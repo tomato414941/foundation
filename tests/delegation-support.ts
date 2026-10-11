@@ -35,7 +35,7 @@ export async function delegatedFixture() {
   const environment = await signEnvironment({
     format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     name: 'Own server', executor: executor.binding, operatorId: executor.actor.id,
-    driver: 'attached', capabilities: Object.values(Operations), functionVersion: 1,
+    driver: 'attached', capabilities: Object.values(Operations), functionVersion: 2,
     isolation: 'process', revision: 1,
   }, executor.keys);
   await delegation.register(executor.actor, environment);

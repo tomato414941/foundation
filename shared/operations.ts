@@ -22,15 +22,10 @@ export const RunOperation = z.object({ ownerId: Id, environmentId: Id.optional()
   operation: z.union([
     z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
     Command.extend({ kind: z.literal('command') }),
-    z.object({ kind: z.literal('function'), functionId: Id, definitionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
-      arguments: JsonObject.default({}) }).strict(),
-    z.object({ kind: z.enum(['http', 'command', 'function']), programId: Id, programDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-      functionId: Id.optional(), definitionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional() }).strict(),
+    z.object({ kind: z.enum(['http', 'command']), programId: Id, programDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
   ]), save: z.record(z.string(), Name).default({}) }).strict().superRefine((value, context) => {
-    if (value.operation.kind !== 'function' && !value.environmentId)
+    if (!value.environmentId)
       context.addIssue({ code: 'custom', path: ['environmentId'], message: 'Choose an execution environment.' });
-    if (value.operation.kind === 'function' && !value.operation.functionId)
-      context.addIssue({ code: 'custom', path: ['operation', 'functionId'], message: 'Choose a saved function.' });
   });
 
 export const OperationDescription = z.object({ name: Invocation.shape.name, title: OperationTitle,

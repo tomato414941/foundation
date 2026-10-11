@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { AppSave, ConnectService, FunctionSave, RunOperation, ValueSave } from '../shared/operations.js';
+import { AppSave, ConnectService, RunOperation, ValueSave } from '../shared/operations.js';
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
@@ -12,7 +12,6 @@ import type { Relations } from './relations.js';
 import type { Resources } from './resources.js';
 import type { Catalog } from './catalog.js';
 import type { Environments } from './environments.js';
-import type { Functions } from './functions.js';
 import type { Objects } from './objects.js';
 import type { Billing } from './billing.js';
 import type { Processes } from './processes.js';
@@ -24,7 +23,7 @@ import { OperationFailed, OperationRegistry } from './operations.js';
 
 interface Services {
   authorization: Authorization; principals: Principals; relations: Relations; resources: Resources;
-  catalog: Catalog; environments: Environments; functions: Functions; objects: Objects; billing: Billing;
+  catalog: Catalog; environments: Environments; objects: Objects; billing: Billing;
   processes: Processes; integrations: Integrations; custody: Custody; delegation: Delegation;
 }
 const CREATED: Record<string, readonly [string, string]> = {
@@ -48,7 +47,7 @@ const withId = (params: Record<string, string>, body: unknown) => ({ ...bodyObje
 const ok = () => ({ ok: true as const });
 
 export function userOperations(services: Services) {
-  const { authorization, principals, relations, resources, catalog, environments, functions, objects,
+  const { authorization, principals, relations, resources, catalog, environments, objects,
     billing, processes, integrations, custody, delegation } = services;
   const operations = new OperationRegistry();
   const bind = operations.bind.bind(operations);
@@ -225,8 +224,6 @@ export function userOperations(services: Services) {
       return input;
     } });
   const keyholder = async () => fail(400, 'keyholder_required', 'Continue this operation with your encryption keys.');
-  operations.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
-    { execution: 'keyholder', complete: (who, input, proof) => functions.save(who, input, P.FunctionWrite.parse(proof), custody, delegation) });
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
     proof: C.JsonValue, type: string) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
@@ -279,19 +276,6 @@ export function userOperations(services: Services) {
       } });
   operations.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
     { execution: 'keyholder', configure: ['environmentId'], secret: () => false,
-      resolve: async (who, input) => {
-        if (input.operation.kind !== 'function' || !input.operation.functionId) return input;
-        const row = await resources.get(input.operation.functionId);
-        await authorization.requireResource(who, row, 'execute');
-        if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
-        const definitionDigest = await hash(row.data);
-        const environmentId = C.FunctionDefinition.parse(row.data).environmentId;
-        if (input.environmentId && environmentId !== input.environmentId)
-          fail(400, 'wrong_environment', 'Run the function in its configured environment.');
-        if (input.operation.definitionDigest && input.operation.definitionDigest !== definitionDigest)
-          fail(409, 'changed', 'The function changed. Review it again.');
-        return { ...input, environmentId, operation: { ...input.operation, definitionDigest } };
-      },
       complete: async (who, input, proof, execution) => {
         const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
         if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.intent.actor.principalId !== who.id ||

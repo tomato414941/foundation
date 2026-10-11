@@ -186,6 +186,8 @@ export class Environments {
            AND coalesce((r.data->'ssh'->>'activeSessions')::int,0)=0
            AND NOT EXISTS(SELECT 1 FROM execution_tasks t WHERE t.environment_id=r.id AND t.state IN ('queued','running'))
            AND NOT EXISTS(SELECT 1 FROM environment_processes p WHERE p.environment_id=r.id AND p.state IN ('queued','running'))
+           AND NOT EXISTS(SELECT 1 FROM function_invocations i WHERE i.environment_id=r.id AND
+             (i.state IN ('queued','running') OR (i.state='uncertain' AND i.phase='dispatched' AND i.finished_at IS NULL)))
          OR r.data->>'state'='starting' AND j.bootstrap_expires_at<now())`);
     for (const row of expired) await this.requestStop(row.id, 'The environment reached its lifetime limit.');
     const lease = randomUUID();

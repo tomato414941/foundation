@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { FunctionDefinition } from '../shared/contracts.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createLocalMcp } from '../cli/src/mcp.js';
 import { Client } from '../cli/src/client.js';
@@ -48,17 +50,41 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
       parameters: [{ name: 'message', label: 'Message' }], program: { kind: 'command',
         command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN,secret:process.env.TOKEN})));'],
         inputs: [{ name: 'TOKEN', source: { id: f.resource.id } }], timeoutSeconds: 5 } } });
-  const invocation = await call('foundation_run', { operation: { kind: 'function', id: fn.id, arguments: { message: 'From MCP' } } });
-  await f.executor.tick();
-  const functionResult = await call('foundation_execution_result', { id: invocation.id });
+  const invocation = await call('foundation_invoke_function', { functionId: fn.id, arguments: { message: 'From MCP' } });
+  await f.functionExecutor.tick();
+  const functionResult = await call('foundation_invocation_result', { id: (invocation.body as { id: string }).id });
   assert.equal(functionResult.state, 'succeeded');
-  assert.deepEqual(JSON.parse(functionResult.text as string).result, { message: 'From MCP', configured: true, secret: '[redacted]' });
-  const captured = await call('foundation_run', { operation: { kind: 'function', id: fn.id,
-    arguments: { message: 'Saved through MCP' }, save: { '/message': 'MCP message' } } });
-  await f.executor.tick();
-  const capturedResult = await call('foundation_execution_result', { id: captured.id });
-  const saved = JSON.parse(capturedResult.text as string).result.saved;
-  assert.equal(new TextDecoder().decode(await f.client.reveal(saved['MCP message'])), 'Saved through MCP');
+  assert.deepEqual(JSON.parse(functionResult.text as string), { message: 'From MCP', configured: true, secret: '[redacted]' });
   const invalid = await client.callTool({ name: 'foundation_api', arguments: { method: 'GET', path: '/api/../auth/signin' } });
   assert.equal(invalid.isError, true);
+});
+
+
+test('URL接続のMCPで共有された関数を見つけ、APIトークンだけで呼び出して結果を読む', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Shared MCP function', definition: FunctionDefinition.parse({
+    environmentId: f.environment.manifest.id, program: { kind: 'command',
+      command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN,secret:process.env.TOKEN}))'],
+      inputs: [{ name: 'TOKEN', source: { id: f.resource.id } }] }, result: 'json' }) });
+  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
+  const origin = await f.app.listen({ host: '127.0.0.1', port: 0 });
+  const client = new McpClient({ name: 'remote-function-caller', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(origin + '/api/mcp'), {
+    requestInit: { headers: { authorization: 'Bearer ' + f.stranger.token } },
+  }));
+  t.after(() => client.close());
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return result.structuredContent!.data as Record<string, unknown>;
+  };
+  const available = await call('foundation_functions');
+  const found = (available.body as { items: Array<{ id: string; data: unknown }> }).items.find(item => item.id === fn.id)!;
+  assert.deepEqual(found.data, { description: '', parameters: [], result: 'json' });
+  const invoked = await call('foundation_invoke_function', { functionId: fn.id });
+  const id = (invoked.body as { id: string }).id;
+  await f.functionExecutor.tick();
+  const result = await call('foundation_invocation_result', { id });
+  assert.equal(result.state, 'succeeded');
+  assert.deepEqual(JSON.parse(result.text as string), { configured: true, secret: '[redacted]' });
 });

@@ -12,7 +12,7 @@ export const EnvironmentManifest = z.object({
   name: Name, executor: KeyBinding, operatorId: Id,
   driver: z.enum(['attached', 'managed']),
   capabilities: z.array(Operation).min(1).max(6),
-  functionVersion: z.literal(1).optional(),
+  functionVersion: z.number().int().positive().optional(),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
   // The IAM role or user this executor runs as, when it has one: what an account owner's role must trust.
@@ -49,7 +49,7 @@ export async function authorizeEnvironment(environment: RegisteredEnvironment, i
   if (intent.environmentId !== manifest.id || intent.origin !== manifest.origin ||
     intent.environmentDigest !== await hash(manifest) ||
     canonical(intent.executor) !== canonical(manifest.executor) ||
-    !manifest.capabilities.includes(intent.operation) || (intent.operation === Operations.function && manifest.functionVersion !== 1))
+    !manifest.capabilities.includes(intent.operation) || (intent.operation === Operations.function && manifest.functionVersion !== 2))
     throw new Error('This environment does not authorize the requested execution.');
 }
 
@@ -120,13 +120,14 @@ export const Task = z.object({
 export type TaskView = z.infer<typeof Task>;
 
 export const OutputDestination = z.object({ name: Name, approval: PolicyApproval }).strict();
+export const FunctionOperation = z.object({ kind: z.literal('function'), functionId: Id, definition: FunctionDefinition,
+  arguments: JsonObject.default({}), outputs: z.record(z.string(), OutputDestination).default({}) }).strict();
 export const RuntimeOperation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
     save: z.record(z.string(), OutputDestination).default({}) }).strict(),
   z.object({ kind: z.literal('command'), ...Command.shape }).strict(),
-  z.object({ kind: z.literal('function'), functionId: Id, definition: FunctionDefinition,
-    arguments: JsonObject.default({}),
-    outputs: z.record(z.string(), OutputDestination).default({}) }).strict(),
   z.object({ kind: z.enum(['connect', 'refresh', 'revoke']), input: Json }).strict(),
 ]);
 export type ExecutionOperation = z.infer<typeof RuntimeOperation>;
+export type FunctionExecution = z.infer<typeof FunctionOperation>;
+export type ExecutableOperation = ExecutionOperation | FunctionExecution;

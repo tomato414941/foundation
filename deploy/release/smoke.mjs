@@ -4,14 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { configuration } from '../../dist/server/config.js';
 import { createContext } from '../../dist/server/context.js';
 import { Client } from '../../dist/cli/src/client.js';
 import { saveIdentity } from '../../dist/cli/src/config.js';
 import { newIdentityKeys, publicPart, bindKeys, signBinding, canonical } from '../../dist/shared/authority.js';
 import { CustodyClient } from '../../dist/shared/client.js';
-import { ConnectionClient } from '../../dist/shared/connection-client.js';
-import { OperationClient } from '../../dist/shared/operation-client.js';
+import { FunctionClient } from '../../dist/shared/function-client.js';
 import { FileJournal } from '../../dist/runtime/journal.js';
 import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
@@ -22,7 +23,7 @@ const config = await configuration();
 const context = await createContext(config);
 const directory = await mkdtemp(join(tmpdir(), 'foundation-release-smoke-'));
 const identities = [], resources = [];
-let environment, agent, finished = false;
+let environment, agent, mcp, finished = false;
 const check = async path => {
   const response = await fetch(config.origin + path, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
   assert.equal(response.status, 200, 'Public request failed: ' + path);
@@ -48,8 +49,8 @@ try {
     await client.json('/api/principals/' + binding.principalId + '/binding', { method: 'PUT', body: await signBinding(binding, keys) });
     const trust = new JournalTrust(new FileJournal(join(directory, String(index)), config.origin, binding, keys));
     const custody = new CustodyClient(client, config.origin, binding, keys, trust);
-    const operations = new OperationClient(custody, new ConnectionClient(custody, { async get() { return null; }, async put() {} }));
-    identities[index] = { id: binding.principalId, client, custody, operations, binding, trust };
+    const functions = new FunctionClient(client, custody);
+    identities[index] = { id: binding.principalId, client, custody, functions, binding, trust };
   }
   const [owner, caller] = identities;
   if (process.env.RELEASE_SMOKE_MODE === 'attached') {
@@ -85,27 +86,40 @@ try {
       inputs: [{ name: 'TOKEN', source: { id: input.id } }], timeoutSeconds: 90 },
     parameters: [{ name: 'count', label: 'Count', type: 'number', required: true }, { name: 'enabled', label: 'Enabled', type: 'boolean', required: true }], result: 'json',
   };
-  const saved = await owner.operations.execute({ name: 'function.save', input: { ownerId: owner.id, name: 'Release function', definition } });
-  assert.equal(saved.kind, 'saved'); const fn = saved.resource; resources.push(fn.id);
+  const fn = await owner.functions.save({ ownerId: owner.id, name: 'Release function', definition });
+  resources.push(fn.id);
   await owner.client.json('/api/relations', { method: 'POST', body: { subjectId: caller.id, relation: 'runner', objectId: fn.id } });
   await assert.rejects(caller.custody.read(input.id));
   const arguments_ = { count: 0, enabled: false };
-  const started = await caller.operations.execute({ name: 'run.execute', input: { ownerId: caller.id,
-    operation: { kind: 'function', functionId: fn.id, arguments: arguments_ } } });
-  const task = await wait(() => caller.client.json('/api/executions/' + started.task.id), value => !['queued', 'running'].includes(value.state));
-  const result = await caller.custody.result(task);
-  assert.equal(result.ok, true); assert.deepEqual(result.result.arguments, arguments_); assert.equal(result.result.configured, true);
+  const publicFunctions = new FunctionClient(caller.client);
+  const interface_ = await publicFunctions.get(fn.id);
+  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'parameters', 'result']);
+  mcp = new McpClient({ name: 'Foundation release verification', version: '1.0.0' });
+  await mcp.connect(new StreamableHTTPClientTransport(new URL('/api/mcp', config.origin), {
+    requestInit: { headers: { authorization: 'Bearer ' + caller.client.identity.token } },
+  }));
+  const call = async (name, arguments__) => {
+    const response = await mcp.callTool({ name, arguments: arguments__ });
+    assert.notEqual(response.isError, true, 'The MCP function operation failed.');
+    return response.structuredContent.data;
+  };
+  const available = await call('foundation_functions', { query: 'Release function' });
+  assert.ok(available.body.items.some(item => item.id === fn.id));
+  const started = (await call('foundation_invoke_function', { functionId: fn.id, arguments: arguments_ })).body;
+  const result = await wait(() => call('foundation_invocation_result', { id: started.id }),
+    value => !['queued', 'running'].includes(value.state));
+  const returned = JSON.parse(result.text);
+  assert.equal(result.state, 'succeeded'); assert.deepEqual(returned.arguments, arguments_); assert.equal(returned.configured, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  const capture = await caller.operations.execute({ name: 'run.execute', input: { ownerId: caller.id,
-    operation: { kind: 'function', functionId: fn.id, arguments: arguments_ }, save: { '/output': 'Release output' } } });
-  const captured = await wait(() => caller.client.json('/api/executions/' + capture.task.id), value => !['queued', 'running'].includes(value.state));
-  const capturedResult = await caller.custody.result(captured);
-  assert.equal(capturedResult.ok, true); assert.deepEqual(Object.keys(capturedResult.result), ['saved']);
-  const output = capturedResult.result.saved['Release output']; resources.push(output);
+  const capture = await caller.functions.invoke(fn.id, arguments_, { save: { '/output': 'Release output' } });
+  const captured = await wait(() => caller.functions.result(capture.id), value => !['queued', 'running'].includes(value.state));
+  assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.result), ['saved']);
+  const output = captured.result.saved['Release output']; resources.push(output);
   assert.match(decode(await caller.custody.reveal(output)), /^[a-f0-9]{48}$/);
   finished = true;
 } finally {
   const failures = [];
+  if (mcp) await mcp.close();
   if (agent) {
     agent.kill('SIGTERM');
     await new Promise(resolve => { if (agent.exitCode !== null) resolve(); else agent.once('exit', resolve); });
@@ -138,4 +152,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, function: true, encryptedInputs: true, encryptedOutput: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, function: true, mcp: true, encryptedInputs: true, encryptedOutput: true, cleanup: true }));

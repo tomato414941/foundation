@@ -9,6 +9,8 @@ import { CustodyClient } from '../shared/client.js';
 import type { JsonApi } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { OperationClient } from '../shared/operation-client.js';
+import { FunctionClient } from '../shared/function-client.js';
+import { FunctionBroker, FunctionExecutor } from '../runtime/functions.js';
 import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { canonical } from '../shared/authority.js';
@@ -38,7 +40,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     const result = await app.inject({ method: (options.method ?? 'GET') as 'GET', url: path,
       headers: { authorization: 'Bearer ' + token },
       ...(options.body !== undefined ? { payload: options.body as object } : {}) });
-    const value = result.json();
+    const value = result.statusCode === 204 ? null : result.json();
     if (result.statusCode >= 400) throw new DomainError(result.statusCode, value.error.code, value.error.message);
     return schema ? schema.parse(value) : value as T;
   } });
@@ -53,6 +55,8 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const runtimeConnections = new Connections(f.executor.binding, f.executor.keys, broker.connections(), journal, transport, aws);
   const executor = new Executor(f.environment, f.executor.keys, broker, journal, transport,
     new CommandProcess({ isolation: 'process' }), runtimeConnections);
+  const functions = new FunctionClient(api(f.owner.token), client);
+  const functionExecutor = new FunctionExecutor(executor, new FunctionBroker(api(f.executor.token)), journal);
   const method = async (id: string) => {
     const catalog = await client.api.json('/api/connection-methods', {}, listOf(CatalogMethod));
     const selected = catalog.items.find(item => item.id === id)!;
@@ -97,7 +101,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     await executor.tick();
     return client.result(await client.api.json('/api/executions/' + task.id, {}, Task));
   }
-  return { ...f, context, app, api, client, connections, operations, runtimeConnections, executor, journal, requests,
+  return { ...f, context, app, api, client, connections, operations, functions, functionExecutor, runtimeConnections, executor, journal, requests,
     method, saveApp, start, tick, accept, http,
     async close() { await app.close(); await f.close(); } };
 }

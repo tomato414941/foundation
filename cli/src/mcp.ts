@@ -1,27 +1,25 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Command, HttpRequest, Id, JsonObject, Name, Resource } from '../../shared/contracts.js';
+import { Command, HttpRequest, Id, Name } from '../../shared/contracts.js';
 import { FunctionSave } from '../../shared/operations.js';
-import { operationClient } from './operations.js';
 import { Task } from '../../shared/execution.js';
 import type { ExecutionOperation } from '../../shared/execution.js';
 import type { CustodyClient } from '../../shared/client.js';
 import { mcpCall, registerMetadataTools, ResponseFormat } from '../../runtime/mcp-metadata.js';
 import type { Client } from './client.js';
 import { privateClient } from './custody.js';
+import { FunctionClient } from '../../shared/function-client.js';
 import packageInfo from '../package.json' with { type: 'json' };
 
 const Operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
     save: z.record(z.string().max(500), Name).default({}) }).strict(),
   Command.extend({ kind: z.literal('command') }).strict(),
-  z.object({ kind: z.literal('function'), id: Id, arguments: JsonObject.default({}),
-    save: z.record(z.string(), Name).default({}) }).strict(),
 ]);
 export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
   const server = new McpServer({ name: 'foundation-mcp-server', version: packageInfo.version }, {
-    instructions: 'Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected inputs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/operations lists user operations. Create approval requests with POST /api/requests and operations containing name, input, and optional input fields; the recipient enters protected values in the request screen. Use foundation_execution_result to verify and decrypt protected results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
+    instructions: 'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_invocation_result to read the result. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_save_function with local keys to publish a definition and approve its protected inputs. Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected caller programs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/operations lists user operations. Create approval requests with POST /api/requests and operations containing name, input, and optional input fields; the recipient enters protected values in the request screen. Use foundation_execution_result to verify and decrypt protected execution results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
   });
   registerMetadataTools(server, {
     schema: () => client.json('/api/openapi.json'),
@@ -37,25 +35,20 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
     const { response_format: _format, ...destination } = input;
-    const result = await operationClient(client, custody()).execute({ name: 'function.save', input: JsonObject.parse(destination) });
-    if (!('kind' in result) || result.kind !== 'saved') return result;
-    return { id: result.resource.id, name: result.resource.name, version: result.resource.version };
+    const result = await new FunctionClient(client, custody()).save(destination);
+    return { id: result.id, name: result.name, version: result.version };
   }, input.response_format));
   server.registerTool('foundation_run', {
     title: 'Run on an explicitly trusted executor',
-    description: 'Sign and encrypt one HTTP request, saved function, or command. Functions use their configured environment and declared inputs; their execute permission is sufficient. Commands and arbitrary HTTP need environmentId and caller-program input grants. The executor must already be trusted. Use save to map result JSON pointers to encrypted variable names; these executions return saved IDs. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
+    description: 'Sign and encrypt one HTTP request or command for an explicitly selected, trusted executor. Requires environment permission and caller-program input grants. Use foundation_invoke_function for saved functions. Use save to map HTTP result JSON pointers to encrypted variable names. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
     inputSchema: z.object({ ownerId: Id.optional(), environmentId: Id.optional(),
       operation: Operation, response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
     let operation: ExecutionOperation;
-    if (input.operation.kind === 'function') {
-      const resource = await client.json('/api/resources/' + input.operation.id, {}, Resource);
-      if (resource.kind !== 'function') throw new Error('Choose a saved function.');
-      operation = { kind: 'function', functionId: resource.id, definition: resource.data, arguments: input.operation.arguments, outputs: {} };
-    } else if (input.operation.kind === 'http') operation = { ...input.operation, save: {} };
+    if (input.operation.kind === 'http') operation = { ...input.operation, save: {} };
     else operation = input.operation;
-    const environmentId = operation.kind === 'function' ? operation.definition.environmentId : input.environmentId;
+    const environmentId = input.environmentId;
     if (!environmentId) throw new Error('Choose an execution environment.');
     const task = await custody().submit(input.ownerId ?? client.identity.principalId, environmentId, operation,
       input.operation.kind !== 'command' ? { save: input.operation.save } : {});

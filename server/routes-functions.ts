@@ -1,0 +1,76 @@
+import { z } from 'zod';
+import type { ApiApp } from './app.js';
+import { actor } from './app.js';
+import type { Context } from './context.js';
+import { fail } from './errors.js';
+import { Id, IdParams, PageQuery, FunctionResource, listOf } from '../shared/contracts.js';
+import { KeyBinding } from '../shared/authority.js';
+import { CreateFunction, UpdateFunction, Invocation, InvocationInput, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
+import { ProtectedRead } from '../shared/protocol.js';
+
+export async function routesFunctions(app: ApiApp, context: Context) {
+  const { functions, invocations, resources, authorization, custody, delegation } = context;
+  const selected = async (id: string) => {
+    const row = await resources.get(id);
+    if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
+    return row;
+  };
+  app.get('/api/functions', { schema: { querystring: PageQuery.extend({ query: z.string().max(200).optional() }),
+    response: { 200: listOf(FunctionResource) } } }, async request => {
+    const who = actor(request), ids = [...new Set([...await authorization.find(who.id, 'function', 'read'),
+      ...await authorization.find(who.id, 'function', 'execute')])];
+    const limit = request.query.limit;
+    const rows = await resources.db.all<import('./resources.js').ResourceRow>(
+      `SELECT * FROM resources WHERE kind='function' AND id=ANY($1::uuid[]) AND ($2::uuid IS NULL OR id>$2)
+       AND ($3::text IS NULL OR strpos(lower(name),lower($3))>0) ORDER BY id LIMIT $4`,
+      [ids, request.query.after ?? null, request.query.query ?? null, limit + 1]);
+    return { items: await Promise.all(rows.slice(0, limit).map(async row => FunctionResource.parse(await resources.view(who, row)))),
+      next: rows.length > limit ? rows[limit - 1]!.id : null };
+  });
+  app.post('/api/principals/:id/functions', { bodyLimit: 40 * 1024 * 1024, schema: { params: IdParams,
+    body: CreateFunction, response: { 201: FunctionResource } } }, async (request, reply) => {
+    const { authorization: proof, ...input } = request.body;
+    return reply.code(201).send(FunctionResource.parse(await functions.save(actor(request), { ...input, ownerId: request.params.id }, proof, custody, delegation)));
+  });
+  app.get('/api/functions/:id', { schema: { params: IdParams, response: { 200: FunctionResource } } }, async request => {
+    const row = await selected(request.params.id), who = actor(request), permissions = await authorization.actions(who, row);
+    if (!permissions.includes('read') && !permissions.includes('execute')) fail(403, 'forbidden', 'You cannot access this function.');
+    return FunctionResource.parse(await resources.view(who, row, permissions));
+  });
+  app.put('/api/functions/:id', { bodyLimit: 40 * 1024 * 1024, schema: { params: IdParams,
+    body: UpdateFunction, response: { 200: FunctionResource } } }, async request => {
+    const row = await selected(request.params.id), { authorization: proof, ...input } = request.body;
+    return FunctionResource.parse(await functions.save(actor(request), { ...input, ownerId: row.owner_id, resourceId: row.id }, proof, custody, delegation));
+  });
+  app.delete('/api/functions/:id', { schema: { params: IdParams, response: { 204: z.null() } } }, async (request, reply) => {
+    await resources.delete(actor(request), await selected(request.params.id));
+    return reply.code(204).send(null);
+  });
+  app.get('/api/functions/:id/authorizations', { schema: { params: IdParams, response: { 200: listOf(ProtectedRead) } } },
+    request => functions.authorizations(actor(request), request.params.id, custody));
+  app.get('/api/functions/:id/output-recipient', { schema: { params: IdParams,
+    response: { 200: z.object({ executor: KeyBinding }) } } }, async request => {
+    const current = await functions.execution(actor(request), request.params.id, custody, delegation);
+    return { executor: current.publication.executor };
+  });
+  app.post('/api/functions/:id/invocations', { bodyLimit: 8 * 1024 * 1024, schema: { params: IdParams,
+    body: InvocationInput, response: { 202: Invocation } } }, async (request, reply) =>
+    reply.code(202).send(await invocations.create(actor(request), request.params.id, request.body)));
+  app.get('/api/principals/:id/invocations', { schema: { params: IdParams, querystring: PageQuery,
+    response: { 200: listOf(Invocation) } } }, request => invocations.list(actor(request), request.params.id, request.query.limit, request.query.after));
+  app.get('/api/invocations/:id', { schema: { params: IdParams, response: { 200: Invocation } } },
+    request => invocations.get(actor(request), request.params.id));
+  app.post('/api/invocations/:id/cancel', { schema: { params: IdParams, body: z.object({}).strict(), response: { 200: Invocation } } },
+    request => invocations.cancel(actor(request), request.params.id));
+  app.post('/api/environments/:id/invocations/claim', { schema: { params: IdParams, body: z.object({}).strict(),
+    response: { 200: ClaimedInvocation } } }, request => invocations.claim(actor(request), request.params.id));
+  const lease = z.object({ lease: Id }).strict();
+  app.post('/api/invocations/:id/dispatch', { schema: { params: IdParams, body: lease,
+    response: { 200: z.object({ ok: z.literal(true) }) } } }, request => invocations.dispatch(actor(request), request.params.id, request.body.lease));
+  app.post('/api/invocations/:id/renew', { schema: { params: IdParams, body: lease,
+    response: { 200: z.object({ active: z.boolean(), reason: z.enum(['cancelled', 'authorization_changed', 'lease_lost']).optional() }) } } },
+    request => invocations.renew(actor(request), request.params.id, request.body.lease));
+  app.post('/api/invocations/:id/finish', { bodyLimit: 8 * 1024 * 1024, schema: { params: IdParams,
+    body: lease.extend({ completion: InvocationCompletion }), response: { 200: Invocation } } },
+    request => invocations.finish(actor(request), request.params.id, request.body.lease, request.body.completion));
+}

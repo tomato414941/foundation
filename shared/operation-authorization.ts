@@ -9,7 +9,6 @@ import { z } from 'zod';
 export const PrivateProgram = z.object({ operation: RuntimeOperation, save: z.record(z.string(), Name) }).strict();
 export function reviewedProgram(operation: ExecutionOperation) {
   if (operation.kind === 'http') return { kind: operation.kind, request: operation.request };
-  if (operation.kind === 'function') return { kind: operation.kind, functionId: operation.functionId, definition: operation.definition, arguments: operation.arguments };
   return operation;
 }
 
@@ -33,15 +32,10 @@ export async function authorizeOperationContext(intent: ExecutionIntent, operati
     throw new Error('Use the reviewed run and execution environment.');
   if ('programDigest' in expected.operation) {
     if (await hash(reviewedProgram(operation)) !== expected.operation.programDigest) throw new Error('Run the reviewed private program.');
-  } else if (operation.kind === 'function' && expected.operation.kind === 'function') {
-    if (operation.functionId !== expected.operation.functionId || await hash(operation.definition) !== expected.operation.definitionDigest ||
-      canonical(operation.arguments) !== canonical(expected.operation.arguments)) throw new Error('Run the reviewed function and arguments.');
   } else if (operation.kind === 'http' && expected.operation.kind === 'http') {
     if (canonical(operation.request) !== canonical(expected.operation.request))
       throw new Error('Run the reviewed HTTP request and output destinations.');
   } else if (canonical(operation) !== canonical(RuntimeOperation.parse(expected.operation))) throw new Error('Run the reviewed command.');
   if (operation.kind === 'http' && canonical(Object.fromEntries(Object.entries(operation.save).map(([pointer, output]) => [pointer, output.name]))) !== canonical(expected.save))
     throw new Error('Use the reviewed output destinations.');
-  if (operation.kind === 'function' && canonical(Object.fromEntries(Object.entries(operation.outputs).map(([pointer, output]) => [pointer, output.name]))) !== canonical(expected.save))
-    throw new Error('Use the reviewed function output destinations.');
 }

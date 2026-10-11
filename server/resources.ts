@@ -106,6 +106,7 @@ export class Resources {
     return result;
   }
   async view(actor: Actor, row: ResourceRow, permissions?: ActionName[]): Promise<ResourceView> {
+    permissions ??= await this.authorization.actions(actor, row);
     const data =
       row.kind === 'service' || row.kind === 'method'
           ? { ...row.data, name: row.name }
@@ -114,7 +115,10 @@ export class Resources {
                 ...row.data,
                 services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [],
               }
-            : row.data;
+            : row.kind === 'function'
+              ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
+                ...(permissions.includes('read') ? { environmentId: row.data.environmentId, program: row.data.program } : {}) }
+              : row.data;
     return Resource.parse({
       id: row.id,
       ownerId: row.owner_id,
@@ -124,7 +128,7 @@ export class Resources {
       version: row.version,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
-      permissions: permissions ?? (await this.authorization.actions(actor, row)),
+      permissions,
     });
   }
   async list(
@@ -147,7 +151,8 @@ export class Resources {
     );
     const selected = rows.slice(0, limit),
       permissions = await this.authorization.permissions(actor, selected);
-    const readable = selected.filter((row) => permissions.get(row.id)?.includes('read'));
+    const readable = selected.filter((row) => permissions.get(row.id)?.includes('read') ||
+      (row.kind === 'function' && permissions.get(row.id)?.includes('execute')));
     return {
       items: await Promise.all(readable.map((row) => this.view(actor, row, permissions.get(row.id) as ActionName[]))),
       next: rows.length > limit ? selected.at(-1)!.id : null,
@@ -156,7 +161,8 @@ export class Resources {
   // What others hold that the actor was let read: not what belongs to a principal it acts as or for.
   async shared(actor: Actor) {
     const readable = (
-      await Promise.all(ResourceKind.options.map((kind) => this.authorization.find(actor.id, kind, 'read')))
+      await Promise.all([...ResourceKind.options.map((kind) => this.authorization.find(actor.id, kind, 'read')),
+        this.authorization.find(actor.id, 'function', 'execute')])
     ).flat();
     const rows = await this.db.all<ResourceRow>(
       'SELECT * FROM resources WHERE id=ANY($1::uuid[]) AND NOT owner_id=ANY($2::uuid[]) ORDER BY name,id',

@@ -6,7 +6,7 @@ import type { Bindings } from './bindings.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { ContentTypes, ProtectedContent, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
-import type { CustodyContent } from '../shared/custody.js';
+import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
@@ -214,9 +214,16 @@ export class Custody {
       "SELECT request FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
       [content.creationRunId],
     );
-    if (!task || task.request.intent.ownerId !== policy.ownerId ||
-      canonical(task.request.intent.actor) !== canonical(authority) ||
-      canonical(task.request.intent.executor) !== canonical(binding))
+    const invocation = !task ? await this.resources.db.one<{ owner_id: string; executor: BoundKeys;
+      request: { actor: BoundKeys | null; outputs: Record<string, { approval: { policy: CustodyPolicy; signature: string } }> } }>(
+      "SELECT owner_id,executor,request FROM function_invocations WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
+      [content.creationRunId]) : null;
+    const authorized = task ? task.request.intent.ownerId === policy.ownerId &&
+      canonical(task.request.intent.actor) === canonical(authority) && canonical(task.request.intent.executor) === canonical(binding)
+      : invocation && invocation.owner_id === policy.ownerId && canonical(invocation.request.actor) === canonical(authority) &&
+        canonical(invocation.executor) === canonical(binding) && Object.values(invocation.request.outputs).some(output =>
+          canonical(output.approval.policy) === canonical(policy) && output.approval.signature === content.authorization);
+    if (!authorized)
       fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');

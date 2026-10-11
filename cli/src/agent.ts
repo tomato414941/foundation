@@ -15,6 +15,7 @@ import { journalLock } from '../../runtime/lock.js';
 import { detectAwsPrincipal } from '../../runtime/aws-principal.js';
 import { Operations } from '../../shared/custody.js';
 import { ProcessBroker, ProcessExecutor } from '../../runtime/process.js';
+import { FunctionBroker, FunctionExecutor } from '../../runtime/functions.js';
 import { SSHServer } from '../../runtime/ssh.js';
 import { SSHWorkerState } from '../../shared/ssh.js';
 
@@ -40,16 +41,16 @@ export async function startAgent(client: Client, options: {
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
         throw new Error('Use the owner and identity originally registered for this executor.');
       // Keep runtime support and the machine's current AWS identity in the signed registration.
-      if (environment.manifest.functionVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
+      if (environment.manifest.functionVersion !== 2 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
         const { awsPrincipal: _previous, ...manifest } = environment.manifest;
-        environment = await signEnvironment({ ...manifest, functionVersion: 1, ...(awsPrincipal ? { awsPrincipal } : {}),
+        environment = await signEnvironment({ ...manifest, functionVersion: 2, ...(awsPrincipal ? { awsPrincipal } : {}),
           revision: manifest.revision + 1 }, keys);
         await journal.write('environment_' + id, environment);
       }
     } else {
       environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
-        capabilities: Object.values(Operations), functionVersion: 1,
+        capabilities: Object.values(Operations), functionVersion: 2,
         isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);
@@ -62,6 +63,7 @@ export async function startAgent(client: Client, options: {
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);
     const executor = new Executor(environment, keys, broker, journal, transport,
       new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage }), connections);
+    const functions = new FunctionExecutor(executor, new FunctionBroker(client), journal);
     const workingDirectory = environment.manifest.isolation === 'container' ? '/workspace' : process.cwd();
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
     if (options.managed && options.ssh) {
@@ -76,10 +78,11 @@ export async function startAgent(client: Client, options: {
     }));
     do {
       ssh?.ensureRunning();
-      const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await processes.reconcile()];
+      const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await functions.reconcile(), ...await processes.reconcile()];
       if (pending.length) process.stderr.write(JSON.stringify({ event: 'reconciliation_pending', ids: pending }) + '\n');
       let claimed = false;
-      try { claimed = await executor.tick(controller.signal); claimed = await processes.tick(controller.signal) || claimed; }
+      try { claimed = await executor.tick(controller.signal); claimed = await functions.tick(controller.signal) || claimed;
+        claimed = await processes.tick(controller.signal) || claimed; }
       catch (error) { if (!(error instanceof DeliveryPending) || options.once) throw error; }
       if (options.once) break;
       if (!claimed) await delay(1000, undefined, { signal: controller.signal });

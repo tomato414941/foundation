@@ -35,6 +35,7 @@ import { OperationExecutions } from './operation-executions.js';
 import { canonical } from '../shared/authority.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
+import { Invocations } from './invocations.js';
 
 export interface Dependencies {
   db?: Database;
@@ -72,6 +73,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations = new ConnectionOperations(custody),
     oauthRelays = new OAuthRelays(delegation);
   const processes = new Processes(resources, delegation);
+  const invocations = new Invocations(functions, custody, delegation);
   principals.keySharing = new KeySharing(custody);
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
     environments = new Environments(
@@ -85,7 +87,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
   const operations = userOperations({ authorization, principals, relations, resources, catalog, environments,
-    functions, objects, billing, processes, integrations, custody, delegation });
+    objects, billing, processes, integrations, custody, delegation });
   const operationExecutions = new OperationExecutions(db, vault, authorization, operations, audit);
   const requests = new Requests(
       db,
@@ -160,6 +162,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations,
     oauthRelays,
     processes,
+    invocations,
   };
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;

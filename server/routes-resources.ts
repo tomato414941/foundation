@@ -89,7 +89,8 @@ export async function routesResources(app: ApiApp, context: Context) {
     async (request) => {
       const who = actor(request),
         row = await resources.get(request.params.id);
-      await authorization.requireResource(who, row, 'read');
+      if (row.kind !== 'function' || !await authorization.can(who, row, 'execute'))
+        await authorization.requireResource(who, row, 'read');
       return resources.view(who, row);
     },
   );

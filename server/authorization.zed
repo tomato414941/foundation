@@ -197,7 +197,7 @@ definition function {
   relation transferrer: principal
   relation runner: principal
 
-  permission read = owner->use + reader->stands + runner->stands
+  permission read = owner->use + reader->stands
   permission update = owner->use + editor->stands
   permission delete = owner->use + deleter->stands
   permission share = owner->stands + sharer->stands

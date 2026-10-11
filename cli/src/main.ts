@@ -37,6 +37,8 @@ import { Invocation, OperationDescription, OperationExecution } from '../../shar
 import { OperationMaterial } from '../../shared/operation-client.js';
 import { managedAgent } from './managed-agent.js';
 import { startMcp } from './mcp.js';
+import { FunctionClient } from '../../shared/function-client.js';
+import { FunctionDefinition } from '../../shared/contracts.js';
 import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
@@ -65,7 +67,14 @@ Usage: foundation <command> [options]
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
   run --environment ID --request JSON  Run an HTTP request on the selected executor
-  run --function ID [--arguments JSON] Run a saved function in its configured environment
+  function list                       List accessible functions and their inputs
+  function show ID                    Read a function's interface or permitted definition
+  function create --body JSON         Approve and save a function definition
+  function update ID --body JSON      Approve and replace a function definition
+  function invoke ID [--arguments JSON] Invoke a function (--id ID for retries, --wait for result)
+  function result ID                  Read an invocation (--wait to wait for completion)
+  function cancel ID                  Cancel a function invocation
+  function delete ID                  Delete a function
   run --environment ID -- COMMAND ...  Run a command in an environment
   wait ID [--timeout SECONDS]           Wait for a run to finish
   retry ID                             Submit the same saved, signed execution request
@@ -142,7 +151,6 @@ const options = {
   inputs: textOption,
   request: textOption,
   save: textOption,
-  function: textOption,
   arguments: textOption,
   environment: textOption,
   timeout: textOption,
@@ -549,22 +557,42 @@ async function main(argv: string[]) {
       .parse(await json(args.values.inputs, []));
     return execute(await localInputs(client, inputs), commandArguments);
   }
+  if (command === 'function') {
+    const action = requireArgument(args.positionals[0], 'Choose list, show, create, update, invoke, result, cancel, or delete.');
+    const functions = new FunctionClient(client);
+    if (action === 'list') { await output(await client.json('/api/functions?limit=100'), args); return 0; }
+    if (action === 'create' || action === 'update') {
+      const body = z.object({ name: Name, definition: FunctionDefinition, version: z.number().int().positive().optional() }).strict().parse(await json(args.values.body));
+      const id = action === 'update' ? Id.parse(requireArgument(args.positionals[1], 'Supply a function ID.')) : undefined;
+      const previous = id ? await functions.get(id) : null;
+      await output(await new FunctionClient(client, privateClient(client).custody).save({ ownerId: previous?.ownerId ?? owner,
+        name: body.name, definition: body.definition, ...(id ? { resourceId: id, version: body.version ?? previous!.version } : {}) }), args);
+      return 0;
+    }
+    const id = Id.parse(requireArgument(args.positionals[1], 'Supply a function or invocation ID.'));
+    if (action === 'show') { await output(await functions.get(id), args); return 0; }
+    if (action === 'delete') { await functions.remove(id); return 0; }
+    if (action === 'cancel') { await output(await functions.cancel(id), args); return 0; }
+    if (action === 'invoke' || action === 'result') {
+      const save = z.record(z.string(), Name).parse(await json(args.values.save, {}));
+      const invoker = Object.keys(save).length ? new FunctionClient(client, privateClient(client).custody) : functions;
+      let result = action === 'invoke' ? await invoker.invoke(id, JsonObject.parse(await json(args.values.arguments, {})),
+        { ownerId: owner, save, ...(args.values.id ? { id: Id.parse(args.values.id) } : {}) })
+        : await functions.result(id);
+      if (args.values.wait) result = await waitFor(() => functions.result(result.id),
+        value => value.error?.code === 'cancellation_pending' ? 'running' : value.state, seconds(args.values.timeout, 3600));
+      await output(result, args);
+      return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
+    }
+    throw new Error('Choose list, show, create, update, invoke, result, cancel, or delete.');
+  }
   if (command === 'run') {
-    const modes = [args.values.request, args.values.function, commandArguments.length ? true : false].filter(Boolean);
-    if (modes.length !== 1) throw new Error('Choose --request, --function, or a command after --.');
-    const fn = args.values.function ? await client.json('/api/resources/' + Id.parse(args.values.function), {}, Resource) : null;
-    if (fn && fn.kind !== 'function') throw new Error('Choose a saved function.');
-    const environmentId = fn?.kind === 'function' ? fn.data.environmentId
-      : Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
+    const modes = [args.values.request, commandArguments.length ? true : false].filter(Boolean);
+    if (modes.length !== 1) throw new Error('Choose --request or a command after --.');
+    const environmentId = Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
     const input = args.values.request
       ? { kind: 'http', request: await json(args.values.request) }
-      : fn?.kind === 'function'
-        ? {
-            kind: 'function',
-            functionId: fn.id,
-            arguments: await json(args.values.arguments, {}),
-          }
-        : {
+      : {
             kind: 'command',
             command: commandArguments,
             timeoutSeconds: seconds(args.values.timeout, 60, 3600),

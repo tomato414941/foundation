@@ -67,7 +67,8 @@ export class Client {
     options: { method?: string; body?: unknown; raw?: Uint8Array; signal?: AbortSignal } = {},
     schema?: z.ZodType<T>,
   ): Promise<T> {
-    const value: unknown = await (await this.response(path, options)).json();
+    const response = await this.response(path, options);
+    const value: unknown = response.status === 204 ? null : await response.json();
     return schema ? schema.parse(value) : (value as T);
   }
   async session() {

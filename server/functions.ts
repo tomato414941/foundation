@@ -6,7 +6,7 @@ import { publicUrl } from './transport.js';
 import { FunctionDefinition, validInputName } from '../shared/contracts.js';
 import type { FunctionSpec, HttpRequestInput, JsonValue, SourceReference } from '../shared/contracts.js';
 import { FunctionSave } from '../shared/operations.js';
-import { FunctionWrite } from '../shared/protocol.js';
+import { FunctionWrite, verifyFunction } from '../shared/function-api.js';
 import { canonical, hash } from '../shared/authority.js';
 import { ContentTypes, Operations, functionOperations } from '../shared/custody.js';
 import { pointerParts, setPointer } from '../shared/values.js';
@@ -50,8 +50,8 @@ export class Functions {
     }
     const environment = await delegation.environment(spec.environmentId);
     await this.resources.authorization.requireResource(actor, await this.resources.get(spec.environmentId), 'execute');
-    if (environment.registration.manifest.functionVersion !== 1)
-      fail(409, 'function_runtime_required', 'Update this environment to Foundation CLI 5 or create a new environment.');
+    if (environment.registration.manifest.functionVersion !== 2)
+      fail(409, 'function_runtime_required', 'Update this environment to Foundation CLI 6 or create a new environment.');
     if (environment.stopped_at || !environment.registration.manifest.capabilities.includes(Operations.function) ||
       !environment.registration.manifest.capabilities.includes(Operations[spec.program.kind]))
       fail(400, 'unsupported_environment', 'Choose an active environment that can execute this function.');
@@ -104,6 +104,13 @@ export class Functions {
       fail(403, 'forbidden', 'You cannot create this function.');
     const spec = await this.validateFunction(actor, input.definition, delegation);
     await this.validateFunction({ id: input.ownerId }, spec, delegation);
+    const publication = await verifyFunction(proof.publication);
+    const executor = (await delegation.environment(spec.environmentId)).registration.manifest.executor;
+    await custody.bindings.requireCurrent(publication.author);
+    if (publication.author.principalId !== actor.id || publication.functionId !== proof.functionId ||
+      publication.ownerId !== input.ownerId || publication.revision !== (previous?.version ?? 0) + 1 ||
+      canonical(publication.definition) !== canonical(spec) || canonical(publication.executor) !== canonical(executor))
+      fail(400, 'invalid_function_publication', 'Sign the current function definition and its selected execution environment.');
     const sources = await this.sources(spec, custody), current = new Set(sources.map(source => source.policy.id));
     if (previous) for (const item of (await this.authorizations(actor, previous.id, custody)).items)
       if (!current.has(item.content.policy.id)) sources.push(item.content);
@@ -113,7 +120,6 @@ export class Functions {
       fail(413, 'input_limit', 'Use at most 16 MB of encrypted inputs in one function.');
     if (canonical(Object.keys(proof.contents).sort()) !== canonical(sources.map(source => source.policy.id).sort()))
       fail(400, 'missing_inputs', 'Approve each input needed by this function.');
-    const executor = (await delegation.environment(spec.environmentId)).registration.manifest.executor;
     for (const source of sources) {
       const content = proof.contents[source.policy.id]!.content;
       const operations = functionOperations(source.policy.contentType);
@@ -125,7 +131,7 @@ export class Functions {
         fail(400, 'function_not_approved', 'Approve this exact function and execution environment for every input.');
     }
     const row = await this.resources.db.transaction(async connection => {
-      const data = spec as unknown as Record<string, JsonValue>;
+      const data = { ...spec, publication } as unknown as Record<string, JsonValue>;
       const row = previous ? await this.resources.update(previous, { name: input.name, data }, connection)
         : await this.resources.insert(input.ownerId, 'function', input.name, data, { id: proof.functionId }, connection);
       await this.resources.references(row.id, this.references(spec), connection);
@@ -136,11 +142,19 @@ export class Functions {
     });
     return this.resources.view(actor, row);
   }
-  async invocation(actor: Actor, id: string, custody: Custody, delegation: Delegation) {
+  async execution(actor: Actor, id: string, custody: Custody, delegation: Delegation) {
     const row = await this.resources.get(id);
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
     await this.resources.authorization.requireResource(actor, row, 'execute');
-    const definition = FunctionDefinition.parse(row.data), environment = await delegation.environment(definition.environmentId);
+    const { publication: storedPublication, ...storedDefinition } = row.data;
+    const definition = FunctionDefinition.parse(storedDefinition), environment = await delegation.environment(definition.environmentId);
+    if (environment.registration.manifest.functionVersion !== 2)
+      fail(409, 'function_runtime_required', 'Update the execution environment to Foundation CLI 6.');
+    if (!storedPublication) fail(409, 'function_not_published', 'Save this function to approve its current definition.');
+    const publication = await verifyFunction(storedPublication as unknown as z.infer<typeof FunctionWrite>['publication']);
+    if (canonical(publication.definition) !== canonical(definition) || publication.functionId !== row.id ||
+      publication.ownerId !== row.owner_id || canonical(publication.executor) !== canonical(environment.registration.manifest.executor))
+      fail(409, 'function_changed', 'Save this function to approve its current definition.');
     if (environment.stopped_at) fail(409, 'environment_stopped', 'This function’s environment has stopped.');
     await this.resources.authorization.requireResource({ id: row.owner_id }, await this.resources.get(definition.environmentId), 'execute');
     const sources = await this.sources(definition, custody), reference = { id, digest: await hash(definition) };
@@ -149,6 +163,6 @@ export class Functions {
         canonical(grant.executor) === canonical(environment.registration.manifest.executor) &&
         functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)) && Date.parse(grant.expiresAt) > Date.now()))
         fail(409, 'function_not_approved', 'The owner must approve this function’s inputs again.');
-    return { definition, registration: environment.registration, sources };
+    return { row, definition, publication, registration: environment.registration, sources };
   }
 }

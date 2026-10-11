@@ -476,25 +476,24 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Function principal', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
-  const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
   const environmentId = randomUUID();
   const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
   assert.equal(registered.code, 0, registered.stderr);
   const kept = await c.run(['keep', 'Function input', '--stdin'], 'private-function-input');
   assert.equal(kept.code, 0, kept.stderr);
   const sourceId = JSON.parse(kept.stdout).id;
-  const saved = await c.run(['operation', 'run', 'function.save', '--body', '@-'], JSON.stringify({
-    ownerId: identity.principalId, name: 'CLI function', definition: { environmentId, parameters: [{ name: 'message', label: 'Message' }],
+  const saved = await c.run(['function', 'create', '--body', '@-'], JSON.stringify({
+    name: 'CLI function', definition: { environmentId, parameters: [{ name: 'message', label: 'Message' }],
       program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN,secret:process.env.TOKEN})));'],
         inputs: [{ name: 'TOKEN', source: { id: sourceId } }], timeoutSeconds: 5 }, result: 'json' },
   }));
   assert.equal(saved.code, 0, saved.stderr);
-  const functionId = JSON.parse(saved.stdout).resource.id;
-  const started = await c.run(['run', '--function', functionId, '--arguments', '{"message":"CLI invocation"}']);
+  const functionId = JSON.parse(saved.stdout).id;
+  const started = await c.run(['function', 'invoke', functionId, '--arguments', '{"message":"CLI invocation"}']);
   assert.equal(started.code, 0, started.stderr);
   const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
   assert.equal(executed.code, 0, executed.stderr);
-  const result = await c.run(['wait', JSON.parse(started.stdout).id, '--timeout', '5']);
+  const result = await c.run(['function', 'result', JSON.parse(started.stdout).id, '--wait', '--timeout', '5']);
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).result, { message: 'CLI invocation', configured: true, secret: '[redacted]' });
 });

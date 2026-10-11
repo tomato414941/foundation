@@ -277,6 +277,32 @@ CREATE TABLE IF NOT EXISTS environment_processes (
   finished_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS process_queue ON environment_processes(environment_id,state,created_at);
+CREATE TABLE IF NOT EXISTS function_invocations (
+  id uuid PRIMARY KEY,
+  function_id uuid NOT NULL,
+  function_owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  executor_id uuid NOT NULL REFERENCES principals(id),
+  environment_id uuid NOT NULL,
+  executor jsonb NOT NULL,
+  actor jsonb NOT NULL,
+  input_digest text NOT NULL,
+  request jsonb NOT NULL,
+  publication jsonb NOT NULL,
+  state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
+  completion jsonb,
+  error jsonb,
+  phase text NOT NULL DEFAULT 'queued' CHECK(phase IN ('queued','claimed','dispatched','settled')),
+  cancel_requested boolean NOT NULL DEFAULT false,
+  lease_token uuid,
+  lease_until timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS invocation_queue ON function_invocations(environment_id,state,created_at);
+CREATE INDEX IF NOT EXISTS invocation_owner ON function_invocations(owner_id,id);
 CREATE TABLE IF NOT EXISTS connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

@@ -21,6 +21,7 @@ import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesExecution } from './routes-execution.js';
 import { routesProcesses } from './routes-processes.js';
+import { routesFunctions } from './routes-functions.js';
 import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
 import { routesOperations } from './routes-operations.js';
@@ -461,6 +462,7 @@ export async function buildApp(context: Context) {
   await routesResources(app, context);
   await routesExecution(app, context);
   await routesProcesses(app, context);
+  await routesFunctions(app, context);
   await routesSSH(app, context);
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);

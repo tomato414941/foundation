@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FunctionDefinition, Id, Name, Sealed, Time } from './contracts.js';
+import { Id, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, Signature, SignedBinding } from './authority.js';
 import { AccessPolicy, DelegatedRun, ProtectedContent } from './custody.js';
 import { ExecutionReceipt, SignedEnvironment, Task } from './execution.js';
@@ -19,9 +19,6 @@ export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, 
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
 export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired']) }).strict();
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
-export const FunctionWrite = z.object({ functionId: Id, contents: KeyUpdates }).strict();
-export const FunctionInvocation = z.object({ definition: FunctionDefinition,
-  registration: SignedEnvironment, sources: z.array(ProtectedContent).max(100) }).strict();
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();
 export const Registration = z.object({ registration: SignedEnvironment, stoppedAt: z.iso.datetime().nullable(),

@@ -431,7 +431,9 @@ export const EnvironmentResource = z.object({
 export const FunctionResource = z.object({
   ...resourceBase,
   kind: z.literal('function'),
-  data: FunctionDefinition,
+  data: FunctionDefinition.omit({ environmentId: true, program: true }).extend({
+    environmentId: Id.optional(), program: FunctionProgram.optional(),
+  }),
 });
 export const Resource = z.discriminatedUnion('kind', [
   VariableResource,

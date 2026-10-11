@@ -1,62 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { MemoryJournal } from './delegation-support.js';
-import { FunctionDefinition, JsonObject, Resource } from '../shared/contracts.js';
+import { FunctionDefinition, Resource } from '../shared/contracts.js';
 import type { FunctionSpec } from '../shared/contracts.js';
 import { CustodyClient } from '../shared/client.js';
-import { ConnectionClient } from '../shared/connection-client.js';
-import { OperationClient } from '../shared/operation-client.js';
+import { FunctionClient, InvocationSubmissionError } from '../shared/function-client.js';
+import { FunctionBroker, FunctionExecutor } from '../runtime/functions.js';
+import { InvocationCompletion } from '../shared/function-api.js';
+import { DeliveryPending } from '../runtime/executor.js';
 import { JournalTrust } from '../runtime/trust.js';
-import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, prepareRun, protect, reveal } from '../shared/custody.js';
+import { canonical, hash, sign } from '../shared/authority.js';
+import { ContentTypes, protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
-import { Task } from '../shared/execution.js';
 import { functionArguments, functionProgram } from '../shared/functions.js';
 
-const script = 'let text=""; process.stdin.on("data", c => text += c); process.stdin.on("end", () => { const args = JSON.parse(text); console.log(JSON.stringify({ message: args.message, configured: Boolean(process.env.TOKEN), secret: process.env.TOKEN })); });';
+const script = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,configured:!!process.env.TOKEN,secret:process.env.TOKEN}));});';
 const definition = (environmentId: string, sourceId?: string, command = script) => FunctionDefinition.parse({
   environmentId, program: { kind: 'command', command: ['node', '-e', command],
     inputs: sourceId ? [{ name: 'TOKEN', source: { id: sourceId } }] : [], timeoutSeconds: 5 },
   parameters: [{ name: 'message', label: 'Message', default: 'Hello' }], result: 'json',
 });
 async function save(f: Awaited<ReturnType<typeof flowFixture>>, spec: FunctionSpec) {
-  const result = await f.operations.execute({ name: 'function.save', input: JsonObject.parse({ ownerId: f.owner.actor.id,
-    name: 'Processor ' + crypto.randomUUID(), definition: spec }) });
-  assert.ok('kind' in result && result.kind === 'saved', JSON.stringify(result));
-  if (!('kind' in result) || result.kind !== 'saved' || result.resource.kind !== 'function') throw new Error('Expected a saved function.');
-  return result.resource;
+  const result = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Processor ' + crypto.randomUUID(), definition: spec });
+  if (result.kind !== 'function') throw new Error('Expected a function.');
+  return { ...result, data: FunctionDefinition.parse(result.data) };
 }
 async function caller(f: Awaited<ReturnType<typeof flowFixture>>) {
   const trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(f.executor.binding); await trust.rememberBinding(f.owner.binding);
   const client = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys, trust);
-  const connections = new ConnectionClient(client, { async get() { return null; }, async put() {} });
-  return { client, operations: new OperationClient(client, connections) };
+  return { client, functions: new FunctionClient(f.api(f.stranger.token), client) };
 }
-
-test('関数だけを共有して秘密を使う固定処理を実行し、呼び出した人へ結果を返す', async t => {
-  const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
-  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
-  const { client, operations } = await caller(f);
-  await assert.rejects(client.read(f.resource.id));
-  await assert.rejects(client.environment(f.environment.manifest.id));
-  await assert.rejects(f.authorization.requireResource(f.stranger.actor, f.resource, 'use'));
-  const text = '"; process.exit(99); //';
-  const started = await operations.execute({ name: 'run.execute', input: { ownerId: f.stranger.actor.id,
-    operation: { kind: 'function', functionId: fn.id, arguments: { message: text } } } });
-  assert.ok('kind' in started && started.kind === 'run');
-  if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected an execution.');
-  await f.executor.tick();
-  const task = await client.api.json('/api/executions/' + started.task.id, {}, Task);
-  assert.equal(task.state, 'succeeded', JSON.stringify(await client.result(task)));
-  assert.deepEqual((await client.result(task))!.result, { message: text, configured: true, secret: '[redacted]' });
-  const content = await f.context.custody.get(f.resource.id);
-  await assert.rejects(reveal(content, f.stranger.binding, f.stranger.keys.encryption));
-  await assert.rejects(client.submit(f.stranger.actor.id, f.environment.manifest.id,
-    { kind: 'command', command: ['node', '-e', 'console.log(process.env.TOKEN)'], inputs: [{ name: 'TOKEN', source: { id: f.resource.id }, format: 'text' }], timeoutSeconds: 5 }));
-});
 
 test('引数の必須項目と既定値を検証し、宣言した引数だけを固定処理へ渡す', () => {
   const spec = definition(crypto.randomUUID());
@@ -87,19 +63,57 @@ test('数値・真偽値・JSONの型と既定値を保って関数の引数を�
   assert.throws(() => functionArguments(spec, { count: Infinity }));
 });
 
-test('JSONの引数を文字列化せず任意の処理に渡し、構造化した結果を受け取る', async t => {
+test('呼び出し権限だけを持つ利用者がAPIトークンで関数を実行し、秘密を開示せず結果を受け取る', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
+  const functions = new FunctionClient(f.api(f.stranger.token));
+  const view = await functions.get(fn.id);
+  assert.deepEqual(view.data, { description: '', parameters: fn.data.parameters, result: 'json' });
+  assert.deepEqual(view.permissions, ['execute']);
+  const { client } = await caller(f);
+  await assert.rejects(client.read(f.resource.id));
+  await assert.rejects(client.environment(f.environment.manifest.id));
+  await assert.rejects(f.authorization.requireResource(f.stranger.actor, await f.resources.get(fn.id), 'read'));
+  const text = '\"; process.exit(99); //';
+  const invocation = await functions.invoke(fn.id, { message: text });
+  await f.functionExecutor.tick();
+  const result = await functions.result(invocation.id);
+  assert.equal(result.state, 'succeeded', JSON.stringify(result));
+  assert.deepEqual(result.result, { message: text, configured: true, secret: '[redacted]' });
+  await assert.rejects(reveal(await f.context.custody.get(f.resource.id), f.stranger.binding, f.stranger.keys.encryption));
+  await assert.rejects(client.submit(f.stranger.actor.id, f.environment.manifest.id, {
+    kind: 'command', command: ['node', '-e', 'console.log(process.env.TOKEN)'],
+    inputs: [{ name: 'TOKEN', source: { id: f.resource.id }, format: 'text' }], timeoutSeconds: 5 }));
+});
+
+test('コードを読む権限と呼び出す権限を別々に渡し、管理APIから関数を更新して削除する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id));
+  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'reader', objectId: fn.id });
+  const functions = new FunctionClient(f.api(f.stranger.token));
+  assert.deepEqual((await functions.get(fn.id)).data, fn.data);
+  await assert.rejects(functions.invoke(fn.id), error => (error as { status: number }).status === 403);
+  const updated = await f.functions.save({ ownerId: fn.ownerId, name: 'Updated function', definition: fn.data,
+    resourceId: fn.id, version: fn.version });
+  assert.equal(updated.name, 'Updated function'); assert.equal(updated.version, fn.version + 1);
+  await assert.rejects(f.functions.save({ ownerId: fn.ownerId, name: fn.name, definition: fn.data,
+    resourceId: fn.id, version: fn.version }), error => (error as { status: number }).status === 409);
+  await f.functions.remove(fn.id);
+  await assert.rejects(functions.get(fn.id), error => (error as { status: number }).status === 404);
+});
+
+test('JSONの引数の型を保ち、宣言と一致しない入力を受付時に検証する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
     program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify(JSON.parse(text))));'] },
     parameters: [{ name: 'count', label: 'Count', type: 'number' }, { name: 'enabled', label: 'Enabled', type: 'boolean' },
       { name: 'payload', label: 'Payload', type: 'json' }], result: 'json' }));
   const args = { count: 0, enabled: false, payload: { values: [1, 'two', null], nested: { ready: true } } };
-  const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: args, outputs: {} });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result!.ok, true, JSON.stringify(result));
-  assert.deepEqual(result!.result, args);
+  await assert.rejects(f.functions.invoke(fn.id, { ...args, count: '0' }), error => (error as { status: number }).status === 400);
+  const invocation = await f.functions.invoke(fn.id, args);
+  await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(invocation.id)).result, args);
 });
 
 test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型のまま設定する', async t => {
@@ -110,95 +124,64 @@ test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型�
     parameters: [{ name: 'count', label: 'Count', type: 'number' }, { name: 'enabled', label: 'Enabled', type: 'boolean' },
       { name: 'payload', label: 'Payload', type: 'json' }, { name: 'constructor', label: 'Constructor', required: false }], result: 'json' }));
   const args = { count: 0, enabled: false, payload: [1, { name: 'item' }, null] };
-  const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: args, outputs: {} });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result!.ok, true, JSON.stringify(result));
-  assert.deepEqual(result!.result, { ...args, caption: 'Count 0', constructor: null });
+  const invocation = await f.functions.invoke(fn.id, args);
+  await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(invocation.id)).result, { ...args, caption: 'Count 0', constructor: null });
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('count'), '0');
 });
 
-test('関数の定義と実行先を署名した依頼へ結びつけ、変更後は再承認して実行する', async t => {
+test('承認された定義だけを実行し、変更後の関数を再承認して呼び出す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
-  const operation = { kind: 'function' as const, functionId: fn.id, definition: fn.data, arguments: {}, outputs: {} };
-  const prepared = await f.client.prepare(f.owner.actor.id, fn.data.environmentId, operation);
-  const changed = { ...operation, definition: definition(fn.data.environmentId, f.resource.id, 'console.log(JSON.stringify({changed:true}))') };
-  const forged = await prepareRun({ ...prepared.intent, id: crypto.randomUUID(), operationDigest: await hash(changed),
-    functionId: fn.id, functionDigest: await hash(changed.definition) }, changed, f.owner.keys);
-  await assert.rejects(f.client.submitPrepared(forged));
-  const substituted = await prepareRun({ ...prepared.intent, id: crypto.randomUUID(), operationDigest: await hash(changed) }, changed, f.owner.keys);
-  const substitutedTask = await f.client.submitPrepared(substituted);
-  await f.executor.tick();
-  assert.equal((await f.client.api.json('/api/executions/' + substitutedTask.id, {}, Task)).state, 'failed');
-  const edited = await f.operations.execute({ name: 'function.save', input: JsonObject.parse({ ownerId: f.owner.actor.id,
-    resourceId: fn.id, version: fn.version, name: fn.name, definition: changed.definition }) });
-  assert.ok('kind' in edited && edited.kind === 'saved');
-  await assert.rejects(f.client.submitPrepared(prepared));
-  const current = await f.client.api.json('/api/resources/' + fn.id, {}, Resource);
-  assert.equal(current.kind, 'function');
-  if (current.kind !== 'function') throw new Error('Expected a function.');
-  const task = await f.client.submit(f.owner.actor.id, current.data.environmentId, { ...operation, definition: current.data });
-  await f.executor.tick();
-  assert.deepEqual((await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task)))!.result, { changed: true });
+  const queued = await f.functions.invoke(fn.id);
+  const changed = definition(f.environment.manifest.id, f.resource.id, 'console.log(JSON.stringify({changed:true}))');
+  await f.functions.save({ ownerId: fn.ownerId, name: fn.name, resourceId: fn.id, version: fn.version, definition: changed });
+  assert.equal(await f.functionExecutor.tick(), false);
+  assert.equal((await f.functions.result(queued.id)).state, 'failed');
+  const invocation = await f.functions.invoke(fn.id);
+  await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(invocation.id)).result, { changed: true });
 });
 
-test('共有許可を取り消した関数の待機中の実行を開始前に止める', async t => {
+test('共有許可を取り消した関数の待機中の呼び出しを開始前に止める', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.environment.manifest.id));
   const line = { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id };
   await f.relations.draw(f.owner.actor, line);
-  const { client } = await caller(f);
-  const task = await client.submit(f.stranger.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: {}, outputs: {} });
+  const functions = new FunctionClient(f.api(f.stranger.token)), invocation = await functions.invoke(fn.id);
   await f.relations.erase(f.owner.actor, line);
-  assert.equal(await f.executor.tick(), false);
-  assert.equal((await client.api.json('/api/executions/' + task.id, {}, Task)).state, 'failed');
+  assert.equal(await f.functionExecutor.tick(), false);
+  assert.equal((await functions.result(invocation.id)).state, 'failed');
 });
 
-test('入力の利用許可が有効な間に関数を実行し、期限が切れたら所有者が再承認する', async t => {
+test('入力の利用許可の期限を確認し、所有者が再承認した関数を呼び出す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
-  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
-  const { client } = await caller(f);
-  const changeExpiry = async (expiresAt: string) => {
-    const previous = await f.client.read(f.resource.id);
-    await f.client.save(f.resource.name, await f.client.reveal(f.resource.id), { ...previous.content.policy,
-      revision: previous.content.policy.revision + 1, grants: previous.content.policy.grants.map(grant =>
-        'function' in grant && grant.function.id === fn.id ? { ...grant, expiresAt } : grant) }, { previous });
-  };
-  const expiresAt = new Date(Date.now() + 300_000).toISOString();
-  await changeExpiry(expiresAt);
-  const operation = { kind: 'function' as const, functionId: fn.id, definition: fn.data, arguments: {}, outputs: {} };
-  const prepared = await client.prepare(f.stranger.actor.id, fn.data.environmentId, operation);
-  assert.equal(prepared.intent.expiresAt, expiresAt);
-  const task = await client.submitPrepared(prepared);
-  await f.executor.tick();
-  assert.equal((await client.api.json('/api/executions/' + task.id, {}, Task)).state, 'succeeded');
-  await changeExpiry(new Date(Date.now() - 1000).toISOString());
-  await assert.rejects(client.prepare(f.stranger.actor.id, fn.data.environmentId, operation));
-  const renewed = await f.operations.execute({ name: 'function.save', input: JsonObject.parse({ ownerId: f.owner.actor.id,
-    resourceId: fn.id, version: fn.version, name: fn.name, definition: fn.data }) });
-  assert.ok('kind' in renewed && renewed.kind === 'saved');
-  const next = await client.submit(f.stranger.actor.id, fn.data.environmentId, operation);
-  await f.executor.tick();
-  assert.equal((await client.api.json('/api/executions/' + next.id, {}, Task)).state, 'succeeded');
+  const previous = await f.client.read(f.resource.id);
+  await f.client.save(f.resource.name, await f.client.reveal(f.resource.id), { ...previous.content.policy,
+    revision: previous.content.policy.revision + 1, grants: previous.content.policy.grants.map(grant =>
+      'function' in grant && grant.function.id === fn.id ? { ...grant, expiresAt: new Date(Date.now() - 1000).toISOString() } : grant) }, { previous });
+  await assert.rejects(f.functions.invoke(fn.id), error => (error as { code: string }).code === 'function_not_approved');
+  await f.functions.save({ ownerId: fn.ownerId, name: fn.name, resourceId: fn.id, version: fn.version, definition: fn.data });
+  const invocation = await f.functions.invoke(fn.id);
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(invocation.id)).state, 'succeeded');
 });
 
-test('HTTP処理を関数として実行し、JSONの結果を暗号化した変数にも保存する', async t => {
+test('共有された関数の結果を呼び出す人の暗号化された変数へ保存する', async t => {
   const f = await flowFixture(() => jsonResponse({ count: 7 })); t.after(f.close);
   const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
     program: { kind: 'http', request: { url: 'https://service.example/items{?query}',
       bindings: [{ pointer: '/headers/authorization', parts: ['Bearer ', { id: f.resource.id }] }] } },
     parameters: [{ name: 'query', label: 'Query' }], result: 'json' }));
-  const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: { query: 'hello world' }, outputs: {} }, { save: { '/count': 'Count' } });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result?.ok, true, JSON.stringify(result));
-  const output = result!.result as { saved: Record<string, string> };
-  assert.equal(new TextDecoder().decode(await f.client.reveal(output.saved.Count!)), '7');
+  await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
+  const { client, functions } = await caller(f);
+  const invocation = await functions.invoke(fn.id, { query: 'hello world' }, { save: { '/count': 'Count' } });
+  await f.functionExecutor.tick();
+  const result = await functions.result(invocation.id);
+  assert.equal(result.state, 'succeeded', JSON.stringify(result));
+  const output = result.result as { saved: Record<string, string> };
+  assert.equal(decode(await client.reveal(output.saved.Count!)), '7');
   assert.equal(f.requests[0]!.headers!.authorization, 'Bearer confidential-value');
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('query'), 'hello world');
 });
@@ -207,30 +190,24 @@ test('関数で生成した秘密を暗号化して保存し、呼び出す人�
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.environment.manifest.id, undefined,
     'console.log(JSON.stringify({credential:require("crypto").randomBytes(16).toString("hex")}))'));
-  const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: {}, outputs: {} }, { save: { '/credential': 'Generated credential' } });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result!.ok, true, JSON.stringify(result));
-  const output = result!.result as { saved: Record<string, string> };
-  const id = output.saved['Generated credential']!;
-  assert.deepEqual(result!.result, { saved: { 'Generated credential': id } });
-  const credential = decode(await f.client.reveal(id));
-  assert.match(credential, /^[a-f0-9]{32}$/);
+  const invocation = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Generated credential' } });
+  await f.functionExecutor.tick();
+  const result = await f.functions.result(invocation.id);
+  assert.equal(result.state, 'succeeded', JSON.stringify(result));
+  const output = result.result as { saved: Record<string, string> }, id = output.saved['Generated credential']!;
+  assert.deepEqual(result.result, { saved: { 'Generated credential': id } });
+  assert.match(decode(await f.client.reveal(id)), /^[a-f0-9]{32}$/);
 });
 
-test('処理の終了コードと結果の形式を検証し、失敗を検証済みの結果として返す', async t => {
+test('処理の終了コードと結果の形式を検証し、失敗の理由を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   for (const [command, code, timeout] of [['process.stderr.write("problem");process.exit(3)', 'function_failed', 5], ['console.log("invalid JSON")', 'invalid_function_result', 5], ['setInterval(()=>{},1000)', 'function_timeout', 1]] as const) {
     const spec = definition(f.environment.manifest.id, undefined, command);
     if (spec.program.kind === 'command') spec.program.timeoutSeconds = timeout;
-    const fn = await save(f, spec);
-    const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-      definition: fn.data, arguments: {}, outputs: {} });
-    await f.executor.tick();
-    const completed = await f.client.api.json('/api/executions/' + task.id, {}, Task);
-    assert.equal(completed.state, 'failed');
-    assert.equal((await f.client.result(completed))!.error!.code, code);
+    const fn = await save(f, spec), invocation = await f.functions.invoke(fn.id);
+    await f.functionExecutor.tick();
+    const result = await f.functions.result(invocation.id);
+    assert.equal(result.state, 'failed'); assert.equal(result.error!.code, code);
   }
 });
 
@@ -240,21 +217,210 @@ test('関数の入力を更新して新しい値を使い、呼び出しごと�
   const fn = await save(f, definition(f.environment.manifest.id, f.resource.id, program));
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
   const newSource = await f.client.save('New input', encode('new-private-token-value'), policy);
-  const result = await f.operations.execute({ name: 'function.save', input: JsonObject.parse({ ownerId: f.owner.actor.id,
-    resourceId: fn.id, version: fn.version, name: fn.name, definition: definition(f.environment.manifest.id, newSource.id, program) }) });
-  assert.ok('kind' in result && result.kind === 'saved');
-  const current = await f.client.api.json('/api/resources/' + fn.id, {}, Resource);
-  if (current.kind !== 'function') throw new Error('Expected a function.');
-  for (let invocation = 0; invocation < 2; invocation++) {
-    const task = await f.client.submit(f.owner.actor.id, current.data.environmentId, { kind: 'function', functionId: fn.id,
-      definition: current.data, arguments: {}, outputs: {} });
-    await f.executor.tick();
-    assert.deepEqual((await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task)))!.result,
-      { count: 1, length: 'new-private-token-value'.length });
+  await f.functions.save({ ownerId: fn.ownerId, resourceId: fn.id, version: fn.version, name: fn.name,
+    definition: definition(f.environment.manifest.id, newSource.id, program) });
+  for (let index = 0; index < 2; index++) {
+    const invocation = await f.functions.invoke(fn.id);
+    await f.functionExecutor.tick();
+    assert.deepEqual((await f.functions.result(invocation.id)).result, { count: 1, length: 'new-private-token-value'.length });
   }
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
 });
 
+test('同じ呼び出しIDで再試行しても処理を一度だけ実行する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const id = crypto.randomUUID(), first = await f.functions.invoke(fn.id, {}, { id });
+  assert.equal((await f.functions.invoke(fn.id, {}, { id })).id, first.id);
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.invoke(fn.id, {}, { id })).state, 'succeeded');
+  assert.equal(f.requests.length, 1);
+  await assert.rejects(f.functions.invoke(fn.id, { different: true }, { id }), error => (error as { status: number }).status === 409);
+});
+
+test('受付後に通信が途切れても呼び出しIDから確認し、同じ処理を再実行せず再試行する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const api = f.api(f.owner.token);
+  const functions = new FunctionClient({ async json(path, options, schema) {
+    await api.json(path, options, schema);
+    throw new Error('The response was lost.');
+  } });
+  let id = '';
+  await assert.rejects(functions.invoke(fn.id), error => {
+    assert.ok(error instanceof InvocationSubmissionError); id = error.invocationId; return true;
+  });
+  assert.equal((await f.functions.result(id)).state, 'queued');
+  assert.equal((await f.functions.invoke(fn.id, {}, { id })).id, id);
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(id)).state, 'succeeded');
+  assert.equal(f.requests.length, 1);
+});
+
+test('所有者の署名で承認したプログラムを確認してから秘密を使う処理を開始する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST',
+      bindings: [{ pointer: '/headers/authorization', parts: [{ id: f.resource.id }] }] } } }));
+  const invocation = await f.functions.invoke(fn.id);
+  class AlteredBroker extends FunctionBroker {
+    override async claim(id: string) {
+      const value = await super.claim(id);
+      if (value?.publication.definition.program.kind === 'http')
+        value.publication.definition.program.request.url = 'https://other.example/action';
+      return value;
+    }
+  }
+  const broker = new AlteredBroker(f.functionExecutor.broker.api);
+  await new FunctionExecutor(f.executor, broker, f.journal).tick();
+  assert.equal((await f.functions.result(invocation.id)).error?.code, 'invalid_function');
+  assert.equal(f.requests.length, 0);
+  const approved = await f.functions.invoke(fn.id);
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(approved.id)).state, 'succeeded');
+  assert.equal(f.requests.length, 1);
+});
+
+test('結果の送信が途切れても保存した署名付きの結果を再送し、処理を一度だけ実行する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const invocation = await f.functions.invoke(fn.id);
+  class LostResponseBroker extends FunctionBroker {
+    lose = true;
+    override async finish(lease: string, completion: Parameters<FunctionBroker['finish']>[1]) {
+      const value = await super.finish(lease, completion);
+      if (this.lose) { this.lose = false; throw new Error('The result response was lost.'); }
+      return value;
+    }
+  }
+  const worker = new FunctionExecutor(f.executor, new LostResponseBroker(f.functionExecutor.broker.api), f.journal);
+  await assert.rejects(worker.tick(), DeliveryPending);
+  assert.equal((await f.functions.result(invocation.id)).state, 'succeeded');
+  assert.deepEqual(await worker.reconcile(), []);
+  assert.equal(await worker.tick(), false);
+  assert.equal(f.requests.length, 1);
+});
+
+test('開始前に期限が切れた処理を別のリースで引き受け、古いリースでの実行を拒否する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
+  const expired = (await broker.claim(f.environment.manifest.id))!;
+  await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
+  await f.context.invocations.recover();
+  assert.equal((await f.functions.result(invocation.id)).state, 'queued');
+  await assert.rejects(broker.dispatch(invocation.id, expired.lease), error => (error as { code: string }).code === 'lease_lost');
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(invocation.id)).state, 'succeeded');
+  assert.equal(f.requests.length, 1);
+});
+
+test('開始後に実行主体が停止した処理は結果不明として返し、自動でやり直さない', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const invocation = await f.functions.invoke(fn.id), claim = (await f.functionExecutor.broker.claim(f.environment.manifest.id))!;
+  await f.functionExecutor.broker.dispatch(invocation.id, claim.lease);
+  await f.journal.write('invocation_' + invocation.id, { id: invocation.id, digest: await hash(claim.request),
+    lease: claim.lease, phase: 'dispatched', delivered: false, completion: null });
+  await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
+  await f.context.invocations.recover();
+  assert.equal((await f.functions.result(invocation.id)).state, 'uncertain');
+  assert.deepEqual(await f.functionExecutor.reconcile(), []);
+  assert.equal((await f.functions.invoke(fn.id, {}, { id: invocation.id })).state, 'uncertain');
+  assert.equal(await f.functionExecutor.tick(), false);
+  assert.equal(f.requests.length, 0);
+});
+
+test('呼び出しに対応する実行主体の署名を検証して結果を保存する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id));
+  const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
+  const claim = (await broker.claim(f.environment.manifest.id))!;
+  await broker.dispatch(invocation.id, claim.lease);
+  const value = { id: invocation.id, requestDigest: await hash(claim.request), state: 'succeeded' as const,
+    result: { done: true }, error: null, finishedAt: new Date().toISOString() };
+  const forged = InvocationCompletion.parse({ ...value, signature: await sign(value, f.owner.keys.signing, 'function-result') });
+  await assert.rejects(broker.finish(claim.lease, forged), error => (error as { code: string }).code === 'invalid_result');
+  const approved = InvocationCompletion.parse({ ...value, signature: await sign(value, f.executor.keys.signing, 'function-result') });
+  assert.equal((await broker.finish(claim.lease, approved)).state, 'succeeded');
+  await assert.rejects(new FunctionClient(f.api(f.stranger.token)).result(invocation.id), error => (error as { status: number }).status === 403);
+});
+
+test('開始前の中止と実行開始が競合しても中止を確定し、次の呼び出しを実行する', async t => {
+  const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const invocation = await f.functions.invoke(fn.id);
+  class CancelledBroker extends FunctionBroker {
+    override async dispatch(id: string, lease: string) { await f.functions.cancel(id); return super.dispatch(id, lease); }
+  }
+  const worker = new FunctionExecutor(f.executor, new CancelledBroker(f.functionExecutor.broker.api), f.journal);
+  await worker.tick();
+  assert.equal((await f.functions.result(invocation.id)).state, 'cancelled');
+  assert.deepEqual(await worker.reconcile(), []);
+  assert.equal(f.requests.length, 0);
+  const next = await f.functions.invoke(fn.id);
+  await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(next.id)).state, 'succeeded');
+  assert.equal(f.requests.length, 1);
+});
+
+test('待機中に期限が切れた呼び出しと削除された関数の呼び出しを失敗として確定する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id));
+  const expired = await f.functions.invoke(fn.id);
+  await f.db.pool.query("UPDATE function_invocations SET request=jsonb_set(request,'{expiresAt}',to_jsonb($2::text)) WHERE id=$1",
+    [expired.id, new Date(Date.now() - 1000).toISOString()]);
+  await f.context.invocations.recover();
+  assert.equal((await f.functions.result(expired.id)).state, 'failed');
+  const deleted = await f.functions.invoke(fn.id);
+  await f.functions.remove(fn.id);
+  await f.context.invocations.recover();
+  assert.equal((await f.functions.result(deleted.id)).state, 'failed');
+  assert.equal(await f.functionExecutor.tick(), false);
+});
+
+test('中止の応答が途切れた場合は結果不明として確定し、遅れて届いた署名付き結果を受け取る', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id));
+  const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
+  const claim = (await broker.claim(f.environment.manifest.id))!;
+  await broker.dispatch(invocation.id, claim.lease);
+  await f.functions.cancel(invocation.id);
+  assert.equal((await f.functions.result(invocation.id)).error?.code, 'cancellation_pending');
+  assert.equal((await f.delegation.maintenance({ id: f.executor.binding.principalId }, f.environment.manifest.id)).active, 1);
+  await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
+  await f.context.invocations.recover();
+  const interrupted = await f.functions.result(invocation.id);
+  assert.equal(interrupted.state, 'uncertain'); assert.ok(interrupted.finishedAt);
+  assert.equal(interrupted.error?.code, 'execution_interrupted');
+  const value = { id: invocation.id, requestDigest: await hash(claim.request), state: 'cancelled' as const,
+    result: null, error: { code: 'invocation_cancelled', message: 'The invocation was cancelled.' }, finishedAt: new Date().toISOString() };
+  const completion = InvocationCompletion.parse({ ...value, signature: await sign(value, f.executor.keys.signing, 'function-result') });
+  assert.equal((await broker.finish(claim.lease, completion)).state, 'cancelled');
+});
+
+test('待機中の呼び出しを中止し、実行中の処理も中止して最終状態を返す', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id, undefined, 'setInterval(()=>{},1000)'));
+  const queued = await f.functions.invoke(fn.id);
+  assert.equal((await f.functions.cancel(queued.id)).state, 'cancelled');
+  const active = await f.functions.invoke(fn.id);
+  const worker = new FunctionExecutor(f.executor, f.functionExecutor.broker, f.journal, 10);
+  const running = worker.tick();
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if ((await f.functions.result(active.id)).startedAt) break;
+    await delay(5);
+  }
+  assert.equal((await f.functions.cancel(active.id)).state, 'uncertain');
+  await running;
+  assert.equal((await f.functions.result(active.id)).state, 'cancelled');
+});
 test('共有した関数がOAuth接続を更新して使用し、認証情報を呼び出す人へ渡さずに結果を返す', async t => {
   const f = await flowFixture(request => request.url.includes('/token') ? jsonResponse({ access_token: 'renewed-token',
     refresh_token: 'refresh-next', token_type: 'Bearer', expires_in: 3600, scope: 'read' }) : jsonResponse({ id: 'account', name: 'Account' }));
@@ -281,17 +447,18 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
     program: { kind: 'command', command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN,secret:process.env.TOKEN}))'],
       inputs: [{ name: 'TOKEN', source: { id: connectionId, output: 'ACCESS_TOKEN' } }], timeoutSeconds: 5 } }));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
-  const { client } = await caller(f);
-  const task = await client.submit(f.stranger.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: {}, outputs: {} });
-  await f.executor.tick();
-  const result = await client.result(await client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result?.ok, true, JSON.stringify(result));
+  const { client, functions } = await caller(f);
+  const task = await functions.invoke(fn.id);
+  await f.functionExecutor.tick();
+  const result = await functions.result(task.id);
+  assert.equal(result.state, 'succeeded', JSON.stringify(result));
   assert.deepEqual(result!.result, { configured: true, secret: '[redacted]' });
   const renewed = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connectionId))));
   assert.equal(renewed.oauth?.accessToken, 'renewed-token');
   await assert.rejects(client.read(app.id));
 });
+
+
 
 test('Pythonの処理へ引数とファイル・JSONの入力を渡し、テキストの結果を受け取る', async t => {
   const f = await flowFixture(); t.after(f.close);
@@ -302,10 +469,9 @@ test('Pythonの処理へ引数とファイル・JSONの入力を渡し、テキ�
       command: ['python3', '-c', 'import json,os,sys; args=json.load(sys.stdin); product=int(args["number"])*int(os.environ["FACTOR"]); length=len(open(os.environ["INPUT"],"rb").read()); print(f"Product {product}, file bytes {length}")'],
       inputs: [{ name: 'FACTOR', source: { id: factor.id }, format: 'json', pointer: '/factor' },
         { name: 'INPUT', source: { id: f.resource.id }, format: 'file' }], timeoutSeconds: 5 } }));
-  const task = await f.client.submit(f.owner.actor.id, fn.data.environmentId, { kind: 'function', functionId: fn.id,
-    definition: fn.data, arguments: { number: '5' }, outputs: {} });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
-  assert.equal(result!.ok, true, JSON.stringify(result));
-  assert.equal(result!.result, 'Product 15, file bytes 18\n');
+  const invocation = await f.functions.invoke(fn.id, { number: '5' });
+  await f.functionExecutor.tick();
+  const result = await f.functions.result(invocation.id);
+  assert.equal(result.state, 'succeeded', JSON.stringify(result));
+  assert.equal(result.result, 'Product 15, file bytes 18\n');
 });

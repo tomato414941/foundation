@@ -6,9 +6,7 @@ import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, Operations, authorizeUse, matchesPin, operationName, verifyRun } from '../shared/custody.js';
-import { FunctionDefinition } from '../shared/contracts.js';
-import { functionSources } from '../shared/functions.js';
+import { Operations, matchesPin, operationName, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/execution.js';
 import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
@@ -164,37 +162,16 @@ export class Delegation {
     if (environment.stopped_at) fail(409, 'environment_stopped', 'Choose an active execution environment.');
     await this.bindings.requireCurrent(intent.executor);
     await authorizeEnvironment(environment.registration, intent);
-    let functionSourceIds: Set<string> | null = null;
-    if (intent.operation === Operations.function) {
-      if (!intent.functionId) fail(400, 'function_required', 'Choose a saved function.');
-      const fn = await this.resources.get(intent.functionId);
-      await this.resources.authorization.requireResource(actor, fn, 'execute');
-      if (fn.kind !== 'function' || await hash(fn.data) !== intent.functionDigest)
-        fail(409, 'function_changed', 'The function changed. Review it again.');
-      const definition = FunctionDefinition.parse(fn.data);
-      if (definition.environmentId !== intent.environmentId)
-        fail(400, 'wrong_environment', 'Run the function in its configured environment.');
-      await this.resources.authorization.requireResource({ id: fn.owner_id }, await this.resources.get(intent.environmentId), 'execute');
-      functionSourceIds = new Set(functionSources(definition).map(source => source.id));
-      for (const id of [...functionSourceIds]) {
-        const source = await this.custody.get(id);
-        if (typeof source.metadata.appId === 'string') functionSourceIds.add(source.metadata.appId);
-      }
-      if (canonical([...functionSourceIds].sort()) !== canonical(intent.sources.map(source => source.id).sort()))
-        fail(400, 'wrong_inputs', 'Use the inputs declared by the function.');
-    } else {
-      if (intent.functionId || intent.functionDigest) fail(400, 'wrong_function', 'Function authorization is only available to saved functions.');
-      await this.resources.authorization.requireResource(actor, await this.resources.get(intent.environmentId), 'execute');
-    }
+    if (intent.operation === Operations.function || intent.functionId || intent.functionDigest)
+      fail(400, 'invocation_required', 'Invoke a saved function through its function API.');
+    await this.resources.authorization.requireResource(actor, await this.resources.get(intent.environmentId), 'execute');
     const sources: CustodyContent[] = [];
     for (const pin of intent.sources) {
       const row = await this.resources.get(pin.id);
-      if (!functionSourceIds) await this.resources.authorization.requireResource(actor, row, 'use');
+      await this.resources.authorization.requireResource(actor, row, 'use');
       const content = await this.custody.get(pin.id);
       if (!await matchesPin(content, pin))
         fail(409, 'changed', 'An input changed. Review it before submitting another execution.');
-      if (functionSourceIds) await authorizeUse(content,
-        content.policy.contentType === ContentTypes.clientCredential ? { ...intent, operation: Operations.refresh } : intent);
       sources.push(content);
     }
     if (sources.reduce((bytes, content) => bytes + JSON.stringify(content).length, 0) > 16_000_000)
@@ -286,7 +263,9 @@ export class Delegation {
     const row = await this.resources.get(id);
     const active = required(await this.resources.db.one<{ count: number }>(
       `SELECT ((SELECT count(*) FROM execution_tasks WHERE environment_id=$1 AND state='running')+
-        (SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND state='running'))::integer AS count`, [id]));
+        (SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND state='running')+
+        (SELECT count(*) FROM function_invocations WHERE environment_id=$1 AND
+          (state='running' OR (state='uncertain' AND phase='dispatched' AND finished_at IS NULL))))::integer AS count`, [id]));
     return { paused: Date.parse(String(row.data.maintenanceUntil)) > Date.now(), active: active.count,
       heartbeatAt: environment.heartbeat_at ? iso(environment.heartbeat_at) : null,
       sshSessions: Number((row.data.ssh as { activeSessions?: number } | undefined)?.activeSessions ?? 0) };

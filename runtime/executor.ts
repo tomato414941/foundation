@@ -9,7 +9,7 @@ import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custo
 import {
   ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
 } from '../shared/execution.js';
-import type { ExecutionOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
+import type { ExecutableOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
 import { functionProgram } from '../shared/functions.js';
 import { authorizeOperationContext } from '../shared/operation-authorization.js';
 import { atPointer, pointerParts, redact, setPointer } from '../shared/values.js';
@@ -130,7 +130,7 @@ export class Executor {
       const operation = RuntimeOperation.parse(opened.operation);
       if (Operations[operation.kind] !== intent.operation) throw new Error('Use the operation authorized by this intent.');
       await authorizeOperationContext(intent, operation);
-      await this.preflight(operation, intent, claim.sources);
+      await this.validateOperation(operation, intent, claim.sources);
       runningSignal.throwIfAborted();
       record.operation = operation;
       record.phase = 'dispatched';
@@ -138,7 +138,7 @@ export class Executor {
       dispatched = true;
       await this.broker.dispatch(intent.id, claim.lease);
       runningSignal.throwIfAborted();
-      const result = await this.execute(operation, intent, claim.sources, runningSignal);
+      const result = await this.executeOperation(operation, intent, claim.sources, runningSignal);
       receipt = await makeReceipt(intent, 'succeeded', { ok: true, result, error: null }, this.keys);
     } catch (error) {
       if (error instanceof DeliveryPending) throw error;
@@ -168,7 +168,7 @@ export class Executor {
     return program.kind === 'http' ? program.request : null;
   }
 
-  private async preflight(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[]) {
+  async validateOperation(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[]) {
     if (new Set(sources.map(source => source.policy.id)).size !== sources.length ||
       sources.length !== intent.sources.length) throw new Error('Supply exactly the signed execution inputs.');
     for (const source of sources) {
@@ -229,7 +229,7 @@ export class Executor {
     }
   }
 
-  private async execute(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
+  async executeOperation(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
     if (operation.kind === 'connect' || operation.kind === 'refresh' || operation.kind === 'revoke')
       return this.extension!.execute(operation.input, intent, sources, signal);
     const request = this.request(operation);
