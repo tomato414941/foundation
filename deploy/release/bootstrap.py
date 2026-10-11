@@ -14,10 +14,13 @@ def main():
     providers = aws("iam", "list-open-id-connect-providers")["OpenIDConnectProviderList"]
     if not any(value["Arn"] == provider for value in providers):
         aws("iam", "create-open-id-connect-provider", "--url", "https://token.actions.githubusercontent.com", "--client-id-list", "sts.amazonaws.com")
+    subject = json.loads(subprocess.check_output(["gh", "api", "repos/tomato414941/foundation/actions/oidc/customization/sub"], text=True))
+    if not subject.get("use_default") or not subject.get("sub_claim_prefix"):
+        raise RuntimeError("Review the repository's custom OIDC subject before configuring its deployment role.")
     trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Federated": provider},
         "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {"StringEquals": {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-            "token.actions.githubusercontent.com:sub": "repo:tomato414941/foundation:environment:production"}}}]}
+            "token.actions.githubusercontent.com:sub": subject["sub_claim_prefix"] + ":environment:production"}}}]}
     role = "foundation-github-release"
     existing = subprocess.run(["aws", "--profile", "foundation", "iam", "get-role", "--role-name", role], capture_output=True, text=True)
     if existing.returncode:
