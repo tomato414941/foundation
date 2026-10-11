@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright, expect
 
+from browser_shards import select_shard
+
 
 ORIGIN = "http://localhost:" + os.environ.get("FOUNDATION_TEST_PORT", "3458")
 ARTIFACTS = Path("test-results/browser")
@@ -1585,6 +1587,9 @@ class BrowserTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    shard = os.environ.get("FOUNDATION_BROWSER_SHARD", "1/1")
+    names = select_shard(unittest.defaultTestLoader.getTestCaseNames(BrowserTests), shard)
+    print(f"Browser shard {shard}: {len(names)} tests", flush=True)
     server = None
     if not os.environ.get("FOUNDATION_UI_SERVER"):
         log = (ARTIFACTS.parent / "browser-server.log")
@@ -1608,7 +1613,7 @@ if __name__ == "__main__":
             server_output.close()
             raise RuntimeError("Browser test server did not start")
     try:
-        unittest.main(verbosity=2)
+        unittest.main(defaultTest=["BrowserTests." + name for name in names], verbosity=2)
     finally:
         if server:
             server.terminate()

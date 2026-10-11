@@ -51,6 +51,7 @@ jobs:
         run: |
           npm run check
           npm test
+          python3 -m unittest discover -s tests -p 'test_*.py'
           python3 -m unittest discover -s deploy/release -p 'test_*.py'
       - name: Stop integration services
         if: always()
@@ -60,11 +61,16 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     concurrency:
-      group: foundation-browser-${{ github.ref }}
+      group: foundation-browser-${{ github.ref }}-${{ matrix.shard }}
       cancel-in-progress: true
     env:
       TEST_DATABASE_URL: postgres://foundation:foundation-ci-only@127.0.0.1:5432/foundation_test
+      FOUNDATION_BROWSER_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -88,7 +94,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: foundation-browser-${{ github.sha }}
+          name: foundation-browser-${{ github.sha }}-${{ matrix.shard }}
           path: test-results/
           if-no-files-found: ignore
       - name: Stop integration services
