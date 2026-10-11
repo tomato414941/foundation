@@ -102,10 +102,10 @@ export class Processes {
   async claim(actor: Actor, environmentId: string) {
     await this.delegation.heartbeat(actor, environmentId);
     const lease = randomUUID();
-    const row = await this.resources.db.one<ProcessRow>(
+    const row = await this.delegation.claimGate(environmentId, connection => this.resources.db.one<ProcessRow>(
       `UPDATE environment_processes SET state='running',phase='claimed',lease_token=$2,lease_until=now()+interval '60 seconds'
        WHERE id=(SELECT id FROM environment_processes WHERE environment_id=$1 AND state='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease]);
+         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease], connection));
     if (!row) return null;
     try { await this.validate(row.actor, environmentId); }
     catch {

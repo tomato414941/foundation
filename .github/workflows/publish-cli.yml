@@ -4,18 +4,23 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      mode:
+        description: Release the tested commit, or retry publication of its deployed artifacts
+        type: choice
+        options: [release, publish-only]
+        default: release
+      allow_schema_change:
+        description: Apply a reviewed database migration after creating a private backup
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: foundation-${{ github.sha }}
-  cancel-in-progress: false
-
 jobs:
   test:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -50,6 +55,7 @@ jobs:
         run: |
           npm run check
           npm test
+          python3 -m unittest discover -s deploy/release -p 'test_*.py'
           npm run build
       - name: Test browser workflows
         run: |
@@ -57,18 +63,29 @@ jobs:
           "$RUNNER_TEMP/foundation-ui/bin/pip" install playwright==1.58.0
           "$RUNNER_TEMP/foundation-ui/bin/python" -m playwright install --with-deps chromium webkit
           "$RUNNER_TEMP/foundation-ui/bin/python" tests/browser.py
-  cli:
+
+  release:
     needs: test
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Publishing to npm must happen one release at a time, whatever commit is being tested.
+    if: always() && (needs.test.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish-only'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://foundationsystems.app
     concurrency:
-      group: foundation-cli-publish
+      group: foundation-production-release
       cancel-in-progress: false
     permissions:
       contents: write
+      packages: write
       id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      AWS_DEFAULT_REGION: ap-northeast-1
+      FOUNDATION_BUCKET: foundation-objects-052438773980
+      FOUNDATION_INSTANCE_ID: i-012a1a04ee760f433
+      EC2_ENVIRONMENT_ZONE: ap-northeast-1a
+      ENVIRONMENT_COMMAND_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -79,102 +96,72 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Plan the release
-        id: release
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          git merge-base --is-ancestor HEAD origin/main
-          node .github/scripts/cli-release.mjs plan
-      - name: Build the CLI
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::052438773980:role/foundation-github-release
+          role-session-name: foundation-release-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Build and check the CLI distribution
+        id: cli
         run: |
           npm ci --include=dev --no-audit --no-fund
           npm run build:cli
-      - name: Pack and check the distributable
-        id: package
-        run: |
-          node --input-type=module <<'NODE'
-          import { execFileSync } from 'node:child_process';
-          import { appendFileSync, readFileSync } from 'node:fs';
-          import { join, basename } from 'node:path';
-          const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
-          const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', process.env.RUNNER_TEMP, './cli'], { encoding: 'utf8' }));
-          const allowed = new Set(['package.json', 'LICENSE', ...pkg.files]);
-          if (!packed.files.every(file => allowed.has(file.path))) throw new Error('The package contains files outside the CLI distribution.');
-          if (!packed.files.some(file => file.path === 'LICENSE')) throw new Error('The package must include its license.');
-          if (packed.filename !== basename(packed.filename)) throw new Error('Unexpected package filename.');
-          const tarball = join(process.env.RUNNER_TEMP, packed.filename);
-          const prefix = join(process.env.RUNNER_TEMP, 'foundation-cli-install');
-          execFileSync('npm', ['install', '--global', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', prefix, tarball], { stdio: 'inherit' });
-          const actual = execFileSync(join(prefix, 'bin', 'foundation'), ['--version'], { encoding: 'utf8' }).trim();
-          if (actual !== pkg.version) throw new Error('Installed package version mismatch.');
-          appendFileSync(process.env.GITHUB_OUTPUT, 'tarball=' + tarball + '\n');
-          console.log('Verified ' + packed.id + ' (' + packed.size + ' bytes).');
-          NODE
-      - name: Verify npm trusted publishing
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
-          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
-          url.searchParams.set('audience', 'npm:registry.npmjs.org');
-          const identity = await fetch(url, {
-            headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (!identity.ok) throw new Error(`GitHub OIDC returned HTTP ${identity.status}.`);
-          const { value } = await identity.json();
-          if (!value) throw new Error('GitHub did not return an OIDC token.');
-          const exchange = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg.name)}`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${value}` },
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (!exchange.ok) throw new Error(`npm rejected this workflow (HTTP ${exchange.status}). Check the package's Trusted Publisher settings.`);
-          const result = await exchange.json();
-          if (!result.token) throw new Error('npm did not issue a registry token.');
-          console.log(`npm accepted this workflow for ${pkg.name}. No package was published.`);
-          NODE
-      - name: Create the GitHub Release
-        if: github.event_name == 'push' && steps.release.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/cli-release.mjs github
-      - name: Publish through npm trusted publishing
-        if: github.event_name != 'workflow_dispatch' && steps.release.outputs.publish == 'true'
-        working-directory: cli
-        env:
-          CLI_TARBALL: ${{ steps.package.outputs.tarball }}
-        run: npm publish "$CLI_TARBALL" --access public --ignore-scripts --registry=https://registry.npmjs.org/
-      - name: Confirm npm publication
-        if: github.event_name != 'workflow_dispatch' && steps.release.outputs.publish == 'true'
-        run: node .github/scripts/cli-release.mjs wait
-  image:
-    needs: test
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Sign in to the GitHub container registry
+          node .github/scripts/cli-release.mjs plan
+      - name: Check npm trusted publishing before deployment
+        if: steps.cli.outputs.publish == 'true'
+        run: node .github/scripts/cli-release.mjs verify
+      - name: Sign in to the container registry
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      - name: Build and publish the server image
+      - name: Prepare immutable release artifacts
+        env:
+          PUBLICATION_ONLY: ${{ inputs.mode == 'publish-only' }}
         run: |
-          docker buildx create --use --name foundation >/dev/null
-          docker buildx build --platform linux/arm64 \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" \
-            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
-            --provenance=false --load .
-          docker run --rm "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" node --input-type=module -e "await import('/app/dist/server/app.js')"
-          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}"
-          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:main"
-          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" | head -3
+          args=()
+          if [ "$PUBLICATION_ONLY" = true ]; then args+=(--existing-only); fi
+          python3 deploy/release/prepare.py "$RUNNER_TEMP/foundation-release" "${args[@]}"
+      - name: Build and verify the final server container
+        if: inputs.mode != 'publish-only'
+        run: python3 deploy/release/build.py "$RUNNER_TEMP/foundation-release"
+      - name: Deploy and verify production
+        id: deploy
+        if: inputs.mode != 'publish-only'
+        env:
+          ALLOW_SCHEMA_CHANGE: ${{ inputs.allow_schema_change == true }}
+        run: |
+          args=()
+          if [ "$ALLOW_SCHEMA_CHANGE" = true ]; then args+=(--allow-schema-change); fi
+          python3 deploy/release/deploy.py "$RUNNER_TEMP/foundation-release/manifest.json" "${args[@]}"
+      - name: Confirm the exact deployed release
+        if: steps.deploy.outputs.obsolete != 'true'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const expected = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/foundation-release/manifest.json', 'utf8'));
+          const response = await fetch('https://foundationsystems.app/api/release', { signal: AbortSignal.timeout(30_000) });
+          if (!response.ok) throw new Error('Production has no verified release.');
+          const actual = await response.json();
+          if (actual.commit !== expected.commit || actual.cliSha256 !== expected.cliSha256) throw new Error('Another commit is running in production.');
+          console.log('Production verified: ' + actual.commit);
+          NODE
+      - name: Publish the verified CLI
+        if: steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true'
+        working-directory: cli
+        run: npm publish "$RUNNER_TEMP/foundation-release/cli.tgz" --access public --ignore-scripts --registry=https://registry.npmjs.org/
+      - name: Confirm npm publication
+        if: steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true'
+        run: node .github/scripts/cli-release.mjs wait
+      - name: Publish the GitHub Release
+        if: steps.deploy.outputs.obsolete != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/cli-release.mjs github
+      - name: Record release artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: foundation-release-${{ github.sha }}
+          path: ${{ runner.temp }}/foundation-release/*.json
+          if-no-files-found: ignore

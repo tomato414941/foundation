@@ -14,6 +14,7 @@ import type { Actor } from './authorization.js';
 import type { SigninResult } from './authentication.js';
 import { fail, failure } from './errors.js';
 import { token } from './vault.js';
+import { verifiedRelease } from './release.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
@@ -159,6 +160,10 @@ export async function buildApp(context: Context) {
   app.get('/health', { schema: { hide: true } }, async () => {
     await context.db.pool.query('SELECT 1');
     return { ok: true };
+  });
+  app.get('/api/release', { schema: { hide: true } }, async (_request, reply) => {
+    const release = await verifiedRelease(config.FOUNDATION_DATA);
+    return release ?? reply.code(503).send({ error: { code: 'release_pending', message: 'The release is being verified.' } });
   });
   app.get('/api/openapi.json', { schema: { hide: true } }, () => app.swagger());
   app.get('/api/session', { schema: { response: { 200: S.Session } } }, async (request) => ({

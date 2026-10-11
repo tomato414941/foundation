@@ -2,6 +2,8 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const packageName = '@tomato414941/foundation';
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -51,6 +53,21 @@ export async function readRegistry(fetcher = fetch) {
   if (!response.ok)
     throw new Error('Cannot check published CLI versions (npm HTTP ' + response.status + ').');
   return response.json();
+}
+
+export async function checkPublishedContent(pkg, registry, bytes, fetcher = fetch) {
+  const published = registry.versions[pkg.version];
+  if (!published) return;
+  const url = new URL(published.dist.tarball);
+  if (url.origin !== 'https://registry.npmjs.org') throw new Error('Unexpected npm package origin.');
+  const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error('Could not read the published CLI.');
+  const packed = Buffer.from(await response.arrayBuffer());
+  const integrity = 'sha512-' + createHash('sha512').update(packed).digest('base64');
+  if (integrity !== published.dist.integrity) throw new Error('The published package failed its integrity check.');
+  const previous = execFileSync('tar', ['-xzOf', '-', 'package/dist/cli.mjs'], { input: packed, maxBuffer: 40_000_000 });
+  if (!Buffer.from(bytes).equals(previous))
+    throw new Error('The CLI distribution changed. Increase cli/package.json version before releasing.');
 }
 
 export async function ensureRelease({ repository, sha, version, token, fetcher = fetch }) {
@@ -149,27 +166,57 @@ async function main() {
       if (!readFileSync('cli/LICENSE', 'utf8').trim()) throw new Error('The CLI license text is required.');
       if (process.env.RELEASE_TAG && process.env.RELEASE_TAG !== 'cli-v' + pkg.version)
         throw new Error('The release tag must match the CLI package version.');
-      const plan = planRelease(pkg, await readRegistry());
+      const registry = await readRegistry();
+      await checkPublishedContent(pkg, registry, readFileSync('cli/dist/cli.mjs'));
+      const plan = planRelease(pkg, registry);
       appendFileSync(process.env.GITHUB_OUTPUT, 'publish=' + plan.publish + '\ntag=' + plan.tag + '\n');
       console.log(plan.reason);
       break;
     }
-    case 'github':
+    case 'github': {
+      let sha = process.env.GITHUB_SHA;
+      try {
+        const tag = 'cli-v' + pkg.version;
+        const source = execFileSync('git', ['rev-parse', 'refs/tags/' + tag + '^{commit}'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        execFileSync('git', ['merge-base', '--is-ancestor', source, sha], { stdio: 'ignore' });
+        const tagged = JSON.parse(execFileSync('git', ['show', tag + ':cli/package.json'], { encoding: 'utf8' }));
+        if (tagged.version !== pkg.version) throw new Error('The existing CLI tag has another version.');
+        sha = source;
+      } catch (error) {
+        if (error.status !== 128) throw error;
+      }
       console.log(
         await ensureRelease({
           repository: process.env.GITHUB_REPOSITORY,
-          sha: process.env.GITHUB_SHA,
+          sha,
           version: pkg.version,
           token: process.env.GH_TOKEN,
         }),
       );
       break;
+    }
     case 'wait':
       await waitForPublication(pkg.version);
       console.log('npm has published ' + packageName + '@' + pkg.version + '.');
       break;
+    case 'verify': {
+      const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+      url.searchParams.set('audience', 'npm:registry.npmjs.org');
+      const identity = await fetch(url, { headers: { Authorization: 'Bearer ' + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN },
+        signal: AbortSignal.timeout(30_000), redirect: 'error' });
+      if (!identity.ok) throw new Error('GitHub OIDC returned HTTP ' + identity.status);
+      const { value } = await identity.json();
+      if (!value) throw new Error('GitHub did not return an OIDC token.');
+      const exchange = await fetch('https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/' + encodeURIComponent(packageName), {
+        method: 'POST', headers: { Authorization: 'Bearer ' + value }, signal: AbortSignal.timeout(30_000), redirect: 'error',
+      });
+      if (!exchange.ok) throw new Error('npm rejected the trusted publisher (HTTP ' + exchange.status + ').');
+      if (!(await exchange.json()).token) throw new Error('npm did not issue a publication token.');
+      console.log('npm accepted this workflow. No package was published.');
+      break;
+    }
     default:
-      throw new Error('Usage: cli-release.mjs <plan|github|wait>');
+      throw new Error('Usage: cli-release.mjs <plan|github|wait|verify>');
   }
 }
 

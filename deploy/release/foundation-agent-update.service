@@ -1,0 +1,9 @@
+[Unit]
+Description=Update the Foundation agent from the verified production release
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/dev/.local/lib/foundation-release/update_agent.py --environment c71078da-1cfd-42b1-8d64-52681cf95a79 --service foundation-agent-dev-us.service
+Environment=PATH=/home/dev/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/usr/bin:/bin
+TimeoutStartSec=180
+UMask=0077

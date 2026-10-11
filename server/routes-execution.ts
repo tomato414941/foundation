@@ -70,6 +70,14 @@ export async function routesExecution(app: ApiApp, context: Context) {
   app.post('/api/environments/:id/heartbeat', {
     schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: z.object({ registration: P.SignedEnvironment }) } },
   }, request => delegation.heartbeat(actor(request), request.params.id));
+  const maintenance = z.object({ paused: z.boolean(), active: z.number().int().nonnegative(),
+    heartbeatAt: z.iso.datetime().nullable(), sshSessions: z.number().int().nonnegative() });
+  app.get('/api/environments/:id/maintenance', {
+    schema: { params: C.IdParams, response: { 200: maintenance } },
+  }, request => delegation.maintenance(actor(request), request.params.id));
+  app.post('/api/environments/:id/maintenance', {
+    schema: { params: C.IdParams, body: z.object({ paused: z.boolean() }).strict(), response: { 200: maintenance } },
+  }, request => delegation.maintenance(actor(request), request.params.id, request.body.paused));
   app.post('/api/environments/:id/claim', {
     schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: P.ClaimedExecution } },
   }, request => delegation.claim(actor(request), request.params.id));

@@ -250,12 +250,12 @@ export class Delegation {
   async claim(actor: Actor, environmentId: string): Promise<ClaimedTask | null> {
     await this.heartbeat(actor, environmentId);
     const lease = randomUUID();
-    const row = await this.resources.db.one<TaskRow>(
+    const row = await this.claimGate(environmentId, connection => this.resources.db.one<TaskRow>(
       `UPDATE execution_tasks SET state='running',phase='claimed',started_at=coalesce(started_at,now()),
          lease_token=$2,lease_until=now()+interval '60 seconds'
        WHERE id=(SELECT id FROM execution_tasks WHERE environment_id=$1 AND state='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease],
-    );
+         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease], connection,
+    ));
     if (!row) return null;
     try {
       const { sources } = await this.validate(row.actor, row.request);
@@ -267,6 +267,29 @@ export class Delegation {
       );
       return null;
     }
+  }
+
+  async claimGate<T>(id: string, claim: (connection: Queryable) => Promise<T | undefined>) {
+    return this.resources.db.transaction(async connection => {
+      const row = required(await this.resources.db.one<{ data: Record<string, unknown> }>(
+        'SELECT data FROM resources WHERE id=$1 FOR UPDATE', [id], connection));
+      if (Date.parse(String(row.data.maintenanceUntil)) > Date.now()) return undefined;
+      return claim(connection);
+    });
+  }
+
+  async maintenance(actor: Actor, id: string, paused?: boolean) {
+    const environment = await this.requireExecutor(actor, id);
+    if (paused !== undefined) await this.resources.db.pool.query(
+      "UPDATE resources SET data=jsonb_set(data,'{maintenanceUntil}',to_jsonb($2::text)) WHERE id=$1",
+      [id, new Date(paused ? Date.now() + 120_000 : 0).toISOString()]);
+    const row = await this.resources.get(id);
+    const active = required(await this.resources.db.one<{ count: number }>(
+      `SELECT ((SELECT count(*) FROM execution_tasks WHERE environment_id=$1 AND state='running')+
+        (SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND state='running'))::integer AS count`, [id]));
+    return { paused: Date.parse(String(row.data.maintenanceUntil)) > Date.now(), active: active.count,
+      heartbeatAt: environment.heartbeat_at ? iso(environment.heartbeat_at) : null,
+      sshSessions: Number((row.data.ssh as { activeSessions?: number } | undefined)?.activeSessions ?? 0) };
   }
 
   async renew(actor: Actor, id: string, lease: string) {
