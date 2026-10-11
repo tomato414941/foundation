@@ -17,6 +17,7 @@ import { FileJournal } from '../../dist/runtime/journal.js';
 import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
 import { encode, decode } from '../../dist/shared/encryption.js';
+import { cleanupIdentities } from './cleanup.mjs';
 
 // Only disposable identities and test material are used, including against production.
 const config = await configuration();
@@ -144,9 +145,7 @@ try {
   }
   if (!failures.length) {
     const ids = identities.map(value => typeof value === 'string' ? value : value.id);
-    await context.db.pool.query('DELETE FROM execution_tasks WHERE owner_id=ANY($1::uuid[])', [ids]);
-    await context.db.pool.query('DELETE FROM principals WHERE owner_id=ANY($1::uuid[])', [ids]);
-    await context.db.pool.query('DELETE FROM principals WHERE id=ANY($1::uuid[])', [ids]);
+    await cleanupIdentities(context.db, ids);
   }
   await context.db.close(); await rm(directory, { recursive: true, force: true });
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
