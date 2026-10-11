@@ -4,7 +4,6 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { MemoryPayments, MemoryObjects, MemoryRunner } from './fakes.js';
 import { ApprovalRequest, EnvironmentInput } from '../shared/contracts.js';
-import { requestedOperation } from '../shared/operations.js';
 import { buildApp } from '../server/app.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
@@ -140,8 +139,8 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
   assert.equal(created.statusCode, 201, created.body);
   const file = created.json();
   const asked = await app.inject({ method: 'POST', url: '/api/requests', headers: { authorization: 'Bearer ' + sender.token },
-    payload: { to: owner.actor.id, operations: [requestedOperation('object.update', { id: file.id, version: file.version,
-      contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') })] } });
+    payload: { to: owner.actor.id, operations: [{ name: 'object.update', input: { id: file.id, version: file.version,
+      contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } }] } });
   assert.equal(asked.statusCode, 201, asked.body);
   const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
   assert.equal(answered.statusCode, 200, answered.body); assert.equal(ApprovalRequest.parse(answered.json()).state, 'approved');

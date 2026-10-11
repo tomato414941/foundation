@@ -51,7 +51,7 @@ export class Worker {
       await this.context.db.pool.query('DELETE FROM sessions WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM request_links WHERE expires_at<now()');
       await this.context.db.pool.query(
-        "UPDATE approval_requests SET state='expired',private_input=NULL,continue_url=NULL WHERE state IN ('pending','running') AND expires_at<now()",
+        "UPDATE approval_requests SET state='expired' WHERE state IN ('pending','running') AND expires_at<now()",
       );
     }, 60_000);
   }

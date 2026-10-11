@@ -32,7 +32,6 @@ import { OAuthRelays } from './oauth-relays.js';
 import { Operations } from '../shared/custody.js';
 import { userOperations } from './user-operations.js';
 import { OperationExecutions } from './operation-executions.js';
-import { requestedOperation } from '../shared/operations.js';
 import { canonical } from '../shared/authority.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
@@ -93,7 +92,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       operationExecutions,
     );
   operationExecutions.consent = async (actor, id, operation, error) => {
-    await requests.propose(actor, error.to, error.proposed, requestedOperation(operation.name, operation.input), id);
+    await requests.propose(actor, error.to, error.proposed, { ...operation, inputs: [] }, id);
   };
   delegation.checkOperationContext = async (actor, intent) => {
     const context = intent.operationContext!, { plan } = await operationExecutions.input(actor, context.id);
@@ -118,10 +117,10 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     }
   };
   delegation.checkApproval = async (actor, intent) => {
-    const plan = await requests.operationPlan(actor, intent.approval!.id), input = plan.invocation.input;
+    const { plan } = await operationExecutions.input(actor, intent.approval!.id), input = plan.invocation.input;
     const kind = plan.invocation.name === 'connection.connect' ? 'connect' : plan.invocation.name === 'run.execute'
       ? (input.operation as { kind: keyof typeof Operations }).kind : null;
-    if (!intent.operationContext || intent.operationContext.id !== plan.id || plan.index !== intent.approval!.index ||
+    if (!intent.operationContext || intent.operationContext.id !== intent.approval!.id || plan.index !== intent.approval!.index ||
       input.ownerId !== intent.ownerId || !kind || intent.operation !== Operations[kind] ||
       (input.environmentId && input.environmentId !== intent.environmentId))
       throw new Error('Use the operation and execution environment approved by this request.');

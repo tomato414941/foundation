@@ -21,7 +21,7 @@ test('外部連携のURLを保存し、承認依頼の状態を含めた完了UR
   assert.deepEqual(read.json(), settings);
   const created = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: {
     to: recipient.actor.id,
-    operations: [{ method: 'POST', path: '/api/relations', body: {
+    operations: [{ name: 'relation.draw', input: {
       relation: 'agent', objectId: '$approver', subjectId: sender.actor.id,
     } }],
   } });

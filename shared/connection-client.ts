@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { CustodyClient } from './client.js';
-import { ApprovalRequest, Id, JsonObject, Name } from './contracts.js';
+import { Id, JsonObject, Name } from './contracts.js';
 import type { JsonValue, MethodDescription } from './contracts.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes, approvePolicy } from './custody.js';
 import type { CustodyPolicy } from './custody.js';
-import { ConnectionPlan, OAuthRelay, relayContext } from './protocol.js';
+import { OAuthRelay, relayContext } from './protocol.js';
 import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
@@ -22,9 +22,8 @@ export const FlowRecord = z.object({
   step: z.enum(['start', 'authorize', 'exchange', 'review', 'commit', 'connected', 'cancelled']),
   taskId: Id, createdAt: z.iso.datetime(),
   approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
-  approvalCompleted: z.boolean().optional(),
-  execution: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),
-  pendingRun: DelegatedRun.optional(),
+  execution: z.object({ id: Id, index: z.number().int().nonnegative() }).strict(),
+  pendingRun: DelegatedRun,
   url: z.url().nullable(), review: Review.nullable(), connectionId: Id.nullable(),
 }).strict();
 export type ConnectionFlow = z.infer<typeof FlowRecord>;
@@ -43,7 +42,7 @@ export class ConnectionClient {
   constructor(readonly custody: CustodyClient, readonly store: FlowStore) {}
   private async flow(id: string) {
     const found = await this.store.get(Id.parse(id));
-    if (!found) throw new Error('Continue this connection from the browser or terminal that started it.');
+    if (!found) throw new Error('The saved progress for this connection is unavailable.');
     const flow = FlowRecord.parse(found);
     if (flow.policy.origin !== this.custody.origin ||
       !flow.policy.authorities.some(authority => canonical(authority) === canonical(this.custody.binding)))
@@ -53,31 +52,24 @@ export class ConnectionClient {
   async start(input: { ownerId: string; environmentId: string; name: string; methodId: string; method: MethodDescription;
     appId?: string; fields?: Record<string, string>; scopes?: string[];
     aws?: AwsConnectionRequest;
-    connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string;
-    execution?: { id: string; index: number } }) {
+    connectionId?: string; environments?: string[]; redirectUri?: string;
+    execution: { id: string; index: number } }) {
     const id = crypto.randomUUID();
-    const plan = input.approvalId ? await this.custody.api.json('/api/requests/' + input.approvalId + '/connection', {}, ConnectionPlan) : null;
-    if (plan && (plan.input.ownerId !== input.ownerId || plan.input.methodId !== input.methodId ||
-      plan.input.connectionId !== input.connectionId ||
-      (plan.input.environmentId && plan.input.environmentId !== input.environmentId)))
-      throw new Error('Use the connection method and executor approved by this request.');
-    const approval = plan ? { id: plan.id, index: plan.index } : undefined;
-    const execution = input.execution ?? (plan ? { id: plan.id, index: plan.index } : undefined);
-    if (execution) {
-      const active = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
-      if (active.index !== execution.index || active.invocation.name !== 'connection.connect' ||
-        active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
-        (active.invocation.input.appId && active.invocation.input.appId !== input.appId) ||
-        (active.invocation.input.methodDigest && active.invocation.input.methodDigest !== await hash(input.method)) ||
-        (active.invocation.input.name && active.invocation.input.name !== input.name) ||
-        (active.invocation.input.environmentId && active.invocation.input.environmentId !== input.environmentId))
-        throw new Error('Use the connection and execution environment prepared by this operation.');
-      const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
-        ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
-        ...(!active.invocation.input.name ? { name: input.name } : {}) };
-      if (Object.keys(values).length) await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', { method: 'PATCH',
-        body: { index: execution.index, values } }, OperationExecution);
-    }
+    const execution = input.execution;
+    const active = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+    const approval = active.approval;
+    if (active.index !== execution.index || active.invocation.name !== 'connection.connect' ||
+      active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
+      (active.invocation.input.appId && active.invocation.input.appId !== input.appId) ||
+      (active.invocation.input.methodDigest && active.invocation.input.methodDigest !== await hash(input.method)) ||
+      (active.invocation.input.name && active.invocation.input.name !== input.name) ||
+      (active.invocation.input.environmentId && active.invocation.input.environmentId !== input.environmentId))
+      throw new Error('Use the connection and execution environment prepared by this operation.');
+    const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
+      ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
+      ...(!active.invocation.input.name ? { name: input.name } : {}) };
+    if (Object.keys(values).length) await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', { method: 'PATCH',
+      body: { index: execution.index, values } }, OperationExecution);
     const previous = input.connectionId ? await this.custody.read(input.connectionId) : null;
     if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId ||
       previous.content.metadata.methodId !== input.methodId)) throw new Error('Choose the existing connection and its method.');
@@ -96,18 +88,15 @@ export class ConnectionClient {
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,
       appId, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
       step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, review: null, connectionId: null,
-      ...(approval ? { approval, approvalCompleted: false } : {}) };
-    if (execution) flow.execution = execution;
-    flow.pendingRun = request;
+      execution, pendingRun: request, ...(approval ? { approval } : {}) };
     await this.custody.trust.rememberRun(request);
     await this.store.put(flow);
-    if (execution) await this.custody.api.json('/api/operation-executions/' + execution.id + '/continuation', { method: 'PUT',
+    await this.custody.api.json('/api/operation-executions/' + execution.id + '/continuation', { method: 'PUT',
       body: { index: execution.index, continuation: { kind: 'connection', id } } }, OperationExecution);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending' as const, flow, task };
   }
   private async operationContext(execution: ConnectionFlow['execution'], flowId: string) {
-    if (!execution) return undefined;
     const plan = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     if (plan.index !== execution.index) throw new Error('Continue the connection that is awaiting input.');
     return { ...execution, invocation: plan.invocation, continuationId: flowId };
@@ -115,19 +104,13 @@ export class ConnectionClient {
   async progress(id: string, relay = true): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step === 'connected') {
-      if ((flow.execution || flow.approval) && !flow.approvalCompleted) {
-        if (flow.execution) await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/complete', {
-          method: 'POST', body: { index: flow.execution.index, proof: { runId: flow.taskId, resourceId: flow.connectionId } },
-        }, OperationExecution);
-        else await this.custody.api.json('/api/requests/' + flow.approval!.id + '/connection', {
-          method: 'POST', body: { runId: flow.taskId, resourceId: flow.connectionId },
-        }, ApprovalRequest);
-        flow.approvalCompleted = true; await this.store.put(flow);
-      }
+      await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/complete', {
+        method: 'POST', body: { index: flow.execution.index, proof: { runId: flow.taskId, resourceId: flow.connectionId } },
+      }, OperationExecution);
       return { kind: 'connected', flow, id: flow.connectionId! };
     }
     if (flow.step === 'cancelled') {
-      if (flow.execution) await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/cancel',
+      await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/cancel',
         { method: 'POST', body: {} }, OperationExecution);
       return { kind: 'cancelled', flow };
     }
@@ -148,7 +131,7 @@ export class ConnectionClient {
     let task: TaskView;
     try { task = await this.custody.api.json('/api/executions/' + flow.taskId, {}, Task); }
     catch (error) {
-      if (!flow.pendingRun || !error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
       task = await this.custody.submitPrepared(flow.pendingRun);
     }
     if (['queued', 'running'].includes(task.state)) return { kind: 'pending', flow, task };
@@ -184,12 +167,12 @@ export class ConnectionClient {
       throw new Error('The authorization response does not match this connection request.');
     if (query.has('error')) {
       flow.step = 'cancelled'; await this.store.put(flow);
-      return { kind: 'cancelled', flow };
+      return this.progress(id, false);
     }
     const request = await this.custody.prepare(flow.ownerId, flow.environmentId, { kind: 'connect', input: {
       action: 'exchange', flowId: id, parameters,
     } }, { sourceIds: flow.appId ? [flow.appId] : [], approval: flow.approval,
-      operationContext: await this.operationContext(flow.execution ?? flow.approval, id) });
+      operationContext: await this.operationContext(flow.execution, id) });
     flow.step = 'exchange'; flow.taskId = request.intent.id;
     flow.pendingRun = request;
     await this.store.put(flow);
@@ -210,7 +193,7 @@ export class ConnectionClient {
       action: 'commit', flowId: id, authorizationDigest: flow.review!.metadata.authorizationDigest!,
       approval: await approvePolicy(policy, this.custody.binding, this.custody.keys, previous?.content),
     } }, { id: runId, expiresAt, approval: flow.approval,
-      operationContext: await this.operationContext(flow.execution ?? flow.approval, id) });
+      operationContext: await this.operationContext(flow.execution, id) });
     flow.step = 'commit'; flow.taskId = request.intent.id;
     flow.pendingRun = request;
     await this.store.put(flow);

@@ -44,9 +44,8 @@ export default function RequestNew() {
             label={t('requestOperations')}
             value={[
               {
-                method: 'POST',
-                path: '/api/relations',
-                body: { subjectId: '$requester', relation: 'agent', objectId: '$approver' },
+                name: 'relation.draw',
+                input: { subjectId: '$requester', relation: 'agent', objectId: '$approver' },
               },
             ]}
             rows={10}

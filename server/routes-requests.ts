@@ -3,9 +3,6 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import * as C from '../shared/contracts.js';
-import * as P from '../shared/protocol.js';
-import { fail } from './errors.js';
-import { WaitingOperation } from '../shared/operations.js';
 
 export async function routesRequests(
   app: ApiApp,
@@ -13,24 +10,6 @@ export async function routesRequests(
   cookieOptions: { httpOnly: boolean; secure: boolean; sameSite: 'lax'; path: string },
 ) {
   const { requests, integrations } = context;
-  app.get('/api/requests/:id/connection', {
-    schema: { params: C.IdParams, response: { 200: P.ConnectionPlan } },
-  }, request => requests.connectionPlan(actor(request), request.params.id));
-  app.get('/api/requests/:id/operation', {
-    schema: { params: C.IdParams, response: { 200: WaitingOperation.extend({ id: C.Id }) } },
-  }, request => requests.operationPlan(actor(request), request.params.id));
-  app.post('/api/requests/:id/connection', {
-    schema: { params: C.IdParams, body: z.object({ runId: C.Id, resourceId: C.Id }).strict(),
-      response: { 200: C.ApprovalRequest } },
-  }, async request => {
-    const who = actor(request), id = request.params.id;
-    const execution = await context.operationExecutions.get(who, id);
-    const index = execution.waiting?.index ?? execution.results.findIndex(result => result && typeof result === 'object' &&
-      !Array.isArray(result) && result.kind === 'connected' && result.id === request.body.resourceId);
-    if (index < 0) fail(409, 'connection_required', 'Continue the approved connection.');
-    await context.operationExecutions.complete(who, id, index, request.body);
-    return requests.get(who, id);
-  });
   app.get(
     '/api/requests',
     { schema: { querystring: C.PageQuery, response: { 200: C.listOf(C.ApprovalRequest) } } },

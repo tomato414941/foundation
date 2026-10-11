@@ -13,7 +13,6 @@ import type { Context } from './context.js';
 import type { Actor } from './authorization.js';
 import type { SigninResult } from './authentication.js';
 import { fail, failure } from './errors.js';
-import { AgreementNeeded } from './relations.js';
 import { token } from './vault.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
@@ -139,17 +138,7 @@ export async function buildApp(context: Context) {
       reply.setCookie('foundation_browser', request.browser, { ...cookieOptions, maxAge: 365 * 86400 });
   });
   app.setErrorHandler(async (thrown, request, reply) => {
-    let error: unknown = thrown;
-    // A change made on one side that waits on the other is sent there as a request, and made once that side agrees.
-    if (error instanceof AgreementNeeded)
-      try {
-        const operation = { method: request.method, path: request.url, body: request.body, inputs: [] };
-        return reply
-          .code(202)
-          .send(await context.requests.propose(actor(request), error.to, error.proposed, C.Operation.parse(operation)));
-      } catch (refused) {
-        error = refused;
-      }
+    const error: unknown = thrown;
     const isValidation = typeof error === 'object' && error !== null && 'validation' in error;
     const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
     if (isValidation || code === 'FST_ERR_CTP_INVALID_JSON_BODY' || code === 'FST_ERR_CTP_EMPTY_JSON_BODY')

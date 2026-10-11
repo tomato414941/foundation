@@ -50,17 +50,8 @@ export async function custodyClient(principalId?: string) {
     location.origin, identity.binding, identity.keys, trust);
 }
 export async function connectionClient() {
-  const custody = await custodyClient(), trust = custody.trust as BrowserTrust, remote = new RemoteFlowStore(custody);
-  return new ConnectionClient(custody, {
-    async get(id) {
-      const saved = await remote.get(id);
-      if (saved) return saved;
-      const previous = await trust.get<import('../../shared/connection-client').ConnectionFlow>('flow:' + id);
-      if (previous) await remote.put(previous);
-      return previous;
-    },
-    put: flow => remote.put(flow),
-  });
+  const custody = await custodyClient();
+  return new ConnectionClient(custody, new RemoteFlowStore(custody));
 }
 export async function operationClient() {
   const connections = await connectionClient();

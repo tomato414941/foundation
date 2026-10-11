@@ -25,7 +25,7 @@ export async function routesMcp(app: ApiApp) {
       { name: 'Foundation', version: '1.0.0' },
       {
         instructions:
-          'Use foundation_schema to discover the Foundation API and foundation_api to call it as the authenticated principal. GET /api/operations lists user operations and their inputs. POST /api/operations/{name} executes the same operation used by forms and approval requests. A request can prepare that call for its recipient. Protected inputs are entered and encrypted in the request screen; credentials must never be included in API request bodies. Start commands with POST /api/environments/{id}/processes, then inspect or cancel the returned process ID.',
+          'Use foundation_schema to discover the Foundation API and foundation_api to call it as the authenticated principal. GET /api/operations lists user operations and their inputs. POST /api/operations/{name} executes the same operation used by forms and approval requests. Create a request with POST /api/requests and operations containing name, input, and optional input fields. Protected inputs are entered and encrypted in the request screen; credentials must never be included in API request bodies. Start commands with POST /api/environments/{id}/processes, then inspect or cancel the returned process ID.',
       },
     );
     registerMetadataTools(server, {

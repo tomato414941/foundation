@@ -26,9 +26,8 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
     payload: {
       operations: [
         {
-          method: 'POST',
-          path: '/api/relations',
-          body: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id },
+          name: 'relation.draw',
+          input: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id },
         },
       ],
     },
@@ -74,7 +73,8 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
     payload: {
       to: owner.actor.id,
       operations: [
-        { method: 'POST', path: '/api/principals', body: { name: 'New group', ownerId: owner.actor.id } },
+        { name: 'principal.create', input: { name: '', ownerId: owner.actor.id },
+          inputs: [{ pointer: '/name', label: 'Group name' }] },
       ],
     },
   });
@@ -107,10 +107,11 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
     method: 'POST',
     url: '/api/requests/' + asked.json().id + '/approve',
     headers,
-    payload: {},
+    payload: { values: [{ '/name': 'New group' }] },
   });
   assert.equal(answer.statusCode, 200, answer.body);
   assert.equal(answer.json().state, 'approved');
+  assert.equal(answer.json().results[0].name, 'New group');
   const repeated = await app.inject({
     method: 'POST',
     url: '/api/requests/' + asked.json().id + '/redeem',
@@ -123,16 +124,16 @@ test('接続の承認後に実行先で認証情報を受け取り、暗号化�
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [{ method: 'CONNECT', path: '/api/connections', body: {
+    operations: [{ name: 'connection.connect', input: {
       ownerId: f.owner.actor.id, methodId: 'github:token', environmentId: f.environment.manifest.id,
+      name: 'Requested connection',
     } }] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
   assert.equal(answer.state, 'running');
   assert.equal(answer.waiting?.invocation.name, 'connection.connect');
   assert.equal(answer.waiting?.invocation.input.environmentId, f.environment.manifest.id);
-  const started = await f.connections.start({ ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
-    methodId: 'github:token', method: await f.method('github:token'), name: 'Requested connection',
-    fields: { token: 'owner-provided-key' }, approvalId: asked.id });
+  const started = await f.operations.continue(asked.id, { fields: { token: 'owner-provided-key' } });
+  if (!('flow' in started)) throw new Error('Expected a pending connection.');
   assert.equal((await f.tick(started.flow.id)).kind, 'review');
   const connection = await f.accept(started.flow.id);
   const completed = await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest);
@@ -147,20 +148,19 @@ test('承認依頼の取り消しで待機中の接続を止め、その依頼�
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [{ method: 'CONNECT', path: '/api/connections', body: {
-      ownerId: f.owner.actor.id, methodId: 'render:token',
+    operations: [{ name: 'connection.connect', input: {
+      ownerId: f.owner.actor.id, methodId: 'render:token', name: 'Requested', environmentId: f.environment.manifest.id,
     } }] } }, ApprovalRequest);
   await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  const input = { ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
-    methodId: 'render:token', method: await f.method('render:token'), name: 'Requested',
-    fields: { token: 'provided-key' }, approvalId: asked.id };
-  const started = await f.connections.start(input);
+  const started = await f.operations.continue(asked.id, { fields: { token: 'provided-key' } });
+  if (!('flow' in started)) throw new Error('Expected a pending connection.');
   assert.equal((await sender.json('/api/requests/' + asked.id + '/cancel', { method: 'POST', body: {} }, ApprovalRequest)).state, 'cancelled');
   assert.equal((await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution)).state, 'cancelled');
   const progress = await f.tick(started.flow.id);
   assert.equal(progress.kind, 'failed');
   if (progress.kind === 'failed') assert.equal(progress.task.state, 'cancelled');
-  await assert.rejects(f.connections.start(input), { code: 'request_answered' });
+  const resumed = await f.operations.continue(asked.id, { fields: { token: 'provided-key' } });
+  assert.equal('state' in resumed && resumed.state, 'cancelled');
 });
 
 test('依頼の各操作は、承認する人が読む名前を日本語と英語で持ち、呼び出しの形は見せずに済む', async (t) => {
@@ -179,14 +179,14 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     assert.equal(response.statusCode, 201, response.body);
     return ApprovalRequest.parse(response.json()).operations.map((operation) => operation.title);
   };
-  assert.deepEqual(await ask([{ method: 'POST', path: '/api/relations', body: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id } }]),
+  assert.deepEqual(await ask([{ name: 'relation.draw', input: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id } }]),
     [{ ja: 'アクセスを許可する', en: 'Allow access' }]);
   const target = '00000000-0000-4000-8000-000000000001';
   assert.deepEqual(await ask([
-    { method: 'POST', path: '/api/relations', body: { relation: 'reader', objectId: target, subjectId: device.actor.id } },
-    { method: 'PATCH', path: '/api/principals/' + device.actor.id, body: { name: 'renamed' } },
-    { method: 'DELETE', path: '/api/resources/' + target },
-    { method: 'CONNECT', path: '/api/connections', body: { ownerId: '$approver', methodId: 'github-token' } },
+    { name: 'relation.draw', input: { relation: 'reader', objectId: target, subjectId: device.actor.id } },
+    { name: 'principal.rename', input: { id: device.actor.id, name: 'renamed' } },
+    { name: 'resource.delete', input: { id: target } },
+    { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'github:token' } },
   ], person.actor.id), [
     { ja: '権限を渡す', en: 'Give a permission' },
     { ja: 'プリンシパルを変更する', en: 'Change a principal' },

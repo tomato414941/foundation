@@ -8,6 +8,7 @@ import type { OutboundRequest, OutboundResponse, Transport } from '../server/tra
 import { CustodyClient } from '../shared/client.js';
 import type { JsonApi } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { canonical } from '../shared/authority.js';
@@ -47,6 +48,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const flows = new Map<string, ConnectionFlow>();
   const connections = new ConnectionClient(client, { async get(id) { return structuredClone(flows.get(id) ?? null); },
     async put(flow) { flows.set(flow.id, structuredClone(flow)); } });
+  const operations = new OperationClient(client, connections);
   const broker = new HttpBroker(api(f.executor.token)), journal = new MemoryJournal();
   const runtimeConnections = new Connections(f.executor.binding, f.executor.keys, broker.connections(), journal, transport, aws);
   const executor = new Executor(f.environment, f.executor.keys, broker, journal, transport,
@@ -69,8 +71,11 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   async function start(input: { methodId: string; fields?: Record<string, string>; name?: string;
     scopes?: string[];
     connectionId?: string; appId?: string; aws?: AwsConnectionRequest }) {
-    return connections.start({ ...input, method: await method(input.methodId), name: input.name ?? 'Account',
-      ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id });
+    const { fields, scopes, aws, ...configuration } = input;
+    const progress = await operations.execute({ name: 'connection.connect', input: { ...configuration,
+      name: input.name ?? 'Account', ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id } }, { fields, scopes, aws });
+    if (!('kind' in progress) || progress.kind !== 'pending') throw new Error('Expected a pending connection.');
+    return progress;
   }
   async function tick(id: string) {
     await executor.tick();
@@ -92,7 +97,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     await executor.tick();
     return client.result(await client.api.json('/api/executions/' + task.id, {}, Task));
   }
-  return { ...f, context, app, api, client, connections, runtimeConnections, executor, journal, requests,
+  return { ...f, context, app, api, client, connections, operations, runtimeConnections, executor, journal, requests,
     method, saveApp, start, tick, accept, http,
     async close() { await app.close(); await f.close(); } };
 }

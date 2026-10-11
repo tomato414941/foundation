@@ -217,7 +217,7 @@ export class Accounts {
           );
       }
       await connection.query(
-        "UPDATE approval_requests SET state=CASE WHEN state IN ('pending','running') THEN 'cancelled' ELSE state END,private_input=NULL,continue_url=NULL,from_id=CASE WHEN from_id=$1 THEN $2 ELSE from_id END,to_id=CASE WHEN to_id=$1 THEN $2 ELSE to_id END WHERE from_id=$1 OR to_id=$1",
+        "UPDATE approval_requests SET state=CASE WHEN state IN ('pending','running') THEN 'cancelled' ELSE state END,from_id=CASE WHEN from_id=$1 THEN $2 ELSE from_id END,to_id=CASE WHEN to_id=$1 THEN $2 ELSE to_id END WHERE from_id=$1 OR to_id=$1",
         [from.id, to.id],
       );
       await connection.query(

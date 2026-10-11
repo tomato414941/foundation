@@ -141,11 +141,10 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz,
-  private_input text,
-  continue_url text,
   proposal jsonb,
   credential_id uuid REFERENCES credentials(id) ON DELETE CASCADE
 );
+ALTER TABLE approval_requests DROP COLUMN IF EXISTS private_input, DROP COLUMN IF EXISTS continue_url;
 CREATE INDEX IF NOT EXISTS requests_recipient ON approval_requests(to_id,state,created_at);
 CREATE TABLE IF NOT EXISTS operation_executions (
   id uuid PRIMARY KEY,

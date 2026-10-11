@@ -456,31 +456,23 @@ export const Command = z
     inputs: z.array(Input).max(32).default([]),
   })
   .strict();
-export const Operation = z
-  .object({
-    method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'CONNECT']),
-    path: z.string().startsWith('/api/').max(2048),
-    body: Json.optional(),
-    inputs: z
-      .array(
-        z.object({
-          pointer: z.string(),
-          label: z.string().min(1).max(100),
-          secret: z.boolean().default(false),
-          multiline: z.boolean().default(false),
-          site: z.url().optional(),
-        }),
-      )
-      .max(16)
-      .default([]),
-  })
-  .strict();
+export const Invocation = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/),
+  input: JsonObject,
+}).strict();
+export const Operation = Invocation.extend({
+  inputs: z.array(z.object({
+    pointer: z.string(),
+    label: z.string().min(1).max(100),
+    secret: z.boolean().default(false),
+    multiline: z.boolean().default(false),
+    site: z.url().optional(),
+  }).strict()).max(16).default([]),
+});
 export type RequestedOperation = z.infer<typeof Operation>;
 // What an operation does, in the words shown to the one asked to approve it: Japanese and English.
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
-export const ConnectionRequest = z.object({ ownerId: z.union([Id, z.literal('$approver')]),
-  methodId: z.string().min(1).max(200), connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional() }).strict();
 export const RequestInput = z
   .object({
     to: Id.optional(),
@@ -503,8 +495,7 @@ export const ApprovalRequest = z.object({
   message: z.string(),
   proposal: Proposal.nullable(),
   operations: z.array(Operation.extend({ title: OperationTitle,
-    execution: z.enum(['server', 'keyholder']).default('server'),
-    invocation: z.object({ name: z.string(), input: JsonObject }).strict().optional(),
+    execution: z.enum(['server', 'keyholder']),
   })),
   state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
   results: z.array(Json.nullable()),
@@ -512,15 +503,14 @@ export const ApprovalRequest = z.object({
   expiresAt: Time,
   url: z.url(),
   code: z.string().optional(),
-  continueUrl: z.url().nullable(),
   returnUrl: z.url().nullable(),
   refreshUrl: z.url().nullable(),
   canRespond: z.boolean(),
   waiting: z.object({ index: z.number().int().nonnegative(),
-    invocation: z.object({ name: z.string(), input: JsonObject }).strict(),
+    invocation: Invocation,
     approval: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),
     continuation: z.object({ kind: z.enum(['connection', 'run']), id: Id }).strict().nullable(),
-  }).strict().nullable().default(null),
+  }).strict().nullable(),
 });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const DeviceRequest = z.object({

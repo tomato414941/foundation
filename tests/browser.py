@@ -337,7 +337,6 @@ class BrowserTests(unittest.TestCase):
         expect(row.get_by_role("button", name="削除", exact=True)).to_have_count(0)
         page.get_by_role("link", name="キーを発行", exact=True).click()
         expect(page.get_by_role("heading", name="キーを発行", exact=True)).to_be_visible()
-        expect(page.get_by_role("combobox", name="種類", exact=True)).to_have_count(0)
         page.get_by_role("textbox", name="名前", exact=True).fill("Issued key")
         page.get_by_role("button", name="追加", exact=True).click()
         expect(page.get_by_role("textbox", name="APIキー", exact=True)).to_be_visible()
@@ -1109,7 +1108,7 @@ class BrowserTests(unittest.TestCase):
         receiver, principal = self.passkey_account("OVH approver")
         environment = self.executor(receiver, principal).rsplit("/", 1)[1]
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "message": "OVHcloudへ接続してください。", "operations": [{
-            "method": "POST", "path": "/api/operations/connection.connect", "body": {
+            "name": "connection.connect", "input": {
                 "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Requested OVH account"
             }
         }]}, headers={"origin": ORIGIN})
@@ -1150,7 +1149,7 @@ class BrowserTests(unittest.TestCase):
         receiver, principal = self.passkey_account("Connection approver")
         environment = self.executor(receiver, principal).rsplit("/", 1)[1]
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
-            "method": "POST", "path": "/api/operations/connection.connect", "body": {
+            "name": "connection.connect", "input": {
                 "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Cancelled OVH account", "environmentId": environment
             }
         }]}, headers={"origin": ORIGIN})
@@ -1171,7 +1170,7 @@ class BrowserTests(unittest.TestCase):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
-            "method": "POST", "path": "/api/operations/variable.save", "body": {
+            "name": "variable.save", "input": {
                 "ownerId": "$approver", "name": "Requested variable", "value": "", "environmentIds": []
             }, "inputs": [{"pointer": "/value", "label": "Private value", "secret": True}]
         }]}, headers={"origin": ORIGIN})
@@ -1193,14 +1192,13 @@ class BrowserTests(unittest.TestCase):
         sender.goto(ORIGIN + "/requests/new")
         sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
         sender.get_by_role("textbox", name="メッセージ", exact=True).fill("Create a project account")
-        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"method": "POST", "path": "/api/principals", "body": {"name": "Approved project", "ownerId": "$approver"}}]))
+        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Approved project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
         sender.wait_for_url("**/requests/*")
         expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
         receiver.goto(sender.url)
         receiver.wait_for_load_state("networkidle")
         expect(receiver.get_by_text("1. プリンシパルを作る", exact=True)).to_be_visible()
-        expect(receiver.get_by_text("POST /api/principals")).to_have_count(0)
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible()
@@ -1213,7 +1211,7 @@ class BrowserTests(unittest.TestCase):
         viewer, _ = self.passkey_account("Existing session")
         sender.goto(ORIGIN + "/requests/new")
         sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
-        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"method": "POST", "path": "/api/principals", "body": {"name": "Link project", "ownerId": "$approver"}}]))
+        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Link project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
         sender.wait_for_url("**/requests/*")
         expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()

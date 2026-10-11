@@ -142,10 +142,9 @@ export class OperationExecutions {
       if (!updated.rowCount) fail(409, 'execution_changed', 'Reload this operation before continuing.');
       if (snapshot.actor.approvalId) {
         const approved = await connection.query<{ from_id: string }>(
-          `UPDATE approval_requests SET results=$2,continue_url=NULL,
+          `UPDATE approval_requests SET results=$2,
             state=CASE WHEN $3='succeeded' THEN 'approved' WHEN $3='failed' THEN 'pending' ELSE state END,
-            finished_at=CASE WHEN $3='succeeded' THEN now() ELSE finished_at END,
-            private_input=CASE WHEN $3 IN ('succeeded','failed') THEN NULL ELSE private_input END
+            finished_at=CASE WHEN $3='succeeded' THEN now() ELSE finished_at END
             WHERE id=$1 AND state='running' AND expires_at>now() RETURNING from_id`,
           [snapshot.actor.approvalId, JSON.stringify(snapshot.results), state]);
         if (state === 'succeeded' && approved.rows[0]) await this.audit.record(approved.rows[0].from_id,
@@ -248,9 +247,7 @@ export class OperationExecutions {
     return this.locked(id, async () => {
       const { row, snapshot, plan } = await this.input(actor, id);
       if (plan.index !== index || snapshot.continuation) fail(409, 'execution_changed', 'Continue the operation already in progress.');
-      const operation = this.operations.configure({ method: 'POST', path: '/api/operations/' + plan.invocation.name,
-        body: plan.invocation.input, inputs: [] }, values);
-      snapshot.operations[index] = this.operations.prepare(this.operations.resolve(operation)).invocation;
+      snapshot.operations[index] = this.operations.prepare(this.operations.configure(plan.invocation, values)).invocation;
       await this.save(row, snapshot, 'waiting', 'input');
       return this.view(row, snapshot);
     });

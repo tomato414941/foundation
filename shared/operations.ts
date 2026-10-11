@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { Command, ConnectionRequest, HttpRequest, Id, Json, JsonObject, Name, Operation, OperationTitle } from './contracts.js';
+import { Command, HttpRequest, Id, Invocation, Json, JsonObject, Name, OperationTitle } from './contracts.js';
 
-export const Invocation = z.object({ name: z.string().regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/), input: JsonObject }).strict();
+export { Invocation } from './contracts.js';
 export type OperationInvocation = z.infer<typeof Invocation>;
 
 const destination = z.object({ ownerId: Id, name: Name, resourceId: Id.optional(),
@@ -10,11 +10,12 @@ const destination = z.object({ ownerId: Id, name: Name, resourceId: Id.optional(
 export const ValueSave = destination.extend({ value: z.literal('').optional() });
 export const AppSave = destination.extend({ methodId: z.string().min(1).max(200), clientId: z.string().max(1000),
   fields: z.record(z.string(), z.literal('')).default({}), clientSecret: z.literal('').optional() });
-export const ConnectService = ConnectionRequest.extend({ ownerId: Id, appId: Id.optional(),
+export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1).max(200),
+  connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional(), appId: Id.optional(),
   environments: z.array(Id).max(32).optional(), redirectUri: z.url().optional(),
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.literal('')).optional(),
-  clientSecret: z.literal('').optional() });
+  clientSecret: z.literal('').optional() }).strict();
 export const RunOperation = z.object({ ownerId: Id, environmentId: Id,
   operation: z.union([
     z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
@@ -39,8 +40,3 @@ export const OperationExecution = z.object({ id: Id, actorId: Id,
 export type OperationExecutionView = z.infer<typeof OperationExecution>;
 export const OperationContext = z.object({ id: Id, index: z.number().int().nonnegative(), invocation: Invocation,
   continuationId: Id.optional() }).strict();
-
-export function requestedOperation(name: string, input: Record<string, z.infer<typeof Json>>,
-  inputs: z.input<typeof Operation>['inputs'] = []) {
-  return Operation.parse({ method: 'POST', path: '/api/operations/' + Invocation.shape.name.parse(name), body: input, inputs });
-}

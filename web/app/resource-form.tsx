@@ -137,7 +137,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     locked,
     serviceId: query.get('service'),
     methodId: query.get('method'),
-    approvalId: query.get('approval'),
     environmentId: query.get('environment'),
   };
 }
@@ -163,9 +162,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         name: name || existing?.name || selected.name,
         ...(connectionId ? { connectionId } : {}) }, form, selected);
       if (previous) prepared.material = { ...prepared.material, ...connectionSettings(selected, form, previous) };
-      const progress = formText(form, 'approvalId')
-        ? await client.continue(formText(form, 'approvalId'), prepared.material)
-        : await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
+      const progress = await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
       if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);
     }
@@ -386,7 +383,6 @@ export default function ResourceForm() {
         <Form method="post" encType="multipart/form-data">
           <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
             <input type="hidden" name="version" value={existing?.version ?? ''} />
-            {data.approvalId && <input type="hidden" name="approvalId" value={data.approvalId} />}
             {existing?.kind === 'connection' && (
               <input type="hidden" name="connectionId" value={existing.id} />
             )}

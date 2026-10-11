@@ -612,9 +612,8 @@ async function main(argv: string[]) {
             message: args.values.message ?? hostname(),
             operations: [
               {
-                method: 'POST',
-                path: '/api/relations',
-                body: { subjectId: current.principal.id, relation: 'agent', objectId: '$approver' },
+                name: 'relation.draw',
+                input: { subjectId: current.principal.id, relation: 'agent', objectId: '$approver' },
               },
             ],
           }

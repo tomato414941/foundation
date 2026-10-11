@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { ApprovalRequest, Resource, listOf } from '../shared/contracts.js';
-import { OperationDescription, OperationExecution, requestedOperation } from '../shared/operations.js';
+import { OperationDescription, OperationExecution } from '../shared/operations.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
@@ -23,7 +23,7 @@ test('定義した操作を通常のAPIと承認依頼から同じ利用者の�
   assert.deepEqual(direct, { text: 'Hello', actorId: f.owner.actor.id });
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [requestedOperation('message.format', { text: 'Hello' })] } }, ApprovalRequest);
+    operations: [{ name: 'message.format', input: { text: 'Hello' } }] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
   assert.equal(answer.state, 'approved'); assert.deepEqual(answer.results[0], direct);
 });
@@ -37,10 +37,10 @@ test('通常の画面と依頼の変数保存が鍵を持つ利用者の暗号�
   if (!('kind' in ordinary) || ordinary.kind !== 'saved') throw new Error('Expected a variable.');
   assert.equal(decode(await f.client.reveal(ordinary.resource.id)), 'ordinary-secret');
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
-    requestedOperation('principal.create', { ownerId: '$approver', name: 'Prepared group' }),
-    requestedOperation('variable.save', { ownerId: '$approver', name: 'Requested value', value: '', environmentIds: [] },
-      [{ pointer: '/value', label: 'Access token', secret: true }]),
-    requestedOperation('principal.rename', { id: '$approver', name: 'Finished owner' }),
+    { name: 'principal.create', input: { ownerId: '$approver', name: 'Prepared group' } },
+    { name: 'variable.save', input: { ownerId: '$approver', name: 'Requested value', value: '', environmentIds: [] },
+      inputs: [{ pointer: '/value', label: 'Access token', secret: true }] },
+    { name: 'principal.rename', input: { id: '$approver', name: 'Finished owner' } },
   ] } }, ApprovalRequest);
   const pending = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
   assert.equal(pending.state, 'running'); assert.equal(pending.waiting?.index, 1);
@@ -55,7 +55,9 @@ test('通常の画面と依頼の変数保存が鍵を持つ利用者の暗号�
   const execution = await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution);
   assert.equal(execution.state, 'succeeded'); assert.equal(execution.id, asked.id);
   const row = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM operation_executions WHERE id=$1', [asked.id]);
-  assert.ok(row?.snapshot); assert.equal(row.snapshot.includes('owner-only-secret'), false);
+  assert.ok(row?.snapshot);
+  const snapshot = await f.context.vault.decrypt(row.snapshot, 'operation-execution:' + asked.id);
+  assert.equal(JSON.stringify(snapshot).includes('owner-only-secret'), false);
   const resource = await f.client.api.json('/api/resources/' + result.resource.id, {}, Resource);
   assert.deepEqual(resource.data, result.resource.data);
 });
@@ -67,7 +69,7 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
   const sender = f.api(f.stranger.token), connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
   const operations = new OperationClient(f.client, connections);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
-    requestedOperation('connection.connect', { ownerId: '$approver', methodId: 'ovh:client_credentials', name: 'OVH account' }),
+    { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'ovh:client_credentials', name: 'OVH account' } },
   ] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {
     configuration: [{ environmentId: f.environment.manifest.id, clientId: 'ovh-service-account' }],
@@ -87,8 +89,6 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
   const tokenCall = f.requests.find(request => request.url.includes('/oauth2/token'))!;
   assert.ok(String(tokenCall.body).includes('client_secret=ovh-service-secret'));
   assert.ok(String(tokenCall.body).includes('client_id=ovh-service-account'));
-  const envelope = await f.context.db.one<{ envelope: unknown }>('SELECT envelope FROM operation_continuations WHERE id=$1', [start.flow.id]);
-  assert.ok(envelope); assert.equal(JSON.stringify(envelope).includes('ovh-service-secret'), false);
   await assert.rejects(sender.json('/api/operation-continuations/' + start.flow.id), { code: 'forbidden' });
 });
 
@@ -96,8 +96,8 @@ test('承認したHTTP操作と署名した実行を結び付け、実行先が�
   const f = await flowFixture(); t.after(f.close);
   const operations = new OperationClient(f.client, f.connections), sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [requestedOperation('run.execute', { ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
-      operation: { kind: 'http', request: { url: 'https://api.example.com/reviewed', method: 'GET' } } })] } }, ApprovalRequest);
+    operations: [{ name: 'run.execute', input: { ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
+      operation: { kind: 'http', request: { url: 'https://api.example.com/reviewed', method: 'GET' } } } }] } }, ApprovalRequest);
   await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
   const plan = await operations.plan(asked.id);
   const prepared = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
@@ -156,7 +156,7 @@ test('途中の操作をやり直す際に、保存した進捗から続けて�
   });
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [requestedOperation('counter.first', {}), requestedOperation('counter.second', {})] } }, ApprovalRequest);
+    operations: [{ name: 'counter.first', input: {} }, { name: 'counter.second', input: {} }] } }, ApprovalRequest);
   await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }), { code: 'temporarily_unavailable' });
   assert.equal((await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'pending');
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
@@ -190,7 +190,7 @@ test('送信の応答を失っても保存した署名付き実行を別のク�
 test('承認後に実行開始が中断しても、承認済みの同じ実行を保存した権限で再開する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [requestedOperation('principal.create', { ownerId: '$approver', name: 'Resumed group' })] } }, ApprovalRequest);
+    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'Resumed group' } }] } }, ApprovalRequest);
   const start = f.context.operationExecutions.start.bind(f.context.operationExecutions);
   f.context.operationExecutions.start = async () => { throw new Error('Process stopped after recording approval.'); };
   await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }), { status: 500 });

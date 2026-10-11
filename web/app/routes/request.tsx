@@ -30,7 +30,8 @@ function inputOperation(item: ApprovalView, actorId: string) {
     return operation.execution === 'keyholder' && (!result || (typeof result === 'object' && !Array.isArray(result) && ('error' in result || 'pending' in result)));
   });
   if (index < 0) return null;
-  const invocation = item.operations[index]!.invocation!;
+  const { name, input } = item.operations[index]!;
+  const invocation = { name, input };
   return { index, invocation: { name: invocation.name, input: substitute(invocation.input, actorId, item.from.id) } as OperationInvocation };
 }
 function configuration(invocation: OperationInvocation, input: OperationInvocation['input']) {
@@ -129,7 +130,7 @@ export default function RequestPage() {
           return <Panel key={index} title={`${index + 1}. ${i18n.language === 'ja' ? operation.title.ja : operation.title.en}`}>
             {current?.index === index && inputForm && <OperationInputFields data={inputForm} />}
             {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} acceptIntent="acceptConnection" cancelIntent="decline" />}
-            {!privateOperation && operation.body != null && <JsonView value={operation.body} />}
+            {!privateOperation && <JsonView value={operation.input} />}
             {!privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
               {input.multiline ? <TextareaField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
                 disabled={!item.canRespond || !pending} required={item.canRespond && pending} rows={3} /> :

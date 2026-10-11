@@ -125,7 +125,7 @@ export class OperationClient {
         name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
         connectionId: connection.connectionId, fields: material.fields, scopes: material.scopes, aws: material.aws,
         environments: connection.environments, redirectUri: connection.redirectUri,
-        execution: { id, index: plan.index }, approvalId: plan.approval?.id });
+        execution: { id, index: plan.index } });
     }
     if (name === 'run.execute') {
       if (plan.continuation?.kind === 'run') {
