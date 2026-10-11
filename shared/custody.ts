@@ -45,8 +45,11 @@ const permitted: Record<ContentTypeId, readonly OperationId[]> = {
   [ContentTypes.clientCredential]: [Operations.connect, Operations.refresh, Operations.revoke],
 };
 export const permittedOperations = (type: ContentTypeId) => permitted[type];
+export const functionOperations = (type: ContentTypeId) => permittedOperations(type)
+  .filter(operation => operation === Operations.function || operation === Operations.refresh);
 export const renewable = (type: ContentTypeId) => type === ContentTypes.tokenSet;
-export const ExecutionGrant = z.object({
+export const FunctionReference = z.object({ id: Id, digest: Fingerprint }).strict();
+const PrincipalGrant = z.object({
   actor: KeyBinding,
   executor: KeyBinding,
   operations: z.array(Operation).min(1).max(6),
@@ -55,6 +58,13 @@ export const ExecutionGrant = z.object({
   callerProgram: z.boolean().default(false),
   expiresAt: Time,
 }).strict();
+export const FunctionGrant = z.object({
+  function: FunctionReference,
+  executor: KeyBinding,
+  operations: z.array(Operation).min(1).max(6),
+  expiresAt: Time,
+}).strict();
+export const ExecutionGrant = z.union([PrincipalGrant, FunctionGrant]);
 export type UseGrant = z.infer<typeof ExecutionGrant>;
 export const AccessPolicy = z.object({
   format: z.literal(2),
@@ -151,7 +161,7 @@ async function nextLineage(previous: CustodyContent | undefined, policy: Custody
 export async function validatePolicy(input: CustodyPolicy) {
   const policy = AccessPolicy.parse(input);
   const bindings = [...policy.authorities, ...policy.readers,
-    ...policy.grants.flatMap(grant => [grant.actor, grant.executor]), ...policy.producers.map(producer => producer.executor)];
+    ...policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor]), ...policy.producers.map(producer => producer.executor)];
   const known = new Map<string, string>();
   for (const binding of bindings) {
     await validateBinding(binding);
@@ -170,6 +180,11 @@ export async function validatePolicy(input: CustodyPolicy) {
     if (new Set(grant.operations).size !== grant.operations.length ||
       grant.operations.some(operation => !permittedOperations(policy.contentType).includes(operation)))
       throw new Error('Grant only the operations this kind of content supports.');
+    if ('function' in grant) {
+      if (grant.operations.some(operation => operation !== Operations.function && operation !== Operations.refresh))
+        throw new Error('Function grants authorize the saved function and its credential renewal.');
+      continue;
+    }
     if (grant.operations.some(operation => operation === Operations.http || operation === Operations.command) && !grant.callerProgram)
       throw new Error('Explicitly authorize caller-supplied programs before allowing arbitrary execution.');
     if (grant.operations.includes(Operations.function) && !grant.functionDigests.length && !grant.callerProgram)
@@ -341,7 +356,7 @@ export const RunIntent = z.object({
   operationContext: OperationContext.optional(),
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
   environmentDigest: Fingerprint,
-  operation: Operation, functionDigest: Fingerprint.nullable(),
+  operation: Operation, functionDigest: Fingerprint.nullable(), functionId: Id.optional(),
   operationDigest: Fingerprint,
   sources: z.array(SourcePin).max(100),
   resultRecipients: z.array(KeyBinding).min(1).max(100),
@@ -411,13 +426,15 @@ export async function authorizeUse(
   if (canonical(intent.actor) === canonical(intent.executor) &&
     policy.readers.some(reader => canonical(reader) === canonical(intent.actor))) return content;
   const matching = policy.grants.filter(grant =>
-    canonical(grant.actor) === canonical(intent.actor) &&
+    ('actor' in grant ? canonical(grant.actor) === canonical(intent.actor)
+      : grant.function.id === intent.functionId && grant.function.digest === intent.functionDigest) &&
     canonical(grant.executor) === canonical(intent.executor) &&
     grant.operations.includes(intent.operation) &&
     Date.parse(grant.expiresAt) > (options.now ?? Date.now()) &&
     Date.parse(grant.expiresAt) >= Date.parse(intent.expiresAt),
   );
   const granted = matching.some(grant => {
+    if ('function' in grant) return intent.operation === Operations.function || intent.operation === Operations.refresh;
     if (intent.operation === Operations.function && !grant.callerProgram &&
       (!intent.functionDigest || !grant.functionDigests.includes(intent.functionDigest))) return false;
     if (grant.origins.length && (!options.destination || !grant.origins.includes(new URL(options.destination).origin)))

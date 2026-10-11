@@ -1,18 +1,18 @@
 import { z } from 'zod';
 import { ApprovalRequest, Id, Resource, listOf } from './contracts.js';
-import type { JsonValue, ResourceView } from './contracts.js';
+import type { FunctionSpec, JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
-  AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
+  AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, functionOperations, permittedOperations, policyAuthority,
   prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
-import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
+import { BoundRecipient, FunctionInvocation, FunctionWrite, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
-import { functionRequest } from './function-request.js';
+import { functionProgram, functionSources } from './functions.js';
 
 export interface JsonApi {
   json<T = unknown>(path: string, options?: { method?: string; body?: unknown; signal?: AbortSignal }, schema?: z.ZodType<T>): Promise<T>;
@@ -103,7 +103,7 @@ export class CustodyClient {
       throw new Error('Include your own identity as a reader before creating this item.');
     const expiresAt = options.expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
     const grants = options.previous ? options.previous.grants.filter(grant =>
-      grant.actor.id !== this.binding.id && Date.parse(grant.expiresAt) > Date.now()) : [];
+      (!('actor' in grant) || grant.actor.id !== this.binding.id) && Date.parse(grant.expiresAt) > Date.now()) : [];
     for (const environment of environments) {
       await this.trusted(environment.manifest.executor);
       grants.push({ actor: this.binding, executor: environment.manifest.executor,
@@ -175,6 +175,39 @@ export class CustodyClient {
     }
     return [...sources.values()];
   }
+  async prepareFunction(definition: FunctionSpec, functionId: string, existing = false) {
+    const environment = await this.environment(definition.environmentId);
+    if (environment.manifest.functionVersion !== 1)
+      throw new ClientFailure('function_runtime_required', 'Update this environment to Foundation CLI 5 or create a new environment.');
+    if (!environment.manifest.capabilities.includes(Operations.function) ||
+      !environment.manifest.capabilities.includes(Operations[definition.program.kind]))
+      throw new Error('Choose an environment that can execute this function.');
+    const sources = await this.sourceContents(functionSources(definition).map(source => source.id));
+    const current = new Set(sources.map(source => source.policy.id));
+    if (existing) {
+      const previous = await this.api.json('/api/functions/' + functionId + '/authorizations', {}, listOf(ProtectedRead));
+      for (const item of previous.items) if (!current.has(item.content.policy.id)) {
+        await this.observe(item.content);
+        sources.push(item.content);
+      }
+    }
+    const contents: z.infer<typeof FunctionWrite>['contents'] = {};
+    const reference = { id: functionId, digest: await hash(definition) };
+    for (const source of sources) {
+      const previous = await this.read(source.policy.id);
+      if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(this.binding)))
+        throw new Error('An authority of each input must approve its use by this function.');
+      const operations = functionOperations(source.policy.contentType);
+      const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1,
+        grants: [...previous.content.policy.grants.filter(grant => !('function' in grant) || grant.function.id !== functionId),
+          ...(current.has(source.policy.id) ? [{ function: reference, executor: environment.manifest.executor, operations,
+            expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }] : [])] });
+      const bytes = await reveal(previous.content, this.binding, this.keys.encryption);
+      contents[source.policy.id] = { version: previous.version, content: await protect(bytes, policy,
+        previous.content.materialRevision + 1, this.binding, this.keys, previous.content.metadata, previous.content) };
+    }
+    return FunctionWrite.parse({ functionId, contents });
+  }
   async output(ownerId: string, name: string, runId: string, environment: RegisteredEnvironment, expiresAt: string) {
     let existing: ResourceView | undefined, after: string | null = null;
     do {
@@ -192,28 +225,43 @@ export class CustodyClient {
   async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
     options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;
       approval?: ExecutionIntent['approval']; operationContext?: ExecutionIntent['operationContext'] } = {}) {
-    const environment = await this.environment(environmentId), operation = RuntimeOperation.parse(input);
-    const id = options.id ?? crypto.randomUUID(), expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
-    const request = operation.kind === 'http' ? operation.request : operation.kind === 'function'
-      ? functionRequest(operation.definition, operation.arguments) : null;
+    const operation = RuntimeOperation.parse(input);
+    const invocation = operation.kind === 'function' ? await this.api.json('/api/functions/' + operation.functionId + '/invocation', {}, FunctionInvocation) : null;
+    if (invocation && (await hash(invocation.definition) !== await hash(operation.kind === 'function' ? operation.definition : null) ||
+      invocation.definition.environmentId !== environmentId)) throw new Error('Run the current function in its approved environment.');
+    const environment = invocation ? await verifyEnvironment(invocation.registration) : await this.environment(environmentId);
+    await this.trusted(environment.manifest.executor);
+    const id = options.id ?? crypto.randomUUID();
+    let expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
+    const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
+    const request = program.kind === 'http' ? program.request : null;
     if (operation.kind === 'http' || operation.kind === 'function') {
-      const save = operation.kind === 'function' ? operation.definition.save : options.save ?? {};
-      if (operation.kind === 'function' && Object.keys(save).length && operation.definition.outputOwnerId !== ownerId)
-        throw new Error('Run this function for its approved output owner.');
+      const save = options.save ?? {};
       const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, name]) =>
         [pointer, await this.output(ownerId, name, id, environment, expiresAt)])));
       if (operation.kind === 'http') operation.save = outputs;
       else operation.outputs = outputs;
     }
-    const ids = operation.kind === 'command' ? operation.inputs.map(input => input.source.id)
+    const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)
       : request ? request.bindings.flatMap(binding => binding.parts.flatMap(part => typeof part === 'string' ? [] : [part.id])) : [];
-    const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
+    const sources = invocation ? invocation.sources : await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
+    if (invocation) for (const content of sources) await this.observe(content);
+    if (operation.kind === 'function' && !options.expiresAt) {
+      const digest = await hash(operation.definition);
+      const deadlines = sources.map(source => Math.max(...source.policy.grants.filter(grant => 'function' in grant &&
+        grant.function.id === operation.functionId && grant.function.digest === digest &&
+        canonical(grant.executor) === canonical(environment.manifest.executor) &&
+        functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)))
+        .map(grant => Date.parse(grant.expiresAt))));
+      expiresAt = new Date(Math.min(Date.parse(expiresAt), ...deadlines)).toISOString();
+    }
     const intent: ExecutionIntent = { format: 2, id, origin: this.origin, ownerId, actor: this.binding,
       environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
       operation: Operations[operation.kind], operationDigest: await hash(operation),
       ...(options.approval ? { approval: options.approval } : {}),
       ...(options.operationContext ? { operationContext: options.operationContext } : {}),
       functionDigest: operation.kind === 'function' ? await hash(operation.definition) : null,
+      ...(operation.kind === 'function' ? { functionId: operation.functionId } : {}),
       sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),
         ...(content.policy.contentType === ContentTypes.tokenSet && typeof content.metadata.authorizationDigest === 'string'

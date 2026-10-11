@@ -1,4 +1,4 @@
-import { InputField } from './form-fields';
+import { CheckboxField, InputField, TextareaField } from './form-fields';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -18,10 +18,8 @@ async function runResource(params: LoaderFunctionArgs['params']) {
   return resource;
 }
 export async function runLoader({ params }: LoaderFunctionArgs) {
-  const [resource, environments] = await Promise.all([
-    runResource(params),
-    availableEnvironments(params.owner!),
-  ]);
+  const resource = await runResource(params);
+  const environments = resource ? [] : await availableEnvironments(params.owner!);
   return { resource, environments };
 }
 export async function runAction({ params, request }: ActionFunctionArgs) {
@@ -29,17 +27,27 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
     const form = await request.formData();
     const resource = await runResource(params);
     let input: Record<string, JsonValue>;
-    if (resource?.kind === 'function')
+    if (resource?.kind === 'function') {
+      const args: Record<string, JsonValue> = {};
+      for (const parameter of resource.data.parameters) {
+        const name = 'argument.' + parameter.name, text = String(form.get(name) ?? '');
+        if (parameter.type === 'boolean') args[parameter.name] = form.has(name);
+        else if (parameter.type === 'json') {
+          if (text.trim()) args[parameter.name] = jsonField(form, name, null);
+        } else if (parameter.type === 'number') {
+          if (text.trim()) {
+            const value = Number(text);
+            if (!Number.isFinite(value)) throw new ApiFailure('invalid_input');
+            args[parameter.name] = value;
+          }
+        } else if (text || parameter.required) args[parameter.name] = text;
+      }
       input = {
         kind: 'function',
         functionId: resource.id,
-        arguments: Object.fromEntries(
-          [...form.entries()]
-            .filter(([key]) => key.startsWith('argument.'))
-            .map(([key, value]) => [key.slice(9), String(value)]),
-        ),
+        arguments: args,
       };
-    else
+    } else
       input = {
         kind: 'http',
         request: {
@@ -59,7 +67,8 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
       if (!(error instanceof ApiFailure) || error.status !== 403) throw error;
       ownerId = client.custody.binding.principalId;
     }
-    const result = await client.execute({ name: 'run.execute', input: { ownerId, environmentId: formText(form, 'environmentId'),
+    const result = await client.execute({ name: 'run.execute', input: { ownerId,
+      environmentId: resource?.kind === 'function' ? resource.data.environmentId : formText(form, 'environmentId'),
       operation: input, save: jsonField(form, 'save', {}) } });
     if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('invalid_input');
     return redirect('/runs/' + result.task.id);
@@ -74,25 +83,25 @@ export default function RunForm() {
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">
-          <EnvironmentChoice items={environments} />
+          {!resource && <EnvironmentChoice items={environments} />}
           {resource?.kind === 'function' ? (
-            resource.data.parameters.map((parameter) => (
-              <InputField
-                key={parameter.name}
-                name={'argument.' + parameter.name}
-                label={parameter.label || parameter.name}
-                required={parameter.required}
-                defaultValue={parameter.default ?? ''}
-              />
-            ))
+            resource.data.parameters.map((parameter) => {
+              const props = { name: 'argument.' + parameter.name, label: parameter.label || parameter.name };
+              return parameter.type === 'boolean' ? <CheckboxField key={parameter.name} {...props} defaultChecked={parameter.default === true} />
+                : parameter.type === 'json' ? <TextareaField key={parameter.name} {...props} required={parameter.required}
+                    defaultValue={parameter.default === undefined ? '' : JSON.stringify(parameter.default, null, 2)} />
+                : <InputField key={parameter.name} {...props} required={parameter.required}
+                    type={parameter.type === 'number' ? 'number' : 'text'} step={parameter.type === 'number' ? 'any' : undefined}
+                    defaultValue={typeof parameter.default === 'string' || typeof parameter.default === 'number' ? parameter.default : ''} />;
+            })
           ) : (
             <>
               <Panel>
                 <RequestFields />
               </Panel>
-              <JsonField name="save" label={t('saveOutputs')} value={{}} />
             </>
           )}
+          <JsonField name="save" label={t('saveOutputs')} value={{}} />
           <SaveBar back={resource ? resourcePath(resource) : '..'} label="execute" />
         </div>
       </Form>

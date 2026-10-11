@@ -40,3 +40,22 @@ test('コンテナの作業領域に保存したファイルを次の実行で�
   assert.equal(reader.exitCode, 0, reader.stderr);
   assert.equal(reader.stdout, 'first\nsecond');
 });
+
+test('関数の呼び出しごとに作業領域を用意し、実行環境の保存済みファイルを保つ', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'foundation-function-workspace-'));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const commands = new CommandProcess({ isolation: 'container', image, workspace });
+  const run = (code: string, temporary: boolean) => commands.execute({ command: ['node', '-e', code],
+    timeoutSeconds: 20, environment: {}, files: {}, workspace: temporary ? 'temporary' : 'shared',
+    ...(temporary ? {} : { workingDirectory: '/workspace' }) }, new AbortController().signal);
+  const stored = await run('require("fs").writeFileSync("counter","99")', false);
+  assert.equal(stored.exitCode, 0, stored.stderr);
+  for (let invocation = 0; invocation < 2; invocation++) {
+    const result = await run('const fs=require("fs");const count=(fs.existsSync("counter")?Number(fs.readFileSync("counter")):0)+1;fs.writeFileSync("counter",String(count));console.log(JSON.stringify({count,cwd:process.cwd(),home:process.env.HOME}));', true);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { count: 1, cwd: '/tmp', home: '/tmp' });
+  }
+  const retained = await run('process.stdout.write(require("fs").readFileSync("counter"))', false);
+  assert.equal(retained.exitCode, 0, retained.stderr);
+  assert.equal(retained.stdout, '99');
+});

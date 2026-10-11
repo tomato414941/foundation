@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Command, HttpRequest, Id, Invocation, Json, JsonObject, Name, OperationTitle } from './contracts.js';
+import { Command, FunctionDefinition, HttpRequest, Id, Invocation, Json, JsonObject, Name, OperationTitle } from './contracts.js';
 
 export { Invocation } from './contracts.js';
 export type OperationInvocation = z.infer<typeof Invocation>;
@@ -10,21 +10,28 @@ const destination = z.object({ ownerId: Id, name: Name, resourceId: Id.optional(
 export const ValueSave = destination.extend({ value: z.literal('').optional() });
 export const AppSave = destination.extend({ methodId: z.string().min(1).max(200), clientId: z.string().max(1000),
   fields: z.record(z.string(), z.literal('')).default({}), clientSecret: z.literal('').optional() });
+export const FunctionSave = z.object({ ownerId: Id, name: Name, definition: FunctionDefinition,
+  resourceId: Id.optional(), version: z.number().int().positive().optional() }).strict();
 export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1).max(200),
   connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional(), appId: Id.optional(),
   environments: z.array(Id).max(32).optional(), redirectUri: z.url().optional(),
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.literal('')).optional(),
   clientSecret: z.literal('').optional() }).strict();
-export const RunOperation = z.object({ ownerId: Id, environmentId: Id,
+export const RunOperation = z.object({ ownerId: Id, environmentId: Id.optional(),
   operation: z.union([
     z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
     Command.extend({ kind: z.literal('command') }),
     z.object({ kind: z.literal('function'), functionId: Id, definitionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
-      arguments: z.record(z.string(), z.string()).default({}) }).strict(),
+      arguments: JsonObject.default({}) }).strict(),
     z.object({ kind: z.enum(['http', 'command', 'function']), programId: Id, programDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
       functionId: Id.optional(), definitionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional() }).strict(),
-  ]), save: z.record(z.string(), Name).default({}) }).strict();
+  ]), save: z.record(z.string(), Name).default({}) }).strict().superRefine((value, context) => {
+    if (value.operation.kind !== 'function' && !value.environmentId)
+      context.addIssue({ code: 'custom', path: ['environmentId'], message: 'Choose an execution environment.' });
+    if (value.operation.kind === 'function' && !value.operation.functionId)
+      context.addIssue({ code: 'custom', path: ['operation', 'functionId'], message: 'Choose a saved function.' });
+  });
 
 export const OperationDescription = z.object({ name: Invocation.shape.name, title: OperationTitle,
   execution: z.enum(['server', 'keyholder']), input: JsonObject }).strict();

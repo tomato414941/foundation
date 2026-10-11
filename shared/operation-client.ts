@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AppSave, ConnectService, Invocation, OperationExecution, RunOperation, ValueSave, WaitingOperation } from './operations.js';
+import { AppSave, ConnectService, FunctionSave, Invocation, OperationExecution, RunOperation, ValueSave, WaitingOperation } from './operations.js';
 import type { OperationInvocation, OperationExecutionView } from './operations.js';
 import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
@@ -38,9 +38,12 @@ export class OperationClient {
       const run = RunOperation.parse(invocation.input);
       if (!('programId' in run.operation)) {
         const operation = await this.program(run.operation);
+        if (operation.kind === 'function' && run.environmentId && run.environmentId !== operation.definition.environmentId)
+          throw new Error('Run the function in its configured environment.');
         const programId = crypto.randomUUID();
         await this.records.put(programId, { operation, save: run.save });
-        invocation = { ...invocation, input: { ...run, operation: { kind: run.operation.kind, programId,
+        invocation = { ...invocation, input: { ...run,
+          ...(operation.kind === 'function' ? { environmentId: operation.definition.environmentId } : {}), operation: { kind: run.operation.kind, programId,
           programDigest: await hash(reviewedProgram(operation)), ...(run.operation.kind === 'function'
             ? { functionId: run.operation.functionId, definitionDigest: await hash(operation.kind === 'function' ? operation.definition : null) } : {}) } } };
       }
@@ -73,12 +76,19 @@ export class OperationClient {
     const resource = await this.custody.api.json('/api/resources/' + input.functionId, {}, Resource);
     if (resource.kind !== 'function' || (input.definitionDigest && await hash(resource.data) !== input.definitionDigest))
       throw new Error('Choose the reviewed function.');
-    return RuntimeOperation.parse({ kind: 'function', definition: resource.data, arguments: input.arguments });
+    return RuntimeOperation.parse({ kind: 'function', functionId: resource.id, definition: resource.data, arguments: input.arguments });
   }
   async continue(id: string, material: PrivateOperationInput = {}): Promise<OperationResult> {
     const execution = await this.custody.api.json('/api/operation-executions/' + Id.parse(id), {}, OperationExecution);
     if (!execution.waiting) return execution;
     const plan = await this.plan(id), { name, input } = plan.invocation;
+    if (name === 'function.save') {
+      const destination = FunctionSave.parse(input);
+      const write = await this.custody.prepareFunction(destination.definition, destination.resourceId ?? crypto.randomUUID(), Boolean(destination.resourceId));
+      const completed = await this.complete(id, plan.index, write as unknown as JsonValue);
+      for (const { content } of Object.values(write.contents)) await this.custody.trust.rememberContent(content);
+      return { kind: 'saved' as const, resource: Resource.parse(completed.results[plan.index]) };
+    }
     if (name === 'variable.save' || name === 'app.save') {
       const destination = name === 'app.save' ? AppSave.parse(input) : ValueSave.parse(input);
       const previous = destination.resourceId ? await this.custody.read(destination.resourceId) : undefined;
@@ -149,7 +159,9 @@ export class OperationClient {
         operation = program.operation;
       } else operation = await this.program(run.operation);
       const runId = crypto.randomUUID();
-      const prepared = await this.custody.prepare(run.ownerId, run.environmentId, operation, { id: runId, save: run.save, approval: plan.approval,
+      const environmentId = operation.kind === 'function' ? operation.definition.environmentId : run.environmentId;
+      if (!environmentId) throw new Error('Choose an execution environment.');
+      const prepared = await this.custody.prepare(run.ownerId, environmentId, operation, { id: runId, save: run.save, approval: plan.approval,
         operationContext: { id, index: plan.index, invocation: plan.invocation } });
       await this.records.put(prepared.intent.id, prepared);
       await this.custody.api.json('/api/operation-executions/' + id + '/continuation', { method: 'PUT',

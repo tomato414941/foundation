@@ -10,6 +10,7 @@ export interface RunnerJob {
   environment: Record<string, string>;
   files: Record<string, string>;
   workingDirectory?: string;
+  workspace?: 'shared' | 'temporary';
 }
 export interface CommandResult {
   exitCode: number | null;
@@ -40,11 +41,16 @@ export class CommandProcess implements CommandExecutor {
     const files = join(directory, 'files');
     const name = 'foundation-' + crypto.randomUUID();
     const container = this.options.isolation === 'container';
+    const temporary = job.workspace === 'temporary';
     const output: CommandResult = { exitCode: null, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
     let interrupted = false;
     try {
       await mkdir(files, { mode: 0o700 });
       const values = { ...job.environment };
+      if (temporary && container) {
+        values.HOME ??= '/tmp';
+        values.TMPDIR ??= '/tmp';
+      }
       for (const [key, value] of Object.entries(job.files)) {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('Use valid file variable names.');
         await writeFile(join(files, key), Buffer.from(value, 'base64'), { mode: 0o600, flag: 'wx' });
@@ -60,7 +66,7 @@ export class CommandProcess implements CommandExecutor {
         await writeFile(envFile, Object.entries(values).filter(([, value]) => !/[\r\n]/.test(value))
           .map(([key, value]) => key + '=' + value).join('\n'),
           { mode: 0o600, flag: 'wx' });
-        if (this.options.workspace) await mkdir(this.options.workspace, { recursive: true, mode: 0o700 });
+        if (!temporary && this.options.workspace) await mkdir(this.options.workspace, { recursive: true, mode: 0o700 });
         command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--cap-drop=ALL',
           '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=512m', '--cpus=1',
           '--network=bridge', '--tmpfs=/tmp:rw,nosuid,nodev,size=64m',
@@ -68,13 +74,14 @@ export class CommandProcess implements CommandExecutor {
           '--mount=type=bind,source=' + files + ',target=/run/foundation,readonly',
           '--env-file', envFile,
           ...multiline.flatMap(([key, value]) => ['--env', key + '=' + value]),
-          ...(this.options.workspace ? ['--mount=type=bind,source=' + this.options.workspace + ',target=/workspace'] : []),
-          ...(job.workingDirectory ? ['--workdir', job.workingDirectory] : []),
+          ...(!temporary && this.options.workspace ? ['--mount=type=bind,source=' + this.options.workspace + ',target=/workspace'] : []),
+          ...(temporary ? ['--workdir', '/tmp'] : job.workingDirectory ? ['--workdir', job.workingDirectory] : []),
           '--entrypoint=' + job.command[0]!, '-i', this.options.image!, ...job.command.slice(1)];
       }
       await new Promise<void>(resolve => {
         const child = spawn(command[0]!, command.slice(1), {
-          env: childEnvironment(container ? {} : values), cwd: container ? this.options.cwd : job.workingDirectory ?? this.options.cwd,
+          env: childEnvironment(container ? {} : temporary ? { ...values, HOME: directory, TMPDIR: directory } : values),
+          cwd: container ? this.options.cwd : temporary ? directory : job.workingDirectory ?? this.options.cwd,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
         });
         const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') };

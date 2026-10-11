@@ -105,7 +105,7 @@ export class Custody {
     const { binding } = await this.bindings.current(actor.id);
     if (!content.policy.readers.some(reader => canonical(reader) === canonical(binding)) &&
       !content.policy.grants.some(grant => (canonical(grant.executor) === canonical(binding) ||
-        canonical(grant.actor) === canonical(binding)) &&
+        ('actor' in grant && canonical(grant.actor) === canonical(binding))) &&
         Date.parse(grant.expiresAt) > Date.now()))
       fail(403, 'forbidden', 'This identity is not a recipient of this item.');
     await this.resources.authorization.requireResource(actor, row, 'read');
@@ -122,7 +122,7 @@ export class Custody {
     if (content.signerId !== binding.id || canonical(policyAuthority(content)) !== canonical(binding))
       fail(403, 'forbidden', 'Sign this change as an authorized editor of the item.');
     const allBindings = [...policy.readers, ...policy.authorities,
-      ...policy.grants.flatMap(grant => [grant.actor, grant.executor])];
+      ...policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor])];
     for (const keys of new Map(allBindings.map(keys => [keys.id, keys])).values())
       await this.bindings.requireCurrent(keys);
     const persist = async (connection: Queryable) => {
@@ -269,7 +269,7 @@ export class Custody {
     for (const observer of content.policy.observers ?? []) add(observer, ['reader']);
     for (const authority of content.policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'sharer', 'user']);
     for (const grant of content.policy.grants) {
-      add(grant.actor.principalId, ['reader', 'user']);
+      if ('actor' in grant) add(grant.actor.principalId, ['reader', 'user']);
       add(grant.executor.principalId, ['reader', 'user']);
     }
     await project(connection, content.policy.id, [...lines.values()]);

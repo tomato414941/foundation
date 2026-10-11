@@ -56,7 +56,7 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
         const policy = { ...previous.content.policy, revision: previous.content.policy.revision + 1, producers: [],
           readers: previous.content.policy.readers.filter(reader => reader.principalId !== id),
           authorities: previous.content.policy.authorities.filter(authority => authority.principalId !== id),
-          grants: previous.content.policy.grants.filter(grant => grant.actor.principalId !== id && (remove ? grant.executor.principalId !== id : true)),
+          grants: previous.content.policy.grants.filter(grant => (!('actor' in grant) || grant.actor.principalId !== id) && (remove ? grant.executor.principalId !== id : true)),
           observers: (previous.content.policy.observers ?? []).filter(observer => observer !== id) };
         if (!remove) {
           if (actions.includes('read')) policy.observers.push(id);

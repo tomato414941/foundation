@@ -36,7 +36,7 @@ export class KeySharing {
       const policy = { ...content.policy, revision: content.policy.revision + 1,
         readers: unique([...content.policy.readers.filter(binding => !removed(binding)), ...readers]),
         authorities: unique([...content.policy.authorities.filter(binding => !removed(binding)), ...readers]),
-        grants: content.policy.grants.filter(grant => !removed(grant.actor) && !removed(grant.executor)), producers: [],
+        grants: content.policy.grants.filter(grant => (!('actor' in grant) || !removed(grant.actor)) && !removed(grant.executor)), producers: [],
         ...(content.policy.observers ? { observers: content.policy.observers.filter(id => !oldReaders.has(id) || readers.some(item => item.principalId === id)) } : {}),
       };
       if (canonical({ ...policy, revision: content.policy.revision }) === canonical(content.policy)) continue;

@@ -48,7 +48,7 @@ class BrowserRunner extends MemoryRunner {
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
     const registration = await signEnvironment({ format: 3, id, origin, ownerId: bootstrap.ownerId,
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
-      capabilities: Object.values(Operations),
+      capabilities: Object.values(Operations), functionVersion: 1,
       isolation: 'container', commandImage: bootstrap.commandImage,
       awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });

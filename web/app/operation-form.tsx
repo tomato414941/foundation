@@ -16,7 +16,7 @@ export async function loadOperationForm(invocation: OperationInvocation) {
   const ownerId = String(invocation.input.ownerId);
   const usesMethod = invocation.name === 'connection.connect' || invocation.name === 'app.save';
   const [environments, methods, owned, shared, owner] = await Promise.all([
-    availableEnvironments(ownerId),
+    invocation.name === 'function.save' ? [] : availableEnvironments(ownerId),
     usesMethod ? api('/connection-methods', {}, listOf(CatalogMethod)) : { items: [] },
     invocation.name === 'connection.connect' ? api('/principals/' + ownerId + '/resources?kind=app&limit=200', {}, listOf(Resource))
       .catch(error => { if (error instanceof ApiFailure && error.status === 403) return { items: [] }; throw error; }) : { items: [] },
@@ -55,6 +55,7 @@ export function operationSubmission(data: OperationFormData, form: FormData): { 
       material: { value: formText(form, 'value'), clientSecret: formText(form, 'clientSecret') || undefined,
         fields: connectionFields(form) } };
   }
+  if (name === 'function.save') return { input, material: {} };
   return { input: { ...input, environmentId: input.environmentId ?? formText(form, 'environmentId') }, material: {} };
 }
 
@@ -70,6 +71,7 @@ export function OperationInputFields({ data }: { data: OperationFormData }) {
       <InputField name="name" label={t('name')} defaultValue={data.method?.name ?? ''} required />}
     {data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
     {name === 'run.execute' && <JsonView value={input.operation} />}
+    {name === 'function.save' && <JsonView value={input.definition} />}
     {name === 'variable.save' && <TextareaField name="value" label={t('value')} autoComplete="off" rows={5} required />}
     {(name === 'connection.connect' || name === 'app.save') && <>
       <ConnectionMethodHelp method={data.method} />
@@ -77,7 +79,7 @@ export function OperationInputFields({ data }: { data: OperationFormData }) {
         existing={existing} appMaterial={null} apps={data.apps} selectedAppId={typeof input.appId === 'string' ? input.appId : undefined}
         clientId={typeof input.clientId === 'string' && input.clientId ? input.clientId : undefined} />
     </>}
-    {Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
+    {name === 'function.save' ? null : Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
       {input.environmentIds.map(id => data.environments.find(item => item.id === id)?.name ?? String(id)).join(', ') || '—'}
     </Detail> : fixedEnvironment ? <Detail label={t('executionDestination')}>
       {data.environments.find(item => item.id === fixedEnvironment)?.name ?? fixedEnvironment}

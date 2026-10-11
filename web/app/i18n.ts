@@ -2,6 +2,21 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 const words: Record<string, [string, string]> = {
+  functionProgram: ['処理', 'Program'],
+  functionCommand: ['プログラムと引数（JSON配列）', 'Program and arguments (JSON array)'],
+  functionArgumentsHelp: ['呼び出し時の引数はJSONとして標準入力から受け取ります。結果を標準出力へ書き出してください。', 'Read invocation arguments as JSON from standard input. Write the result to standard output.'],
+  functionInputs: ['接続・変数の入力（JSON）', 'Connection and variable inputs (JSON)'],
+  functionTimeout: ['制限時間（秒）', 'Time limit (seconds)'],
+  functionResult: ['結果の形式', 'Result format'],
+  functionText: ['テキスト', 'Text'],
+  executionOutput: ['出力', 'Output'],
+  'errors.function_not_approved': ['所有者が関数を保存し直して、入力の利用を承認してください。', 'The owner must save the function again to approve its inputs.'],
+  'errors.function_changed': ['関数が変更されています。確認してもう一度実行してください。', 'The function changed. Review it before running it again.'],
+  'errors.invalid_function_result': ['関数の結果をJSONとして読み取れませんでした。', 'The function did not return valid JSON.'],
+  'errors.function_timeout': ['関数の制限時間を超えました。', 'The function exceeded its time limit.'],
+  'errors.function_output_limit': ['関数の出力がサイズ上限を超えました。', 'The function output exceeded its size limit.'],
+  'errors.function_failed': ['関数の処理が正常に完了しませんでした。', 'The function did not finish successfully.'],
+  'errors.function_runtime_required': ['実行環境のFoundation CLIを5以降へ更新するか、新しい実行環境を作成してください。', 'Update the environment to Foundation CLI 5 or later, or create a new environment.'],
   sshAuthorizedKeys: ['SSH公開鍵', 'SSH public keys'],
   sshAuthorizedKeysOptional: ['SSH公開鍵（任意）', 'SSH public keys (optional)'],
   sshKeysSaved: ['SSH公開鍵を保存しました。', 'SSH public keys saved.'],

@@ -39,6 +39,12 @@ export async function routesExecution(app: ApiApp, context: Context) {
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
+  app.get('/api/functions/:id/invocation', {
+    schema: { params: C.IdParams, response: { 200: P.FunctionInvocation } },
+  }, request => context.functions.invocation(actor(request), request.params.id, custody, delegation));
+  app.get('/api/functions/:id/authorizations', {
+    schema: { params: C.IdParams, response: { 200: C.listOf(P.ProtectedRead) } },
+  }, request => context.functions.authorizations(actor(request), request.params.id, custody));
   app.post('/api/executor/outputs', {
     schema: { body: P.ProtectedWrite.omit({ version: true }), response: { 201: z.object({ id: C.Id }) } },
   }, async (request, reply) => {

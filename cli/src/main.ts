@@ -65,7 +65,7 @@ Usage: foundation <command> [options]
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
   run --environment ID --request JSON  Run an HTTP request on the selected executor
-  run --environment ID --function ID   Run a saved function on the selected executor
+  run --function ID [--arguments JSON] Run a saved function in its configured environment
   run --environment ID -- COMMAND ...  Run a command in an environment
   wait ID [--timeout SECONDS]           Wait for a run to finish
   retry ID                             Submit the same saved, signed execution request
@@ -450,8 +450,8 @@ async function main(argv: string[]) {
     else if (action === 'get') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, OperationExecution), args);
     else if (action === 'run' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
-      if (action === 'run') {
-        const invocation = Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) });
+      const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
+      if (invocation) {
         const catalog = await client.json('/api/operations', {}, listOf(OperationDescription));
         const definition = catalog.items.find(item => item.name === invocation.name);
         if (!definition) throw new Error('Choose an available operation.');
@@ -462,7 +462,7 @@ async function main(argv: string[]) {
       }
       const operations = operationClient(client);
       const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
-        : await operations.execute(Invocation.parse({ name: args.positionals[1], input: await json(args.values.body, {}) }), material);
+        : await operations.execute(invocation!, material);
       await output('flow' in result ? flowOutput(result) : result, args);
     } else throw new Error('Choose operation list, run, get, or continue.');
     return 0;
@@ -550,11 +550,12 @@ async function main(argv: string[]) {
     return execute(await localInputs(client, inputs), commandArguments);
   }
   if (command === 'run') {
-    const environmentId = Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
     const modes = [args.values.request, args.values.function, commandArguments.length ? true : false].filter(Boolean);
     if (modes.length !== 1) throw new Error('Choose --request, --function, or a command after --.');
     const fn = args.values.function ? await client.json('/api/resources/' + Id.parse(args.values.function), {}, Resource) : null;
     if (fn && fn.kind !== 'function') throw new Error('Choose a saved function.');
+    const environmentId = fn?.kind === 'function' ? fn.data.environmentId
+      : Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
     const input = args.values.request
       ? { kind: 'http', request: await json(args.values.request) }
       : fn?.kind === 'function'

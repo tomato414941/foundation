@@ -136,7 +136,7 @@ test('指定した関数の内容を照合し、任意のプログラムを動�
   const functions: CustodyPolicy = { ...policy, grants: [{ ...policy.grants[0]!, operations: [Operations.function],
     callerProgram: false, functionDigests: [functionDigest] }] };
   const content = await protect(encode('value'), functions, 1, owner.binding, owner.keys);
-  const pinned: ExecutionIntent = { ...intent, operation: Operations.function, functionDigest,
+  const pinned: ExecutionIntent = { ...intent, operation: Operations.function, functionDigest, functionId: crypto.randomUUID(),
     sources: [{ ...intent.sources[0]!, policyDigest: await hash(functions) }] };
   await authorizeUse(content, pinned, { destination: 'https://service.example/me' });
   await assert.rejects(authorizeUse(content, { ...pinned, functionDigest: await hash({ changed: true }) }, {

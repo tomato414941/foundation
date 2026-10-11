@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { AppSave, ConnectService, RunOperation, ValueSave } from '../shared/operations.js';
+import { AppSave, ConnectService, FunctionSave, RunOperation, ValueSave } from '../shared/operations.js';
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
@@ -31,7 +31,6 @@ const CREATED: Record<string, readonly [string, string]> = {
   service: ['サービス定義を作る', 'Create a service definition'],
   method: ['接続方法を作る', 'Create a connection method'],
   environment: ['実行環境を作る', 'Create an environment'],
-  function: ['関数を作る', 'Create a function'],
 };
 const lineTitles: Record<string, readonly [readonly [string, string], readonly [string, string]]> = {
   agent: [['代理にする', 'Make an agent'], ['代理を外す', 'Remove an agent']],
@@ -101,9 +100,7 @@ export function userOperations(services: Services) {
               return resources.insert(owner, 'method', body.name, C.MethodDefinition.parse({
                 ...body.definition, name: body.name }) as unknown as Record<string, C.JsonValue>);
             })()
-          : body.kind === 'environment'
-            ? await environments.create(who, owner, body.options, body.name)
-            : await functions.create(who, owner, body.name, body.definition);
+          : await environments.create(who, owner, body.options, body.name);
       return resources.view(who, row);
     });
   bind({ name: 'resource.create', method: 'POST', path: '/api/principals/:id/resources', schema: { params: C.IdParams,
@@ -113,20 +110,12 @@ export function userOperations(services: Services) {
       let row = await resources.get(id);
       await authorization.requireResource(who, row, 'update');
       if (body.version !== row.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
-      const fields = ['version', 'name', ...(['function', 'service', 'method'].includes(row.kind) ? ['definition'] : [])];
+      const fields = ['version', 'name', ...(['service', 'method'].includes(row.kind) ? ['definition'] : [])];
       if (Object.keys(body).some(field => !fields.includes(field)))
         fail(400, 'invalid_input', 'Choose fields that can be edited for this item.');
       if (body.name && body.name !== row.name) await authorization.requireResource(who, row, 'rename');
       if (body.definition) {
-        if (row.kind === 'function') {
-          const spec = await functions.validateFunction(who, C.FunctionDefinition.parse(body.definition));
-          await functions.validateFunction({ id: row.owner_id }, spec);
-          row = await resources.db.transaction(async connection => {
-            const updated = await resources.update(row, { data: spec as unknown as Record<string, C.JsonValue>,
-              ...(body.name ? { name: body.name } : {}) }, connection);
-            await resources.references(row.id, functions.references(spec.request), connection); return updated;
-          });
-        } else if (row.kind === 'service') {
+        if (row.kind === 'service') {
           row = await resources.db.transaction(async connection => {
             await connection.query('SELECT pg_advisory_xact_lock(736023747)');
             const definition = await catalog.prepareDefinition(who, row.owner_id, C.ServiceInputDefinition.parse(body.definition), connection);
@@ -236,6 +225,8 @@ export function userOperations(services: Services) {
       return input;
     } });
   const keyholder = async () => fail(400, 'keyholder_required', 'Continue this operation with your encryption keys.');
+  operations.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
+    { execution: 'keyholder', complete: (who, input, proof) => functions.save(who, input, P.FunctionWrite.parse(proof), custody, delegation) });
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
     proof: C.JsonValue, type: string) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
@@ -246,9 +237,9 @@ export function userOperations(services: Services) {
     const binding = await services.custody.bindings.current(who.id);
     const previous = input.resourceId ? await custody.get(input.resourceId) : null;
     const executors = previous && input.environmentIds === undefined
-      ? previous.policy.grants.filter(grant => grant.actor.id === binding.binding.id).map(grant => grant.executor.id)
+      ? previous.policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id)
       : await Promise.all((input.environmentIds ?? []).map(async id => (await delegation.environment(id)).registration.manifest.executor.id));
-    const grants = policy.grants.filter(grant => grant.actor.id === binding.binding.id).map(grant => grant.executor.id);
+    const grants = policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id);
     if (canonical([...new Set(executors)].sort()) !== canonical([...new Set(grants)].sort()))
       fail(409, 'operation_changed', 'Use the execution environments approved for this item.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
@@ -291,12 +282,15 @@ export function userOperations(services: Services) {
       resolve: async (who, input) => {
         if (input.operation.kind !== 'function' || !input.operation.functionId) return input;
         const row = await resources.get(input.operation.functionId);
-        await authorization.requireResource(who, row, 'read');
+        await authorization.requireResource(who, row, 'execute');
         if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
         const definitionDigest = await hash(row.data);
+        const environmentId = C.FunctionDefinition.parse(row.data).environmentId;
+        if (input.environmentId && environmentId !== input.environmentId)
+          fail(400, 'wrong_environment', 'Run the function in its configured environment.');
         if (input.operation.definitionDigest && input.operation.definitionDigest !== definitionDigest)
           fail(409, 'changed', 'The function changed. Review it again.');
-        return { ...input, operation: { ...input.operation, definitionDigest } };
+        return { ...input, environmentId, operation: { ...input.operation, definitionDigest } };
       },
       complete: async (who, input, proof, execution) => {
         const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);

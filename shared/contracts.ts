@@ -263,6 +263,8 @@ export type CatalogService = z.infer<typeof CatalogEntry>;
 // An input names its item by id. A connection also names which of its outputs to use.
 export const Source = z.object({ id: Id, output: z.string().min(1).max(100).optional() }).strict();
 export type SourceReference = z.infer<typeof Source>;
+export const validInputName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
+  !/^(FOUNDATION_|LD_|DYLD_)|^(NODE_OPTIONS|BASH_ENV|ENV|PYTHONSTARTUP|GIT_CONFIG_COUNT|GIT_CONFIG_SYSTEM)$/u.test(name);
 export const Input = z
   .object({
     name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
@@ -293,23 +295,36 @@ export const HttpRequest = z
   })
   .strict();
 export type HttpRequestInput = z.infer<typeof HttpRequest>;
+export const Command = z
+  .object({
+    command: z.array(z.string().max(8192)).min(1).max(100),
+    stdin: z.string().max(1_000_000).optional(),
+    timeoutSeconds: z.number().int().min(1).max(3600).default(60),
+    inputs: z.array(Input).max(32).default([]),
+  })
+  .strict();
+export const FunctionProgram = z.discriminatedUnion('kind', [
+  Command.omit({ stdin: true }).extend({ kind: z.literal('command') }).strict(),
+  z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
+]);
 export const FunctionDefinition = z
   .object({
     description: z.string().max(2000).default(''),
-    request: HttpRequest,
+    environmentId: Id,
+    program: FunctionProgram,
     parameters: z
       .array(
         z.object({
           name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/),
           label: z.string().max(100),
+          type: z.enum(['string', 'number', 'boolean', 'json']).default('string'),
           required: z.boolean().default(true),
-          default: z.string().optional(),
-        }),
+          default: Json.optional(),
+        }).strict(),
       )
       .max(32)
       .default([]),
-    save: z.record(z.string(), Name).default({}),
-    outputOwnerId: Id.optional(),
+    result: z.enum(['text', 'json']).default('json'),
   })
   .strict();
 export type FunctionSpec = z.infer<typeof FunctionDefinition>;
@@ -437,25 +452,16 @@ export const NewResource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
   z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),
   z.object({ kind: z.literal('environment'), name: Name.optional(), options: EnvironmentInput }).strict(),
-  z.object({ kind: z.literal('function'), name: Name, definition: FunctionDefinition }).strict(),
 ]);
 export type NewResourceInput = z.infer<typeof NewResource>;
 export const UpdateResource = z
   .object({
     version: z.number().int().positive(),
     name: Name.optional(),
-    definition: z.union([ServiceInputDefinition, MethodDefinition, FunctionDefinition]).optional(),
+    definition: z.union([ServiceInputDefinition, MethodDefinition]).optional(),
   })
   .strict();
 
-export const Command = z
-  .object({
-    command: z.array(z.string().max(8192)).min(1).max(100),
-    stdin: z.string().max(1_000_000).optional(),
-    timeoutSeconds: z.number().int().min(1).max(3600).default(60),
-    inputs: z.array(Input).max(32).default([]),
-  })
-  .strict();
 export const Invocation = z.object({
   name: z.string().regex(/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/),
   input: JsonObject,

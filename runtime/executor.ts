@@ -1,5 +1,6 @@
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import { canonical, hash } from '../shared/authority.js';
+import { Json } from '../shared/contracts.js';
 import type { HttpRequestInput, JsonValue, SourceReference } from '../shared/contracts.js';
 import {
   ContentTypes, Operations, authorizeUse, matchesPin, openRun, produceContent, useContent, verifyContent, verifyPolicyApproval,
@@ -9,7 +10,7 @@ import {
   ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
 } from '../shared/execution.js';
 import type { ExecutionOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
-import { functionRequest } from '../shared/function-request.js';
+import { functionProgram } from '../shared/functions.js';
 import { authorizeOperationContext } from '../shared/operation-authorization.js';
 import { atPointer, pointerParts, redact, setPointer } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
@@ -163,9 +164,8 @@ export class Executor {
   }
 
   private request(operation: Operation): HttpRequestInput | null {
-    if (operation.kind === 'http') return operation.request;
-    if (operation.kind === 'function') return functionRequest(operation.definition, operation.arguments);
-    return null;
+    const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
+    return program.kind === 'http' ? program.request : null;
   }
 
   private async preflight(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[]) {
@@ -182,8 +182,11 @@ export class Executor {
       await this.journal.write('checkpoint_' + source.policy.id,
         { policy: source.policy.revision, material: source.materialRevision });
     }
-    if (operation.kind === 'function' && await hash(operation.definition) !== intent.functionDigest)
+    if (operation.kind === 'function' && (operation.functionId !== intent.functionId ||
+      await hash(operation.definition) !== intent.functionDigest || operation.definition.environmentId !== intent.environmentId ||
+      !this.environment.manifest.capabilities.includes(Operations[operation.definition.program.kind])))
       throw new Error('Run the exact function authorized by this intent.');
+    if (operation.kind !== 'function' && (intent.functionId || intent.functionDigest)) throw new Error('Use function authorization only for a saved function.');
     const request = this.request(operation);
     if (request) {
       publicUrl(request.url, intent.origin);
@@ -197,26 +200,21 @@ export class Executor {
           throw new Error('Bind credentials to request headers or the body.');
         setPointer(structuredClone(request), binding.pointer, 'validation');
       }
-      const save = operation.kind === 'function' ? operation.outputs : operation.kind === 'http' ? operation.save : {};
-      if (operation.kind === 'function') {
-        if (Object.keys(save).length !== Object.keys(operation.definition.save).length ||
-          Object.entries(operation.definition.save).some(([pointer, name]) => save[pointer]?.name !== name))
-          throw new Error('Use the output destinations declared by this function.');
-      }
-      for (const [pointer, output] of Object.entries(save)) {
-        pointerParts(pointer);
-        if (!this.broker.capture) throw new Error('This executor cannot save encrypted outputs.');
-        const approval = await verifyPolicyApproval(output.approval);
-        if (canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
-          approval.policy.origin !== intent.origin ||
-          approval.policy.contentType !== ContentTypes.value || approval.policy.ownerId !== intent.ownerId ||
-          (operation.kind === 'function' && operation.definition.outputOwnerId !== approval.policy.ownerId) ||
-          !approval.policy.producers.some(producer => producer.runId === intent.id &&
-            canonical(producer.executor) === canonical(this.binding) && Date.parse(producer.expiresAt) > Date.now()))
-          throw new Error('Approve each encrypted output for this execution.');
-      }
     }
-    const references = operation.kind === 'command' ? operation.inputs.map(input => input.source)
+    const save = operation.kind === 'function' ? operation.outputs : operation.kind === 'http' ? operation.save : {};
+    for (const [pointer, output] of Object.entries(save)) {
+      pointerParts(pointer);
+      if (!this.broker.capture) throw new Error('This executor cannot save encrypted outputs.');
+      const approval = await verifyPolicyApproval(output.approval);
+      if (canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
+        approval.policy.origin !== intent.origin ||
+        approval.policy.contentType !== ContentTypes.value || approval.policy.ownerId !== intent.ownerId ||
+        !approval.policy.producers.some(producer => producer.runId === intent.id &&
+          canonical(producer.executor) === canonical(this.binding) && Date.parse(producer.expiresAt) > Date.now()))
+        throw new Error('Approve each encrypted output for this execution.');
+    }
+    const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
+    const references = program.kind === 'command' ? program.inputs.map(input => input.source)
       : request ? request.bindings.flatMap(binding => binding.parts.filter((part): part is SourceReference => typeof part !== 'string')) : [];
     for (const source of references) {
       const content = sources.find(value => value.policy.id === source.id);
@@ -234,6 +232,7 @@ export class Executor {
     if (operation.kind === 'connect' || operation.kind === 'refresh' || operation.kind === 'revoke')
       return this.extension!.execute(operation.input, intent, sources, signal);
     const request = this.request(operation);
+    const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
     const sensitive: string[] = [], cache = new Map<string, Promise<Record<string, string>>>();
     const resolve = async (source: SourceReference) => {
       const content = sources.find(content => content.policy.id === source.id)!;
@@ -246,11 +245,18 @@ export class Executor {
       if (!source.output || !Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
       return encode(outputs[source.output]!);
     };
-    if (operation.kind === 'command') {
-      const values = await processInputs(operation.inputs, resolve);
-      const result = await this.commands.execute({ command: operation.command, timeoutSeconds: operation.timeoutSeconds,
-        ...(operation.stdin === undefined ? {} : { stdin: operation.stdin }),
-        environment: values.environment, files: values.files }, signal);
+    if (program.kind === 'command') {
+      const values = await processInputs(program.inputs, resolve);
+      const result = await this.commands.execute({ command: program.command, timeoutSeconds: program.timeoutSeconds,
+        ...(program.stdin === undefined ? {} : { stdin: program.stdin }),
+        environment: values.environment, files: values.files,
+        ...(operation.kind === 'function' ? { workspace: 'temporary' as const } : {}) }, signal);
+      if (operation.kind === 'function') {
+        if (result.timedOut) throw new DomainError(408, 'function_timeout', 'The function exceeded its time limit.');
+        if (result.truncated) throw new DomainError(413, 'function_output_limit', 'The function output exceeded its size limit.');
+        if (result.exitCode !== 0) throw new DomainError(422, 'function_failed', redact(result.stderr, values.sensitive).slice(0, 1000) || 'The function did not finish successfully.');
+        return this.functionResult(operation, intent, redact(result.stdout, values.sensitive));
+      }
       return { ...result, stdout: redact(result.stdout, values.sensitive), stderr: redact(result.stderr, values.sensitive) };
     }
     const spec = structuredClone(request!);
@@ -271,7 +277,11 @@ export class Executor {
     if (spec.form !== undefined) { body = new URLSearchParams(spec.form).toString(); spec.headers['content-type'] = 'application/x-www-form-urlencoded'; }
     const response = await this.transport.send({ url: spec.url, method: spec.method, headers: spec.headers,
       ...(body === undefined ? {} : { body }), signal });
-    const save = operation.kind === 'function' ? operation.outputs : operation.kind === 'http' ? operation.save : {};
+    if (operation.kind === 'function') {
+      if (response.status >= 400) throw new DomainError(502, 'service_response', 'The service returned an unsuccessful response.');
+      return this.functionResult(operation, intent, redact(utf8(response.body), sensitive));
+    }
+    const save = operation.kind === 'http' ? operation.save : {};
     if (Object.keys(save).length) {
       if (response.status >= 400) throw new DomainError(502, 'service_response', 'The service returned an unsuccessful response.');
       const saved: Record<string, string> = {};
@@ -289,5 +299,19 @@ export class Executor {
     }
     return { status: response.status, headers: Object.fromEntries(Object.entries(response.headers)
       .map(([key, value]) => [key, redact(value, sensitive)])), body: redact(utf8(response.body), sensitive) };
+  }
+  private async functionResult(operation: Extract<Operation, { kind: 'function' }>, intent: ExecutionIntent, text: string): Promise<JsonValue> {
+    let value: JsonValue;
+    try { value = operation.definition.result === 'text' ? text : Json.parse(JSON.parse(text)); }
+    catch { throw new DomainError(422, 'invalid_function_result', 'The function must return valid JSON.'); }
+    const saved: Record<string, string> = {};
+    for (const [pointer, destination] of Object.entries(operation.outputs)) {
+      const selected = pointer === '' ? value : atPointer(value, pointer);
+      if (selected === undefined) throw new DomainError(400, 'invalid_pointer', 'The function result value was not found.');
+      const bytes = encode(typeof selected === 'string' ? selected : JSON.stringify(selected));
+      const content = await produceContent(bytes, destination.approval, intent.id, this.binding, this.keys, { bytes: bytes.length });
+      saved[destination.name] = (await this.broker.capture!(destination.name, content)).id;
+    }
+    return Object.keys(saved).length ? { saved } : value;
   }
 }

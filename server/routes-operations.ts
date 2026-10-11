@@ -66,7 +66,7 @@ export async function routesOperations(app: ApiApp, context: Context) {
     body: z.object({ index: z.number().int().nonnegative(), continuation: WaitingOperation.shape.continuation.unwrap() }).strict(),
     response: { 200: OperationExecution } } }, request => executions.track(actor(request), request.params.id,
       request.body.index, request.body.continuation));
-  app.post('/api/operation-executions/:id/complete', { schema: { params: C.IdParams,
+  app.post('/api/operation-executions/:id/complete', { bodyLimit: 40 * 1024 * 1024, schema: { params: C.IdParams,
     body: z.object({ index: z.number().int().nonnegative(), proof: C.Json }).strict(), response: { 200: OperationExecution } } },
     request => executions.complete(actor(request), request.params.id, request.body.index, request.body.proof));
   app.get('/api/operation-continuations/:id', { schema: { params: C.IdParams, response: { 200: ContinuationEnvelope.nullable() } } }, async request => {

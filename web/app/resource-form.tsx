@@ -6,8 +6,8 @@ import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
-import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
-import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
+import { CatalogEntry, CatalogMethod, JsonObject, Resource, Payment, Usage, listOf } from '../../shared/contracts';
+import type { CatalogConnectionMethod, HttpRequestInput } from '../../shared/contracts';
 import { decode } from '../../shared/encryption';
 import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
@@ -70,7 +70,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     kind === 'connection'
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
-    isProtected(kind) ? availableEnvironments(params.owner!) : [],
+    isProtected(kind) || kind === 'function' ? availableEnvironments(params.owner!) : [],
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -85,7 +85,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     try {
       const client = await custodyClient(), item = await client.read(resource.id);
       selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
-        item.content.policy.grants.some(grant => grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
+        item.content.policy.grants.some(grant => 'actor' in grant && grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
       if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
       if (resource.kind === 'connection') {
         const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
@@ -199,20 +199,30 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         },
         ...(form.has('sshKeys') ? { ssh: sshSettings(form) } : {}),
       };
-    } else if (kind === 'function')
-      body.definition = {
+    } else if (kind === 'function') {
+      const definition = {
         description: formText(form, 'description'),
-        request: {
+        environmentId: formText(form, 'environmentId'),
+        program: formText(form, 'programKind') === 'command' ? {
+          kind: 'command', command: jsonField(form, 'command', []),
+          inputs: jsonField(form, 'inputs', []), timeoutSeconds: Number(formText(form, 'timeoutSeconds')),
+        } : { kind: 'http', request: {
           url: formText(form, 'url'),
           method: formText(form, 'httpMethod'),
           headers: jsonField(form, 'headers', {}),
           ...(formText(form, 'body') ? { body: String(form.get('body')) } : {}),
           bindings: jsonField(form, 'bindings', []),
-        },
+        } },
         parameters: jsonField(form, 'parameters', []),
-        save: jsonField(form, 'save', {}),
+        result: formText(form, 'result'),
       };
-    else if (kind === 'service' || kind === 'method')
+      const saved = await (await operationClient()).execute({ name: 'function.save', input: JsonObject.parse({
+        ownerId: owner, name, definition,
+        ...(existing ? { resourceId: existing.id, version } : {}),
+      }) });
+      if (!('kind' in saved) || saved.kind !== 'saved') throw new ApiFailure('invalid_input');
+      return redirect(resourcePath(saved.resource));
+    } else if (kind === 'service' || kind === 'method')
       body.definition = { ...jsonField<Record<string, unknown>>(form, 'definition', {}), name };
     if (existing) {
       delete body.kind;
@@ -230,12 +240,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
 export function RequestFields({
   value,
 }: {
-  value?: Extract<
-    ResourceView,
-    {
-      kind: 'function';
-    }
-  >['data']['request'];
+  value?: HttpRequestInput;
 }) {
   const { t } = useTranslation();
   return (
@@ -321,6 +326,7 @@ export default function ResourceForm() {
     (!method ||
       method.availability === 'unavailable');
   const spec = existing?.kind === 'function' ? existing.data : undefined;
+  const [programKind, setProgramKind] = useState(spec?.program.kind ?? 'command');
   const unavailable =
     data.kind === 'environment'
       ? !sessionData.features.environments
@@ -553,15 +559,28 @@ export default function ResourceForm() {
                       defaultValue={spec?.description ?? ''}
                       rows={2}
                     />
-                    <Panel title={t('http')}>
-                      <RequestFields value={spec?.request} />
-                    </Panel>
+                    <EnvironmentChoice items={data.environments} selected={spec ? [spec.environmentId] : []} />
+                    <SelectField name="programKind" label={t('functionProgram')} value={programKind} onValueChange={value => setProgramKind(value as 'command' | 'http')}>
+                      <SelectItem value="command">{t('command')}</SelectItem>
+                      <SelectItem value="http">{t('http')}</SelectItem>
+                    </SelectField>
+                    {programKind === 'http' ? <Panel title={t('http')}>
+                      <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined} />
+                    </Panel> : <Panel title={t('command')}>
+                      <JsonField name="command" label={t('functionCommand')} value={spec?.program.kind === 'command' ? spec.program.command : ['node', '-e', 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.stringify(JSON.parse(input))));']} />
+                      <p className="text-sm text-muted-foreground">{t('functionArgumentsHelp')}</p>
+                      <JsonField name="inputs" label={t('functionInputs')} value={spec?.program.kind === 'command' ? spec.program.inputs : []} />
+                      <InputField name="timeoutSeconds" label={t('functionTimeout')} type="number" min={1} max={3600} required defaultValue={spec?.program.kind === 'command' ? spec.program.timeoutSeconds : 60} />
+                    </Panel>}
                     <JsonField
                       name="parameters"
                       label={t('parameters')}
                       value={spec?.parameters ?? []}
                     />
-                    <JsonField name="save" label={t('saveOutputs')} value={spec?.save ?? {}} />
+                    <SelectField name="result" label={t('functionResult')} defaultValue={spec?.result ?? 'json'}>
+                      <SelectItem value="json">JSON</SelectItem>
+                      <SelectItem value="text">{t('functionText')}</SelectItem>
+                    </SelectField>
                   </>
                 )}
                 {(data.kind === 'service' || data.kind === 'method') && (

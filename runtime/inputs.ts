@@ -1,4 +1,5 @@
 import type { InjectionInput, SourceReference } from '../shared/contracts.js';
+import { validInputName } from '../shared/contracts.js';
 import { atPointer, textValue } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
 
@@ -11,8 +12,7 @@ export async function processInputs(
   const environment: Record<string, string> = {}, files: Record<string, string> = {}, sensitive: string[] = [];
   const names = new Set<string>();
   for (const input of inputs) {
-    if (names.has(input.name) ||
-      /^(FOUNDATION_|LD_|DYLD_)|^(NODE_OPTIONS|BASH_ENV|ENV|PYTHONSTARTUP|GIT_CONFIG_COUNT|GIT_CONFIG_SYSTEM)$/u.test(input.name))
+    if (names.has(input.name) || !validInputName(input.name))
       throw new Error('Use distinct, unreserved environment variable names.');
     names.add(input.name);
     let value = await resolve(input.source);

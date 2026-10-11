@@ -139,6 +139,64 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
 
+    def test_固定した関数を共有して秘密を使う処理の結果を受け取る(self):
+        page, principal = self.passkey_account("Function owner")
+        environment = self.executor(page, principal).rsplit("/", 1)[1]
+        source = self.variable(page, principal, name="Function token", value="private-function-token").rsplit("/", 1)[1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Reusable function")
+        self.select(page, "実行環境", "Browser executor")
+        code = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,amount:args.amount,enabled:args.enabled,payload:args.payload,configured:!!process.env.TOKEN,secret:process.env.TOKEN}));});'
+        page.get_by_role("textbox", name="プログラムと引数（JSON配列）", exact=True).fill(json.dumps(["node", "-e", code]))
+        page.get_by_role("textbox", name="接続・変数の入力（JSON）", exact=True).fill(json.dumps([{"name": "TOKEN", "source": {"id": source}}]))
+        page.get_by_role("textbox", name="パラメーター（JSON）", exact=True).fill(json.dumps([
+            {"name": "message", "label": "Message"},
+            {"name": "amount", "label": "Amount", "type": "number", "default": 0},
+            {"name": "enabled", "label": "Enabled", "type": "boolean", "default": True},
+            {"name": "payload", "label": "Payload", "type": "json", "default": {}},
+        ]))
+        page.screenshot(path=str(ARTIFACTS / "function-editor-desktop-ja.png"), full_page=True)
+        print("Rendered function editor: " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
+        function_path = page.url
+        function_id = function_path.rsplit("/", 1)[1]
+        reader, recipient = self.passkey_account("Function caller")
+        self.trust(reader, page, principal)
+        fingerprint = page.request.get(ORIGIN + "/__test/executor/" + environment + "/fingerprint").json()
+        self.trust_fingerprint(reader, fingerprint["id"], fingerprint["fingerprint"])
+        granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "runner", "objectId": function_id}, headers={"origin": ORIGIN})
+        self.assertTrue(granted.ok, granted.text())
+        reader.goto(function_path + "/run")
+        reader.wait_for_load_state("networkidle")
+        reader.get_by_role("textbox", name="Message", exact=True).fill("Shared invocation")
+        expect(reader.get_by_role("spinbutton", name="Amount", exact=True)).to_have_value("0")
+        reader.get_by_role("spinbutton", name="Amount", exact=True).fill("12.5")
+        expect(reader.get_by_role("checkbox", name="Enabled", exact=True)).to_be_checked()
+        reader.get_by_role("checkbox", name="Enabled", exact=True).uncheck()
+        reader.get_by_role("textbox", name="Payload", exact=True).fill(json.dumps({"items": [1, False, None]}))
+        reader.screenshot(path=str(ARTIFACTS / "function-run-desktop-ja.png"), full_page=True)
+        reader.get_by_role("button", name="実行", exact=True).click()
+        reader.wait_for_url("**/runs/*")
+        expect(reader.locator("main")).to_contain_text("Shared invocation", timeout=15000)
+        expect(reader.locator("main")).to_contain_text('"configured": true')
+        expect(reader.locator("main")).to_contain_text('"amount": 12.5')
+        expect(reader.locator("main")).to_contain_text('"enabled": false')
+        expect(reader.locator("main")).to_contain_text('"items": [')
+        expect(reader.locator("main")).to_contain_text("[redacted]")
+        self.assertEqual(reader.request.get(ORIGIN + "/api/resources/" + source + "/custody").status, 403)
+        self.assertEqual(reader.request.get(ORIGIN + "/api/environments/" + environment + "/registration").status, 403)
+        page.goto(function_path + "/edit")
+        self.select(page, "言語", "English")
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(page.get_by_role("textbox", name="Program and arguments (JSON array)", exact=True)).to_have_value(json.dumps(["node", "-e", code], ensure_ascii=False, indent=2))
+        page.screenshot(path=str(ARTIFACTS / "function-editor-mobile-en.png"), full_page=True)
+        print("Rendered function editor (English): " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
+        page.get_by_role("button", name="Save", exact=True).click()
+        expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
+
     def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
         path = self.variable(page, principal)

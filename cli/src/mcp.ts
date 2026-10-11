@@ -1,7 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Command, HttpRequest, Id, Name, Resource } from '../../shared/contracts.js';
+import { Command, HttpRequest, Id, JsonObject, Name, Resource } from '../../shared/contracts.js';
+import { FunctionSave } from '../../shared/operations.js';
+import { operationClient } from './operations.js';
 import { Task } from '../../shared/execution.js';
 import type { ExecutionOperation } from '../../shared/execution.js';
 import type { CustodyClient } from '../../shared/client.js';
@@ -14,7 +16,8 @@ const Operation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
     save: z.record(z.string().max(500), Name).default({}) }).strict(),
   Command.extend({ kind: z.literal('command') }).strict(),
-  z.object({ kind: z.literal('function'), id: Id, arguments: z.record(z.string(), z.string()).default({}) }).strict(),
+  z.object({ kind: z.literal('function'), id: Id, arguments: JsonObject.default({}),
+    save: z.record(z.string(), Name).default({}) }).strict(),
 ]);
 export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
   const server = new McpServer({ name: 'foundation-mcp-server', version: packageInfo.version }, {
@@ -27,10 +30,21 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
       return { status: response.status, body: response.status === 204 ? null : await response.json() };
     },
   });
+  server.registerTool('foundation_save_function', {
+    title: 'Save a reusable function',
+    description: 'Save a fixed program, its arguments and result format, and its execution environment. Command programs read arguments as JSON from stdin and write their result to stdout in temporary working storage. Approves the exact function for its protected inputs using local encryption keys. Share its execute permission to allow calls without direct input access. Reference variable or connection IDs; never supply their plaintext.',
+    inputSchema: FunctionSave.extend({ response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, input => mcpCall(async () => {
+    const { response_format: _format, ...destination } = input;
+    const result = await operationClient(client, custody()).execute({ name: 'function.save', input: JsonObject.parse(destination) });
+    if (!('kind' in result) || result.kind !== 'saved') return result;
+    return { id: result.resource.id, name: result.resource.name, version: result.resource.version };
+  }, input.response_format));
   server.registerTool('foundation_run', {
     title: 'Run on an explicitly trusted executor',
-    description: 'Sign and encrypt one HTTP request, saved function, or command for the selected executor. Returns its ID and state. Use resource IDs for credentials, not plaintext. The executor must already be trusted and authorized for every input. Commands and arbitrary HTTP require a caller-program grant. Retry transport failures only with foundation_resume_execution and the returned ID.',
-    inputSchema: z.object({ ownerId: Id.optional(), environmentId: Id,
+    description: 'Sign and encrypt one HTTP request, saved function, or command. Functions use their configured environment and declared inputs; their execute permission is sufficient. Commands and arbitrary HTTP need environmentId and caller-program input grants. The executor must already be trusted. Use save to map result JSON pointers to encrypted variable names; these executions return saved IDs. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
+    inputSchema: z.object({ ownerId: Id.optional(), environmentId: Id.optional(),
       operation: Operation, response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
@@ -38,11 +52,13 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     if (input.operation.kind === 'function') {
       const resource = await client.json('/api/resources/' + input.operation.id, {}, Resource);
       if (resource.kind !== 'function') throw new Error('Choose a saved function.');
-      operation = { kind: 'function', definition: resource.data, arguments: input.operation.arguments, outputs: {} };
+      operation = { kind: 'function', functionId: resource.id, definition: resource.data, arguments: input.operation.arguments, outputs: {} };
     } else if (input.operation.kind === 'http') operation = { ...input.operation, save: {} };
     else operation = input.operation;
-    const task = await custody().submit(input.ownerId ?? client.identity.principalId, input.environmentId, operation,
-      input.operation.kind === 'http' ? { save: input.operation.save } : {});
+    const environmentId = operation.kind === 'function' ? operation.definition.environmentId : input.environmentId;
+    if (!environmentId) throw new Error('Choose an execution environment.');
+    const task = await custody().submit(input.ownerId ?? client.identity.principalId, environmentId, operation,
+      input.operation.kind !== 'command' ? { save: input.operation.save } : {});
     return { id: task.id, state: task.state, environmentId: task.environmentId };
   }, input.response_format));
   server.registerTool('foundation_execution_result', {
