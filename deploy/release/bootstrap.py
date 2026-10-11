@@ -3,8 +3,42 @@ import subprocess
 
 
 def aws(*args):
-    output = subprocess.check_output(["aws", "--profile", "foundation", "--region", "ap-northeast-1", *args, "--output", "json"], text=True)
+    output = subprocess.run(["aws", "--profile", "foundation", "--region", "ap-northeast-1", *args, "--output", "json"],
+                            check=True, capture_output=True, text=True).stdout
     return json.loads(output) if output.strip() else {}
+
+
+def configure_role(name, trust, policy_name, policy):
+    try:
+        aws("iam", "get-role", "--role-name", name)
+    except subprocess.CalledProcessError as error:
+        if "NoSuchEntity" not in (error.stderr or ""):
+            raise
+        aws("iam", "create-role", "--role-name", name, "--assume-role-policy-document", json.dumps(trust),
+            "--max-session-duration", "3600")
+    else:
+        aws("iam", "update-assume-role-policy", "--role-name", name, "--policy-document", json.dumps(trust))
+    aws("iam", "put-role-policy", "--role-name", name, "--policy-name", policy_name, "--policy-document", json.dumps(policy))
+
+
+def configure_build_role(account, subject_prefix):
+    if account != "052438773980":
+        raise RuntimeError("Configure the Foundation account only.")
+    trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {
+        "Federated": "arn:aws:iam::" + account + ":oidc-provider/token.actions.githubusercontent.com"},
+        "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {"StringEquals": {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+            "token.actions.githubusercontent.com:sub": subject_prefix + ":ref:refs/heads/main"}}}]}
+    policy = aws("iam", "get-role-policy", "--role-name", "foundation-environment-builder",
+                 "--policy-name", "environment-build")["PolicyDocument"]
+    bucket = "foundation-objects-052438773980"
+    policy["Statement"].extend([
+        {"Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::" + bucket,
+         "Condition": {"StringLike": {"s3:prefix": ["foundation-releases/*", "foundation-environment-images/*"]}}},
+        {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
+         "Resource": "arn:aws:s3:::" + bucket + "/foundation-releases/*"},
+    ])
+    configure_role("foundation-github-build", trust, "build", policy)
 
 
 def main():
@@ -17,17 +51,12 @@ def main():
     subject = json.loads(subprocess.check_output(["gh", "api", "repos/tomato414941/foundation/actions/oidc/customization/sub"], text=True))
     if not subject.get("use_default") or not subject.get("sub_claim_prefix"):
         raise RuntimeError("Review the repository's custom OIDC subject before configuring its deployment role.")
+    configure_build_role(account, subject["sub_claim_prefix"])
     trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Federated": provider},
         "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {"StringEquals": {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
             "token.actions.githubusercontent.com:sub": subject["sub_claim_prefix"] + ":environment:production"}}}]}
     role = "foundation-github-release"
-    existing = subprocess.run(["aws", "--profile", "foundation", "iam", "get-role", "--role-name", role], capture_output=True, text=True)
-    if existing.returncode:
-        if "NoSuchEntity" not in existing.stderr: raise RuntimeError(existing.stderr)
-        aws("iam", "create-role", "--role-name", role, "--assume-role-policy-document", json.dumps(trust), "--max-session-duration", "3600")
-    else:
-        aws("iam", "update-assume-role-policy", "--role-name", role, "--policy-document", json.dumps(trust))
     policy = aws("iam", "get-role-policy", "--role-name", "foundation-environment-builder", "--policy-name", "environment-build")["PolicyDocument"]
     bucket = "foundation-objects-052438773980"
     policy["Statement"].extend([
@@ -39,7 +68,7 @@ def main():
             "arn:aws:ssm:ap-northeast-1::document/AWS-RunShellScript"]},
         {"Effect": "Allow", "Action": ["ssm:GetCommandInvocation", "ssm:ListCommands"], "Resource": "*"},
     ])
-    aws("iam", "put-role-policy", "--role-name", role, "--policy-name", "release", "--policy-document", json.dumps(policy))
+    configure_role(role, trust, "release", policy)
     images = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ec2:RunInstances",
         "Resource": "arn:aws:ec2:ap-northeast-1::image/*", "Condition": {
             "StringEquals": {"aws:ResourceTag/foundation:managed": "environment-image", "ec2:Owner": account}}}]}

@@ -23,17 +23,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:18-alpine
-        env:
-          POSTGRES_USER: foundation
-          POSTGRES_PASSWORD: foundation-ci-only
-          POSTGRES_DB: foundation_test
-        ports: [5432:5432]
-        options: >-
-          --health-cmd "pg_isready -U foundation -d foundation_test"
-          --health-interval 5s --health-timeout 5s --health-retries 20
+    concurrency:
+      group: foundation-tests-${{ github.ref }}
+      cancel-in-progress: true
     env:
       TEST_DATABASE_URL: postgres://foundation:foundation-ci-only@127.0.0.1:5432/foundation_test
       TEST_COMMAND_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
@@ -44,38 +36,127 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
-          package-manager-cache: false
+          cache: npm
       - name: Install test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends openssh-server
           sudo mkdir -p /run/sshd
           npm ci --include=dev --no-audit --no-fund
-      - name: Prepare the pinned command image
+      - name: Prepare integration services
         run: |
-          for attempt in 1 2 3 4 5; do
-            if docker pull "$TEST_COMMAND_IMAGE"; then break; fi
-            if [ "$attempt" = 5 ]; then exit 1; fi
-            sleep "$((attempt * 5))"
-          done
+          python3 deploy/release/images.py "$TEST_COMMAND_IMAGE"
+          bash .github/scripts/test-database.sh
       - name: Check and test
         run: |
           npm run check
           npm test
           python3 -m unittest discover -s deploy/release -p 'test_*.py'
+      - name: Stop integration services
+        if: always()
+        run: docker rm --force --volumes foundation-test-postgres || true
+
+  browser:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: foundation-browser-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      TEST_DATABASE_URL: postgres://foundation:foundation-ci-only@127.0.0.1:5432/foundation_test
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Build the browser test application
+        run: |
+          npm ci --include=dev --no-audit --no-fund
           npm run build
+          bash .github/scripts/test-database.sh
       - name: Test browser workflows
         run: |
           python3 -m venv "$RUNNER_TEMP/foundation-ui"
           "$RUNNER_TEMP/foundation-ui/bin/pip" install playwright==1.58.0
           "$RUNNER_TEMP/foundation-ui/bin/python" -m playwright install --with-deps chromium webkit
           "$RUNNER_TEMP/foundation-ui/bin/python" tests/browser.py
+      - name: Record browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: foundation-browser-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+      - name: Stop integration services
+        if: always()
+        run: docker rm --force --volumes foundation-test-postgres || true
 
-  release:
+  prepare:
     needs: test
-    if: always() && (needs.test.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish-only'))
+    if: needs.test.result == 'success'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
+    concurrency:
+      group: foundation-release-build
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      AWS_DEFAULT_REGION: ap-northeast-1
+      FOUNDATION_BUCKET: foundation-objects-052438773980
+      EC2_ENVIRONMENT_ZONE: ap-northeast-1a
+      ENVIRONMENT_COMMAND_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::052438773980:role/foundation-github-build
+          role-session-name: foundation-build-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Build and check the CLI distribution
+        run: |
+          npm ci --include=dev --no-audit --no-fund
+          npm run build:cli
+          node .github/scripts/cli-release.mjs plan
+      - name: Sign in to the container registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Prepare immutable release artifacts
+        run: python3 deploy/release/prepare.py "$RUNNER_TEMP/foundation-release"
+      - name: Build and verify the final server container
+        run: python3 deploy/release/build.py "$RUNNER_TEMP/foundation-release"
+      - name: Record build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: foundation-build-${{ github.sha }}
+          path: ${{ runner.temp }}/foundation-release/*.json
+          if-no-files-found: ignore
+
+  release:
+    needs: [test, browser, prepare]
+    if: >-
+      always() && !cancelled() &&
+      ((needs.test.result == 'success' && needs.browser.result == 'success' && needs.prepare.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish-only'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     environment:
       name: production
       url: https://foundationsystems.app
@@ -84,15 +165,12 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
-      packages: write
       id-token: write
     env:
       AWS_REGION: ap-northeast-1
       AWS_DEFAULT_REGION: ap-northeast-1
       FOUNDATION_BUCKET: foundation-objects-052438773980
       FOUNDATION_INSTANCE_ID: i-012a1a04ee760f433
-      EC2_ENVIRONMENT_ZONE: ap-northeast-1a
-      ENVIRONMENT_COMMAND_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -109,7 +187,7 @@ jobs:
           role-session-name: foundation-release-${{ github.run_id }}
           aws-region: ap-northeast-1
           role-duration-seconds: 3600
-      - name: Build and check the CLI distribution
+      - name: Check CLI publication
         id: cli
         run: |
           npm ci --include=dev --no-audit --no-fund
@@ -118,20 +196,8 @@ jobs:
       - name: Check npm trusted publishing before deployment
         if: steps.cli.outputs.publish == 'true'
         run: node .github/scripts/cli-release.mjs verify
-      - name: Sign in to the container registry
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      - name: Prepare immutable release artifacts
-        env:
-          PUBLICATION_ONLY: ${{ inputs.mode == 'publish-only' }}
-        run: |
-          args=()
-          if [ "$PUBLICATION_ONLY" = true ]; then args+=(--existing-only); fi
-          python3 deploy/release/prepare.py "$RUNNER_TEMP/foundation-release" "${args[@]}"
-      - name: Build and verify the final server container
-        if: inputs.mode != 'publish-only'
-        run: python3 deploy/release/build.py "$RUNNER_TEMP/foundation-release"
+      - name: Read the verified release artifacts
+        run: python3 deploy/release/prepare.py "$RUNNER_TEMP/foundation-release" --existing-only
       - name: Deploy and verify production
         id: deploy
         if: inputs.mode != 'publish-only'

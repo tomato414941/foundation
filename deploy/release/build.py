@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 from manifest import digest, validate, write_json
+from images import pull_image, registry_command
 
 
 def store_artifact(bucket, key, path):
@@ -33,10 +34,11 @@ def main():
         validate(json.loads(target.read_text())); return
     manifest = json.loads((directory / "build.json").read_text())
     image = "ghcr.io/tomato414941/foundation:" + manifest["commit"]
-    subprocess.run(["docker", "build", "--platform", "linux/arm64", "--label", "org.opencontainers.image.revision=" + manifest["commit"],
-                    "--build-arg", "FOUNDATION_RELEASE_COMMIT=" + manifest["commit"], "--tag", image, "."], check=True)
+    registry_command(["docker", "build", "--platform", "linux/arm64", "--label", "org.opencontainers.image.revision=" + manifest["commit"],
+                      "--build-arg", "FOUNDATION_RELEASE_COMMIT=" + manifest["commit"], "--tag", image, "."])
     # Test the final container with an ephemeral database and the packaged CLI.
     name = "release-" + manifest["commit"][:12]
+    pull_image("public.ecr.aws/docker/library/postgres:18-alpine")
     subprocess.run(["docker", "network", "create", name], check=True, stdout=subprocess.DEVNULL)
     try:
         subprocess.run(["docker", "run", "-d", "--name", name + "-db", "--network", name,
@@ -44,7 +46,7 @@ def main():
                         "public.ecr.aws/docker/library/postgres:18-alpine"], check=True, stdout=subprocess.DEVNULL)
         import time
         for _ in range(30):
-            if subprocess.run(["docker", "exec", name + "-db", "pg_isready", "-U", "foundation"], capture_output=True).returncode == 0: break
+            if subprocess.run(["docker", "exec", name + "-db", "pg_isready", "-h", "127.0.0.1", "-U", "foundation"], capture_output=True).returncode == 0: break
             time.sleep(1)
         else: raise RuntimeError("The disposable database did not become ready.")
         subprocess.run(["docker", "run", "-d", "--name", name + "-app", "--network", name,
@@ -60,7 +62,7 @@ def main():
         for container in [name + "-app", name + "-db"]:
             subprocess.run(["docker", "rm", "-f", "-v", container], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["docker", "network", "rm", name], check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["docker", "push", image], check=True)
+    registry_command(["docker", "push", image])
     output = subprocess.check_output(["docker", "image", "inspect", "--format", "{{json .RepoDigests}}", image], text=True)
     manifest["image"] = next(value for value in json.loads(output) if value.startswith("ghcr.io/tomato414941/foundation@"))
     validate(manifest)
