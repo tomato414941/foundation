@@ -61,7 +61,7 @@ def main():
     encoded = base64.b64encode(archive.getvalue()).decode()
     directory = "/opt/foundation/releases/" + manifest["commit"] + "/installer"
     script = "set -eu\numask 077\nmkdir -p '" + directory + "'\nprintf '%s' '" + encoded + "' | base64 -d | tar -xz -C '" + directory + "'\n"
-    script += "python3 '" + directory + "/host.py' '" + directory + "/manifest.json'" + (" --allow-schema-change" if args.allow_schema_change else "")
+    script += "python3 '" + directory + "/host.py' '" + directory + "/manifest.json' --expected-current '" + current + "'" + (" --allow-schema-change" if args.allow_schema_change else "")
     invocation(instance, [script])
 
 

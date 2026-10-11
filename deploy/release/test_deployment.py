@@ -9,16 +9,17 @@ from manifest import digest, update_environment
 
 
 class SimulatedDeployment(Deployment):
-    def __init__(self, *args, fail=False, old_schema=None, **kwargs):
+    def __init__(self, *args, fail=False, old_schema=None, running_commit=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fail, self.old_schema = fail, old_schema or b"schema"
         self.applied = []
+        self.running_commit = running_commit or self.manifest["commit"]
 
     def run(self, *command, **kwargs):
         if command[:3] == ("docker", "image", "inspect"):
             return json.dumps({"org.opencontainers.image.revision": self.manifest["commit"]}).encode()
         if command[:2] == ("docker", "inspect"):
-            return self.manifest["commit"].encode()
+            return self.running_commit.encode()
         if "cat" in command: return self.old_schema
         return b""
 
@@ -89,6 +90,13 @@ class DeploymentTests(unittest.TestCase):
     def test_replaces_an_exported_image_setting(self):
         value = update_environment("A=first\nexport FOUNDATION_IMAGE='old'\nB=last\n", {"FOUNDATION_IMAGE": "new"})
         self.assertEqual(value, "A=first\nFOUNDATION_IMAGE=new\nB=last\n")
+
+    def test_preserves_a_release_deployed_while_waiting_for_the_host_lock(self):
+        deployment = self.deployment(expected_current="b" * 40, running_commit="c" * 40)
+        with self.assertRaisesRegex(RuntimeError, "Another release was deployed"):
+            deployment.execute()
+        self.assertEqual(self.env.read_text(), self.original)
+        self.assertEqual(deployment.applied, [])
 
 
 if __name__ == "__main__":

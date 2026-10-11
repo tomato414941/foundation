@@ -13,11 +13,12 @@ from manifest import digest, update_environment, validate, write_json
 
 
 class Deployment:
-    def __init__(self, manifest, root="/opt/foundation", env="/etc/foundation/v1.env", schema_change=False):
+    def __init__(self, manifest, root="/opt/foundation", env="/etc/foundation/v1.env", schema_change=False, expected_current=None):
         self.manifest = validate(manifest)
         self.root, self.env = Path(root), Path(env)
         self.directory = self.root / "releases" / manifest["commit"]
         self.schema_change = schema_change
+        self.expected_current = expected_current
         self.previous = self.env.read_bytes()
         self.compose_path = self.root / "v1" / "compose.yaml"
         self.previous_compose = self.compose_path.read_bytes()
@@ -62,6 +63,11 @@ class Deployment:
 
     def execute(self):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.expected_current:
+            actual = self.run("docker", "inspect", "--format", '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                              "foundation-v1-foundation-1").decode().strip()
+            if actual not in [self.expected_current, self.manifest["commit"]]:
+                raise RuntimeError("Another release was deployed while this release waited. Rerun to compare the current commit.")
         state = self.directory / "state.json"
         if state.exists() and json.loads(state.read_text()).get("verified"):
             actual = self.run("docker", "inspect", "--format", '{{index .Config.Labels "org.opencontainers.image.revision"}}',
@@ -123,12 +129,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest")
     parser.add_argument("--allow-schema-change", action="store_true")
+    parser.add_argument("--expected-current", required=True)
     args = parser.parse_args()
     lock_path = Path("/opt/foundation/releases/deploy.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        Deployment(json.loads(Path(args.manifest).read_text()), schema_change=args.allow_schema_change).execute()
+        Deployment(json.loads(Path(args.manifest).read_text()), schema_change=args.allow_schema_change,
+                   expected_current=args.expected_current).execute()
 
 
 if __name__ == "__main__":
