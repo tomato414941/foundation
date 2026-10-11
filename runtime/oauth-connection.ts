@@ -21,11 +21,10 @@ function application(app: AppState | null): AppState {
 }
 function scopes(input: ConnectionStart) {
   const definition = specification(input).scopes;
-  // Older clients sent additions; current clients send the complete selection.
-  return selectScopes(definition, input.requestedScopes ?? [...definition.default, ...input.scopes]);
+  return selectScopes(definition, input.scopes);
 }
 function material(input: ConnectionStart, app: AppState, token: OAuthToken) {
-  return ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
+  return ConnectionMaterial.parse({ format: 2, methodId: input.methodId, method: input.method,
     generation: randomUUID(), appId: input.appId, appGeneration: input.appId ? app.generation : null, oauth: token });
 }
 function checkpoint(value: ConnectionCheckpoint) {

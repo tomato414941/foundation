@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
-import { AwsConnectionInput, legacyAwsConnection } from '../../shared/aws';
+import { AwsConnectionInput } from '../../shared/aws';
 import type { AwsConnectionRequest, AwsConnectionState } from '../../shared/aws';
 import type { ConnectionState } from '../../shared/connections';
 import type { ResourceView } from '../../shared/contracts';
@@ -18,7 +18,7 @@ export type AwsFormValues = {
   role?: AwsConnectionRequest['role'];
 };
 export function awsFormValues(state: ConnectionState): AwsFormValues | undefined {
-  const input = state.aws ?? (state.role ? legacyAwsConnection(state.role) : undefined);
+  const input = state.aws;
   if (!input) return;
   return { authentication: input.authentication.kind, region: input.region,
     ...(input.role ? { role: input.role } : {}),

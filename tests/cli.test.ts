@@ -437,7 +437,7 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   const environment = randomUUID();
   const registered = await c.run(['agent', 'start', '--id', environment, '--once']);
   assert.equal(registered.code, 0, registered.stderr);
-  const start = await c.run(['connect', '--method', 'aws:role', '--environment', environment, '--name', 'AWS session role', '--aws', '@-'],
+  const start = await c.run(['connect', '--method', 'aws:authentication', '--environment', environment, '--name', 'AWS session role', '--aws', '@-'],
     JSON.stringify({ authentication: { kind: 'session', accessKeyId: 'explicit-cli-key', secretAccessKey: 'explicit-cli-secret',
       sessionToken: 'explicit-cli-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
       role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } }));

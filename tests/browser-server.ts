@@ -70,14 +70,6 @@ class BrowserRunner extends MemoryRunner {
     // This UI fixture simulates provisioning; container isolation has its own integration test.
     agents.set(id, new Executor(registration, keys, broker, journal, transport,
       new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport, {
-        async obtain(arn, externalId, region) {
-          const requests = roleRequests.get(id) ?? [];
-          requests.push({ arn, externalId, region });
-          roleRequests.set(id, requests);
-          return { AWS_ACCESS_KEY_ID: 'browser-role-key', AWS_SECRET_ACCESS_KEY: 'browser-role-secret',
-            AWS_SESSION_TOKEN: 'browser-role-session', AWS_DEFAULT_REGION: region };
-        },
-      }, {
         async obtain(input) {
           const requests = awsRequests.get(id) ?? [];
           requests.push(input); awsRequests.set(id, requests);

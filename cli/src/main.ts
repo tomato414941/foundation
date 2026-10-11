@@ -130,7 +130,6 @@ const options = {
   connection: textOption,
   fields: textOption,
   scopes: textOption,
-  role: textOption,
   aws: textOption,
   parameters: textOption,
   'redirect-uri': textOption,
@@ -447,7 +446,6 @@ async function main(argv: string[]) {
       methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
       appId: args.values.app, connectionId: args.values.connection,
       fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
-      role: args.values.role ? await json(args.values.role) : undefined,
       aws: args.values.aws ? await json(args.values.aws) : undefined,
       environments: args.values.for, redirectUri: args.values['redirect-uri'] });
     else {

@@ -14,7 +14,7 @@ export class TokenConnection implements ConnectionProvider {
     connectionFields(specification(input).fields, input.fields);
   }
   async start({ input }: AuthorizationContext) {
-    return { kind: 'ready' as const, material: ConnectionMaterial.parse({ format: 1,
+    return { kind: 'ready' as const, material: ConnectionMaterial.parse({ format: 2,
       methodId: input.methodId, method: input.method, generation: randomUUID(), appId: null, appGeneration: null,
       fields: connectionFields(specification(input).fields, input.fields) }) };
   }

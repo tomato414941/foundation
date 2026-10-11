@@ -719,7 +719,7 @@ class BrowserTests(unittest.TestCase):
     def test_選んだ実行先のAWSの身元を信頼するIAMロールをAWSで作るリンクを示す(self):
         page, principal = self.passkey_account()
         self.executor(page, principal)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         self.select(page, "認証方法", "実行環境のAWS認証")
         page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
@@ -753,7 +753,7 @@ class BrowserTests(unittest.TestCase):
         environment_id = environment_path.rsplit("/", 1)[1]
         role = {"arn": "arn:aws:iam::123456789012:role/team/Example", "region": "us-west-2",
                 "externalId": "saved-external-id"}
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         self.select(page, "認証方法", "実行環境のAWS認証")
         page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
@@ -805,7 +805,7 @@ class BrowserTests(unittest.TestCase):
             route.fulfill(response=response, json=data)
 
         page.route(re.compile(r"/api/principals/[^/]+/resources\?kind=environment"), unconfirmed_identity)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         self.select(page, "認証方法", "実行環境のAWS認証")
         page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
@@ -825,7 +825,7 @@ class BrowserTests(unittest.TestCase):
     def test_AWSアクセスキーを保存し再接続で認証情報を引き継いで更新する(self):
         page, principal = self.passkey_account("AWS access key owner")
         environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         expect(page.get_by_role("combobox", name="認証方法", exact=True)).to_have_text("アクセスキー")
         page.get_by_role("textbox", name="名前", exact=True).fill("AWS keys")
         page.get_by_label("アクセスキーID", exact=True).fill("browser-access-key")
@@ -872,7 +872,7 @@ class BrowserTests(unittest.TestCase):
         from datetime import datetime, timezone
         page, principal = self.passkey_account("AWS temporary credentials owner")
         environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         self.select(page, "認証方法", "一時認証情報")
         page.get_by_role("textbox", name="名前", exact=True).fill("AWS temporary role")
         page.get_by_label("アクセスキーID", exact=True).fill("temporary-key")
@@ -905,7 +905,7 @@ class BrowserTests(unittest.TestCase):
     def test_実行環境のAWS認証で追加ロールを指定せず接続を保存する(self):
         page, principal = self.passkey_account("AWS environment credentials owner")
         environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
         self.select(page, "認証方法", "実行環境のAWS認証")
         page.get_by_role("textbox", name="名前", exact=True).fill("AWS environment")
         self.select(page, "実行環境", "Browser executor")

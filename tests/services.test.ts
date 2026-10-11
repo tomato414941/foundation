@@ -149,14 +149,19 @@ test('先に承認した接続を保持し、古い確認画面には最新の�
 
 test('選択した実行先のワークロード権限でIAMロールを引き受ける', async t => {
   const obtained: string[] = [];
-  const f = await flowFixture(undefined, { async obtain(arn, externalId, region) {
-    obtained.push(arn + ':' + externalId);
-    return { AWS_ACCESS_KEY_ID: 'role-key', AWS_SECRET_ACCESS_KEY: 'role-secret',
-      AWS_SESSION_TOKEN: 'role-session', AWS_DEFAULT_REGION: region };
+  const f = await flowFixture(undefined, { async obtain(input) {
+    obtained.push(input.role!.arn + ':' + input.role!.externalId);
+    const sourceIdentity = { accountId: '123456789012', principalId: 'EXECUTOR',
+      arn: 'arn:aws:iam::123456789012:role/Executor' };
+    return { state: { ...input, sourceIdentity, identity: { accountId: '123456789012', principalId: 'TARGET',
+      arn: 'arn:aws:sts::123456789012:assumed-role/Example/test' } }, credentials: {
+      AWS_ACCESS_KEY_ID: 'role-key', AWS_SECRET_ACCESS_KEY: 'role-secret',
+      AWS_SESSION_TOKEN: 'role-session', AWS_DEFAULT_REGION: input.region, AWS_REGION: input.region } };
   } });
   t.after(f.close);
   const role = { arn: 'arn:aws:iam::123456789012:role/Example', region: 'ap-northeast-1', externalId: 'exclusive-external-id' };
-  const started = await f.start({ methodId: 'aws:role', role });
+  const started = await f.start({ methodId: 'aws:authentication',
+    aws: { authentication: { kind: 'environment' }, region: role.region, role: { arn: role.arn, externalId: role.externalId } } });
   assert.equal((await f.tick(started.flow.id)).kind, 'review');
   const saved = await f.accept(started.flow.id);
   assert.equal((await f.http(saved.id, 'AWS_ACCESS_KEY_ID'))?.ok, true);

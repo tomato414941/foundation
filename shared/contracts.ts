@@ -159,7 +159,7 @@ const Scopes = z.object({
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
-  application: z.enum(['required', 'implicit']).optional(),
+  application: z.enum(['required', 'implicit']).default('required'),
   grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   issuer: z.url().optional(),
   authorizeUrl: UrlTemplate.optional(),
@@ -204,9 +204,9 @@ export const TokenDefinition = z.object({
   instructions: z.string().optional(),
   hint: z.string().optional(),
 });
-export const AuthKind = z.enum(['oauth', 'token', 'role']);
+export const AuthKind = z.enum(['oauth', 'token', 'aws']);
 export type AuthKindName = z.infer<typeof AuthKind>;
-export const RoleDefinition = z.object({ kind: z.literal('aws'), hint: z.string().optional() });
+export const AwsDefinition = z.object({ hint: z.string().optional() }).strict();
 const methodMetadata = {
   name: Name,
   docs: z.url().optional(),
@@ -218,8 +218,8 @@ const OAuthMethod = z
 const TokenMethod = z
   .object({ ...methodMetadata, kind: z.literal('token'), config: TokenDefinition })
   .strict();
-const RoleMethod = z.object({ ...methodMetadata, kind: z.literal('role'), config: RoleDefinition }).strict();
-export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, RoleMethod]);
+const AwsMethod = z.object({ ...methodMetadata, kind: z.literal('aws'), config: AwsDefinition }).strict();
+export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod]);
 export type MethodDescription = z.infer<typeof MethodDefinition>;
 const methodCatalogMetadata = {
   id: z.string().min(1),
@@ -229,7 +229,7 @@ const methodCatalogMetadata = {
 export const CatalogMethod = z.discriminatedUnion('kind', [
   OAuthMethod.extend(methodCatalogMetadata),
   TokenMethod.extend(methodCatalogMetadata),
-  RoleMethod.extend(methodCatalogMetadata),
+  AwsMethod.extend(methodCatalogMetadata),
 ]);
 export type CatalogConnectionMethod = z.infer<typeof CatalogMethod>;
 export const MethodKey = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);

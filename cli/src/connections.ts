@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Client } from './client.js';
 import { privateClient } from './custody.js';
 import { CatalogMethod, Id, Name, Resource, listOf } from '../../shared/contracts.js';
-import { AppMaterial, ConnectionMaterial } from '../../shared/connections.js';
+import { AppMaterial } from '../../shared/connections.js';
 import { ConnectionClient, FlowRecord } from '../../shared/connection-client.js';
 import type { ConnectionFlow, FlowProgress } from '../../shared/connection-client.js';
 import { canonical } from '../../shared/authority.js';
@@ -47,14 +47,14 @@ export async function saveApp(client: Client, input: {
 }
 export async function startConnection(client: Client, input: {
   ownerId: string; environmentId: string; methodId: string; name?: string; appId?: string;
-  connectionId?: string; fields: unknown; scopes: unknown; role?: unknown; aws?: unknown; environments?: string[]; redirectUri?: string;
+  connectionId?: string; fields: unknown; scopes: unknown; aws?: unknown; environments?: string[]; redirectUri?: string;
 }) {
   const definition = await method(client, input.methodId);
   const existing = input.connectionId ? await client.json('/api/resources/' + Id.parse(input.connectionId), {}, Resource) : null;
   return connectionClient(client).start({ ownerId: input.ownerId, environmentId: Id.parse(input.environmentId),
     name: Name.parse(input.name ?? existing?.name ?? definition.name), methodId: input.methodId, method: definition,
     appId: input.appId, connectionId: input.connectionId, fields: z.record(z.string(), z.string()).parse(input.fields),
-    scopes: z.array(z.string()).optional().parse(input.scopes), role: ConnectionMaterial.shape.role.parse(input.role),
+    scopes: z.array(z.string()).optional().parse(input.scopes),
     ...(input.aws !== undefined ? { aws: AwsConnectionInput.parse(input.aws) } : {}),
     environments: input.environments, redirectUri: input.redirectUri });
 }

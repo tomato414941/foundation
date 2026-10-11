@@ -3,28 +3,24 @@ import { ConnectionMaterial } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { fail } from '../server/errors.js';
 import type { AwsConnectionProvider } from './aws.js';
-import type { RoleProvider } from './roles.js';
 import type { AuthorizationContext, ConnectionProvider, ConnectionStart } from './connection-provider.js';
 
 export class AwsConnection implements ConnectionProvider {
-  constructor(readonly aws: AwsConnectionProvider, readonly legacy: RoleProvider) {}
+  constructor(readonly aws: AwsConnectionProvider) {}
   validate(input: ConnectionStart) {
-    if (!input.role && !input.aws) fail(400, 'role_required', 'Choose AWS authentication or a role trusted for this executor.');
+    if (!input.aws) fail(400, 'aws_authentication_required', 'Choose AWS authentication for this executor.');
   }
   async start({ input, signal }: AuthorizationContext) {
-    const aws = input.aws ? (await this.aws.obtain(input.aws, undefined, signal)).state : undefined;
-    if (!aws) await this.legacy.obtain(input.role!.arn, input.role!.externalId, input.role!.region);
-    return { kind: 'ready' as const, material: ConnectionMaterial.parse({ format: 1,
+    const aws = (await this.aws.obtain(input.aws!, undefined, signal)).state;
+    return { kind: 'ready' as const, material: ConnectionMaterial.parse({ format: 2,
       methodId: input.methodId, method: input.method, generation: randomUUID(), appId: null, appGeneration: null,
-      ...(aws ? { aws, ...(input.authorizationVersion ? { authorizationVersion: input.authorizationVersion } : {}) }
-        : { role: input.role }) }) };
+      aws }) };
   }
   needsRenewal() { return false; }
   async check(value: ConnectionState, signal: AbortSignal) {
     await this.outputs(value, null, signal);
   }
   async outputs(value: ConnectionState, _app: AppState | null, signal: AbortSignal) {
-    return value.aws ? (await this.aws.obtain(value.aws, value.aws, signal)).credentials
-      : this.legacy.obtain(value.role!.arn, value.role!.externalId, value.role!.region);
+    return (await this.aws.obtain(value.aws!, value.aws, signal)).credentials;
   }
 }

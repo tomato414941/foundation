@@ -1,7 +1,7 @@
 import type { MethodDescription } from './contracts.js';
 
 export type ConnectionField = Extract<MethodDescription, { kind: 'token' }>['config']['fields'][number];
-export type ConnectionFamily = 'oauth' | 'token' | 'aws';
+export type ConnectionFamily = MethodDescription['kind'];
 export interface ConnectionMethodBehavior {
   family: ConnectionFamily;
   application: 'required' | 'implicit' | 'none';
@@ -15,8 +15,7 @@ export interface ConnectionMethodBehavior {
 export function connectionMethod(method: MethodDescription): ConnectionMethodBehavior {
   switch (method.kind) {
     case 'oauth':
-      // Older OpenRouter definitions did not declare their implicit application.
-      const application = method.config.application ?? (method.config.adapter === 'openrouter' ? 'implicit' : 'required');
+      const application = method.config.application;
       return {
         family: 'oauth', application, requiresApp: application === 'required',
         browserAuthorization: method.config.grantType !== 'client_credentials',
@@ -26,10 +25,9 @@ export function connectionMethod(method: MethodDescription): ConnectionMethodBeh
     case 'token':
       return { family: 'token', application: 'none', requiresApp: false, browserAuthorization: false,
         fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
-    case 'role':
-      // The wire kind stays readable by existing clients; role assumption is an AWS option.
+    case 'aws':
       return { family: 'aws', application: 'none', requiresApp: false, browserAuthorization: false, fields: [],
-        outputs: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION'] };
+        outputs: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION'] };
   }
 }
 

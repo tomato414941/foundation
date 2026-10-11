@@ -259,8 +259,10 @@ export class OAuth {
   async refresh(spec: OAuthSpec, app: OAuthApp, previous: OAuthToken, checkpoint?: TokenCheckpoint): Promise<OAuthToken> {
     let current = previous;
     if (previous.expiresAt !== null && previous.expiresAt < Date.now() + 60_000) {
-      if (spec.grantType === 'client_credentials')
-        return this.clientCredentials(spec, app, previous.requestedScopes ?? spec.scopes.default, previous, checkpoint);
+      if (spec.grantType === 'client_credentials') {
+        if (!previous.requestedScopes) fail(409, 'reconnect_required', 'Reconnect this service to select its renewal scopes.');
+        return this.clientCredentials(spec, app, previous.requestedScopes, previous, checkpoint);
+      }
       if (!previous.refreshToken || (previous.refreshExpiresAt && previous.refreshExpiresAt <= Date.now()))
         fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
       const { server, client } = this.configuration(spec, app);

@@ -5,7 +5,7 @@ import { delegatedFixture, MemoryJournal } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
 import { Connections } from '../runtime/connections.js';
 import type { ConnectionBroker } from '../runtime/connections.js';
-import type { RoleProvider } from '../runtime/roles.js';
+import type { AwsConnectionProvider } from '../runtime/aws.js';
 import { DeliveryPending, Executor } from '../runtime/executor.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MethodDefinition } from '../shared/contracts.js';
@@ -20,7 +20,7 @@ import type { OutboundRequest, OutboundResponse, Transport } from '../server/tra
 
 const response = (body: unknown): OutboundResponse => ({ status: 200, headers: { 'content-type': 'application/json' },
   body: encode(JSON.stringify(body)) });
-async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse, roles?: RoleProvider) {
+async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse, aws?: AwsConnectionProvider) {
   const f = await delegatedFixture();
   const method = MethodDefinition.parse({ name: 'Provider', kind: 'oauth', config: {
     authorizeUrl: 'https://provider.example/authorize', tokenUrl: 'https://provider.example/token',
@@ -48,7 +48,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   };
   const requests: OutboundRequest[] = [];
   const transport: Transport = { async send(request) { requests.push(request); return respond(request); } };
-  const connections = new Connections(f.executor.binding, f.executor.keys, broker, journal, transport, roles);
+  const connections = new Connections(f.executor.binding, f.executor.keys, broker, journal, transport, aws);
   const executor = new Executor(f.environment, f.executor.keys, f.broker, journal, transport,
     new CommandProcess({ isolation: 'process' }), connections);
   async function intent(operation: JsonValue, sources: CustodyContent[], kind: ExecutionIntent['operation'], id = crypto.randomUUID()) {
@@ -68,7 +68,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     return result.result as Record<string, JsonValue>;
   }
   async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants'], state?: 'reconnect') {
-    const material = ConnectionMaterial.parse({ format: 1, methodId: 'provider:oauth', method,
+    const material = ConnectionMaterial.parse({ format: 2, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
       ...(state ? { state } : {}),
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
@@ -123,9 +123,9 @@ test('保存済みの認証待ち記録を読み取り、接続先を確認し�
     : response({ id: 'account-1', name: 'Account' }));
   try {
     const flowId = crypto.randomUUID();
-    await f.journal.write('oauth_' + flowId, { actor: f.owner.binding, ownerId: f.owner.actor.id,
+    await f.journal.write('connect_' + flowId, { actor: f.owner.binding, ownerId: f.owner.actor.id,
       input: { action: 'start', flowId, name: 'Continued connection', methodId: 'provider:oauth',
-        method: f.method, appId: f.appPolicy.id, fields: {}, scopes: [], redirectUri: f.config.origin + '/oauth/callback' },
+        method: f.method, appId: f.appPolicy.id, fields: {}, scopes: ['read'], redirectUri: f.config.origin + '/oauth/callback' },
       app: f.appMaterial, state: 'previous-authorization-state', verifier: 'previous-proof-key-verifier',
       expiresAt: Date.now() + 600_000, phase: 'authorize' });
     const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
@@ -149,7 +149,7 @@ test('選び直したスコープと必須スコープでブラウザ認証を�
     const method = MethodDefinition.parse({ ...f.method, config: { ...f.method.config,
       scopes: { default: ['read'], required: ['identity'] } } });
     const started = await f.run({ action: 'start', flowId: crypto.randomUUID(), name: 'Selected scopes',
-      methodId: 'provider:oauth', method, appId: f.appPolicy.id, requestedScopes: [],
+      methodId: 'provider:oauth', method, appId: f.appPolicy.id, scopes: [],
       redirectUri: f.config.origin + '/oauth/callback' });
     assert.equal(new URL(String(started.url)).searchParams.get('scope'), 'identity');
   } finally { await f.close(); }
@@ -160,9 +160,9 @@ test('AWSキーを選んだ実行先へ送り、確認した身元と認証情�
     Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
   const f = await setup(() => response({}));
   try {
-    const method = MethodDefinition.parse({ name: 'AWS', kind: 'role', config: { kind: 'aws' } });
+    const method = MethodDefinition.parse({ name: 'AWS', kind: 'aws', config: {} });
     const flowId = crypto.randomUUID();
-    const reviewed = await f.run({ action: 'start', flowId, name: 'AWS keys', methodId: 'aws:role', method, appId: null,
+    const reviewed = await f.run({ action: 'start', flowId, name: 'AWS keys', methodId: 'aws:authentication', method, appId: null,
       aws: { authentication: { kind: 'access_key', accessKeyId: 'encrypted-aws-key', secretAccessKey: 'encrypted-aws-secret' },
         region: 'us-west-2' } }, []);
     const metadata = reviewed.metadata as Record<string, JsonValue>;
@@ -194,10 +194,10 @@ test('AWSの認証情報を同じ承認と共有許可のまま暗号化して�
     Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
   const f = await setup(() => response({}));
   try {
-    const method = MethodDefinition.parse({ name: 'AWS', kind: 'role', config: { kind: 'aws' } });
+    const method = MethodDefinition.parse({ name: 'AWS', kind: 'aws', config: {} });
     const flowId = crypto.randomUUID();
-    const reviewed = await f.run({ action: 'start', flowId, name: 'Renewable AWS credentials', methodId: 'aws:role',
-      method, appId: null, authorizationVersion: 2,
+    const reviewed = await f.run({ action: 'start', flowId, name: 'Renewable AWS credentials', methodId: 'aws:authentication',
+      method, appId: null,
       aws: { authentication: { kind: 'access_key', accessKeyId: 'first-key', secretAccessKey: 'first-secret' }, region: 'us-west-2' } }, []);
     const metadata = reviewed.metadata as Record<string, JsonValue>, runId = crypto.randomUUID();
     const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.command, Operations.refresh]),
@@ -221,30 +221,6 @@ test('AWSの認証情報を同じ承認と共有許可のまま暗号化して�
     const outputs = await f.connections.outputs(saved, authorization, [saved], new AbortController().signal);
     assert.equal(outputs.AWS_ACCESS_KEY_ID, 'rotated-key');
     assert.equal(outputs.AWS_SECRET_ACCESS_KEY, 'rotated-secret');
-  } finally { await f.close(); }
-});
-
-test('保存済みのAWSロール接続を従来の署名と設定で利用する', async () => {
-  const requests: Array<{ arn: string; externalId: string; region: string }> = [];
-  const credentials = { AWS_ACCESS_KEY_ID: 'legacy-key', AWS_SECRET_ACCESS_KEY: 'legacy-secret',
-    AWS_SESSION_TOKEN: 'legacy-session', AWS_DEFAULT_REGION: 'us-west-2' };
-  const f = await setup(() => response({}), { async obtain(arn, externalId, region) {
-    requests.push({ arn, externalId, region }); return credentials;
-  } });
-  try {
-    const material = ConnectionMaterial.parse({ format: 1, methodId: 'aws:role',
-      method: { name: 'AWS · IAM role', kind: 'role', config: { kind: 'aws' } },
-      generation: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', appId: null, appGeneration: null,
-      role: { arn: 'arn:aws:iam::123456789012:role/team/Legacy', externalId: 'legacy-external-id', region: 'us-west-2' } });
-    const metadata = await connectionMetadata(material);
-    // This digest was produced by the previous release for the saved connection above.
-    assert.equal(metadata.authorizationDigest, 'lTRDDspzDV1t6toqgtfm3euU0zoWs5qW0lTRO5PRRaM');
-    const policy = f.policy(ContentTypes.tokenSet, [Operations.command]);
-    const content = await protect(encode(canonical(material)), policy, 1, f.owner.binding, f.owner.keys, metadata);
-    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 1,
-      policyDigest: await hash(policy), authorizationDigest: metadata.authorizationDigest }] };
-    assert.deepEqual(await f.connections.outputs(content, authorization, [content], new AbortController().signal), credentials);
-    assert.deepEqual(requests, [material.role]);
   } finally { await f.close(); }
 });
 

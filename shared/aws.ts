@@ -46,8 +46,3 @@ export function awsConnectionInfo(state: AwsConnectionState): z.infer<typeof Aws
     ...(state.authentication.kind === 'session' ? { expiresAt: state.authentication.expiresAt } : {}),
   };
 }
-
-export function legacyAwsConnection(role: { arn: string; externalId: string; region: string }): AwsConnectionRequest {
-  return { authentication: { kind: 'environment' }, region: role.region,
-    role: { arn: role.arn, externalId: role.externalId } };
-}

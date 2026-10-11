@@ -14,8 +14,6 @@ import { DomainError, fail } from '../server/errors.js';
 import type { ExecutionExtension } from './executor.js';
 import { DeliveryPending } from './executor.js';
 import type { Journal } from './journal.js';
-import type { RoleProvider } from './roles.js';
-import { AwsRoles } from './roles.js';
 import { AwsConnections } from './aws.js';
 import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
@@ -60,9 +58,9 @@ export class Connections implements ExecutionExtension {
   private readonly providers: ReturnType<typeof connectionProviders>;
   constructor(
     readonly binding: BoundKeys, readonly keys: IdentityKeys, readonly broker: ConnectionBroker,
-    readonly journal: Journal, transport: Transport, roles: RoleProvider = new AwsRoles(),
+    readonly journal: Journal, transport: Transport,
     aws: AwsConnectionProvider = new AwsConnections(),
-  ) { this.providers = connectionProviders(transport, roles, aws); }
+  ) { this.providers = connectionProviders(transport, aws); }
 
   private provider(method: MethodDescription): ConnectionProvider {
     return this.providers[connectionMethod(method).family];
@@ -73,7 +71,9 @@ export class Connections implements ExecutionExtension {
     return content;
   }
   private async material(content: CustodyContent, intent: ExecutionIntent, destination?: string) {
-    const result = ConnectionMaterial.parse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
+    const material = ConnectionMaterial.safeParse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
+    if (!material.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
+    const result = material.data;
     if ((await connectionMetadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
     if (result.state === 'reconnect' && intent.operation !== Operations.revoke)
@@ -103,7 +103,11 @@ export class Connections implements ExecutionExtension {
     return flow;
   }
   private async readFlow(id: string) {
-    return await this.journal.read<Flow>('connect_' + id) ?? await this.journal.read<Flow>('oauth_' + id);
+    const flow = await this.journal.read<Flow>('connect_' + id);
+    if (flow && (!ConnectionAction.safeParse(flow.input).success ||
+      (flow.material && !ConnectionMaterial.safeParse(flow.material).success)))
+      fail(409, 'connection_expired', 'Start the connection again.');
+    return flow;
   }
   private writeFlow(id: string, flow: Flow) { return this.journal.write('connect_' + id, flow); }
   private async startApp(input: ConnectionStart, intent: ExecutionIntent, sources: CustodyContent[]) {

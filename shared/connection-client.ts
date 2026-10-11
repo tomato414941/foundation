@@ -9,7 +9,7 @@ import { ConnectionPlan, OAuthRelay, relayContext } from './protocol.js';
 import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
-import { ConnectionMaterial, requiresApp } from './connections.js';
+import { requiresApp } from './connections.js';
 import { connectionMethod, selectScopes } from './connection-methods.js';
 import type { AwsConnectionRequest } from './aws.js';
 
@@ -47,7 +47,7 @@ export class ConnectionClient {
     return flow;
   }
   async start(input: { ownerId: string; environmentId: string; name: string; methodId: string; method: MethodDescription;
-    appId?: string; fields?: Record<string, string>; scopes?: string[]; role?: z.infer<typeof ConnectionMaterial.shape.role>;
+    appId?: string; fields?: Record<string, string>; scopes?: string[];
     aws?: AwsConnectionRequest;
     connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string }) {
     const id = crypto.randomUUID();
@@ -67,10 +67,8 @@ export class ConnectionClient {
     const appId = requiresApp(input.method) ? Id.parse(input.appId) : null;
     const request = await this.custody.prepare(input.ownerId, input.environmentId, { kind: 'connect', input: {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
-      fields: input.fields ?? {}, scopes: input.scopes ?? [],
-      ...(input.method.kind === 'oauth' ? { requestedScopes: selectScopes(input.method.config.scopes, input.scopes) } : {}),
-      ...(input.role ? { role: input.role } : {}),
-      ...(input.aws ? { aws: input.aws, authorizationVersion: 2 } : {}),
+      fields: input.fields ?? {}, scopes: input.method.kind === 'oauth' ? selectScopes(input.method.config.scopes, input.scopes) : [],
+      ...(input.aws ? { aws: input.aws } : {}),
       ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval });

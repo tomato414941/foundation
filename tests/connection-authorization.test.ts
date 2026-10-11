@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
 
-const material = () => ConnectionMaterial.parse({ format: 1, authorizationVersion: 2, methodId: 'aws:role',
-  method: { name: 'AWS', kind: 'role', config: { kind: 'aws' } },
+const material = () => ConnectionMaterial.parse({ format: 2, methodId: 'aws:authentication',
+  method: { name: 'AWS', kind: 'aws', config: {} },
   generation: 'f109ab1d-bdc6-4eb6-bb2a-3adfc8e831e3', appId: null, appGeneration: null,
   aws: { authentication: { kind: 'session', accessKeyId: 'source-key', secretAccessKey: 'source-secret',
     sessionToken: 'source-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
@@ -42,13 +42,4 @@ test('AWSの認証元とロールとリージョンとExternal IDの変更を新
     const updated = structuredClone(previous); change(updated);
     assert.notEqual((await connectionMetadata(updated)).authorizationDigest, approved.authorizationDigest);
   });
-});
-
-test('保存済みのAWS接続は保存時の認証情報に結び付いた承認で読み取る', async () => {
-  const previous = material(); delete previous.authorizationVersion;
-  const approved = await connectionMetadata(previous), updated = structuredClone(previous);
-  updated.aws!.authentication = { kind: 'session', accessKeyId: 'updated-key', secretAccessKey: 'updated-secret',
-    sessionToken: 'updated-session', expiresAt: Date.now() + 7_200_000 };
-  assert.notEqual((await connectionMetadata(updated)).authorizationDigest, approved.authorizationDigest);
-  assert.equal(approved.accountId, previous.aws!.identity.arn);
 });

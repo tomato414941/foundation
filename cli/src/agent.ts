@@ -12,7 +12,7 @@ import { Connections } from '../../runtime/connections.js';
 import { DeliveryPending, Executor } from '../../runtime/executor.js';
 import { CommandProcess } from '../../runtime/command.js';
 import { journalLock } from '../../runtime/lock.js';
-import { detectAwsPrincipal } from '../../runtime/roles.js';
+import { detectAwsPrincipal } from '../../runtime/aws-principal.js';
 import { Operations } from '../../shared/custody.js';
 import { ProcessBroker, ProcessExecutor } from '../../runtime/process.js';
 import { SSHServer } from '../../runtime/ssh.js';

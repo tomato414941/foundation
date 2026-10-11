@@ -20,12 +20,13 @@ import { CommandProcess } from '../runtime/command.js';
 import { Executor } from '../runtime/executor.js';
 import { HttpBroker } from '../runtime/broker.js';
 import { JournalTrust } from '../runtime/trust.js';
-import type { RoleProvider } from '../runtime/roles.js';
+import type { AwsConnectionProvider } from '../runtime/aws.js';
+import type { AwsConnectionRequest } from '../shared/aws.js';
 
 export const jsonResponse = (value: unknown): OutboundResponse => ({ status: 200,
   headers: { 'content-type': 'application/json' }, body: encode(JSON.stringify(value)) });
 export async function flowFixture(respond: (request: OutboundRequest) => OutboundResponse | Promise<OutboundResponse>
-  = () => jsonResponse({ ok: true }), roles?: RoleProvider) {
+  = () => jsonResponse({ ok: true }), aws?: AwsConnectionProvider) {
   const f = await delegatedFixture();
   const context = await createContext(f.config, { db: f.db, mailer: f.mailer });
   const app = await buildApp(context);
@@ -47,7 +48,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const connections = new ConnectionClient(client, { async get(id) { return structuredClone(flows.get(id) ?? null); },
     async put(flow) { flows.set(flow.id, structuredClone(flow)); } });
   const broker = new HttpBroker(api(f.executor.token)), journal = new MemoryJournal();
-  const runtimeConnections = new Connections(f.executor.binding, f.executor.keys, broker.connections(), journal, transport, roles);
+  const runtimeConnections = new Connections(f.executor.binding, f.executor.keys, broker.connections(), journal, transport, aws);
   const executor = new Executor(f.environment, f.executor.keys, broker, journal, transport,
     new CommandProcess({ isolation: 'process' }), runtimeConnections);
   const method = async (id: string) => {
@@ -67,7 +68,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   };
   async function start(input: { methodId: string; fields?: Record<string, string>; name?: string;
     scopes?: string[];
-    connectionId?: string; appId?: string; role?: { arn: string; externalId: string; region: string } }) {
+    connectionId?: string; appId?: string; aws?: AwsConnectionRequest }) {
     return connections.start({ ...input, method: await method(input.methodId), name: input.name ?? 'Account',
       ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id });
   }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { STSClient } from '@aws-sdk/client-sts';
 import { IAMClient, GetRoleCommand } from '@aws-sdk/client-iam';
-import { awsPrincipal, detectAwsPrincipal } from '../runtime/roles.js';
+import { awsPrincipal, detectAwsPrincipal } from '../runtime/aws-principal.js';
 
 const caller = { Arn: 'arn:aws:sts::123456789012:assumed-role/foundation-host/i-0abc',
   Account: '123456789012', UserId: 'AROFOUNDATIONEXAMPLE:i-0abc' };

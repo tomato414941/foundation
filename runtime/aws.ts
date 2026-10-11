@@ -4,11 +4,17 @@ import type { GetCallerIdentityCommandOutput } from '@aws-sdk/client-sts';
 import { AwsConnectionInput, AwsConnectionMaterial, AwsIdentity, stableAwsArn } from '../shared/aws.js';
 import type { AwsConnectionRequest, AwsConnectionState, VerifiedAwsIdentity } from '../shared/aws.js';
 import { DomainError, fail } from '../server/errors.js';
-import type { RoleCredentials } from './roles.js';
+export interface AwsCredentials extends Record<string, string> {
+  AWS_ACCESS_KEY_ID: string;
+  AWS_SECRET_ACCESS_KEY: string;
+  AWS_SESSION_TOKEN: string;
+  AWS_DEFAULT_REGION: string;
+  AWS_REGION: string;
+}
 
 export interface AwsConnectionProvider {
   obtain(input: AwsConnectionRequest, expected?: AwsConnectionState, signal?: AbortSignal):
-    Promise<{ credentials: RoleCredentials & { AWS_REGION: string }; state: AwsConnectionState }>;
+    Promise<{ credentials: AwsCredentials; state: AwsConnectionState }>;
 }
 function identity(value: GetCallerIdentityCommandOutput): VerifiedAwsIdentity {
   const parsed = AwsIdentity.safeParse({ accountId: value.Account, arn: value.Arn,

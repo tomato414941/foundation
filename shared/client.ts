@@ -77,9 +77,8 @@ export class CustodyClient {
     if (content.policy.id !== id || content.policy.origin !== this.origin) throw new Error('The encrypted content belongs to another item.');
     const author = policyAuthority(content);
     await this.trusted(author);
-    // A checkpoint written in an earlier format cannot be compared with this one, so this content replaces it.
-    const checkpoint = await this.trust.checkpoint(id);
-    const observed = checkpoint && AccessPolicy.safeParse(checkpoint.policy).success ? checkpoint : null;
+    const observed = await this.trust.checkpoint(id);
+    if (observed) AccessPolicy.parse(observed.policy);
     if (observed) {
       if (content.policy.revision < observed.policy.revision || content.materialRevision < observed.materialRevision ||
         (content.policy.revision === observed.policy.revision && canonical(content.policy) !== canonical(observed.policy)) ||

@@ -123,7 +123,7 @@ const google: OAuthService = {
   },
 };
 const namedServices: Readonly<Record<string, OAuthService>> = Object.assign(Object.create(null), {
-  ebay, openrouter, github, google, cloudflare: {}, slack: {},
+  ebay, openrouter, github, google,
 });
 const endpointServices: Array<{ matches(url: URL): boolean; service(spec: OAuthSpec, url: URL): OAuthService }> = [
   {

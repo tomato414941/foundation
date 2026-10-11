@@ -1,18 +1,6 @@
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { IAMClient, GetRoleCommand } from '@aws-sdk/client-iam';
 import { AwsPrincipal } from '../shared/execution.js';
-import { legacyAwsConnection } from '../shared/aws.js';
-import { AwsConnections } from './aws.js';
-
-export interface RoleCredentials extends Record<string, string> {
-  AWS_ACCESS_KEY_ID: string;
-  AWS_SECRET_ACCESS_KEY: string;
-  AWS_SESSION_TOKEN: string;
-  AWS_DEFAULT_REGION: string;
-}
-export interface RoleProvider {
-  obtain(arn: string, externalId: string, region: string): Promise<RoleCredentials>;
-}
 
 // Only a complete IAM ARN can identify the principal a trust policy should name.
 export function awsPrincipal(callerArn: string): string | null {
@@ -43,13 +31,4 @@ export async function detectAwsPrincipal(timeoutMs = 3000): Promise<string | nul
   } catch {
     return null;
   } finally { sts.destroy(); iam?.destroy(); }
-}
-
-// Adapt the legacy role contract to the same authentication engine used by current AWS connections.
-export class AwsRoles implements RoleProvider {
-  async obtain(arn: string, externalId: string, region: string) {
-    const { credentials } = await new AwsConnections().obtain(legacyAwsConnection({ arn, externalId, region }));
-    const { AWS_REGION: _region, ...legacy } = credentials;
-    return legacy;
-  }
 }
