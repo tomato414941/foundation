@@ -1,9 +1,10 @@
 import { redirect } from 'react-router';
 import { z } from 'zod';
-import { ApprovalRequest, Ok } from '../../shared/contracts';
+import { Ok } from '../../shared/contracts';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
 import { ClientFailure, SubmissionPending } from '../../shared/client';
+import { OperationExecution } from '../../shared/operations';
 
 export class ApiFailure extends Error {
   constructor(
@@ -43,7 +44,7 @@ export async function api<T = unknown>(
   return schema ? schema.parse(value) : (value as T);
 }
 // A change comes back done, or as the request that asks the other side to agree to it.
-export const Changed = z.union([Ok, ApprovalRequest]);
+export const Changed = z.union([Ok, OperationExecution]);
 export async function session(request?: Request): Promise<SessionView> {
   return api('/session', { signal: request?.signal }, Session);
 }

@@ -136,7 +136,7 @@ test('片方の側しか持たない人が支払元の線を引くと、もう�
   const line = { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id };
   const asked = await call(owner, '/api/relations', line);
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.deepEqual(asked.json().to, { id: sponsor.actor.id, name: 'Sponsor' });
+  assert.deepEqual(asked.json().responder, { id: sponsor.actor.id, name: 'Sponsor' });
   assert.deepEqual(asked.json().proposal, { kind: 'line', subject: { id: sponsor.actor.id, name: 'Sponsor' },
     relation: 'payer', object: { id: bot.id, name: 'Bot' } });
   assert.equal(await f.billing.payer(bot.id), owner.actor.id);
@@ -145,7 +145,7 @@ test('片方の側しか持たない人が支払元の線を引くと、もう�
   await f.relations.erase(owner.actor, line);
   const offered = await call(sponsor, '/api/relations', line);
   assert.equal(offered.statusCode, 202, offered.body);
-  assert.deepEqual(offered.json().to, { id: bot.id, name: 'Bot' });
+  assert.deepEqual(offered.json().responder, { id: bot.id, name: 'Bot' });
   assert.equal((await call(owner, '/api/requests/' + offered.json().id + '/approve')).json().state, 'approved');
   assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
 });
@@ -158,7 +158,7 @@ test('共有を管理するだけの人は、相手を支払元にできず、�
   const bot = await f.principals.create('Helper bot', null, helper.actor.id);
   const asked = await call(helper, '/api/relations', { subjectId: owner.actor.id, relation: 'payer', objectId: bot.id });
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.equal(asked.json().to.id, owner.actor.id);
+  assert.equal(asked.json().responder.id, owner.actor.id);
   assert.equal((await call(owner, '/api/requests/' + asked.json().id + '/decline')).json().state, 'declined');
   assert.equal(await f.billing.payer(bot.id), helper.actor.id);
 });
@@ -246,7 +246,7 @@ test('承認までに頼んだ人が譲る権限を失っていると、承認�
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });
 
-test('依頼を出した鍵が取り消されると、その依頼はなくなる', async (t) => {
+test('開始した鍵が取り消されると、その権限による所有者の変更を拒否する', async (t) => {
   const f = await fixture(), { app, call } = await served(f);
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('Owner'), other = await f.person('Other');
@@ -255,7 +255,7 @@ test('依頼を出した鍵が取り消されると、その依頼はなくな�
   const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
   assert.equal(asked.statusCode, 202, asked.body);
   await f.authentication.removeCredential(owner.actor, owner.actor.id, second.credential.id);
-  assert.equal((await call(other, '/api/requests/' + asked.json().id + '/approve')).statusCode, 404);
+  assert.equal((await call(other, '/api/operation-executions/' + asked.json().id + '/respond')).statusCode, 401);
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });
 

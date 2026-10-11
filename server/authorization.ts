@@ -19,7 +19,7 @@ export interface Actor {
   requestId?: string;
   approvalId?: string;
   approvalIndex?: number;
-  // Who agreed, for the other side of a change the actor makes, to the request it is made under.
+  // Who agreed, for the other side of a change the actor makes, to the specific execution it is made under.
   agreedBy?: string;
 }
 export interface ResourceIdentity {
@@ -158,7 +158,7 @@ export class Authorization {
       `SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1)
       AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c LEFT JOIN resources e ON e.id=c.environment_id WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now()) AND (c.environment_id IS NULL OR e.data->>'state' IN ('starting','running'))))
       AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now()))
-      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM approval_requests WHERE id=$4 AND state='running' AND expires_at>now())) AS active`,
+      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM operation_executions WHERE id=$4 AND actor_id=$1 AND response='accepted' AND (state='running' OR state='waiting' AND wait='input') AND expires_at>now())) AS active`,
       [actor.id, actor.credentialId ?? null, actor.sessionId ?? null, actor.approvalId ?? null],
       connection,
     );

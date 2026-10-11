@@ -1,14 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Command, HttpRequest, Id, Name } from '../../shared/contracts.js';
+import { Command, HttpRequest, Id, JsonObject, Name } from '../../shared/contracts.js';
 import { FunctionSave } from '../../shared/operations.js';
 import { Task } from '../../shared/execution.js';
-import type { ExecutionOperation } from '../../shared/execution.js';
 import type { CustodyClient } from '../../shared/client.js';
 import { mcpCall, registerMetadataTools, ResponseFormat } from '../../runtime/mcp-metadata.js';
 import type { Client } from './client.js';
 import { privateClient } from './custody.js';
+import { operationClient } from './operations.js';
 import { FunctionClient } from '../../shared/function-client.js';
 import packageInfo from '../package.json' with { type: 'json' };
 
@@ -19,7 +19,7 @@ const Operation = z.discriminatedUnion('kind', [
 ]);
 export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
   const server = new McpServer({ name: 'foundation-mcp-server', version: packageInfo.version }, {
-    instructions: 'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_invocation_result to read the result. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_save_function with local keys to publish a definition and approve its protected inputs. Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected caller programs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/operations lists user operations. Create approval requests with POST /api/requests and operations containing name, input, and optional input fields; the recipient enters protected values in the request screen. Use foundation_execution_result to verify and decrypt protected execution results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
+    instructions: 'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_invocation_result to read the result. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_save_function with local keys to publish a definition and approve its protected inputs. Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected caller programs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/operations lists user operations. Prepare operations with POST /api/operation-executions and operations containing name, input, and optional input fields, with an optional responderId. It returns an execution ID and continuation URL; protected values are entered directly in that screen. Requests deliver executions when a handoff is needed. Use foundation_execution_result to verify and decrypt protected execution results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
   });
   registerMetadataTools(server, {
     schema: () => client.json('/api/openapi.json'),
@@ -45,14 +45,17 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
       operation: Operation, response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
-    let operation: ExecutionOperation;
-    if (input.operation.kind === 'http') operation = { ...input.operation, save: {} };
-    else operation = input.operation;
     const environmentId = input.environmentId;
     if (!environmentId) throw new Error('Choose an execution environment.');
-    const task = await custody().submit(input.ownerId ?? client.identity.principalId, environmentId, operation,
-      input.operation.kind !== 'command' ? { save: input.operation.save } : {});
-    return { id: task.id, state: task.state, environmentId: task.environmentId };
+    const operation = input.operation.kind === 'http' ? { kind: 'http', request: input.operation.request } : input.operation;
+    const result = await operationClient(client, custody()).execute({ name: 'run.execute', input: JsonObject.parse({
+      ownerId: input.ownerId ?? client.identity.principalId, environmentId, operation,
+      save: input.operation.kind === 'http' ? input.operation.save : {},
+    }) });
+    if (!('kind' in result) || result.kind !== 'run') return result;
+    const { task } = result, operationId = task.intent.operationContext!.id;
+    return { id: task.id, state: task.state, environmentId: task.environmentId, operationId,
+      url: client.identity.origin + '/operations/' + operationId };
   }, input.response_format));
   server.registerTool('foundation_execution_result', {
     title: 'Verify and open an execution result',

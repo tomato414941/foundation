@@ -33,7 +33,7 @@ import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
 import { operationClient } from './operations.js';
-import { Invocation, OperationDescription, OperationExecution } from '../../shared/operations.js';
+import { ExecutionInput, ExecutionResponse, Invocation, OperationDescription, OperationExecution } from '../../shared/operations.js';
 import { OperationMaterial } from '../../shared/operation-client.js';
 import { managedAgent } from './managed-agent.js';
 import { startMcp } from './mcp.js';
@@ -53,6 +53,10 @@ Usage: foundation <command> [options]
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   operation list                       List user operations and their inputs
+  operation start --body JSON          Prepare operations and return their continuation URL
+  operation history                   List executions visible to this principal
+  operation respond ID --body JSON     Supply public inputs and consent
+  operation cancel ID                  Cancel a prepared operation
   operation run NAME --body JSON       Execute an operation (private material via --fields)
   operation continue ID [--fields JSON] Resume an operation awaiting private input
   schema [--output FILE]                Read the OpenAPI specification
@@ -455,7 +459,11 @@ async function main(argv: string[]) {
   if (command === 'operation') {
     const action = args.positionals[0] ?? 'list';
     if (action === 'list') await output(await client.json('/api/operations', {}, listOf(OperationDescription)), args);
+    else if (action === 'history') await output(await client.json('/api/operation-executions', {}, listOf(OperationExecution)), args);
     else if (action === 'get') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, OperationExecution), args);
+    else if (action === 'start') await output(await client.json('/api/operation-executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, OperationExecution), args);
+    else if (action === 'respond') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, OperationExecution), args);
+    else if (action === 'cancel') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, OperationExecution), args);
     else if (action === 'run' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
       const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
@@ -472,7 +480,7 @@ async function main(argv: string[]) {
       const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
         : await operations.execute(invocation!, material);
       await output('flow' in result ? flowOutput(result) : result, args);
-    } else throw new Error('Choose operation list, run, get, or continue.');
+    } else throw new Error('Choose operation list, start, respond, run, get, continue, or cancel.');
     return 0;
   }
   if (command === 'connect') {

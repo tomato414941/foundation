@@ -497,3 +497,24 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).result, { message: 'CLI invocation', configured: true, secret: '[redacted]' });
 });
+
+test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const initialized = await c.run(['init', '--name', 'Operation initiator', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const recipient = await c.person('Operation recipient');
+  const prepared = await c.run(['operation', 'start', '--body', '@-'], JSON.stringify({ responderId: recipient.actor.id,
+    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } }] }));
+  assert.equal(prepared.code, 0, prepared.stderr);
+  const execution = JSON.parse(prepared.stdout);
+  assert.equal(new URL(execution.url).pathname, '/operations/' + execution.id);
+  assert.equal(execution.wait, 'approval');
+  await c.context.operationExecutions.respond(recipient.actor, execution.id);
+  const read = await c.run(['operation', 'get', execution.id]);
+  assert.equal(read.code, 0, read.stderr);
+  assert.equal(JSON.parse(read.stdout).state, 'succeeded');
+  assert.equal(JSON.parse(read.stdout).results[0].name, 'CLI handoff result');
+  const history = await c.run(['operation', 'history']);
+  assert.equal(history.code, 0, history.stderr);
+  assert.ok(JSON.parse(history.stdout).items.some((item: { id: string }) => item.id === execution.id));
+});

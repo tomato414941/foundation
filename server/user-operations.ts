@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { AppSave, ConnectService, RunOperation, ValueSave } from '../shared/operations.js';
+import { AppSave, ConnectService, FunctionSave, OperationExecution, RevokeConnection, RunOperation, ValueSave } from '../shared/operations.js';
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
@@ -18,13 +18,16 @@ import type { Processes } from './processes.js';
 import type { Integrations } from './integrations.js';
 import type { Custody } from './custody.js';
 import type { Delegation } from './delegation.js';
+import type { Functions } from './functions.js';
+import type { Invocations } from './invocations.js';
+import { FunctionWrite, Invocation as FunctionInvocation, InvocationInput } from '../shared/function-api.js';
 import { fail } from './errors.js';
 import { OperationFailed, OperationRegistry } from './operations.js';
 
 interface Services {
   authorization: Authorization; principals: Principals; relations: Relations; resources: Resources;
   catalog: Catalog; environments: Environments; objects: Objects; billing: Billing;
-  processes: Processes; integrations: Integrations; custody: Custody; delegation: Delegation;
+  processes: Processes; integrations: Integrations; custody: Custody; delegation: Delegation; functions: Functions; invocations: Invocations;
 }
 const CREATED: Record<string, readonly [string, string]> = {
   service: ['サービス定義を作る', 'Create a service definition'],
@@ -48,7 +51,7 @@ const ok = () => ({ ok: true as const });
 
 export function userOperations(services: Services) {
   const { authorization, principals, relations, resources, catalog, environments, objects,
-    billing, processes, integrations, custody, delegation } = services;
+    billing, processes, integrations, custody, delegation, functions, invocations } = services;
   const operations = new OperationRegistry();
   const bind = operations.bind.bind(operations);
 
@@ -73,7 +76,7 @@ export function userOperations(services: Services) {
   });
   for (const [name, method] of [['relation.draw', 'POST'], ['relation.erase', 'DELETE']] as const)
     bind({ name, method, path: '/api/relations', bodyLimit: 32 * 1024 * 1024, schema: { body: line,
-      response: { 200: C.Ok, 202: C.ApprovalRequest } }, input: (_params, body) => body });
+      response: { 200: C.Ok, 202: OperationExecution } }, input: (_params, body) => body });
   const revoke = idInput.extend({ principalId: C.Id });
   operations.define('principal.revoke', revoke, ['アクセスを取り消す', 'Revoke access'], async (who, input) => {
     await relations.revoke(who, input.id, input.principalId); return ok();
@@ -85,7 +88,7 @@ export function userOperations(services: Services) {
     await principals.get(input.id); await relations.transfer(who, input.id, input.to, input.contents); return ok();
   });
   bind({ name: 'principal.transfer', method: 'POST', path: '/api/principals/:id/transfer', bodyLimit: 32 * 1024 * 1024,
-    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: C.ApprovalRequest } }, input: withId });
+    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: OperationExecution } }, input: withId });
 
   operations.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
     input => CREATED[String((input.resource as Record<string, C.JsonValue>)?.kind)] ?? ['項目を作る', 'Create an item'],
@@ -150,7 +153,7 @@ export function userOperations(services: Services) {
     const row = await resources.get(input.id); await relations.transfer(who, row.id, input.to); return ok();
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
-    body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: C.ApprovalRequest } }, input: withId });
+    body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: OperationExecution } }, input: withId });
   operations.define('environment.stop', idInput, ['実行環境を止める', 'Stop an environment'], async (who, input) =>
     resources.view(who, await environments.stop(who, await resources.get(input.id))));
   bind({ name: 'environment.stop', method: 'POST', path: '/api/resources/:id/stop', schema: { params: C.IdParams,
@@ -218,7 +221,7 @@ export function userOperations(services: Services) {
   // Signed encrypted writes also use an operation. Consent can resume the exact signed write.
   operations.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
   bind({ name: 'custody.write', method: 'PUT', path: '/api/resources/:id/custody', schema: { params: C.IdParams,
-    body: P.ProtectedWrite, response: { 200: C.Resource, 202: C.ApprovalRequest } }, input: (params, body) => {
+    body: P.ProtectedWrite, response: { 200: C.Resource, 202: OperationExecution } }, input: (params, body) => {
       const input = P.ProtectedWrite.parse(body);
       if (params.id !== input.content.policy.id) fail(400, 'wrong_resource', 'Save the encrypted content at its approved destination.');
       return input;
@@ -250,9 +253,52 @@ export function userOperations(services: Services) {
     { execution: 'keyholder', configure: ['environmentIds', 'name', 'clientId'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
+  operations.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
+    { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
+      const write = FunctionWrite.parse(proof);
+      if (input.resourceId && input.resourceId !== write.functionId || write.publication.ownerId !== input.ownerId ||
+        canonical(write.publication.definition) !== canonical(input.definition) || write.publication.revision !== (input.resourceId ? (input.version ?? 0) + 1 : 1))
+        fail(409, 'operation_changed', 'Publish the function definition approved by this operation.');
+      return functions.save(who, input, write, custody, delegation);
+    } });
+  const invokeFunction = InvocationInput.extend({ functionId: C.Id, functionVersion: z.number().int().positive().optional() });
+  const reviewedFunction = async (input: Record<string, C.JsonValue>) => {
+    const row = await resources.get(C.Id.parse(input.functionId));
+    if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
+    if (input.functionVersion && input.functionVersion !== row.version) fail(409, 'changed', 'The function changed. Review it again.');
+    return { ...input, functionVersion: row.version };
+  };
+  operations.define('function.invoke', invokeFunction, ['関数を実行する', 'Invoke a function'],
+    async (who, { functionId, functionVersion, ...input }) => {
+      await reviewedFunction({ functionId, ...(functionVersion ? { functionVersion } : {}) });
+      return invocations.create(who, functionId, input);
+    }, {
+      review: (_who, input) => reviewedFunction(input), resolve: (_who, input) => reviewedFunction(C.JsonObject.parse(input)),
+      observe: async (who, result) => {
+        const current = await invocations.get(who, FunctionInvocation.parse(result).id);
+        return { state: current.state === 'queued' || current.state === 'running' ? 'pending' : current.state, result: C.Json.parse(current) };
+      }, cancel: (who, result) => invocations.cancel(who, FunctionInvocation.parse(result).id),
+    });
+  bind({ name: 'function.invoke', method: 'POST', path: '/api/functions/:id/invocations', bodyLimit: 8 * 1024 * 1024,
+    schema: { params: C.IdParams, body: InvocationInput, response: { 202: FunctionInvocation } },
+    input: (params, body) => ({ functionId: params.id, ...bodyObject(body) }), status: 202 });
+  operations.define('function.delete', idInput, ['関数を削除する', 'Delete a function'], async (who, input) => {
+    const row = await resources.get(input.id);
+    if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
+    await resources.delete(who, row); return null;
+  });
+  bind({ name: 'function.delete', method: 'DELETE', path: '/api/functions/:id', schema: { params: C.IdParams, response: { 204: z.null() } }, input: params => params, status: 204 });
+  operations.define('function.cancel', idInput, ['関数の実行を中止する', 'Cancel a function invocation'], (who, input) => invocations.cancel(who, input.id));
+  bind({ name: 'function.cancel', method: 'POST', path: '/api/invocations/:id/cancel', schema: { params: C.IdParams, body: z.object({}).strict(),
+    response: { 200: FunctionInvocation } }, input: params => params });
   operations.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
     { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
+      review: async (who, input) => {
+        const methodDigest = await hash(await catalog.method(who, z.string().parse(input.methodId)));
+        if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        return { ...input, methodDigest };
+      },
       resolve: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, input.methodId));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
@@ -274,6 +320,18 @@ export function userOperations(services: Services) {
         if (input.name && row.name !== input.name) fail(409, 'operation_changed', 'Use the approved connection name.');
         return { kind: 'connected', id: content.policy.id, metadata: content.metadata };
       } });
+  operations.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Revoke a connection'], keyholder,
+    { execution: 'keyholder', configure: [], complete: async (who, input, proof, execution) => {
+      const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
+      if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
+        task.intent.actor.principalId !== who.id || task.intent.ownerId !== input.ownerId || task.environmentId !== input.environmentId ||
+        task.intent.operationContext?.id !== execution.id || task.intent.operationContext.index !== execution.index ||
+        !task.intent.sources.some(source => source.id === input.connectionId))
+        fail(409, 'execution_required', 'Finish the revocation prepared by this operation.');
+      const result = { kind: 'run', id: task.id, state: task.state };
+      if (task.state !== 'succeeded') throw new OperationFailed(result, task.state === 'uncertain');
+      return result;
+    } });
   operations.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
     { execution: 'keyholder', configure: ['environmentId'], secret: () => false,
       complete: async (who, input, proof, execution) => {

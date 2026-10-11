@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ApprovalRequest, Id, Resource, listOf } from './contracts.js';
+import { OperationExecution } from './operations.js';
+import { Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
@@ -135,7 +136,7 @@ export class CustodyClient {
     const content = await protect(bytes, policy, previous.content.materialRevision + 1,
       this.binding, this.keys, previous.content.metadata, previous.content);
     const result = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
-      body: { name, content, version: previous.version } }, z.union([Resource, ApprovalRequest]));
+      body: { name, content, version: previous.version } }, z.union([Resource, OperationExecution]));
     if ('kind' in result) await this.trust.rememberContent(content);
     return result;
   }
@@ -244,6 +245,14 @@ export class CustodyClient {
     if (!request) throw new Error('Resume this execution from the device that saved its signed request.');
     if (canonical(request.intent.actor) !== canonical(this.binding) || request.intent.origin !== this.origin)
       throw new Error('Use the identity that signed this execution request.');
+    try {
+      const previous = await this.api.json('/api/executions/' + id, {}, Task);
+      if (canonical(previous.intent) !== canonical(request.intent) || previous.requestSignature !== request.signature)
+        throw new Error('Use the saved request that started this execution.');
+      return previous;
+    } catch (error) {
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
+    }
     return this.submitPrepared(request);
   }
   async result(task: TaskView) {

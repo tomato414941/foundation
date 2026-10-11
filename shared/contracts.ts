@@ -481,6 +481,8 @@ export type RequestedOperation = z.infer<typeof Operation>;
 // What an operation does, in the words shown to the one asked to approve it: Japanese and English.
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
+export const DisplayedOperation = Operation.extend({ title: OperationTitle,
+  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()) });
 export const RequestInput = z
   .object({
     to: Id.optional(),
@@ -502,9 +504,7 @@ export const ApprovalRequest = z.object({
   to: Principal.pick({ id: true, name: true }).nullable(),
   message: z.string(),
   proposal: Proposal.nullable(),
-  operations: z.array(Operation.extend({ title: OperationTitle,
-    execution: z.enum(['server', 'keyholder']),
-  })),
+  operations: z.array(DisplayedOperation),
   state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
   results: z.array(Json.nullable()),
   createdAt: Time,
@@ -514,6 +514,8 @@ export const ApprovalRequest = z.object({
   returnUrl: z.url().nullable(),
   refreshUrl: z.url().nullable(),
   canRespond: z.boolean(),
+  canCancel: z.boolean(),
+  executionState: z.enum(['waiting', 'running', 'succeeded', 'failed', 'uncertain', 'cancelled']),
   waiting: z.object({ index: z.number().int().nonnegative(),
     invocation: Invocation,
     approval: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),

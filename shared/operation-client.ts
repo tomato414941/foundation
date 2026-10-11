@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { AppSave, ConnectService, Invocation, OperationExecution, RunOperation, ValueSave, WaitingOperation } from './operations.js';
+import { AppSave, ConnectService, FunctionSave, Invocation, OperationExecution, RevokeConnection, RunOperation, ValueSave, WaitingOperation } from './operations.js';
 import type { OperationInvocation, OperationExecutionView } from './operations.js';
-import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
+import { CatalogMethod, Id, Json, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import type { CustodyClient } from './client.js';
 import type { ConnectionClient, FlowProgress } from './connection-client.js';
@@ -15,6 +15,7 @@ import type { AwsConnectionRequest } from './aws.js';
 import { AwsConnectionInput } from './aws.js';
 import { SealedContinuationStore } from './operation-continuations.js';
 import { DelegatedRun } from './custody.js';
+import { FunctionClient } from './function-client.js';
 import { PrivateProgram, reviewedProgram } from './operation-authorization.js';
 
 export interface PrivateOperationInput {
@@ -45,7 +46,7 @@ export class OperationClient {
           programDigest: await hash(reviewedProgram(operation)) } } };
       }
     }
-    return this.custody.api.json('/api/operation-executions', { method: 'POST', body: Invocation.parse(invocation) }, OperationExecution);
+    return this.custody.api.json('/api/operation-executions', { method: 'POST', body: { operations: [Invocation.parse(invocation)] } }, OperationExecution);
   }
   async plan(id: string) {
     return this.custody.api.json('/api/operation-executions/' + Id.parse(id) + '/input', {}, WaitingOperation.extend({ id: Id }));
@@ -75,6 +76,12 @@ export class OperationClient {
     const execution = await this.custody.api.json('/api/operation-executions/' + Id.parse(id), {}, OperationExecution);
     if (!execution.waiting) return execution;
     const plan = await this.plan(id), { name, input } = plan.invocation;
+    if (name === 'function.save') {
+      const client = new FunctionClient(this.custody.api, this.custody), authorization = await client.prepare(FunctionSave.parse(input));
+      const completed = await this.complete(id, plan.index, Json.parse(authorization));
+      await client.remember(authorization);
+      return { kind: 'saved', resource: Resource.parse(completed.results[plan.index]) };
+    }
     if (name === 'variable.save' || name === 'app.save') {
       const destination = name === 'app.save' ? AppSave.parse(input) : ValueSave.parse(input);
       const previous = destination.resourceId ? await this.custody.read(destination.resourceId) : undefined;
@@ -123,7 +130,7 @@ export class OperationClient {
         environments: connection.environments, redirectUri: connection.redirectUri,
         execution: { id, index: plan.index } });
     }
-    if (name === 'run.execute') {
+    if (name === 'run.execute' || name === 'connection.revoke') {
       if (plan.continuation?.kind === 'run') {
         let task: TaskView;
         try { task = await this.custody.api.json('/api/executions/' + plan.continuation.id, {}, Task); }
@@ -136,18 +143,20 @@ export class OperationClient {
         if (!['queued', 'running'].includes(task.state)) await this.complete(id, plan.index, { runId: task.id });
         return { kind: 'run' as const, task };
       }
-      const run = RunOperation.parse(input);
+      const revocation = name === 'connection.revoke' ? RevokeConnection.parse(input) : null;
+      const run = revocation ? { ...revocation, operation: { kind: 'revoke' as const, input: { action: 'revoke', id: revocation.connectionId } }, save: {} } : RunOperation.parse(input);
       let operation;
       if ('programId' in run.operation) {
         const program = await this.records.get(run.operation.programId, PrivateProgram);
         if (!program || await hash(reviewedProgram(program.operation)) !== run.operation.programDigest)
           throw new Error('Use the reviewed private program.');
         operation = program.operation;
-      } else operation = await this.program(run.operation);
+      } else operation = run.operation.kind === 'revoke' ? run.operation : await this.program(run.operation);
       const runId = crypto.randomUUID();
       const environmentId = run.environmentId;
       if (!environmentId) throw new Error('Choose an execution environment.');
       const prepared = await this.custody.prepare(run.ownerId, environmentId, operation, { id: runId, save: run.save, approval: plan.approval,
+        ...(revocation ? { sourceIds: [revocation.connectionId] } : {}),
         operationContext: { id, index: plan.index, invocation: plan.invocation } });
       await this.records.put(prepared.intent.id, prepared);
       await this.custody.api.json('/api/operation-executions/' + id + '/continuation', { method: 'PUT',

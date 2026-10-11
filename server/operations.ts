@@ -23,6 +23,9 @@ export interface OperationDefinition {
   execute(actor: Actor, input: unknown): Promise<JsonValue>;
   complete?: (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) => Promise<JsonValue>;
   resolve?: (actor: Actor, input: unknown) => Promise<Record<string, JsonValue>>;
+  review?: (actor: Actor, input: Record<string, JsonValue>) => Promise<Record<string, JsonValue>>;
+  observe?: (actor: Actor, result: JsonValue) => Promise<{ state: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; result: JsonValue }>;
+  cancel?: (actor: Actor, result: JsonValue) => Promise<unknown>;
 }
 export interface OperationEndpoint {
   name: string;
@@ -42,11 +45,14 @@ export class OperationRegistry {
     execute: (actor: Actor, input: z.output<T>) => Promise<unknown>,
     options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; secret?: (pointer: string) => boolean;
       complete?: (actor: Actor, input: z.output<T>, proof: JsonValue, execution: { id: string; index: number }) => Promise<unknown>;
-      resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown> } = {}) {
+      resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
+      observe?: OperationDefinition['observe']; cancel?: OperationDefinition['cancel']; review?: OperationDefinition['review'] } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
       configure: options.configure ?? [], secret: options.secret ?? (() => false),
+      ...(options.observe ? { observe: options.observe } : {}), ...(options.cancel ? { cancel: options.cancel } : {}),
+      ...(options.review ? { review: options.review } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
       ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) =>
         await options.complete!(actor, schema.parse(input), proof, execution) as JsonValue } : {}),

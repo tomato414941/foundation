@@ -26,7 +26,7 @@ import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
-import { custodyClient } from '../custody';
+import { operationClient } from '../custody';
 import { availableEnvironments, EnvironmentChoice } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
@@ -59,10 +59,10 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       return { ok: true };
     }
     if (form.has('revoke')) {
-      const client = await custodyClient();
-      const task = await client.submit(params.owner, formText(form, 'environmentId'),
-        { kind: 'revoke', input: { action: 'revoke', id: params.id } }, { sourceIds: [params.id] });
-      return redirect('/runs/' + task.id);
+      const result = await (await operationClient()).execute({ name: 'connection.revoke',
+        input: { ownerId: params.owner, environmentId: formText(form, 'environmentId'), connectionId: params.id } });
+      if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('execution_required');
+      return redirect('/runs/' + result.task.id);
     }
     await api(`${params.section === 'functions' ? '/functions' : '/resources'}/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);

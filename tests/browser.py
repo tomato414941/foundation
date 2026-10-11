@@ -1265,6 +1265,58 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name="実行環境", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/environments")
 
+    def test_操作のリンクからOVHへ接続し同じ本人と別のプリンシパルの入力を完了する(self):
+        for handoff in [False, True]:
+            with self.subTest(handoff=handoff):
+                receiver, principal = self.passkey_account("Direct OVH owner")
+                sender = self.passkey_account("Direct OVH initiator")[0] if handoff else receiver
+                environment = self.executor(receiver, principal).rsplit("/", 1)[1]
+                body = {"operations": [{"name": "connection.connect", "input": {
+                    "ownerId": principal["id"], "methodId": "ovh:client_credentials_ca", "name": "Direct OVH account"
+                }}]}
+                if handoff:
+                    body["responderId"] = principal["id"]
+                    body["message"] = "OVHcloudへ接続してください。"
+                response = sender.request.post(ORIGIN + "/api/operation-executions", data=body, headers={"origin": ORIGIN})
+                self.assertTrue(response.ok, response.text())
+                execution = response.json()
+                receiver.goto(execution["url"])
+                receiver.wait_for_load_state("networkidle")
+                expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
+                expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_be_visible()
+                receiver.get_by_label("クライアントID", exact=True).fill("direct-ovh-client")
+                receiver.get_by_label("クライアントシークレット", exact=True).fill("direct-ovh-secret")
+                self.select(receiver, "実行環境", "Browser executor")
+                bodies = []
+                receiver.on("request", lambda request: bodies.append(request.post_data or "") if "/operation-executions/" in request.url else None)
+                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-input-ja.png" if handoff else "operation-ovh-self-input-ja.png")), full_page=True)
+                receiver.get_by_role("button", name="接続する", exact=True).click()
+                expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+                self.assertEqual(receiver.url, execution["url"])
+                self.assertNotIn("direct-ovh-secret", "".join(bodies))
+                if handoff:
+                    signed_out = receiver.request.post(ORIGIN + "/api/auth/signout", data={}, headers={"origin": ORIGIN})
+                    self.assertTrue(signed_out.ok, signed_out.text())
+                    receiver.goto(execution["url"])
+                    receiver.wait_for_url("**/signin?returnTo=**")
+                    self.assertEqual(parse_qs(urlparse(receiver.url).query)["returnTo"], ["/operations/" + execution["id"]])
+                    receiver.get_by_role("button", name="パスキーでログイン", exact=True).click()
+                    receiver.wait_for_url(execution["url"])
+                else:
+                    receiver.reload()
+                expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-review-ja.png" if handoff else "operation-ovh-self-review-ja.png")), full_page=True)
+                receiver.get_by_role("button", name="保存", exact=True).click()
+                expect(receiver.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
+                completed = sender.request.get(ORIGIN + "/api/operation-executions/" + execution["id"]).json()
+                self.assertEqual(completed["state"], "succeeded")
+                self.assertEqual(completed["actorId"], principal["id"])
+                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-complete-ja.png" if handoff else "operation-ovh-self-complete-ja.png")), full_page=True)
+                print("Rendered direct operation: " + receiver.locator("main").inner_text(), flush=True)
+                receiver.get_by_role("link", name="詳細", exact=True).click()
+                receiver.wait_for_url(f"**/p/{principal['id']}/services/{completed['results'][0]['id']}")
+                expect(receiver.get_by_role("heading", name="Direct OVH account", exact=True)).to_be_visible()
+
     def test_依頼画面でOVHの認証情報を入力し再読込後に接続を確認して保存する(self):
         sender, _ = self.passkey_account("OVH requester")
         receiver, principal = self.passkey_account("OVH approver")

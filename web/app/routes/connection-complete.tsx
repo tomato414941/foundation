@@ -8,7 +8,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const id = Id.safeParse(new URL(request.url).searchParams.get('flow'));
   if (id.success) {
     const progress = await (await connectionClient()).progress(id.data);
-    return redirect(progress.flow.approval ? '/requests/' + progress.flow.approval.id : '/connections/' + id.data);
+    return redirect('/operations/' + progress.flow.execution.id);
   }
   return null;
 }

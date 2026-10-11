@@ -12,7 +12,7 @@ export const sections = {
 export type Section = keyof typeof sections;
 export const sectionFor = (kind: ResourceKindName) =>
   Object.entries(sections).find(([, value]) => value === kind)![0] as Section;
-export const resourcePath = (resource: ResourceView) =>
+export const resourcePath = (resource: Pick<ResourceView, 'ownerId' | 'kind' | 'id'>) =>
   `/p/${resource.ownerId}/${sectionFor(resource.kind)}/${resource.id}`;
 export function resourceKind(section: string | undefined) {
   const result = sections[section as Section];

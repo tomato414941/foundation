@@ -55,20 +55,24 @@ export function operationSubmission(data: OperationFormData, form: FormData): { 
       material: { value: formText(form, 'value'), clientSecret: formText(form, 'clientSecret') || undefined,
         fields: connectionFields(form) } };
   }
+  if (name === 'function.save') return { input, material: {} };
   return { input: { ...input, environmentId: input.environmentId ?? formText(form, 'environmentId') }, material: {} };
 }
 
 export function OperationInputFields({ data }: { data: OperationFormData }) {
   const { t } = useTranslation(), { name, input } = data.invocation;
-  const [environmentId, setEnvironmentId] = useState(String(input.environmentId ?? ''));
+  const definition = name === 'function.save' ? input.definition as { environmentId: string } : null;
+  const [environmentId, setEnvironmentId] = useState(String(input.environmentId ?? definition?.environmentId ?? ''));
   const executor = data.environments.find(item => item.id === environmentId);
-  const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId;
+  const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId || definition?.environmentId;
   const existing: ResourceView | null = null;
   return <div className="flex min-w-0 flex-col gap-6">
     <Detail label={t('owner')}>{data.owner.name}</Detail>
-    {input.name ? <Detail label={t('name')}>{String(input.name)}</Detail> : name !== 'run.execute' &&
+    {input.name ? <Detail label={t('name')}>{String(input.name)}</Detail> : ['variable.save', 'app.save', 'function.save', 'connection.connect'].includes(name) &&
       <InputField name="name" label={t('name')} defaultValue={data.method?.name ?? ''} required />}
     {data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
+    {name === 'connection.revoke' && <Detail label={t('connectionTarget')}>{String(input.connectionId)}</Detail>}
+    {name === 'function.save' && <JsonView value={input.definition} />}
     {name === 'run.execute' && <JsonView value={input.operation} />}
     {name === 'variable.save' && <TextareaField name="value" label={t('value')} autoComplete="off" rows={5} required />}
     {(name === 'connection.connect' || name === 'app.save') && <>

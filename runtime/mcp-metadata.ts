@@ -72,7 +72,7 @@ export function registerMetadataTools(server: McpServer, gateway: {
   }, input.response_format));
   server.registerTool('foundation_api', {
     title: 'Call the Foundation API',
-    description: 'Call Foundation resource, process, and approval APIs as this principal. Start a command with POST /api/environments/{id}/processes. Read state, exit status, and paginated stdout/stderr through GET /api/processes/{id}/output; use its next offset to read more. Inspect or cancel a process through /api/processes/{id}. Include limit/after on list paths. Protected variables and connections require client encryption; use CONNECT approval requests for service consent.',
+    description: 'Call Foundation resource, process, and approval APIs as this principal. Start a command with POST /api/environments/{id}/processes. Read state, exit status, and paginated stdout/stderr through GET /api/processes/{id}/output; use its next offset to read more. Inspect or cancel a process through /api/processes/{id}. Include limit/after on list paths. Use POST /api/operation-executions with operations (name, input, optional input fields) and optional responderId to prepare work. Return its url to the principal supplying consent or private input. Protected variables and connections require client encryption in that continuation screen.',
     inputSchema: z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
       path: z.string().startsWith('/api/').max(2048), body: Json.optional(), response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },

@@ -3,13 +3,19 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
-import { Id, IdParams, PageQuery, FunctionResource, listOf } from '../shared/contracts.js';
+import { Id, IdParams, Json, JsonObject, PageQuery, FunctionResource, listOf } from '../shared/contracts.js';
 import { KeyBinding } from '../shared/authority.js';
-import { CreateFunction, UpdateFunction, Invocation, InvocationInput, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
+import { CreateFunction, UpdateFunction, Invocation, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
+import type { Actor } from './authorization.js';
+import { FunctionSave } from '../shared/operations.js';
 import { ProtectedRead } from '../shared/protocol.js';
 
 export async function routesFunctions(app: ApiApp, context: Context) {
-  const { functions, invocations, resources, authorization, custody, delegation } = context;
+  const { functions, invocations, resources, authorization, custody, delegation, operationExecutions } = context;
+  const publish = async (who: Actor, input: z.infer<typeof FunctionSave>, proof: unknown) => {
+    const execution = await operationExecutions.start(who, [{ name: 'function.save', input: JsonObject.parse(input) }]);
+    return (await operationExecutions.complete(who, execution.id, 0, Json.parse(proof))).results[0];
+  };
   const selected = async (id: string) => {
     const row = await resources.get(id);
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
@@ -30,7 +36,7 @@ export async function routesFunctions(app: ApiApp, context: Context) {
   app.post('/api/principals/:id/functions', { bodyLimit: 40 * 1024 * 1024, schema: { params: IdParams,
     body: CreateFunction, response: { 201: FunctionResource } } }, async (request, reply) => {
     const { authorization: proof, ...input } = request.body;
-    return reply.code(201).send(FunctionResource.parse(await functions.save(actor(request), { ...input, ownerId: request.params.id }, proof, custody, delegation)));
+    return reply.code(201).send(FunctionResource.parse(await publish(actor(request), { ...input, ownerId: request.params.id }, proof)));
   });
   app.get('/api/functions/:id', { schema: { params: IdParams, response: { 200: FunctionResource } } }, async request => {
     const row = await selected(request.params.id), who = actor(request), permissions = await authorization.actions(who, row);
@@ -40,11 +46,7 @@ export async function routesFunctions(app: ApiApp, context: Context) {
   app.put('/api/functions/:id', { bodyLimit: 40 * 1024 * 1024, schema: { params: IdParams,
     body: UpdateFunction, response: { 200: FunctionResource } } }, async request => {
     const row = await selected(request.params.id), { authorization: proof, ...input } = request.body;
-    return FunctionResource.parse(await functions.save(actor(request), { ...input, ownerId: row.owner_id, resourceId: row.id }, proof, custody, delegation));
-  });
-  app.delete('/api/functions/:id', { schema: { params: IdParams, response: { 204: z.null() } } }, async (request, reply) => {
-    await resources.delete(actor(request), await selected(request.params.id));
-    return reply.code(204).send(null);
+    return FunctionResource.parse(await publish(actor(request), { ...input, ownerId: row.owner_id, resourceId: row.id }, proof));
   });
   app.get('/api/functions/:id/authorizations', { schema: { params: IdParams, response: { 200: listOf(ProtectedRead) } } },
     request => functions.authorizations(actor(request), request.params.id, custody));
@@ -53,15 +55,10 @@ export async function routesFunctions(app: ApiApp, context: Context) {
     const current = await functions.execution(actor(request), request.params.id, custody, delegation);
     return { executor: current.publication.executor };
   });
-  app.post('/api/functions/:id/invocations', { bodyLimit: 8 * 1024 * 1024, schema: { params: IdParams,
-    body: InvocationInput, response: { 202: Invocation } } }, async (request, reply) =>
-    reply.code(202).send(await invocations.create(actor(request), request.params.id, request.body)));
   app.get('/api/principals/:id/invocations', { schema: { params: IdParams, querystring: PageQuery,
     response: { 200: listOf(Invocation) } } }, request => invocations.list(actor(request), request.params.id, request.query.limit, request.query.after));
   app.get('/api/invocations/:id', { schema: { params: IdParams, response: { 200: Invocation } } },
     request => invocations.get(actor(request), request.params.id));
-  app.post('/api/invocations/:id/cancel', { schema: { params: IdParams, body: z.object({}).strict(), response: { 200: Invocation } } },
-    request => invocations.cancel(actor(request), request.params.id));
   app.post('/api/environments/:id/invocations/claim', { schema: { params: IdParams, body: z.object({}).strict(),
     response: { 200: ClaimedInvocation } } }, request => invocations.claim(actor(request), request.params.id));
   const lease = z.object({ lease: Id }).strict();

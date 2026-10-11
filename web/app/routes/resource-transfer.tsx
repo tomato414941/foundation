@@ -31,10 +31,10 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       const policy = { ...previous.content.policy, ownerId: to, revision: previous.content.policy.revision + 1,
         readers, authorities: readers, grants: [], observers: [], producers: [] };
       const passed = await client.pass(resource.name, await client.reveal(resource.id), policy, previous);
-      if (!('kind' in passed)) return redirect('/requests/' + passed.id);
+      if (!('kind' in passed)) return redirect(passed.url);
     } else {
       const changed = await api('/resources/' + resource.id + '/transfer', { method: 'POST', body: { to } }, Changed);
-      if ('id' in changed) return redirect('/requests/' + changed.id);
+      if ('id' in changed) return redirect(changed.url);
     }
     return redirect(`/p/${params.owner}/${params.section}`);
   });

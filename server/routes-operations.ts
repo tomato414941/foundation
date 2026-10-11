@@ -4,20 +4,20 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
-import { Invocation, OperationDescription, OperationExecution, WaitingOperation } from '../shared/operations.js';
+import { ExecutionInput, ExecutionResponse, Invocation, OperationDescription, OperationExecution, WaitingOperation } from '../shared/operations.js';
 import { ContinuationEnvelope, continuationContext } from '../shared/operation-continuations.js';
 import { verify } from '../shared/authority.js';
 import { base64url, encode } from '../shared/encryption.js';
 
 export async function routesOperations(app: ApiApp, context: Context) {
-  const { operations, operationExecutions: executions, requests } = context;
+  const { operations, operationExecutions: executions } = context;
   for (const endpoint of operations.endpoints) {
-    app.route({ method: endpoint.method, url: endpoint.path, schema: endpoint.schema, bodyLimit: endpoint.bodyLimit,
+    app.route({ method: endpoint.method, url: endpoint.path, schema: { ...endpoint.schema, response: Object.assign({} as Record<number, z.ZodType>, endpoint.schema.response, { 202: endpoint.schema.response?.[202] ? z.union([endpoint.schema.response[202], OperationExecution]) : OperationExecution }) }, bodyLimit: endpoint.bodyLimit,
       handler: async (request, reply) => {
         const who = actor(request), input = C.JsonObject.parse(endpoint.input(
           request.params as Record<string, string>, request.body, request.query));
         const execution = await executions.start(who, [{ name: endpoint.name, input }]);
-        if (execution.wait === 'approval') return reply.code(202).send(await requests.get(who, execution.id));
+        if (execution.wait === 'approval' || execution.wait === 'input') return reply.code(202).send(execution);
         const result = execution.results[0];
         const status = typeof endpoint.status === 'function' ? endpoint.status(result ?? null) : endpoint.status ?? 200;
         return reply.code(status).send(result);
@@ -28,30 +28,30 @@ export async function routesOperations(app: ApiApp, context: Context) {
     actor(request);
     return { items: [...operations.definitions.values()].map(definition => {
       const [ja, en] = typeof definition.title === 'function' ? definition.title({}) : definition.title;
-      return { name: definition.name, title: { ja, en }, execution: definition.execution,
+      return { name: definition.name, title: { ja, en }, execution: definition.execution, configure: [...definition.configure],
         input: C.JsonObject.parse(z.toJSONSchema(definition.schema)) };
     }), next: null };
   });
   app.post('/api/operations/:name', { schema: { params: Invocation.pick({ name: true }), body: C.JsonObject,
-    response: { 200: C.Json, 202: z.union([OperationExecution, C.ApprovalRequest]) } } }, async (request, reply) => {
+    response: { 200: C.Json, 202: OperationExecution } } }, async (request, reply) => {
     const who = actor(request), execution = await executions.start(who, [{ name: request.params.name, input: request.body }]);
-    if (execution.wait === 'approval') return reply.code(202).send(await requests.get(who, execution.id));
-    if (execution.wait === 'input') return reply.code(202).send(execution);
+    if (execution.wait) return reply.code(202).send(execution);
     return execution.results[0];
   });
-  app.post('/api/operation-executions', { schema: { body: Invocation, response: { 201: OperationExecution } } },
-    async (request, reply) => reply.code(201).send(await executions.start(actor(request), [request.body])));
+  app.post('/api/operation-executions', { schema: { body: ExecutionInput, response: { 201: OperationExecution } } },
+    async (request, reply) => reply.code(201).send(await executions.create(actor(request), request.body)));
+  app.get('/api/operation-executions', { schema: { querystring: C.PageQuery, response: { 200: C.listOf(OperationExecution) } } },
+    request => executions.list(actor(request), request.query.limit, request.query.after));
   app.get('/api/operation-executions/:id', { schema: { params: C.IdParams, response: { 200: OperationExecution } } },
-    request => executions.get(actor(request), request.params.id));
+    request => executions.get(request.actor, request.params.id));
+  app.post('/api/operation-executions/:id/respond', { schema: { params: C.IdParams, body: ExecutionResponse,
+    response: { 200: OperationExecution } } }, request => executions.respond(actor(request), request.params.id,
+      request.body.values, request.body.code, request.body.configuration));
+  app.post('/api/operation-executions/:id/decline', { schema: { params: C.IdParams, body: z.object({}).strict(),
+    response: { 200: OperationExecution } } }, request => executions.cancel(actor(request), request.params.id, true));
   app.post('/api/operation-executions/:id/cancel', { schema: { params: C.IdParams, body: z.object({}).strict(),
     response: { 200: OperationExecution } } }, async request => {
     const who = actor(request), id = request.params.id;
-    await executions.get(who, id, false);
-    const consent = await context.db.one<{ from_id: string }>("SELECT from_id FROM approval_requests WHERE id=$1 AND state IN ('pending','running')", [id]);
-    if (consent) {
-      if (consent.from_id === who.id) await requests.cancel(who, id); else await requests.decline(who, id);
-      return executions.get(who, id);
-    }
     return executions.cancel(who, id);
   });
   app.get('/api/operation-executions/:id/input', { schema: { params: C.IdParams,

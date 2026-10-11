@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { FunctionDefinition, FunctionResource, Id, listOf } from './contracts.js';
+import { FunctionDefinition, FunctionResource, Id, JsonObject, listOf } from './contracts.js';
 import type { FunctionSpec, JsonValue } from './contracts.js';
 import { KeyBinding, canonical, hash } from './authority.js';
 import { AccessPolicy, functionOperations, protect, reveal } from './custody.js';
 import { FunctionWrite, Invocation, publishFunction } from './function-api.js';
 import type { CustodyClient, JsonApi } from './client.js';
 import { ProtectedRead } from './protocol.js';
+import { FunctionSave, OperationExecution } from './operations.js';
 import { functionSources } from './functions.js';
 
 export class InvocationSubmissionError extends Error {
@@ -18,7 +19,7 @@ export class InvocationSubmissionError extends Error {
 export class FunctionClient {
   constructor(readonly api: JsonApi, readonly custody?: CustodyClient) {}
   get(id: string) { return this.api.json('/api/functions/' + Id.parse(id), {}, FunctionResource); }
-  async save(input: { ownerId: string; name: string; definition: FunctionSpec; resourceId?: string; version?: number }) {
+  async prepare(input: { ownerId: string; name: string; definition: FunctionSpec; resourceId?: string; version?: number }) {
     if (!this.custody) throw new Error('Use your encryption keys to approve a function definition.');
     const client = this.custody, definition = FunctionDefinition.parse(input.definition);
     const environment = await client.environment(definition.environmentId);
@@ -51,11 +52,22 @@ export class FunctionClient {
       revision: input.resourceId ? (input.version ?? 0) + 1 : 1, definition, author: client.binding,
       executor: environment.manifest.executor, createdAt: new Date().toISOString() }, client.keys);
     const authorization = FunctionWrite.parse({ functionId, publication, contents });
-    const path = input.resourceId ? '/api/functions/' + functionId : '/api/principals/' + input.ownerId + '/functions';
-    const resource = await this.api.json(path, { method: input.resourceId ? 'PUT' : 'POST',
-      body: { name: input.name, definition, authorization, ...(input.resourceId ? { version: input.version } : {}) } }, FunctionResource);
-    for (const { content } of Object.values(contents)) await client.trust.rememberContent(content);
-    return resource;
+    return authorization;
+  }
+  async remember(authorization: z.infer<typeof FunctionWrite>) {
+    if (!this.custody) return;
+    for (const { content } of Object.values(authorization.contents)) await this.custody.trust.rememberContent(content);
+  }
+  async save(input: { ownerId: string; name: string; definition: FunctionSpec; resourceId?: string; version?: number }) {
+    if (!this.custody) throw new Error('Use your encryption keys to approve a function definition.');
+    const prepared = FunctionSave.parse(input);
+    const execution = await this.api.json('/api/operation-executions', { method: 'POST',
+      body: { operations: [{ name: 'function.save', input: JsonObject.parse(prepared) }] } }, OperationExecution);
+    const authorization = await this.prepare(prepared);
+    const completed = await this.api.json('/api/operation-executions/' + execution.id + '/complete', { method: 'POST',
+      body: { index: execution.index, proof: authorization } }, OperationExecution);
+    await this.remember(authorization);
+    return FunctionResource.parse(completed.results[execution.index]);
   }
   async invoke(id: string, arguments_: Record<string, JsonValue> = {}, options: {
     id?: string; ownerId?: string; save?: Record<string, string>;

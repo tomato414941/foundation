@@ -125,10 +125,12 @@ export async function buildApp(context: Context) {
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
       const ownRequest = '/api/requests/' + request.actor.requestId;
+      const ownExecution = '/api/operation-executions/' + request.actor.requestId;
       if (
         path !== '/api/session' &&
         !path.startsWith('/api/auth/') &&
         path !== ownRequest &&
+        path !== ownExecution && !['/respond', '/decline'].some(suffix => path === ownExecution + suffix) &&
         !path.startsWith(ownRequest + '/') &&
         !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
         path !== '/oauth/callback'
