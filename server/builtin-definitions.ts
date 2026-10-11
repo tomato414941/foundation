@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { AppSave, ConnectService, FunctionSave, OperationExecution, RevokeConnection, RunOperation, ValueSave } from '../shared/operations.js';
+import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Execution, RevokeConnection, RunOperation, ValueSave } from '../shared/executions.js';
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, Operations } from '../shared/custody.js';
+import { ContentTypes, Operations, permittedOperations } from '../shared/custody.js';
+import type { CustodyPolicy } from '../shared/custody.js';
 import type { Authorization } from './authorization.js';
 import type { Principals } from './principals.js';
 import type { Relations } from './relations.js';
@@ -22,7 +23,9 @@ import type { Functions } from './functions.js';
 import type { Invocations } from './invocations.js';
 import { FunctionWrite, Invocation as FunctionInvocation, InvocationInput } from '../shared/function-api.js';
 import { fail } from './errors.js';
-import { OperationFailed, OperationRegistry } from './operations.js';
+import { OperationFailed, DefinitionRegistry } from './definitions.js';
+import type { Queryable } from './database.js';
+import { requiresApp } from '../shared/connections.js';
 
 interface Services {
   authorization: Authorization; principals: Principals; relations: Relations; resources: Resources;
@@ -49,48 +52,48 @@ const bodyObject = (body: unknown) => C.JsonObject.parse(body);
 const withId = (params: Record<string, string>, body: unknown) => ({ ...bodyObject(body), id: params.id });
 const ok = () => ({ ok: true as const });
 
-export function userOperations(services: Services) {
+export function builtinDefinitions(services: Services) {
   const { authorization, principals, relations, resources, catalog, environments, objects,
     billing, processes, integrations, custody, delegation, functions, invocations } = services;
-  const operations = new OperationRegistry();
-  const bind = operations.bind.bind(operations);
+  const definitions = new DefinitionRegistry();
+  const bind = definitions.bind.bind(definitions);
 
   const createPrincipal = z.object({ name: C.Name, ownerId: C.Id }).strict();
-  operations.define('principal.create', createPrincipal, ['プリンシパルを作る', 'Create a principal'], async (who, input) => {
+  definitions.define('principal.create', createPrincipal, ['プリンシパルを作る', 'Create a principal'], async (who, input) => {
     await authorization.requirePrincipal(who, input.ownerId, 'create');
     return principals.view(who, await principals.create(input.name, null, input.ownerId));
   });
   bind({ name: 'principal.create', method: 'POST', path: '/api/principals', schema: { body: createPrincipal,
     response: { 201: C.Principal } }, input: (_params, body) => body, status: 201 });
   const renamePrincipal = idInput.extend({ name: C.Name });
-  operations.define('principal.rename', renamePrincipal, ['プリンシパルを変更する', 'Change a principal'],
+  definitions.define('principal.rename', renamePrincipal, ['プリンシパルを変更する', 'Change a principal'],
     (who, input) => principals.rename(who, input.id, input.name));
   bind({ name: 'principal.rename', method: 'PATCH', path: '/api/principals/:id', schema: { params: C.IdParams,
     body: renamePrincipal.omit({ id: true }), response: { 200: C.Principal } }, input: withId });
   const line = C.RelationInput.extend({ contents: P.KeyUpdates.optional() });
-  operations.define('relation.draw', line, input => lineTitle(input, false), async (who, { contents, ...input }) => {
+  definitions.define('relation.draw', line, input => lineTitle(input, false), async (who, { contents, ...input }) => {
     await relations.draw(who, input, contents); return ok();
   });
-  operations.define('relation.erase', line, input => lineTitle(input, true), async (who, { contents, ...input }) => {
+  definitions.define('relation.erase', line, input => lineTitle(input, true), async (who, { contents, ...input }) => {
     await relations.erase(who, input, contents); return ok();
   });
   for (const [name, method] of [['relation.draw', 'POST'], ['relation.erase', 'DELETE']] as const)
     bind({ name, method, path: '/api/relations', bodyLimit: 32 * 1024 * 1024, schema: { body: line,
-      response: { 200: C.Ok, 202: OperationExecution } }, input: (_params, body) => body });
+      response: { 200: C.Ok, 202: Execution } }, input: (_params, body) => body });
   const revoke = idInput.extend({ principalId: C.Id });
-  operations.define('principal.revoke', revoke, ['アクセスを取り消す', 'Revoke access'], async (who, input) => {
+  definitions.define('principal.revoke', revoke, ['アクセスを取り消す', 'Revoke access'], async (who, input) => {
     await relations.revoke(who, input.id, input.principalId); return ok();
   });
   bind({ name: 'principal.revoke', method: 'POST', path: '/api/principals/:id/revoke', schema: { params: C.IdParams,
     body: revoke.omit({ id: true }), response: { 200: C.Ok } }, input: withId });
   const transfer = idInput.extend({ to: C.Id, contents: P.KeyUpdates.optional() });
-  operations.define('principal.transfer', transfer, ['プリンシパルを譲る', 'Transfer a principal'], async (who, input) => {
+  definitions.define('principal.transfer', transfer, ['プリンシパルを譲る', 'Transfer a principal'], async (who, input) => {
     await principals.get(input.id); await relations.transfer(who, input.id, input.to, input.contents); return ok();
   });
   bind({ name: 'principal.transfer', method: 'POST', path: '/api/principals/:id/transfer', bodyLimit: 32 * 1024 * 1024,
-    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: OperationExecution } }, input: withId });
+    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
 
-  operations.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
+  definitions.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
     input => CREATED[String((input.resource as Record<string, C.JsonValue>)?.kind)] ?? ['項目を作る', 'Create an item'],
     async (who, { ownerId: owner, resource: body }) => {
       const row = body.kind === 'service'
@@ -107,7 +110,7 @@ export function userOperations(services: Services) {
     });
   bind({ name: 'resource.create', method: 'POST', path: '/api/principals/:id/resources', schema: { params: C.IdParams,
     body: C.NewResource, response: { 201: C.Resource } }, input: (params, body) => ({ ownerId: params.id, resource: body }), status: 201 });
-  operations.define('resource.update', z.object({ id: C.Id, changes: C.UpdateResource }).strict(),
+  definitions.define('resource.update', z.object({ id: C.Id, changes: C.UpdateResource }).strict(),
     ['項目を変更する', 'Change an item'], async (who, { id, changes: body }) => {
       let row = await resources.get(id);
       await authorization.requireResource(who, row, 'update');
@@ -139,7 +142,7 @@ export function userOperations(services: Services) {
     });
   bind({ name: 'resource.update', method: 'PATCH', path: '/api/resources/:id', schema: { params: C.IdParams,
     body: C.UpdateResource, response: { 200: C.Resource } }, input: (params, body) => ({ id: params.id, changes: body }) });
-  operations.define('resource.delete', idInput, ['項目を削除する', 'Delete an item'], async (who, input) => {
+  definitions.define('resource.delete', idInput, ['項目を削除する', 'Delete an item'], async (who, input) => {
     const row = await resources.get(input.id);
     if (row.kind === 'environment') return environments.remove(who, row);
     if (row.kind === 'object') await objects.remove(who, row); else await resources.delete(who, row);
@@ -149,31 +152,31 @@ export function userOperations(services: Services) {
     querystring: z.object({}).strict(), response: { 200: C.Ok, 202: C.EnvironmentDeletion } }, input: params => params,
     status: result => result && typeof result === 'object' && 'ok' in result ? 200 : 202 });
   const transferResource = idInput.extend({ to: C.Id });
-  operations.define('resource.transfer', transferResource, ['項目を譲る', 'Transfer an item'], async (who, input) => {
+  definitions.define('resource.transfer', transferResource, ['項目を譲る', 'Transfer an item'], async (who, input) => {
     const row = await resources.get(input.id); await relations.transfer(who, row.id, input.to); return ok();
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
-    body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: OperationExecution } }, input: withId });
-  operations.define('environment.stop', idInput, ['実行環境を止める', 'Stop an environment'], async (who, input) =>
+    body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
+  definitions.define('environment.stop', idInput, ['実行環境を止める', 'Stop an environment'], async (who, input) =>
     resources.view(who, await environments.stop(who, await resources.get(input.id))));
   bind({ name: 'environment.stop', method: 'POST', path: '/api/resources/:id/stop', schema: { params: C.IdParams,
     body: z.object({}).strict(), response: { 200: C.Resource } }, input: params => params });
   const ssh = SSHUpdate.extend({ id: C.Id });
-  operations.define('environment.ssh', ssh, ['SSH公開鍵を設定する', 'Set SSH public keys'], async (who, { id, ...input }) => environments.updateSSH(who, id, input));
+  definitions.define('environment.ssh', ssh, ['SSH公開鍵を設定する', 'Set SSH public keys'], async (who, { id, ...input }) => environments.updateSSH(who, id, input));
   bind({ name: 'environment.ssh', method: 'PUT', path: '/api/environments/:id/ssh', schema: { params: C.IdParams,
     body: SSHUpdate, response: { 200: SSHView } }, input: withId });
   const process = z.object({ environmentId: C.Id, command: CreateProcess }).strict();
-  operations.define('process.start', process, ['コマンドを実行する', 'Start a command'], async (who, input) => {
+  definitions.define('process.start', process, ['コマンドを実行する', 'Start a command'], async (who, input) => {
     const { id, environmentId, ownerId, actorId, state, createdAt } = await processes.create(who, input.environmentId, input.command);
     return { id, environmentId, ownerId, actorId, state, createdAt };
   });
   bind({ name: 'process.start', method: 'POST', path: '/api/environments/:id/processes', schema: { params: C.IdParams,
     body: CreateProcess, response: { 202: CreatedProcess } }, input: (params, body) => ({ environmentId: params.id, command: body }), status: 202 });
-  operations.define('process.cancel', idInput, ['コマンドを中止する', 'Cancel a command'], (who, input) => processes.cancel(who, input.id));
+  definitions.define('process.cancel', idInput, ['コマンドを中止する', 'Cancel a command'], (who, input) => processes.cancel(who, input.id));
   bind({ name: 'process.cancel', method: 'POST', path: '/api/processes/:id/cancel', schema: { params: C.IdParams,
     body: z.object({}).strict(), response: { 200: ProcessView } }, input: params => params });
-  operations.define('run.cancel', idInput, ['実行を中止する', 'Cancel a run'], (who, input) => delegation.cancel(who, input.id));
-  bind({ name: 'run.cancel', method: 'POST', path: '/api/executions/:id/cancel', schema: { params: C.IdParams,
+  definitions.define('run.cancel', idInput, ['実行を中止する', 'Cancel a run'], (who, input) => delegation.cancel(who, input.id));
+  bind({ name: 'run.cancel', method: 'POST', path: '/api/runtime/runs/:id/cancel', schema: { params: C.IdParams,
     body: z.object({}).strict(), response: { 200: P.Task } }, input: params => params });
   const fileLimit = 25 * 1024 * 1024;
   const fileContent = z.object({ bytes: z.string().max(Math.ceil(fileLimit * 4 / 3)).regex(/^[A-Za-z0-9_-]*$/),
@@ -182,13 +185,13 @@ export function userOperations(services: Services) {
     if (!Buffer.isBuffer(body)) fail(400, 'binary_required', 'Upload the file as application/octet-stream.');
     return body.toString('base64url');
   };
-  operations.define('object.create', fileContent.extend({ ownerId: C.Id, name: C.Name }), ['ファイルを保存する', 'Save a file'],
+  definitions.define('object.create', fileContent.extend({ ownerId: C.Id, name: C.Name }), ['ファイルを保存する', 'Save a file'],
     async (who, input) => resources.view(who, await objects.upload(who, input.ownerId, input.name,
       Buffer.from(input.bytes, 'base64url'), input.contentType)));
   bind({ name: 'object.create', method: 'POST', path: '/api/principals/:id/objects', bodyLimit: fileLimit,
     schema: { params: C.IdParams, querystring: fileContent.omit({ bytes: true }).extend({ name: C.Name }), response: { 201: C.Resource } },
     input: (params, body, query) => ({ ...bodyObject(query), ownerId: params.id, bytes: binary(body) }), status: 201 });
-  operations.define('object.update', fileContent.extend({ id: C.Id, version: z.number().int().positive() }),
+  definitions.define('object.update', fileContent.extend({ id: C.Id, version: z.number().int().positive() }),
     ['ファイルを更新する', 'Update a file'], async (who, input) => {
       const row = await resources.get(input.id);
       if (row.version !== input.version) fail(409, 'changed', 'This file changed. Reload it before saving.');
@@ -198,37 +201,37 @@ export function userOperations(services: Services) {
     schema: { params: C.IdParams, querystring: fileContent.omit({ bytes: true }).extend({ version: z.coerce.number().int().positive() }),
       response: { 200: C.Resource } }, input: (params, body, query) => ({ ...bodyObject(query), id: params.id, bytes: binary(body) }) });
   const link = idInput.extend({ minutes: z.number().int().min(1).max(1440).default(15) });
-  operations.define('object.link', link, ['ファイルのリンクを作る', 'Create a file link'], async (who, input) => objects.link(who, await resources.get(input.id), input.minutes));
+  definitions.define('object.link', link, ['ファイルのリンクを作る', 'Create a file link'], async (who, input) => objects.link(who, await resources.get(input.id), input.minutes));
   bind({ name: 'object.link', method: 'POST', path: '/api/resources/:id/link', schema: { params: C.IdParams,
     body: link.omit({ id: true }), response: { 200: z.object({ url: z.url(), expiresAt: C.Time }) } }, input: withId });
   const limits = idInput.extend({ storageBytes: z.number().int().min(1).max(1_000_000_000_000),
     computeSeconds: z.number().int().min(1).max(10_000_000) });
-  operations.define('billing.limits', limits, ['利用上限を設定する', 'Set usage limits'], async (who, input) => {
+  definitions.define('billing.limits', limits, ['利用上限を設定する', 'Set usage limits'], async (who, input) => {
     await billing.limits(who, input.id, input.storageBytes, input.computeSeconds); return ok();
   });
   bind({ name: 'billing.limits', method: 'PUT', path: '/api/principals/:id/limits', schema: { params: C.IdParams,
     body: limits.omit({ id: true }), response: { 200: C.Ok } }, input: withId });
   for (const name of ['checkout', 'portal'] as const) {
-    operations.define('billing.' + name, idInput, name === 'checkout' ? ['支払い方法を登録する', 'Add a payment method'] : ['支払いを管理する', 'Manage payment'],
+    definitions.define('billing.' + name, idInput, name === 'checkout' ? ['支払い方法を登録する', 'Add a payment method'] : ['支払いを管理する', 'Manage payment'],
       (who, input) => billing[name](who, input.id));
     bind({ name: 'billing.' + name, method: 'POST', path: '/api/principals/:id/payment/' + name, schema: { params: C.IdParams,
       body: z.object({}).strict(), response: { 200: z.object({ url: z.url() }) } }, input: params => params });
   }
-  operations.define('settings.update', z.object({ id: C.Id, settings: C.Settings }).strict(), ['連携設定を変更する', 'Change integration settings'],
+  definitions.define('settings.update', z.object({ id: C.Id, settings: C.Settings }).strict(), ['連携設定を変更する', 'Change integration settings'],
     (who, input) => integrations.set(who, input.id, input.settings));
   bind({ name: 'settings.update', method: 'PUT', path: '/api/principals/:id/settings', schema: { params: C.IdParams,
     body: C.Settings, response: { 200: z.object({ settings: C.Settings }) } }, input: (params, body) => ({ id: params.id, settings: body }) });
   // Signed encrypted writes also use an operation. Consent can resume the exact signed write.
-  operations.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
+  definitions.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
   bind({ name: 'custody.write', method: 'PUT', path: '/api/resources/:id/custody', schema: { params: C.IdParams,
-    body: P.ProtectedWrite, response: { 200: C.Resource, 202: OperationExecution } }, input: (params, body) => {
+    body: P.ProtectedWrite, response: { 200: C.Resource, 202: Execution } }, input: (params, body) => {
       const input = P.ProtectedWrite.parse(body);
       if (params.id !== input.content.policy.id) fail(400, 'wrong_resource', 'Save the encrypted content at its approved destination.');
       return input;
     } });
   const keyholder = async () => fail(400, 'keyholder_required', 'Continue this operation with your encryption keys.');
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
-    proof: C.JsonValue, type: string) => {
+    proof: C.JsonValue, type: string, connection?: Queryable) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
     if (policy.ownerId !== input.ownerId || policy.contentType !== type || write.name !== input.name ||
       (input.resourceId && policy.id !== input.resourceId) || write.version !== input.version ||
@@ -244,16 +247,16 @@ export function userOperations(services: Services) {
       fail(409, 'operation_changed', 'Use the execution environments approved for this item.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
-    return resources.view(who, await custody.put(who, write));
+    return resources.view(who, await custody.put(who, write, connection));
   };
-  operations.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
+  definitions.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
     { execution: 'keyholder', configure: ['environmentIds', 'name'], secret: pointer => pointer === '/value',
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.value) });
-  operations.define('app.save', AppSave, ['アプリを保存する', 'Save an application'], keyholder,
+  definitions.define('app.save', AppSave, ['アプリを保存する', 'Save an application'], keyholder,
     { execution: 'keyholder', configure: ['environmentIds', 'name', 'clientId'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
-  operations.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
+  definitions.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
     { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
       const write = FunctionWrite.parse(proof);
       if (input.resourceId && input.resourceId !== write.functionId || write.publication.ownerId !== input.ownerId ||
@@ -266,9 +269,9 @@ export function userOperations(services: Services) {
     const row = await resources.get(C.Id.parse(input.functionId));
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
     if (input.functionVersion && input.functionVersion !== row.version) fail(409, 'changed', 'The function changed. Review it again.');
-    return { ...input, functionVersion: row.version };
+    return { ...input, id: input.id ?? crypto.randomUUID(), functionVersion: row.version };
   };
-  operations.define('function.invoke', invokeFunction, ['関数を実行する', 'Invoke a function'],
+  definitions.define('function.invoke', invokeFunction, ['関数を実行する', 'Invoke a function'],
     async (who, { functionId, functionVersion, ...input }) => {
       await reviewedFunction({ functionId, ...(functionVersion ? { functionVersion } : {}) });
       return invocations.create(who, functionId, input);
@@ -279,21 +282,54 @@ export function userOperations(services: Services) {
         return { state: current.state === 'queued' || current.state === 'running' ? 'pending' : current.state, result: C.Json.parse(current) };
       }, cancel: (who, result) => invocations.cancel(who, FunctionInvocation.parse(result).id),
     });
-  bind({ name: 'function.invoke', method: 'POST', path: '/api/functions/:id/invocations', bodyLimit: 8 * 1024 * 1024,
-    schema: { params: C.IdParams, body: InvocationInput, response: { 202: FunctionInvocation } },
-    input: (params, body) => ({ functionId: params.id, ...bodyObject(body) }), status: 202 });
-  operations.define('function.delete', idInput, ['関数を削除する', 'Delete a function'], async (who, input) => {
+  definitions.define('function.delete', idInput, ['関数を削除する', 'Delete a function'], async (who, input) => {
     const row = await resources.get(input.id);
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a function.');
     await resources.delete(who, row); return null;
   });
   bind({ name: 'function.delete', method: 'DELETE', path: '/api/functions/:id', schema: { params: C.IdParams, response: { 204: z.null() } }, input: params => params, status: 204 });
-  operations.define('function.cancel', idInput, ['関数の実行を中止する', 'Cancel a function invocation'], (who, input) => invocations.cancel(who, input.id));
-  bind({ name: 'function.cancel', method: 'POST', path: '/api/invocations/:id/cancel', schema: { params: C.IdParams, body: z.object({}).strict(),
+  definitions.define('function.cancel', idInput, ['関数の実行を中止する', 'Cancel a function invocation'], (who, input) => invocations.cancel(who, input.id));
+  bind({ name: 'function.cancel', method: 'POST', path: '/api/runtime/functions/:id/cancel', schema: { params: C.IdParams, body: z.object({}).strict(),
     response: { 200: FunctionInvocation } }, input: params => params });
-  operations.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
-    { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId'],
+  const approvedUsers = async (policy: CustodyPolicy, users: string[], expiresAt?: string) => {
+    const expected = [...new Set(users)].sort();
+    const grants = policy.grants.filter(grant => 'actor' in grant);
+    if (canonical(grants.map(grant => 'actor' in grant ? grant.actor.principalId : '').sort()) !== canonical(expected))
+      fail(409, 'operation_changed', 'Use the people and agents approved for this connection.');
+    for (const grant of grants) {
+      if (!('actor' in grant) || canonical(grant.actor) !== canonical(grant.executor) ||
+        canonical([...grant.operations].sort()) !== canonical([...permittedOperations(ContentTypes.tokenSet)].sort()) ||
+        grant.origins.length || grant.functionDigests.length || !grant.callerProgram ||
+        Date.parse(grant.expiresAt) <= Date.now() || Date.parse(grant.expiresAt) > Date.now() + 30 * 86_400_000 + 60_000 ||
+        expiresAt && grant.expiresAt !== expiresAt)
+        fail(409, 'operation_changed', 'Use the connection permissions approved by this execution.');
+    }
+  };
+  definitions.define('connection.authorize', AuthorizeConnection, ['接続の使用を許可する', 'Authorize connection use'], keyholder,
+    { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
+      const write = P.ProtectedWrite.parse(proof), previous = await custody.get(input.connectionId);
+      const row = await resources.get(input.connectionId), policy = write.content.policy;
+      if (row.version !== input.version || write.version !== input.version || write.name !== row.name ||
+        policy.id !== input.connectionId || policy.ownerId !== input.ownerId || previous.policy.ownerId !== input.ownerId ||
+        policy.contentType !== ContentTypes.tokenSet || canonical(write.content.metadata) !== canonical(previous.metadata) ||
+        canonical(policy.readers) !== canonical(previous.policy.readers) || canonical(policy.authorities) !== canonical(previous.policy.authorities) ||
+        canonical(policy.grants.filter(grant => !('actor' in grant))) !== canonical(previous.policy.grants.filter(grant => !('actor' in grant))))
+        fail(409, 'operation_changed', 'Change permissions for the current connection.');
+      await approvedUsers(policy, input.users, input.expiresAt);
+      return resources.view(who, await custody.put(who, write));
+    } });
+  definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
+    { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId', 'users'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
+      prepareInput: async (who, input, proof, connection) => {
+        const method = await catalog.method(who, input.methodId);
+        if (!requiresApp(method) || !input.clientId || !input.environmentId || input.appId || await hash(method) !== input.methodDigest)
+          fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
+        const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
+          name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
+          clientId: input.clientId, environmentIds: [input.environmentId] }), proof, ContentTypes.clientCredential, connection);
+        return { ...input, appId: app.id };
+      },
       review: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, z.string().parse(input.methodId)));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
@@ -305,6 +341,20 @@ export function userOperations(services: Services) {
         return { ...input, methodDigest };
       },
       complete: async (who, input, proof, execution) => {
+        const method = await catalog.method(who, input.methodId);
+        if (method.kind === 'token' && P.ProtectedWrite.safeParse(proof).success) {
+          const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
+          const previous = input.connectionId ? await custody.get(input.connectionId) : null;
+          if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
+            write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
+            write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== 'token' || write.content.metadata.state !== 'ready')
+            fail(409, 'operation_changed', 'Save the token connection approved by this execution.');
+          if (input.users) await approvedUsers(policy, input.users);
+          else if (canonical(policy.grants) !== canonical(previous?.policy.grants ?? []))
+            fail(409, 'operation_changed', 'Keep the approved connection permissions.');
+          const row = await custody.put(who, write);
+          return { kind: 'connected', id: row.id, metadata: write.content.metadata };
+        }
         const evidence = z.object({ runId: C.Id, resourceId: C.Id }).strict().parse(proof);
         const task = await delegation.get(who, evidence.runId), content = await custody.get(evidence.resourceId);
         if (task.state !== 'succeeded' || task.kind !== 'connect' || task.intent.actor.principalId !== who.id ||
@@ -320,7 +370,7 @@ export function userOperations(services: Services) {
         if (input.name && row.name !== input.name) fail(409, 'operation_changed', 'Use the approved connection name.');
         return { kind: 'connected', id: content.policy.id, metadata: content.metadata };
       } });
-  operations.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Revoke a connection'], keyholder,
+  definitions.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Revoke a connection'], keyholder,
     { execution: 'keyholder', configure: [], complete: async (who, input, proof, execution) => {
       const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
       if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
@@ -332,7 +382,7 @@ export function userOperations(services: Services) {
       if (task.state !== 'succeeded') throw new OperationFailed(result, task.state === 'uncertain');
       return result;
     } });
-  operations.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
+  definitions.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
     { execution: 'keyholder', configure: ['environmentId'], secret: () => false,
       complete: async (who, input, proof, execution) => {
         const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
@@ -346,5 +396,5 @@ export function userOperations(services: Services) {
         if (task.state !== 'succeeded') throw new OperationFailed(result, task.state === 'uncertain');
         return result;
       } });
-  return operations;
+  return definitions;
 }

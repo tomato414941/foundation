@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { ApprovalRequest, Resource, listOf } from '../shared/contracts.js';
-import { OperationDescription, OperationExecution } from '../shared/operations.js';
-import { OperationClient } from '../shared/operation-client.js';
+import { DefinitionDescription, Execution } from '../shared/executions.js';
+import { ExecutionClient } from '../shared/execution-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
-import { Task } from '../shared/execution.js';
+import { Task } from '../shared/runtime-protocol.js';
 import { decode } from '../shared/encryption.js';
 import { DomainError } from '../server/errors.js';
 import type { JsonApi } from '../shared/client.js';
@@ -15,22 +15,24 @@ import { CustodyClient, SubmissionPending } from '../shared/client.js';
 
 test('定義した操作を通常のAPIと承認依頼から同じ利用者の権限で実行する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  f.context.operations.define('message.format', z.object({ text: z.string() }).strict(), ['文章を確認する', 'Review text'],
+  f.context.definitions.define('message.format', z.object({ text: z.string() }).strict(), ['文章を確認する', 'Review text'],
     async (actor, input) => ({ text: input.text, actorId: actor.id }));
-  const catalog = await f.client.api.json('/api/operations', {}, listOf(OperationDescription));
+  const catalog = await f.client.api.json('/api/definitions', {}, listOf(DefinitionDescription));
   assert.equal(catalog.items.find(item => item.name === 'message.format')?.title.ja, '文章を確認する');
-  const direct = await f.client.api.json('/api/operations/message.format', { method: 'POST', body: { text: 'Hello' } });
-  assert.deepEqual(direct, { text: 'Hello', actorId: f.owner.actor.id });
+  const direct = await f.client.api.json('/api/definitions/message.format/executions', { method: 'POST', body: { text: 'Hello' } }, Execution);
+  assert.deepEqual(direct.results[0], { text: 'Hello', actorId: f.owner.actor.id });
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'message.format', input: { text: 'Hello' } }] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  assert.equal(answer.state, 'approved'); assert.deepEqual(answer.results[0], direct);
+  assert.equal(answer.state, 'accepted');
+  const completed = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.deepEqual(completed.results[0], direct.results[0]);
 });
 
 test('通常の画面と依頼の変数保存が鍵を持つ利用者の暗号化処理を使い、入力後に同じ実行を続ける', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const operations = new OperationClient(f.client, f.connections), sender = f.api(f.stranger.token);
+  const operations = new ExecutionClient(f.client, f.connections), sender = f.api(f.stranger.token);
   const ordinary = await operations.execute({ name: 'variable.save', input: { ownerId: f.owner.actor.id,
     name: 'Ordinary', environmentIds: [] } }, { value: 'ordinary-secret' });
   assert.equal('kind' in ordinary && ordinary.kind, 'saved');
@@ -42,21 +44,22 @@ test('通常の画面と依頼の変数保存が鍵を持つ利用者の暗号�
       inputs: [{ pointer: '/value', label: 'Access token', secret: true }] },
     { name: 'principal.rename', input: { id: '$approver', name: 'Finished owner' } },
   ] } }, ApprovalRequest);
-  const pending = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  assert.equal(pending.state, 'running'); assert.equal(pending.waiting?.index, 1);
+  await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
+  const pending = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(pending.state, 'waiting'); assert.equal(pending.waiting?.index, 1);
   const first = (pending.results[0] as { id: string }).id;
-  const result = await operations.continue(asked.id, { value: 'owner-only-secret' });
+  const result = await operations.continue(asked.executionId, { value: 'owner-only-secret' });
   assert.equal('kind' in result && result.kind, 'saved');
   if (!('kind' in result) || result.kind !== 'saved') throw new Error('Expected a saved value.');
   assert.equal(decode(await f.client.reveal(result.resource.id)), 'owner-only-secret');
-  const completed = await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest);
-  assert.equal(completed.state, 'approved'); assert.equal((completed.results[0] as { id: string }).id, first);
+  const completed = await sender.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(completed.state, 'succeeded'); assert.equal((completed.results[0] as { id: string }).id, first);
   assert.equal((completed.results[2] as { name: string }).name, 'Finished owner');
-  const execution = await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution);
-  assert.equal(execution.state, 'succeeded'); assert.equal(execution.id, asked.id);
-  const row = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM operation_executions WHERE id=$1', [asked.id]);
+  const execution = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(execution.state, 'succeeded'); assert.equal(execution.id, asked.executionId);
+  const row = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [asked.executionId]);
   assert.ok(row?.snapshot);
-  const snapshot = await f.context.vault.decrypt(row.snapshot, 'operation-execution:' + asked.id);
+  const snapshot = await f.context.vault.decrypt(row.snapshot, 'operation-execution:' + asked.executionId);
   assert.equal(JSON.stringify(snapshot).includes('owner-only-secret'), false);
   const resource = await f.client.api.json('/api/resources/' + result.resource.id, {}, Resource);
   assert.deepEqual(resource.data, result.resource.data);
@@ -67,17 +70,30 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
     ? jsonResponse({ access_token: 'ovh-access-token', token_type: 'Bearer', expires_in: 3600 }) : jsonResponse({ ok: true }));
   t.after(f.close);
   const sender = f.api(f.stranger.token), connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
-  const operations = new OperationClient(f.client, connections);
+  const operations = new ExecutionClient(f.client, connections);
+  const before = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/executions', {}, listOf(Execution));
+  const send = f.client.api.json.bind(f.client.api);
+  const preparations: Array<{ path: string; body: unknown }> = [];
+  f.client.api.json = async (path, options, schema) => {
+    if (path.endsWith('/preparation')) preparations.push({ path, body: options?.body });
+    return send(path, options, schema);
+  };
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
     { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'ovh:client_credentials', name: 'OVH account' } },
   ] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {
     configuration: [{ environmentId: f.environment.manifest.id, clientId: 'ovh-service-account' }],
   } }, ApprovalRequest);
-  assert.equal(answer.waiting?.invocation.input.clientId, 'ovh-service-account');
-  const start = await operations.continue(asked.id, { clientSecret: 'ovh-service-secret' });
+  const approved = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(answer.state, 'accepted');
+  assert.equal(approved.waiting?.invocation.input.clientId, 'ovh-service-account');
+  const start = await operations.continue(asked.executionId, { clientSecret: 'ovh-service-secret' });
   if (!('flow' in start)) throw new Error('Expected a connection flow.');
-  const saved = await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution);
+  const preparation = preparations[0];
+  assert.ok(preparation);
+  const repeated = await send(preparation.path, { method: 'POST', body: preparation.body }, Execution);
+  assert.equal(repeated.id, asked.executionId);
+  const saved = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
   assert.deepEqual(saved.waiting?.continuation, { kind: 'connection', id: start.flow.id });
   const fresh = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
   await f.executor.tick();
@@ -85,39 +101,42 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
   await fresh.accept(start.flow.id); await f.executor.tick();
   const completed = await fresh.progress(start.flow.id);
   assert.equal(completed.kind, 'connected');
-  assert.equal((await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'approved');
+  assert.equal((await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'accepted');
   const tokenCall = f.requests.find(request => request.url.includes('/oauth2/token'))!;
   assert.ok(String(tokenCall.body).includes('client_secret=ovh-service-secret'));
   assert.ok(String(tokenCall.body).includes('client_id=ovh-service-account'));
+  const history = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/executions', {}, listOf(Execution));
+  assert.deepEqual(history.items.filter(item => !before.items.some(saved => saved.id === item.id)).map(item => item.id), [asked.executionId]);
+  assert.equal(history.items.find(item => item.id === asked.executionId)?.state, 'succeeded');
   await assert.rejects(sender.json('/api/operation-continuations/' + start.flow.id), { code: 'forbidden' });
 });
 
 test('承認したHTTP操作と署名した実行を結び付け、実行先が復号後に差し替えを拒否する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const operations = new OperationClient(f.client, f.connections), sender = f.api(f.stranger.token);
+  const operations = new ExecutionClient(f.client, f.connections), sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'run.execute', input: { ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
       operation: { kind: 'http', request: { url: 'https://api.example.com/reviewed', method: 'GET' } } } }] } }, ApprovalRequest);
   await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  const plan = await operations.plan(asked.id);
+  const plan = await operations.plan(asked.executionId);
   const prepared = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
     url: 'https://api.example.com/changed', method: 'DELETE', headers: {}, bindings: [],
-  }, save: {} }, { approval: plan.approval, operationContext: { id: asked.id, index: plan.index, invocation: plan.invocation } });
-  await f.client.api.json('/api/operation-executions/' + asked.id + '/continuation', { method: 'PUT',
+  }, save: {} }, { approval: plan.approval, operationContext: { id: asked.executionId, index: plan.index, invocation: plan.invocation } });
+  await f.client.api.json('/api/executions/' + asked.executionId + '/continuation', { method: 'PUT',
     body: { index: plan.index, continuation: { kind: 'run', id: prepared.intent.id } } });
   const task = await f.client.submitPrepared(prepared);
   await f.executor.tick();
-  const failed = await f.client.api.json('/api/executions/' + task.id, {}, Task);
+  const failed = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
   assert.equal(failed.state, 'failed');
   const result = await f.client.result(failed);
   assert.equal(result?.ok, false); assert.deepEqual(result?.error && typeof result.error === 'object' && 'code' in result.error
     ? result.error.code : null, 'invalid_execution');
-  assert.equal((await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution)).state, 'failed');
+  assert.equal((await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution)).state, 'failed');
 });
 
 test('HTTPの秘密情報を封をしたまま再開し、同じ実行先の処理と完了通知を一度だけ反映する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const operations = new OperationClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
+  const operations = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
   const execution = await operations.start({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
     environmentId: f.environment.manifest.id, operation: { kind: 'http', request: {
       url: 'https://api.example.com/private', method: 'POST', headers: { authorization: 'Bearer private-http-token' }, body: 'private-http-body',
@@ -132,7 +151,7 @@ test('HTTPの秘密情報を封をしたまま再開し、同じ実行先の処�
     url: 'https://api.example.com/private', method: 'POST', headers: {}, bindings: [],
   }, save: {} }, { operationContext: { id: execution.id, index: plan.index, invocation: plan.invocation } });
   await assert.rejects(f.client.submitPrepared(extra), { code: 'operation_changed' });
-  const fresh = new OperationClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
+  const fresh = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
   const resumed = await fresh.continue(execution.id);
   assert.equal('kind' in resumed && resumed.kind === 'run' && resumed.task.id, first.task.id);
   await f.executor.tick();
@@ -140,7 +159,7 @@ test('HTTPの秘密情報を封をしたまま再開し、同じ実行先の処�
   assert.equal('state' in completed && completed.state, 'succeeded');
   assert.equal((await operations.complete(execution.id, 0, { runId: first.task.id })).state, 'succeeded');
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0]?.headers.authorization, 'Bearer private-http-token');
-  const row = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM operation_executions WHERE id=$1', [execution.id]);
+  const row = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [execution.id]);
   const snapshot = await f.context.vault.decrypt(row!.snapshot, 'operation-execution:' + execution.id);
   assert.equal(JSON.stringify(snapshot).includes('private-http-token'), false);
 });
@@ -149,8 +168,8 @@ test('途中の操作をやり直す際に、保存した進捗から続けて�
   const f = await flowFixture(); t.after(f.close);
   let first = 0, second = 0;
   const input = z.object({}).strict();
-  f.context.operations.define('counter.first', input, ['準備する', 'Prepare'], async () => ({ count: ++first }));
-  f.context.operations.define('counter.second', input, ['完了する', 'Finish'], async () => {
+  f.context.definitions.define('counter.first', input, ['準備する', 'Prepare'], async () => ({ count: ++first }));
+  f.context.definitions.define('counter.second', input, ['完了する', 'Finish'], async () => {
     if (++second === 1) throw new DomainError(400, 'temporarily_unavailable', 'Try again.');
     return { count: second };
   });
@@ -158,9 +177,9 @@ test('途中の操作をやり直す際に、保存した進捗から続けて�
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'counter.first', input: {} }, { name: 'counter.second', input: {} }] } }, ApprovalRequest);
   await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }), { code: 'temporarily_unavailable' });
-  assert.equal((await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'pending');
-  const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  assert.equal(answer.state, 'approved'); assert.equal(first, 1); assert.equal(second, 2);
+  assert.equal((await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'accepted');
+  const answer = await f.client.api.json('/api/executions/' + asked.executionId + '/resume', { method: 'POST', body: {} }, Execution);
+  assert.equal(answer.state, 'succeeded'); assert.equal(first, 1); assert.equal(second, 2);
   assert.deepEqual(answer.results, [{ count: 1 }, { count: 2 }]);
 });
 
@@ -169,21 +188,21 @@ test('送信の応答を失っても保存した署名付き実行を別のク�
   let loseResponse = true;
   const api: JsonApi = { async json(path, options = {}, schema) {
     const result = await f.client.api.json(path, options, schema);
-    if (path === '/api/executions' && options.method === 'POST' && loseResponse) {
+    if (path === '/api/runtime/runs' && options.method === 'POST' && loseResponse) {
       loseResponse = false; throw new Error('Connection closed after submission.');
     }
     return result;
   } };
   const custody = new CustodyClient(api, f.config.origin, f.owner.binding, f.owner.keys, f.client.trust);
-  const operations = new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody)));
+  const operations = new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody)));
   const execution = await operations.start({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
     environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://api.example.com/retry', method: 'GET' } } } });
   await assert.rejects(operations.continue(execution.id), SubmissionPending);
-  const fresh = new OperationClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
+  const fresh = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
   const resumed = await fresh.continue(execution.id);
   assert.equal('kind' in resumed && resumed.kind, 'run');
   await f.executor.tick();
-  assert.equal((await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution)).state, 'succeeded');
+  assert.equal((await f.client.api.json('/api/executions/' + execution.id, {}, Execution)).state, 'succeeded');
   assert.equal(f.requests.length, 1);
 });
 
@@ -191,13 +210,13 @@ test('承認後に実行開始が中断しても、承認済みの同じ実行�
   const f = await flowFixture(); t.after(f.close);
   const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'Resumed group' } }] } }, ApprovalRequest);
-  const start = f.context.operationExecutions.start.bind(f.context.operationExecutions);
-  f.context.operationExecutions.start = async () => { throw new Error('Process stopped after recording approval.'); };
+  const start = f.context.executions.start.bind(f.context.executions);
+  f.context.executions.start = async () => { throw new Error('Process stopped after recording approval.'); };
   await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }), { status: 500 });
-  f.context.operationExecutions.start = start;
-  const resumed = await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest);
-  assert.equal(resumed.state, 'approved');
-  assert.equal((await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution)).actorId, f.owner.actor.id);
+  f.context.executions.start = start;
+  const resumed = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(resumed.state, 'succeeded');
+  assert.equal((await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution)).actorId, f.owner.actor.id);
   const groups = await f.context.db.all('SELECT id FROM principals WHERE owner_id=$1 AND name=$2', [f.owner.actor.id, 'Resumed group']);
   assert.equal(groups.length, 1); assert.equal((resumed.results[0] as { id: string }).id, groups[0]!.id);
 });
@@ -210,15 +229,15 @@ test('処理後の進捗保存に失敗すると結果を要確認とし、同�
     if (loseCheckpoint) { loseCheckpoint = false; throw new Error('Connection lost while saving progress.'); }
     return transaction(run);
   };
-  f.context.operations.define('counter.commit', z.object({}).strict(), ['保存する', 'Save'], async () => {
+  f.context.definitions.define('counter.commit', z.object({}).strict(), ['保存する', 'Save'], async () => {
     effects++; loseCheckpoint = true; return { count: effects };
   });
-  await assert.rejects(f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [{ name: 'counter.commit', input: {} }] } }), { status: 500 });
-  const row = await f.context.db.one<{ id: string }>('SELECT id FROM operation_executions WHERE actor_id=$1 ORDER BY created_at DESC LIMIT 1', [f.owner.actor.id]);
+  await assert.rejects(f.client.api.json('/api/executions', { method: 'POST', body: { operations: [{ name: 'counter.commit', input: {} }] } }), { status: 500 });
+  const row = await f.context.db.one<{ id: string }>('SELECT id FROM executions WHERE actor_id=$1 ORDER BY created_at DESC LIMIT 1', [f.owner.actor.id]);
   assert.ok(row);
-  const recovered = await f.client.api.json('/api/operation-executions/' + row.id, {}, OperationExecution);
+  const recovered = await f.client.api.json('/api/executions/' + row.id, {}, Execution);
   assert.equal(recovered.state, 'uncertain');
-  assert.equal((await f.client.api.json('/api/operation-executions/' + row.id, {}, OperationExecution)).state, 'uncertain');
+  assert.equal((await f.client.api.json('/api/executions/' + row.id, {}, Execution)).state, 'uncertain');
   assert.equal(effects, 1);
 });
 
@@ -235,7 +254,7 @@ test('前のログインを終了しても同じ本人の新しいログイン�
       return schema ? schema.parse(value) : value;
     } };
     const custody = new CustodyClient(api, f.config.origin, f.owner.binding, f.owner.keys, f.client.trust);
-    return { session, operations: new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody))) };
+    return { session, operations: new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody))) };
   };
   const first = await login(), execution = await first.operations.start({ name: 'variable.save',
     input: { ownerId: f.owner.actor.id, name: 'Continued after login', environmentIds: [] } });
@@ -248,13 +267,13 @@ test('前のログインを終了しても同じ本人の新しいログイン�
 
 test('接続を取り消すと入力待ちの実行と待機中の処理を取り消した状態で保存する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client)), operations = new OperationClient(f.client, connections);
+  const connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client)), operations = new ExecutionClient(f.client, connections);
   const execution = await operations.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-    environmentId: f.environment.manifest.id, methodId: 'render:token', name: 'Cancelled connection' } });
-  const started = await operations.continue(execution.id, { fields: { token: 'private-render-token' } });
+    environmentId: f.environment.manifest.id, methodId: 'openrouter:oauth', name: 'Cancelled connection' } });
+  const started = await operations.continue(execution.id);
   if (!('flow' in started)) throw new Error('Expected a connection.');
   assert.equal((await connections.cancel(started.flow.id)).kind, 'cancelled');
-  assert.equal((await f.client.api.json('/api/executions/' + started.flow.taskId, {}, Task)).state, 'cancelled');
+  assert.equal((await f.client.api.json('/api/runtime/runs/' + started.flow.taskId, {}, Task)).state, 'cancelled');
   const resumed = await operations.continue(execution.id);
   assert.equal('state' in resumed && resumed.state, 'cancelled');
   assert.equal(await f.executor.tick(), false);
@@ -262,14 +281,14 @@ test('接続を取り消すと入力待ちの実行と待機中の処理を取�
 
 test('同じプリンシパルの許可済み操作を応答待ちにせず実行し、結果と継続URLを返す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const execution = await f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [
+  const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'principal.create', input: { ownerId: f.owner.actor.id, name: 'Direct operation' } },
-  ] } }, OperationExecution);
-  assert.equal(execution.state, 'succeeded'); assert.equal(execution.response, 'none');
+  ] } }, Execution);
+  assert.equal(execution.state, 'succeeded'); assert.deepEqual(execution.requests, []);
   assert.equal(execution.creator.id, f.owner.actor.id); assert.equal(execution.actorId, f.owner.actor.id);
-  assert.equal(new URL(execution.url).pathname, '/operations/' + execution.id);
+  assert.equal(new URL(execution.url).pathname, '/executions/' + execution.id);
   assert.equal((execution.results[0] as { name: string }).name, 'Direct operation');
-  const fetched = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
+  const fetched = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
   assert.deepEqual(fetched.results, execution.results);
 });
 
@@ -278,16 +297,16 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
     ? jsonResponse({ access_token: 'direct-ovh-token', token_type: 'Bearer', expires_in: 3600 }) : jsonResponse({ ok: true }));
   t.after(f.close);
   const creator = f.api(f.stranger.token), connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
-  const handler = new OperationClient(f.client, connections);
-  const execution = await creator.json('/api/operation-executions', { method: 'POST', body: {
+  const handler = new ExecutionClient(f.client, connections);
+  const execution = await creator.json('/api/executions', { method: 'POST', body: {
     responderId: f.owner.actor.id, message: 'Connect OVHcloud', operations: [{ name: 'connection.connect',
       input: { ownerId: '$approver', methodId: 'ovh:client_credentials_ca', name: 'Direct OVH', environmentId: f.environment.manifest.id } }],
-  } }, OperationExecution);
+  } }, Execution);
   assert.equal(execution.wait, 'approval'); assert.equal(execution.creator.id, f.stranger.actor.id);
-  assert.equal(execution.responder?.id, f.owner.actor.id);
-  await assert.rejects(creator.json('/api/operation-executions/' + execution.id + '/respond', { method: 'POST', body: {} }), { code: 'forbidden' });
-  const responded = await f.client.api.json('/api/operation-executions/' + execution.id + '/respond', { method: 'POST',
-    body: { configuration: [{ clientId: 'direct-ovh-client' }] } }, OperationExecution);
+  assert.equal((await f.client.api.json('/api/requests/' + execution.requests[0], {}, ApprovalRequest)).to?.id, f.owner.actor.id);
+  await assert.rejects(creator.json('/api/executions/' + execution.id + '/respond', { method: 'POST', body: {} }), { code: 'forbidden' });
+  const responded = await f.client.api.json('/api/executions/' + execution.id + '/respond', { method: 'POST',
+    body: { configuration: [{ clientId: 'direct-ovh-client' }] } }, Execution);
   assert.equal(responded.actorId, f.owner.actor.id); assert.equal(responded.wait, 'input');
   await assert.rejects(handler.configure(execution.id, { environmentId: f.stranger.actor.id }), { code: 'operation_changed' });
   const started = await handler.continue(execution.id, { clientSecret: 'direct-ovh-secret' });
@@ -297,12 +316,12 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   assert.equal((await fresh.progress(started.flow.id)).kind, 'review');
   await fresh.accept(started.flow.id); await f.executor.tick();
   assert.equal((await fresh.progress(started.flow.id)).kind, 'connected');
-  const completed = await creator.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
+  const completed = await creator.json('/api/executions/' + execution.id, {}, Execution);
   assert.equal(completed.state, 'succeeded'); assert.equal(completed.id, execution.id);
   const resourceId = (completed.results[0] as { id: string }).id;
   await assert.rejects(creator.json('/api/resources/' + resourceId + '/custody'), { code: 'forbidden' });
   await assert.rejects(creator.json('/api/operation-continuations/' + started.flow.id), { code: 'forbidden' });
-  const saved = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM operation_executions WHERE id=$1', [execution.id]);
+  const saved = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [execution.id]);
   assert.ok(saved);
   assert.equal(JSON.stringify(await f.context.vault.decrypt(saved.snapshot, 'operation-execution:' + execution.id)).includes('direct-ovh-secret'), false);
 });
@@ -313,33 +332,33 @@ test('共通の操作から関数を公開して実行し、関数の終了後�
     name: 'Operation function', definition: { environmentId: f.environment.manifest.id,
       program: { kind: 'http', request: { url: 'https://api.example.com/function', method: 'GET' } }, parameters: [], result: 'json', description: '' } } });
   if (!('kind' in publication) || publication.kind !== 'saved') throw new Error('Expected a published function.');
-  const execution = await f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [
+  const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'function.invoke', input: { functionId: publication.resource.id, arguments: {} } },
     { name: 'principal.rename', input: { id: f.owner.actor.id, name: 'Background completion' } },
-  ] } }, OperationExecution);
+  ] } }, Execution);
   assert.equal(execution.state, 'running'); assert.equal(execution.wait, 'execution');
-  const repeated = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
-  assert.equal((repeated.results[0] as { id: string }).id, (execution.results[0] as { id: string }).id);
+  const repeated = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
+  assert.equal(repeated.steps[0]!.runs[0]!.id, execution.steps[0]!.runs[0]!.id);
   await f.functionExecutor.tick();
-  await f.context.operationExecutions.recoverAll();
+  await f.context.executions.recoverAll();
   assert.equal((await f.context.principals.get(f.owner.actor.id)).name, 'Background completion');
-  const completed = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
+  const completed = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
   assert.equal(completed.state, 'succeeded');
-  assert.deepEqual((completed.results[0] as { result: unknown }).result, { message: 'function result' });
+  assert.deepEqual(completed.results[0], { message: 'function result' });
   assert.equal(f.requests.filter(request => request.url === 'https://api.example.com/function').length, 1);
-  const cancelled = await f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [
+  const cancelled = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'function.invoke', input: { functionId: publication.resource.id, arguments: {} } },
-  ] } }, OperationExecution);
-  assert.equal((await f.client.api.json('/api/operation-executions/' + cancelled.id + '/cancel', { method: 'POST', body: {} }, OperationExecution)).state, 'cancelled');
-  assert.equal((await f.functions.result((cancelled.results[0] as { id: string }).id)).state, 'cancelled');
+  ] } }, Execution);
+  assert.equal((await f.client.api.json('/api/executions/' + cancelled.id + '/cancel', { method: 'POST', body: {} }, Execution)).state, 'cancelled');
+  assert.equal((await f.functions.result(cancelled.id)).state, 'cancelled');
 });
 
 test('期限を過ぎた操作の入力や実行を拒否し、完了した操作を再読み込みして結果を確認する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const execution = await f.operations.start({ name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Expired input', environmentIds: [] } });
-  await f.context.db.pool.query("UPDATE operation_executions SET expires_at=now()-interval '1 second' WHERE id=$1", [execution.id]);
-  const expired = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
-  assert.equal(expired.response, 'expired'); assert.equal(expired.state, 'cancelled');
+  await f.context.db.pool.query("UPDATE executions SET expires_at=now()-interval '1 second' WHERE id=$1", [execution.id]);
+  const expired = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
+  assert.equal(expired.state, 'cancelled');
   await assert.rejects(f.operations.plan(execution.id), { code: 'execution_expired' });
 });
 
@@ -348,30 +367,30 @@ test('連続する操作で必要な相手ごとに同意を確認し、すで�
   const recipient = await f.person('Second recipient');
   const first = await f.resources.insert(f.owner.actor.id, 'object', 'First handoff', { size: 0, contentType: 'text/plain' });
   const second = await f.resources.insert(f.owner.actor.id, 'object', 'Second handoff', { size: 0, contentType: 'text/plain' });
-  const execution = await f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [
+  const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'resource.transfer', input: { id: first.id, to: f.stranger.actor.id } },
     { name: 'resource.transfer', input: { id: second.id, to: recipient.actor.id } },
-  ] } }, OperationExecution);
-  assert.equal(execution.wait, 'approval'); assert.equal(execution.responder?.id, f.stranger.actor.id);
-  const agreed = await f.api(f.stranger.token).json('/api/operation-executions/' + execution.id + '/respond', { method: 'POST', body: {} }, OperationExecution);
+  ] } }, Execution);
+  assert.equal(execution.wait, 'approval'); assert.equal((await f.client.api.json('/api/requests/' + execution.requests[0], {}, ApprovalRequest)).to?.id, f.stranger.actor.id);
+  const agreed = await f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond', { method: 'POST', body: {} }, Execution);
   assert.equal(agreed.wait, 'approval'); assert.equal(agreed.index, 1);
-  assert.equal(agreed.responder?.id, recipient.actor.id);
+  assert.equal((await f.api(f.stranger.token).json('/api/requests/' + agreed.requests.at(-1), {}, ApprovalRequest)).to?.id, recipient.actor.id);
   assert.equal((await f.resources.get(first.id)).owner_id, f.stranger.actor.id);
   assert.equal((await f.resources.get(second.id)).owner_id, f.owner.actor.id);
-  const completed = await f.api(recipient.token).json('/api/operation-executions/' + execution.id + '/respond', { method: 'POST', body: {} }, OperationExecution);
+  const completed = await f.api(recipient.token).json('/api/executions/' + execution.id + '/respond', { method: 'POST', body: {} }, Execution);
   assert.equal(completed.state, 'succeeded'); assert.equal((await f.resources.get(second.id)).owner_id, recipient.actor.id);
-  assert.deepEqual((await f.api(f.stranger.token).json('/api/operation-executions/' + execution.id, {}, OperationExecution)).results, completed.results);
+  assert.deepEqual((await f.api(f.stranger.token).json('/api/executions/' + execution.id, {}, Execution)).results, completed.results);
 });
 
 test('同じIDで送信した操作を一度だけ実行し、異なる入力によるIDの再利用を拒否する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const id = crypto.randomUUID(), body = { id, operations: [{ name: 'principal.create', input: { ownerId: f.owner.actor.id, name: 'Idempotent group' } }] };
-  const first = await f.client.api.json('/api/operation-executions', { method: 'POST', body }, OperationExecution);
-  const repeated = await f.client.api.json('/api/operation-executions', { method: 'POST', body }, OperationExecution);
+  const first = await f.client.api.json('/api/executions', { method: 'POST', body }, Execution);
+  const repeated = await f.client.api.json('/api/executions', { method: 'POST', body }, Execution);
   assert.equal(first.id, id); assert.equal(repeated.id, id); assert.deepEqual(repeated.results, first.results);
   const groups = await f.context.db.all('SELECT id FROM principals WHERE owner_id=$1 AND name=$2', [f.owner.actor.id, 'Idempotent group']);
   assert.equal(groups.length, 1);
-  await assert.rejects(f.client.api.json('/api/operation-executions', { method: 'POST', body: { ...body,
+  await assert.rejects(f.client.api.json('/api/executions', { method: 'POST', body: { ...body,
     operations: [{ name: 'principal.create', input: { ownerId: f.owner.actor.id, name: 'Changed group' } }] } }), { code: 'execution_conflict' });
 });
 
@@ -393,7 +412,7 @@ test('共通の操作でGoogleの接続を解除し、指定した接続のア�
     environmentId: f.environment.manifest.id, connectionId: connection.id } });
   if (!('kind' in revocation) || revocation.kind !== 'run') throw new Error('Expected a revocation run.');
   await f.executor.tick();
-  const completed = await f.client.api.json('/api/operation-executions/' + revocation.task.intent.operationContext!.id, {}, OperationExecution);
+  const completed = await f.client.api.json('/api/executions/' + revocation.task.intent.operationContext!.id, {}, Execution);
   assert.equal(completed.state, 'succeeded');
   assert.equal(f.requests.filter(request => request.url === 'https://oauth2.googleapis.com/revoke').length, 1);
 });

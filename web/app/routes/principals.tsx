@@ -48,7 +48,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId, ...(contents ? { contents } : {}) } },
       Changed,
     );
-    if ('id' in changed) return redirect('/requests/' + changed.id);
+    if ('id' in changed) return redirect('/executions/' + changed.id);
     return { ok: true };
   });
 }

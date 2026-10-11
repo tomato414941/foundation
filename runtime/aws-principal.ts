@@ -1,6 +1,6 @@
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { IAMClient, GetRoleCommand } from '@aws-sdk/client-iam';
-import { AwsPrincipal } from '../shared/execution.js';
+import { AwsPrincipal } from '../shared/runtime-protocol.js';
 
 // Only a complete IAM ARN can identify the principal a trust policy should name.
 export function awsPrincipal(callerArn: string): string | null {

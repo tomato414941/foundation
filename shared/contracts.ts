@@ -486,11 +486,15 @@ export const DisplayedOperation = Operation.extend({ title: OperationTitle,
 export const RequestInput = z
   .object({
     to: Id.optional(),
+    executionId: Id.optional(),
     message: z.string().max(1000).default(''),
-    operations: z.array(Operation).min(1).max(8),
+    operations: z.array(Operation).min(1).max(8).optional(),
     expiresInMinutes: z.number().int().min(1).max(1440).default(30),
   })
-  .strict();
+  .strict().superRefine((value, context) => {
+    if (!!value.executionId === !!value.operations)
+      context.addIssue({ code: 'custom', message: 'Choose an execution or supply processing definitions.' });
+  });
 const Named = z.object({ id: Id, name: Name });
 // A change its requester has made its own side of, waiting on the side the request is sent to: a line that needs both
 // its ends, or something passed to a new owner. The requester makes it once that side agrees.
@@ -500,13 +504,12 @@ export const Proposal = z.discriminatedUnion('kind', [
 ]);
 export const ApprovalRequest = z.object({
   id: Id,
+  executionId: Id,
   from: Principal.pick({ id: true, name: true }),
   to: Principal.pick({ id: true, name: true }).nullable(),
   message: z.string(),
-  proposal: Proposal.nullable(),
-  operations: z.array(DisplayedOperation),
-  state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
-  results: z.array(Json.nullable()),
+  purpose: z.enum(['input', 'approval']),
+  state: z.enum(['pending', 'accepted', 'declined', 'cancelled', 'expired']),
   createdAt: Time,
   expiresAt: Time,
   url: z.url(),
@@ -515,12 +518,6 @@ export const ApprovalRequest = z.object({
   refreshUrl: z.url().nullable(),
   canRespond: z.boolean(),
   canCancel: z.boolean(),
-  executionState: z.enum(['waiting', 'running', 'succeeded', 'failed', 'uncertain', 'cancelled']),
-  waiting: z.object({ index: z.number().int().nonnegative(),
-    invocation: Invocation,
-    approval: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),
-    continuation: z.object({ kind: z.enum(['connection', 'run']), id: Id }).strict().nullable(),
-  }).strict().nullable(),
 });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const DeviceRequest = z.object({

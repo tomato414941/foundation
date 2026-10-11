@@ -66,7 +66,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       const to = formText(form, 'to');
       const contents = await rekeySharing(prefix + '/transfer-recipients?' + new URLSearchParams({ to }));
       const changed = await api(prefix + '/transfer', { method: 'POST', body: { to, contents } }, Changed);
-      return redirect('id' in changed ? '/requests/' + changed.id : '/');
+      return redirect('id' in changed ? '/executions/' + changed.id : '/');
     } else if (intent === 'credential')
       await api(prefix + '/credentials/' + formText(form, 'credentialId'), { method: 'DELETE' });
     else if (intent === 'limits')

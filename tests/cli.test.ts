@@ -228,7 +228,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   assert.equal(approved.statusCode, 200, approved.body);
   const waited = await c.run(['request', 'wait', request.id, '--timeout', '5']);
   assert.equal(waited.code, 0, waited.stderr);
-  assert.equal(JSON.parse(waited.stdout).state, 'approved');
+  assert.equal(JSON.parse(waited.stdout).state, 'accepted');
   const status = await c.run(['status']);
   assert.equal(status.code, 0, status.stderr);
   assert.ok(JSON.parse(status.stdout).principals.some((item: { id: string }) => item.id === owner.actor.id));
@@ -353,7 +353,7 @@ test('CLIで実行先を登録し、指定した実行先へ暗号化したコ�
   assert.equal(executed.code, 0, executed.stderr);
   const result = await c.run(['wait', JSON.parse(run.stdout).id, '--timeout', '5']);
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).result.stdout, 'executed:[redacted]');
+  assert.equal(JSON.parse(result.stdout).results[0].stdout, 'executed:[redacted]');
 });
 
 test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示する', () => {
@@ -374,32 +374,19 @@ test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示�
   }
 });
 
-test('CLIで接続を実行先へ依頼し、確認した接続を暗号化して保存してから端末で利用する', async t => {
+test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端末での使用を確認する', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Connection owner', '--origin', c.origin])).code, 0);
-  const environment = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  const start = await c.run(['connect', '--method', 'render:token', '--environment', environment,
-    '--name', 'Render REST', '--fields', '@-'], '{"token":"render-connection-secret"}');
+  const start = await c.run(['connect', '--method', 'render:token', '--name', 'Render REST', '--fields', '@-'],
+    '{"token":"render-connection-secret"}');
   assert.equal(start.code, 0, start.stderr);
-  const flow = JSON.parse(start.stdout).flowId;
-  const execute = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(execute.code, 0, execute.stderr);
-  const review = await c.run(['connect', 'status', flow]);
-  assert.equal(review.code, 0, review.stderr);
-  assert.equal(JSON.parse(review.stdout).kind, 'review');
-  assert.equal(JSON.parse(review.stdout).metadata.methodId, 'render:token');
-  const accept = await c.run(['connect', 'accept', flow]);
-  assert.equal(accept.code, 0, accept.stderr);
-  const saved = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(saved.code, 0, saved.stderr);
-  const connected = await c.run(['connect', 'status', flow]);
-  assert.equal(connected.code, 0, connected.stderr);
-  assert.equal(JSON.parse(connected.stdout).kind, 'connected');
-  const id = JSON.parse(connected.stdout).id;
+  const saved = JSON.parse(start.stdout);
+  assert.equal(saved.kind, 'connected');
+  const completed = await c.run(['execution', 'get', saved.id]);
+  assert.equal(completed.code, 0, completed.stderr);
+  assert.equal(JSON.parse(completed.stdout).state, 'succeeded');
   const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'TOKEN', source: { id, output: 'RENDER_API_KEY' } },
+    { name: 'TOKEN', source: { id: saved.connectionId, output: 'RENDER_API_KEY' } },
   ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '[redacted]');
@@ -442,7 +429,7 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
       sessionToken: 'explicit-cli-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
       role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } }));
   assert.equal(start.code, 0, start.stderr);
-  const flow = JSON.parse(start.stdout).flowId;
+  const flow = JSON.parse(start.stdout).id;
   const executed = await c.run(['agent', 'start', '--id', environment, '--once']);
   assert.equal(executed.code, 0, executed.stderr);
   const reviewed = await c.run(['connect', 'status', flow]);
@@ -454,7 +441,7 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   const saved = await c.run(['agent', 'start', '--id', environment, '--once']);
   assert.equal(saved.code, 0, saved.stderr);
   const connected = await c.run(['connect', 'status', flow]);
-  const id = JSON.parse(connected.stdout).id;
+  const id = JSON.parse(connected.stdout).results[0].id;
   const inputs = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION']
     .map(name => ({ name, source: { id, output: name } }));
   const used = await c.run(['exec', '--inputs', JSON.stringify(inputs), '--', process.execPath, '--input-type=module', '-e',
@@ -495,7 +482,7 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   assert.equal(executed.code, 0, executed.stderr);
   const result = await c.run(['function', 'result', JSON.parse(started.stdout).id, '--wait', '--timeout', '5']);
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout).result, { message: 'CLI invocation', configured: true, secret: '[redacted]' });
+  assert.deepEqual(JSON.parse(result.stdout).results[0], { message: 'CLI invocation', configured: true, secret: '[redacted]' });
 });
 
 test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {
@@ -503,18 +490,18 @@ test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと�
   const initialized = await c.run(['init', '--name', 'Operation initiator', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const recipient = await c.person('Operation recipient');
-  const prepared = await c.run(['operation', 'start', '--body', '@-'], JSON.stringify({ responderId: recipient.actor.id,
+  const prepared = await c.run(['execution', 'start', '--body', '@-'], JSON.stringify({ responderId: recipient.actor.id,
     operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } }] }));
   assert.equal(prepared.code, 0, prepared.stderr);
   const execution = JSON.parse(prepared.stdout);
-  assert.equal(new URL(execution.url).pathname, '/operations/' + execution.id);
+  assert.equal(new URL(execution.url).pathname, '/executions/' + execution.id);
   assert.equal(execution.wait, 'approval');
-  await c.context.operationExecutions.respond(recipient.actor, execution.id);
-  const read = await c.run(['operation', 'get', execution.id]);
+  await c.context.executions.respond(recipient.actor, execution.id);
+  const read = await c.run(['execution', 'get', execution.id]);
   assert.equal(read.code, 0, read.stderr);
   assert.equal(JSON.parse(read.stdout).state, 'succeeded');
   assert.equal(JSON.parse(read.stdout).results[0].name, 'CLI handoff result');
-  const history = await c.run(['operation', 'history']);
+  const history = await c.run(['execution', 'history']);
   assert.equal(history.code, 0, history.stderr);
   assert.ok(JSON.parse(history.stdout).items.some((item: { id: string }) => item.id === execution.id));
 });

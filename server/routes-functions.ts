@@ -7,14 +7,14 @@ import { Id, IdParams, Json, JsonObject, PageQuery, FunctionResource, listOf } f
 import { KeyBinding } from '../shared/authority.js';
 import { CreateFunction, UpdateFunction, Invocation, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
 import type { Actor } from './authorization.js';
-import { FunctionSave } from '../shared/operations.js';
+import { FunctionSave } from '../shared/executions.js';
 import { ProtectedRead } from '../shared/protocol.js';
 
 export async function routesFunctions(app: ApiApp, context: Context) {
-  const { functions, invocations, resources, authorization, custody, delegation, operationExecutions } = context;
+  const { functions, invocations, resources, authorization, custody, delegation, executions } = context;
   const publish = async (who: Actor, input: z.infer<typeof FunctionSave>, proof: unknown) => {
-    const execution = await operationExecutions.start(who, [{ name: 'function.save', input: JsonObject.parse(input) }]);
-    return (await operationExecutions.complete(who, execution.id, 0, Json.parse(proof))).results[0];
+    const execution = await executions.start(who, [{ name: 'function.save', input: JsonObject.parse(input) }]);
+    return (await executions.complete(who, execution.id, 0, Json.parse(proof))).results[0];
   };
   const selected = async (id: string) => {
     const row = await resources.get(id);
@@ -55,19 +55,19 @@ export async function routesFunctions(app: ApiApp, context: Context) {
     const current = await functions.execution(actor(request), request.params.id, custody, delegation);
     return { executor: current.publication.executor };
   });
-  app.get('/api/principals/:id/invocations', { schema: { params: IdParams, querystring: PageQuery,
+  app.get('/api/runtime/principals/:id/functions', { schema: { params: IdParams, querystring: PageQuery,
     response: { 200: listOf(Invocation) } } }, request => invocations.list(actor(request), request.params.id, request.query.limit, request.query.after));
-  app.get('/api/invocations/:id', { schema: { params: IdParams, response: { 200: Invocation } } },
+  app.get('/api/runtime/functions/:id', { schema: { params: IdParams, response: { 200: Invocation } } },
     request => invocations.get(actor(request), request.params.id));
   app.post('/api/environments/:id/invocations/claim', { schema: { params: IdParams, body: z.object({}).strict(),
     response: { 200: ClaimedInvocation } } }, request => invocations.claim(actor(request), request.params.id));
   const lease = z.object({ lease: Id }).strict();
-  app.post('/api/invocations/:id/dispatch', { schema: { params: IdParams, body: lease,
+  app.post('/api/runtime/functions/:id/dispatch', { schema: { params: IdParams, body: lease,
     response: { 200: z.object({ ok: z.literal(true) }) } } }, request => invocations.dispatch(actor(request), request.params.id, request.body.lease));
-  app.post('/api/invocations/:id/renew', { schema: { params: IdParams, body: lease,
+  app.post('/api/runtime/functions/:id/renew', { schema: { params: IdParams, body: lease,
     response: { 200: z.object({ active: z.boolean(), reason: z.enum(['cancelled', 'authorization_changed', 'lease_lost']).optional() }) } } },
     request => invocations.renew(actor(request), request.params.id, request.body.lease));
-  app.post('/api/invocations/:id/finish', { bodyLimit: 8 * 1024 * 1024, schema: { params: IdParams,
+  app.post('/api/runtime/functions/:id/finish', { bodyLimit: 8 * 1024 * 1024, schema: { params: IdParams,
     body: lease.extend({ completion: InvocationCompletion }), response: { 200: Invocation } } },
     request => invocations.finish(actor(request), request.params.id, request.body.lease, request.body.completion));
 }

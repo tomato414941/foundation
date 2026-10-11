@@ -217,7 +217,7 @@ export class Accounts {
           );
       }
       await connection.query(
-        "UPDATE operation_executions SET state=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,creator_id=CASE WHEN creator_id=$1 THEN $2 ELSE creator_id END,responder_id=CASE WHEN responder_id=$1 THEN $2 ELSE responder_id END,actor_id=CASE WHEN actor_id=$1 THEN $2 ELSE actor_id END WHERE creator_id=$1 OR responder_id=$1 OR actor_id=$1",
+        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,creator_id=CASE WHEN creator_id=$1 THEN $2 ELSE creator_id END,responder_id=CASE WHEN responder_id=$1 THEN $2 ELSE responder_id END,actor_id=CASE WHEN actor_id=$1 THEN $2 ELSE actor_id END WHERE creator_id=$1 OR responder_id=$1 OR actor_id=$1",
         [from.id, to.id],
       );
       await connection.query(

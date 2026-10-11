@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OperationExecution } from './operations.js';
+import { Execution } from './executions.js';
 import { Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
@@ -11,8 +11,8 @@ import {
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
 import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
-import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
-import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
+import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './runtime-protocol.js';
+import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
 
 export interface JsonApi {
   json<T = unknown>(path: string, options?: { method?: string; body?: unknown; signal?: AbortSignal }, schema?: z.ZodType<T>): Promise<T>;
@@ -117,14 +117,14 @@ export class CustodyClient {
       authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
-    options: { metadata?: Record<string, JsonValue>; previous?: { content: CustodyContent; version: number };
+    options: { metadata?: Record<string, JsonValue>; labels?: z.infer<typeof import('./connections.js').ConnectionLabels>; previous?: { content: CustodyContent; version: number };
       commit?: (write: z.infer<typeof ProtectedWrite>) => Promise<ResourceView> } = {}) {
     const previous = options.previous;
     if (previous && canonical(policy) === canonical({ ...previous.content.policy, revision: policy.revision }))
       policy = { ...policy, revision: previous.content.policy.revision };
     const content = await protect(bytes, policy, (previous?.content.materialRevision ?? 0) + 1,
       this.binding, this.keys, options.metadata, previous?.content);
-    const write = { name, content, ...(previous ? { version: previous.version } : {}) };
+    const write = { name, content, ...(options.labels ? { labels: options.labels } : {}), ...(previous ? { version: previous.version } : {}) };
     const resource = options.commit ? await options.commit(write) : await this.api.json('/api/resources/' + policy.id + '/custody',
       { method: 'PUT', body: write }, Resource);
     await this.trust.rememberContent(content);
@@ -136,7 +136,7 @@ export class CustodyClient {
     const content = await protect(bytes, policy, previous.content.materialRevision + 1,
       this.binding, this.keys, previous.content.metadata, previous.content);
     const result = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
-      body: { name, content, version: previous.version } }, z.union([Resource, OperationExecution]));
+      body: { name, content, version: previous.version } }, z.union([Resource, Execution]));
     if ('kind' in result) await this.trust.rememberContent(content);
     return result;
   }
@@ -234,7 +234,7 @@ export class CustodyClient {
   }
   async submitPrepared(request: SealedRun) {
     await this.trust.rememberRun(request);
-    try { return await this.api.json('/api/executions', { method: 'POST', body: request }, Task); }
+    try { return await this.api.json('/api/runtime/runs', { method: 'POST', body: request }, Task); }
     catch (error) {
       if (error && typeof error === 'object' && 'status' in error) throw error;
       throw new SubmissionPending(request.intent.id);
@@ -246,7 +246,7 @@ export class CustodyClient {
     if (canonical(request.intent.actor) !== canonical(this.binding) || request.intent.origin !== this.origin)
       throw new Error('Use the identity that signed this execution request.');
     try {
-      const previous = await this.api.json('/api/executions/' + id, {}, Task);
+      const previous = await this.api.json('/api/runtime/runs/' + id, {}, Task);
       if (canonical(previous.intent) !== canonical(request.intent) || previous.requestSignature !== request.signature)
         throw new Error('Use the saved request that started this execution.');
       return previous;

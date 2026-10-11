@@ -130,10 +130,11 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_queue ON runs(state,created_at);
 CREATE INDEX IF NOT EXISTS runs_owner ON runs(owner_id,created_at DESC);
-CREATE TABLE IF NOT EXISTS operation_executions (
+CREATE TABLE IF NOT EXISTS executions (
   id uuid PRIMARY KEY,
   actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   creator_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   responder_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   message text NOT NULL DEFAULT '',
   proposal jsonb,
@@ -149,20 +150,31 @@ CREATE TABLE IF NOT EXISTS operation_executions (
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-ALTER TABLE operation_executions ADD COLUMN IF NOT EXISTS creator_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+ALTER TABLE executions ADD COLUMN IF NOT EXISTS creator_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS responder_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS message text NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS proposal jsonb,
   ADD COLUMN IF NOT EXISTS code_hash text, ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS response text NOT NULL DEFAULT 'none';
-ALTER TABLE operation_executions DROP CONSTRAINT IF EXISTS operation_executions_wait_check;
-ALTER TABLE operation_executions ADD CONSTRAINT operation_executions_wait_check CHECK(wait IN ('approval','input','execution'));
-CREATE INDEX IF NOT EXISTS operation_executions_actor ON operation_executions(actor_id,created_at DESC);
-CREATE INDEX IF NOT EXISTS operation_executions_recipient ON operation_executions(responder_id,state,created_at);
-CREATE TABLE IF NOT EXISTS approval_requests (
-  id uuid PRIMARY KEY REFERENCES operation_executions(id) ON DELETE CASCADE,
-  delivered_at timestamptz NOT NULL DEFAULT now()
+ALTER TABLE executions DROP CONSTRAINT IF EXISTS executions_wait_check;
+ALTER TABLE executions DROP CONSTRAINT IF EXISTS operation_executions_wait_check;
+ALTER TABLE executions ADD CONSTRAINT executions_wait_check CHECK(wait IN ('approval','input','execution'));
+CREATE INDEX IF NOT EXISTS executions_actor ON executions(actor_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS executions_recipient ON executions(responder_id,state,created_at);
+CREATE TABLE IF NOT EXISTS requests (
+  id uuid PRIMARY KEY,
+  execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+  from_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  to_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  message text NOT NULL DEFAULT '',
+  purpose text NOT NULL CHECK(purpose IN ('input','approval')),
+  state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  answered_at timestamptz
 );
-ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS delivered_at timestamptz NOT NULL DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS request_pending ON requests(execution_id) WHERE state='pending';
+CREATE INDEX IF NOT EXISTS request_recipient ON requests(to_id,state,created_at);
 CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS operation_continuations (
   id uuid PRIMARY KEY,
@@ -174,7 +186,7 @@ CREATE TABLE IF NOT EXISTS operation_continuations (
 );
 CREATE TABLE IF NOT EXISTS request_links (
   token_hash text PRIMARY KEY,
-  request_id uuid NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  request_id uuid NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   expires_at timestamptz NOT NULL
 );

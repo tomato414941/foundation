@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Id } from './contracts.js';
-import { AwsPrincipal } from './execution.js';
+import { AwsPrincipal } from './runtime-protocol.js';
 import { AwsRegion, AwsRoleArn } from './aws.js';
 
 export const AwsRolePermission = z.enum(['ReadOnlyAccess', 'AdministratorAccess']);

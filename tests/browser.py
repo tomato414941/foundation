@@ -185,7 +185,7 @@ class BrowserTests(unittest.TestCase):
         reader.get_by_role("textbox", name="Payload", exact=True).fill(json.dumps({"items": [1, False, None]}))
         reader.screenshot(path=str(ARTIFACTS / "function-run-desktop-ja.png"), full_page=True)
         reader.get_by_role("button", name="実行", exact=True).click()
-        reader.wait_for_url("**/invocations/*")
+        reader.wait_for_url("**/executions/*")
         expect(reader.locator("main")).to_contain_text("Shared invocation", timeout=15000)
         expect(reader.locator("main")).to_contain_text('"configured": true')
         expect(reader.locator("main")).to_contain_text('"amount": 12.5')
@@ -496,7 +496,7 @@ class BrowserTests(unittest.TestCase):
         owner.goto(f"{ORIGIN}/p/{project['id']}/settings/general")
         owner.get_by_role("textbox", name="新しい所有者のプリンシパルID").fill(new_owner["id"])
         owner.get_by_role("button", name="所有者を変更", exact=True).click()
-        owner.wait_for_url("**/requests/*")
+        owner.wait_for_url("**/executions/*")
         change = "Shared project の所有者を Project successor に変更"
         expect(owner.get_by_text(change, exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "transfer-request-ja.png"), full_page=True)
@@ -504,22 +504,19 @@ class BrowserTests(unittest.TestCase):
         expect(successor.get_by_text(change, exact=True)).to_be_visible()
         successor.screenshot(path=str(ARTIFACTS / "transfer-approve-ja.png"), full_page=True)
         successor.get_by_role("button", name="承認", exact=True).click()
-        expect(successor.get_by_text("承認済み", exact=True)).to_be_visible()
+        expect(successor.get_by_text("完了", exact=True).first).to_be_visible()
         successor.goto(variable_path)
         successor.get_by_role("button", name="内容を表示", exact=True).click()
         expect(successor.get_by_role("textbox", name="値", exact=True)).to_have_value("team-variable-value")
 
     def test_サービス接続とプリンシパルを作成して委任する(self):
         page, principal = self.passkey_account()
-        self.executor(page, principal)
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
         self.select(page, "サービス", "AWS")
         self.select(page, "サービス", "GitHub")
         page.get_by_role("textbox", name="名前", exact=True).fill("GitHub test")
         page.get_by_label("Personal access token").fill("test-provider-token")
-        self.select(page, "実行環境", "Browser executor")
         page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "GitHub test")
         expect(page.get_by_role("heading", name="GitHub test", exact=True)).to_be_visible()
         expect(page.get_by_text("GitHub", exact=True)).to_be_visible()
         page.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
@@ -531,6 +528,90 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="相手のプリンシパルID").fill(child_id)
         page.get_by_role("button", name="追加", exact=True).click()
         expect(page.get_by_text("Automation は Browser account の代理", exact=True)).to_be_visible()
+
+    def test_HFの登録を依頼して所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
+        import tempfile
+        sender, _ = self.passkey_account("HF requester")
+        owner, principal = self.passkey_account("Chancellor Rigel")
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "Hugging Faceに接続してください。", "operations": [{"name": "connection.connect", "input": {
+                "ownerId": principal["id"], "methodId": "huggingface:token", "name": "Hugging Face"
+            }}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        owner.goto(asked["url"])
+        owner.wait_for_load_state("networkidle")
+        expect(owner.get_by_text("Chancellor Rigel", exact=True).last).to_be_visible()
+        owner.get_by_label("ユーザーアクセストークン", exact=True).fill("hf_browser_registration")
+        owner.screenshot(path=str(ARTIFACTS / "hf-request-input-ja.png"), full_page=True)
+        print("Rendered HF request: " + owner.locator("main").inner_text(), flush=True)
+        owner.get_by_role("button", name="承認", exact=True).click()
+        expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
+        expect(owner.get_by_text("完了", exact=True)).to_be_visible()
+        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
+        self.assertEqual(completed["state"], "succeeded")
+        connection_id = completed["results"][0]["id"]
+        connection_path = f"{ORIGIN}/p/{principal['id']}/services/{connection_id}"
+        owner.goto(connection_path)
+        expect(owner.get_by_role("heading", name="Hugging Face", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "hf-connection-ja.png"), full_page=True)
+        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(paid.ok, paid.text())
+        created = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "dev-us の AI"}, headers={"origin": ORIGIN})
+        self.assertTrue(created.ok, created.text())
+        agent = created.json()
+        owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
+        owner.get_by_role("textbox", name="名前", exact=True).fill("Agent key")
+        owner.get_by_role("button", name="追加", exact=True).click()
+        token = owner.get_by_role("textbox", name="APIキー", exact=True).input_value()
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
+                capture_output=True, text=True, input=token, env=environment)
+            self.assertEqual(login.returncode, 0, login.stderr)
+            fingerprint = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", """
+                import { readFile } from 'node:fs/promises';
+                import { join } from 'node:path';
+                import { fingerprint } from './shared/authority.ts';
+                const identity = JSON.parse(await readFile(join(process.env.XDG_CONFIG_HOME, 'foundation/identity.json'), 'utf8'));
+                console.log(await fingerprint(identity.identities.find(item => item.principalId === identity.current).binding));
+            """], capture_output=True, text=True, env=environment)
+            self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
+            self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
+            owner.goto(ORIGIN + "/account/trust")
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
+                capture_output=True, text=True, env=environment)
+            self.assertEqual(trusted.returncode, 0, trusted.stderr)
+            owner.goto(connection_path)
+            owner.get_by_role("link", name="使用許可を変更", exact=True).click()
+            expect(owner.locator("main")).to_contain_text("Chancellor Rigel")
+            owner.get_by_role("checkbox", name="dev-us の AI", exact=True).check()
+            owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
+            print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
+            owner.get_by_role("button", name="保存", exact=True).click()
+            owner.wait_for_url("**/executions/*")
+            expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+            connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
+            self.assertEqual(connection["ownerId"], principal["id"])
+            used = subprocess.run(["node", "cli/dist/cli.mjs", "exec", "--inputs", json.dumps([
+                {"name": "HF_TOKEN", "source": {"id": connection_id, "output": "HF_TOKEN"}}
+            ]), "--", "node", "-e", "console.log(process.env.HF_TOKEN === 'hf_browser_registration' ? 'Configured' : 'Missing')"],
+                capture_output=True, text=True, env=environment)
+            self.assertEqual(used.returncode, 0, used.stderr)
+            self.assertEqual(used.stdout, "Configured\n")
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/runs")
+        owner.wait_for_load_state("networkidle")
+        execution_link = owner.locator(f'a[href="/executions/{asked["executionId"]}"]')
+        expect(execution_link).to_have_count(1)
+        expect(execution_link).to_contain_text("サービスに接続する")
+        owner.screenshot(path=str(ARTIFACTS / "unified-execution-history-ja.png"), full_page=True)
+        self.select(owner, "言語", "English")
+        owner.set_viewport_size({"width": 390, "height": 844})
+        owner.wait_for_load_state("networkidle")
+        self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
+        owner.screenshot(path=str(ARTIFACTS / "unified-execution-history-mobile-en.png"), full_page=True)
 
     def test_所有するAIの接続を本人の一覧で検索し持ち主を確認して開く(self):
         page, principal = self.passkey_account("Connection owner")
@@ -545,9 +626,8 @@ class BrowserTests(unittest.TestCase):
         page.goto(f"{ORIGIN}/p/{child['id']}/services/new?method=github:token")
         page.get_by_role("textbox", name="名前", exact=True).fill("AI GitHub connection")
         page.get_by_label("Personal access token").fill("test-provider-token")
-        self.select(page, "実行環境", "Owned AI executor")
         page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AI GitHub connection")
+        expect(page.get_by_role("heading", name="AI GitHub connection", exact=True)).to_be_visible()
         connection_path = page.url
         page.goto(f"{ORIGIN}/p/{principal['id']}/services")
         page.wait_for_load_state("networkidle")
@@ -570,9 +650,8 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="AI GitHub connection", exact=True)).to_be_visible()
         self.assertEqual(page.url, connection_path)
 
-    def test_接続方法を選んで登録し共有分類から再利用して再認証を確認する(self):
+    def test_接続方法を選んで登録し共有分類から再利用してトークンを更新する(self):
         page, principal = self.passkey_account("Connection owner")
-        self.executor(page, principal)
         root = f"{ORIGIN}/p/{principal['id']}"
         methods = {
             "personal": {"name": "Personal access", "kind": "token", "config": {
@@ -599,10 +678,8 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "接続方法", "Project access")
         page.get_by_label("Project key").fill("project-fixture-key")
         page.get_by_role("textbox", name="名前", exact=True).fill("Primary account")
-        self.select(page, "実行環境", "Browser executor")
         page.screenshot(path=str(ARTIFACTS / "connection-method-ja.png"), full_page=True, animations="disabled")
         page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "Primary account")
         expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
         expect(page.get_by_text("外部サービスの権限は未確認", exact=True)).to_be_visible()
         expect(page.get_by_text("接続先の名義は未確認", exact=True)).to_be_visible()
@@ -624,18 +701,16 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="再接続", exact=True).click()
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_be_disabled()
         page.get_by_label("Project key").fill("rotated-fixture-key")
-        self.select(page, "実行環境", "Browser executor")
         page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible(timeout=15000)
         page.wait_for_load_state("networkidle")
-        page.screenshot(path=str(ARTIFACTS / "connection-review-ja.png"), full_page=True, animations="disabled")
+        page.screenshot(path=str(ARTIFACTS / "connection-updated-ja.png"), full_page=True, animations="disabled")
         self.select(page, "言語", "English")
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_load_state("networkidle")
-        expect(page.get_by_role("heading", name="Confirm account and permissions, then save", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.screenshot(path=str(ARTIFACTS / "connection-review-mobile-en.png"), full_page=True, animations="disabled")
-        page.get_by_role("button", name="Save", exact=True).click()
+        page.screenshot(path=str(ARTIFACTS / "connection-updated-mobile-en.png"), full_page=True, animations="disabled")
         page.wait_for_url(connection_path)
         expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible(timeout=15000)
         self.assertEqual(page.url, connection_path)
@@ -1277,7 +1352,7 @@ class BrowserTests(unittest.TestCase):
                 if handoff:
                     body["responderId"] = principal["id"]
                     body["message"] = "OVHcloudへ接続してください。"
-                response = sender.request.post(ORIGIN + "/api/operation-executions", data=body, headers={"origin": ORIGIN})
+                response = sender.request.post(ORIGIN + "/api/executions", data=body, headers={"origin": ORIGIN})
                 self.assertTrue(response.ok, response.text())
                 execution = response.json()
                 receiver.goto(execution["url"])
@@ -1288,7 +1363,7 @@ class BrowserTests(unittest.TestCase):
                 receiver.get_by_label("クライアントシークレット", exact=True).fill("direct-ovh-secret")
                 self.select(receiver, "実行環境", "Browser executor")
                 bodies = []
-                receiver.on("request", lambda request: bodies.append(request.post_data or "") if "/operation-executions/" in request.url else None)
+                receiver.on("request", lambda request: bodies.append(request.post_data or "") if "/executions/" in request.url else None)
                 receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-input-ja.png" if handoff else "operation-ovh-self-input-ja.png")), full_page=True)
                 receiver.get_by_role("button", name="接続する", exact=True).click()
                 expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
@@ -1299,7 +1374,7 @@ class BrowserTests(unittest.TestCase):
                     self.assertTrue(signed_out.ok, signed_out.text())
                     receiver.goto(execution["url"])
                     receiver.wait_for_url("**/signin?returnTo=**")
-                    self.assertEqual(parse_qs(urlparse(receiver.url).query)["returnTo"], ["/operations/" + execution["id"]])
+                    self.assertEqual(parse_qs(urlparse(receiver.url).query)["returnTo"], ["/executions/" + execution["id"]])
                     receiver.get_by_role("button", name="パスキーでログイン", exact=True).click()
                     receiver.wait_for_url(execution["url"])
                 else:
@@ -1307,13 +1382,13 @@ class BrowserTests(unittest.TestCase):
                 expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
                 receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-review-ja.png" if handoff else "operation-ovh-self-review-ja.png")), full_page=True)
                 receiver.get_by_role("button", name="保存", exact=True).click()
-                expect(receiver.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
-                completed = sender.request.get(ORIGIN + "/api/operation-executions/" + execution["id"]).json()
+                expect(receiver.get_by_text("完了", exact=True).first).to_be_visible(timeout=15000)
+                completed = sender.request.get(ORIGIN + "/api/executions/" + execution["id"]).json()
                 self.assertEqual(completed["state"], "succeeded")
                 self.assertEqual(completed["actorId"], principal["id"])
                 receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-complete-ja.png" if handoff else "operation-ovh-self-complete-ja.png")), full_page=True)
                 print("Rendered direct operation: " + receiver.locator("main").inner_text(), flush=True)
-                receiver.get_by_role("link", name="詳細", exact=True).click()
+                receiver.get_by_role("link", name="詳細", exact=True).last.click()
                 receiver.wait_for_url(f"**/p/{principal['id']}/services/{completed['results'][0]['id']}")
                 expect(receiver.get_by_role("heading", name="Direct OVH account", exact=True)).to_be_visible()
 
@@ -1348,17 +1423,20 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
         receiver.screenshot(path=str(ARTIFACTS / "request-ovh-review-ja.png"), full_page=True, animations="disabled")
         receiver.get_by_role("button", name="保存", exact=True).click()
-        expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible(timeout=15000)
+        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible(timeout=15000)
+        expect(receiver.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
         self.assertEqual(receiver.url, asked["url"])
         completed = sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()
-        self.assertEqual(completed["state"], "approved")
-        connection = receiver.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        self.assertEqual(completed["state"], "accepted")
+        execution = sender.request.get(ORIGIN + "/api/executions/" + completed["executionId"]).json()
+        self.assertEqual(execution["state"], "succeeded")
+        connection = receiver.request.get(ORIGIN + "/api/resources/" + execution["results"][0]["id"]).json()
         self.assertEqual(connection["name"], "Requested OVH account")
         self.assertEqual(connection["data"]["methodId"], "ovh:client_credentials_ca")
         token_calls = receiver.request.get(ORIGIN + "/__test/executor/" + environment + "/oauth").json()
         self.assertEqual(token_calls, [{"clientId": "requested-ovh-client", "clientSecret": "requested-ovh-secret", "scope": "all"}])
 
-    def test_依頼画面で接続の確認中に取り消すと依頼と実行を終了する(self):
+    def test_依頼を承諾した後に接続の確認を取り消して実行を終了する(self):
         sender, _ = self.passkey_account("Connection requester")
         receiver, principal = self.passkey_account("Connection approver")
         environment = self.executor(receiver, principal).rsplit("/", 1)[1]
@@ -1376,9 +1454,9 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
         receiver.get_by_role("button", name="キャンセル", exact=True).click()
-        expect(receiver.get_by_text("辞退済み", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
-        self.assertEqual(receiver.request.get(ORIGIN + "/api/operation-executions/" + asked["id"]).json()["state"], "cancelled")
+        expect(receiver.get_by_text("取消済み", exact=True)).to_be_visible(timeout=15000)
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "accepted")
+        self.assertEqual(receiver.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "cancelled")
 
     def test_依頼画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
@@ -1394,8 +1472,8 @@ class BrowserTests(unittest.TestCase):
         receiver.wait_for_load_state("networkidle")
         receiver.get_by_role("textbox", name="値", exact=True).fill("requested-private-value")
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible(timeout=15000)
-        result = sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["results"][0]
+        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible(timeout=15000)
+        result = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["results"][0]
         receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
@@ -1415,7 +1493,7 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_text("1. プリンシパルを作る", exact=True)).to_be_visible()
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
 
@@ -1438,7 +1516,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(current["principal"]["id"], principal["id"])
         self.assertEqual(current["requestId"], sender.url.rsplit("/", 1)[1])
         viewer.get_by_role("button", name="承認", exact=True).click()
-        expect(viewer.get_by_text("承認済み", exact=True)).to_be_visible()
+        expect(viewer.get_by_text("承諾済み", exact=True)).to_be_visible()
         projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Link project", [item["name"] for item in projects])
 

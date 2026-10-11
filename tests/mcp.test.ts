@@ -31,18 +31,18 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
   const listed = await client.listTools();
   assert.equal(listed.tools.find(tool => tool.name === 'foundation_execution_result')!.annotations!.readOnlyHint, true);
   const schema = await call('foundation_schema');
-  assert.ok((schema.paths as string[]).includes('/api/executions'));
-  const path = await call('foundation_schema', { path: '/api/executions' });
+  assert.ok((schema.paths as string[]).includes('/api/runtime/runs'));
+  const path = await call('foundation_schema', { path: '/api/runtime/runs' });
   assert.ok(path.post);
   const metadata = await call('foundation_api', { method: 'GET', path: '/api/session' });
   assert.equal((metadata.body as { principal: { id: string } }).principal.id, f.owner.actor.id);
   const run = await call('foundation_run', { environmentId: f.environment.manifest.id,
     operation: { kind: 'command', command: ['node', '-e', 'process.stdout.write("MCP result")'], inputs: [], timeoutSeconds: 5 } });
-  assert.equal(run.state, 'queued');
+  assert.equal(run.state, 'running');
   await f.executor.tick();
   const result = await call('foundation_execution_result', { id: run.id });
   assert.equal(result.state, 'succeeded');
-  assert.equal(JSON.parse(result.text as string).result.stdout, 'MCP result');
+  assert.equal(JSON.parse(result.text as string)[0].stdout, 'MCP result');
   assert.equal((await call('foundation_resume_execution', { id: run.id })).id, run.id);
   assert.equal(await f.executor.tick(), false);
   const fn = await call('foundation_save_function', { ownerId: f.owner.actor.id, name: 'MCP function',
@@ -52,9 +52,9 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
         inputs: [{ name: 'TOKEN', source: { id: f.resource.id } }], timeoutSeconds: 5 } } });
   const invocation = await call('foundation_invoke_function', { functionId: fn.id, arguments: { message: 'From MCP' } });
   await f.functionExecutor.tick();
-  const functionResult = await call('foundation_invocation_result', { id: (invocation.body as { id: string }).id });
+  const functionResult = await call('foundation_execution_result', { id: (invocation.body as { id: string }).id });
   assert.equal(functionResult.state, 'succeeded');
-  assert.deepEqual(JSON.parse(functionResult.text as string), { message: 'From MCP', configured: true, secret: '[redacted]' });
+  assert.deepEqual(JSON.parse(functionResult.text as string)[0], { message: 'From MCP', configured: true, secret: '[redacted]' });
   const invalid = await client.callTool({ name: 'foundation_api', arguments: { method: 'GET', path: '/api/../auth/signin' } });
   assert.equal(invalid.isError, true);
 });
@@ -84,7 +84,7 @@ test('URL接続のMCPで共有された関数を見つけ、APIトークンだ�
   const invoked = await call('foundation_invoke_function', { functionId: fn.id });
   const id = (invoked.body as { id: string }).id;
   await f.functionExecutor.tick();
-  const result = await call('foundation_invocation_result', { id });
+  const result = await call('foundation_execution_result', { id });
   assert.equal(result.state, 'succeeded');
-  assert.deepEqual(JSON.parse(result.text as string), { configured: true, secret: '[redacted]' });
+  assert.deepEqual(JSON.parse(result.text as string)[0], { configured: true, secret: '[redacted]' });
 });

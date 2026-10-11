@@ -19,12 +19,12 @@ import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
-import { routesExecution } from './routes-execution.js';
+import { routesRuntime } from './routes-runtime.js';
 import { routesProcesses } from './routes-processes.js';
 import { routesFunctions } from './routes-functions.js';
 import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
-import { routesOperations } from './routes-operations.js';
+import { routesExecutions } from './routes-executions.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
@@ -125,12 +125,13 @@ export async function buildApp(context: Context) {
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
       const ownRequest = '/api/requests/' + request.actor.requestId;
-      const ownExecution = '/api/operation-executions/' + request.actor.requestId;
+      const delivery = await context.db.one<{ execution_id: string }>('SELECT execution_id FROM requests WHERE id=$1', [request.actor.requestId]);
+      const ownExecution = delivery ? '/api/executions/' + delivery.execution_id : '';
       if (
         path !== '/api/session' &&
         !path.startsWith('/api/auth/') &&
         path !== ownRequest &&
-        path !== ownExecution && !['/respond', '/decline'].some(suffix => path === ownExecution + suffix) &&
+        !(request.method === 'GET' && path === ownExecution) &&
         !path.startsWith(ownRequest + '/') &&
         !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
         path !== '/oauth/callback'
@@ -460,9 +461,9 @@ export async function buildApp(context: Context) {
       return context.audit.list(request.params.id, request.query.limit, request.query.after);
     },
   );
-  await routesOperations(app, context);
+  await routesExecutions(app, context);
   await routesResources(app, context);
-  await routesExecution(app, context);
+  await routesRuntime(app, context);
   await routesProcesses(app, context);
   await routesFunctions(app, context);
   await routesSSH(app, context);

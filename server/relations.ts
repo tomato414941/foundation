@@ -272,7 +272,7 @@ export class Relations {
         [subjectId, principalId],
       );
       await connection.query(
-        "UPDATE operation_executions SET state='cancelled',response='cancelled',wait=NULL,revision=revision+1 WHERE creator_id=$1 AND responder_id=$2 AND response='pending' AND state IN ('waiting','failed')",
+        "UPDATE executions SET state='cancelled',response='cancelled',wait=NULL,revision=revision+1 WHERE creator_id=$1 AND responder_id=$2 AND response='pending' AND state IN ('waiting','failed')",
         [subjectId, principalId],
       );
       await this.audit.record(principalId, actor.id, 'principal.revoke', subjectId, {}, connection);

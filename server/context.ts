@@ -30,9 +30,10 @@ import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { Operations } from '../shared/custody.js';
-import { userOperations } from './user-operations.js';
-import { OperationExecutions } from './operation-executions.js';
-import { migrateOperationExecutions } from './migrate-operation-executions.js';
+import { builtinDefinitions } from './builtin-definitions.js';
+import { Executions } from './executions.js';
+import { migrateExecutions } from './migrate-executions.js';
+import { migrateRequests } from './migrate-requests.js';
 import { canonical } from '../shared/authority.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
@@ -87,13 +88,19 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     );
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
-  const operations = userOperations({ authorization, principals, relations, resources, catalog, environments,
+  const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
     objects, billing, processes, integrations, custody, delegation, functions, invocations });
-  await migrateOperationExecutions(db, vault);
-  const operationExecutions = new OperationExecutions(db, vault, authorization, operations, audit, principals, config.origin);
-  const requests = new Requests(db, authorization, authentication, config.origin, operationExecutions);
+  await migrateExecutions(db, vault);
+  await migrateRequests(db);
+  const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin);
+  executions.runtime = {
+    get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
+    cancel: (actor, reference) => reference.kind === 'run' ? delegation.cancel(actor, reference.id) : invocations.cancel(actor, reference.id),
+  };
+  await executions.importRuntimeHistory();
+  const requests = new Requests(db, authorization, authentication, config.origin, executions);
   delegation.checkOperationContext = async (actor, intent) => {
-    const context = intent.operationContext!, { plan } = await operationExecutions.input(actor, context.id);
+    const context = intent.operationContext!, { plan } = await executions.input(actor, context.id);
     if (context.index !== plan.index || canonical(context.invocation) !== canonical(plan.invocation) ||
       canonical(intent.approval ?? null) !== canonical(plan.approval ?? null) ||
       (plan.invocation.name === 'connection.connect' && (plan.continuation?.kind !== 'connection' || plan.continuation.id !== context.continuationId)) ||
@@ -108,14 +115,14 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       : null;
     if (task.kind === 'connect' && !proof) return;
     try {
-      await operationExecutions.complete({ id: task.actorId }, execution.id, execution.index,
+      await executions.complete({ id: task.actorId }, execution.id, execution.index,
         proof ? { runId: task.id, resourceId: proof.id } : { runId: task.id });
     } catch (error) {
       if (!(error instanceof DomainError) || error.status >= 500) throw error;
     }
   };
   delegation.checkApproval = async (actor, intent) => {
-    const { plan } = await operationExecutions.input(actor, intent.approval!.id), input = plan.invocation.input;
+    const { plan } = await executions.input(actor, intent.approval!.id), input = plan.invocation.input;
     const kind = plan.invocation.name === 'connection.connect' ? 'connect' : plan.invocation.name === 'run.execute'
       ? (input.operation as { kind: keyof typeof Operations }).kind : plan.invocation.name === 'connection.revoke' ? 'revoke' : null;
     if (!intent.operationContext || intent.operationContext.id !== intent.approval!.id || plan.index !== intent.approval!.index ||
@@ -142,8 +149,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     environments,
     integrations,
     requests,
-    operations,
-    operationExecutions,
+    definitions,
+    executions,
     devices,
     bindings,
     custody,

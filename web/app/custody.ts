@@ -5,7 +5,7 @@ import type { BoundKeys, KeyMaterial } from '../../shared/authority';
 import type { CustodyContent, CustodyPolicy, SealedRun } from '../../shared/custody';
 import { ConnectionClient } from '../../shared/connection-client';
 import { RemoteFlowStore } from '../../shared/operation-continuations';
-import { OperationClient } from '../../shared/operation-client';
+import { ExecutionClient } from '../../shared/execution-client';
 import { FunctionClient } from '../../shared/function-client';
 import { api, ApiFailure, session } from './api';
 import { getIdentity } from './keys';
@@ -57,9 +57,9 @@ export async function connectionClient() {
   const custody = await custodyClient();
   return new ConnectionClient(custody, new RemoteFlowStore(custody));
 }
-export async function operationClient() {
+export async function executionClient() {
   const connections = await connectionClient();
-  return new OperationClient(connections.custody, connections);
+  return new ExecutionClient(connections.custody, connections);
 }
 export async function functionClient(withKeys = false) {
   return new FunctionClient({ json: (path, options, schema) => api(path.slice(4), options, schema) },

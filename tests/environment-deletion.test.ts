@@ -11,7 +11,7 @@ import { DomainError } from '../server/errors.js';
 import { EnvironmentInput } from '../shared/contracts.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { bindKeys, hash, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { makeReceipt, readReceipt, signEnvironment } from '../shared/execution.js';
+import { makeReceipt, readReceipt, signEnvironment } from '../shared/runtime-protocol.js';
 import { Operations, prepareRun } from '../shared/custody.js';
 
 async function setup(t: TestContext) {

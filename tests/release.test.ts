@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { flowFixture } from './flow-support.js';
-import { Task } from '../shared/execution.js';
+import { Task } from '../shared/runtime-protocol.js';
 import { CreatedProcess, ProcessView } from '../shared/process.js';
 import { HttpBroker } from '../runtime/broker.js';
 import { ProcessBroker, ProcessExecutor } from '../runtime/process.js';
@@ -35,10 +35,10 @@ test('更新待機中は新規処理を受け取らず、再開後に待って�
     { kind: 'command', command: ['node', '-e', 'console.log("ready")'], inputs: [], timeoutSeconds: 5 });
   assert.equal((await f.context.delegation.maintenance(executor, environment, true)).paused, true);
   assert.equal(await f.executor.tick(), false);
-  assert.equal((await f.client.api.json('/api/executions/' + task.id, {}, Task)).state, 'queued');
+  assert.equal((await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task)).state, 'queued');
   await f.context.delegation.maintenance(executor, environment, false);
   assert.equal(await f.executor.tick(), true);
-  assert.equal((await f.client.api.json('/api/executions/' + task.id, {}, Task)).state, 'succeeded');
+  assert.equal((await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task)).state, 'succeeded');
 });
 
 test('更新要求の期限が切れたら実行環境が処理を再開する', async t => {
@@ -51,7 +51,7 @@ test('更新要求の期限が切れたら実行環境が処理を再開する',
   const task = await f.client.submit(f.owner.actor.id, environment,
     { kind: 'command', command: ['node', '-e', 'console.log("ready")'], inputs: [], timeoutSeconds: 5 });
   assert.equal(await f.executor.tick(), true);
-  assert.equal((await f.client.api.json('/api/executions/' + task.id, {}, Task)).state, 'succeeded');
+  assert.equal((await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task)).state, 'succeeded');
 });
 
 test('実行環境の運営者だけが更新待機を操作する', async t => {

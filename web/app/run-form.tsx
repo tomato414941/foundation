@@ -8,7 +8,7 @@ import { actionResult, api, ApiFailure, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
-import { operationClient, functionClient } from './custody';
+import { executionClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 async function runResource(params: LoaderFunctionArgs['params']) {
   if (!params.id) return null;
@@ -44,7 +44,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
       }
       const save = jsonField<Record<string, string>>(form, 'save', {});
       const result = await (await functionClient(Object.keys(save).length > 0)).invoke(resource.id, args, { save });
-      return redirect('/invocations/' + result.id);
+      return redirect('/executions/' + result.id);
     } else
       input = {
         kind: 'http',
@@ -56,7 +56,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
           bindings: jsonField(form, 'bindings', []),
         },
       };
-    const client = await operationClient();
+    const client = await executionClient();
     let ownerId = params.owner!;
     try {
       const owner = await api('/principals/' + ownerId, {}, Principal);
@@ -69,7 +69,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
       environmentId: formText(form, 'environmentId'),
       operation: input, save: jsonField(form, 'save', {}) } });
     if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('invalid_input');
-    return redirect('/runs/' + result.task.id);
+    return redirect('/executions/' + result.task.intent.operationContext!.id);
   });
 }
 export default function RunForm() {

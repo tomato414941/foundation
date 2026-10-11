@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { delegatedFixture as setup } from './delegation-support.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { openRun, prepareRun, protect, reveal } from '../shared/custody.js';
-import { makeReceipt, readReceipt } from '../shared/execution.js';
+import { makeReceipt, readReceipt } from '../shared/runtime-protocol.js';
 import { decode, encode } from '../shared/encryption.js';
 
 test('公開鍵を本人の署名に結び付け、同じ鍵の登録を再送する', async () => {

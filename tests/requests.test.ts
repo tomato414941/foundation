@@ -6,7 +6,7 @@ import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
 import { ApprovalRequest } from '../shared/contracts.js';
 import { flowFixture } from './flow-support.js';
-import { OperationExecution } from '../shared/operations.js';
+import { Execution } from '../shared/executions.js';
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する', async (t) => {
   const f = await fixture(),
@@ -49,11 +49,11 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
     payload: { code: pending.code },
   });
   assert.equal(answer.statusCode, 200, answer.body);
-  assert.equal(answer.json().state, 'approved');
+  assert.equal(answer.json().state, 'accepted');
   assert.equal(await context.authorization.holds(device.actor.id, principal(person.actor.id), 'use'), true);
   assert.equal(await context.authorization.can(person.actor, principal(device.actor.id), 'manage_credentials'), true);
   const polled = await app.inject({ url: '/api/requests/' + pending.id, headers });
-  assert.equal(polled.json().state, 'approved');
+  assert.equal(polled.json().state, 'accepted');
 });
 
 test('依頼専用リンクでその依頼を承認し、通常のAPI操作を拒否する', async (t) => {
@@ -110,8 +110,9 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
     payload: { values: [{ '/name': 'New group' }] },
   });
   assert.equal(answer.statusCode, 200, answer.body);
-  assert.equal(answer.json().state, 'approved');
-  assert.equal(answer.json().results[0].name, 'New group');
+  assert.equal(answer.json().state, 'accepted');
+  const execution = await app.inject({ url: '/api/executions/' + asked.json().executionId, headers });
+  assert.equal(execution.json().results[0].name, 'New group');
   const repeated = await app.inject({
     method: 'POST',
     url: '/api/requests/' + asked.json().id + '/redeem',
@@ -145,46 +146,29 @@ test('実行環境の更新待機中と再開後も接続依頼と実行先を�
   }
 });
 
-test('接続の承認後に実行先で認証情報を受け取り、暗号化した接続の作成結果を依頼元へ返す', async t => {
+test('依頼の承諾後にトークンを暗号化して保存し、実行から作成結果を確認する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [{ name: 'connection.connect', input: {
-      ownerId: f.owner.actor.id, methodId: 'github:token', environmentId: f.environment.manifest.id,
-      name: 'Requested connection',
-    } }] } }, ApprovalRequest);
+    operations: [{ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+      methodId: 'github:token', name: 'Requested connection' } }] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  assert.equal(answer.state, 'running');
-  assert.equal(answer.waiting?.invocation.name, 'connection.connect');
-  assert.equal(answer.waiting?.invocation.input.environmentId, f.environment.manifest.id);
-  const started = await f.operations.continue(asked.id, { fields: { token: 'owner-provided-key' } });
-  if (!('flow' in started)) throw new Error('Expected a pending connection.');
-  assert.equal((await f.tick(started.flow.id)).kind, 'review');
-  const connection = await f.accept(started.flow.id);
-  const completed = await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest);
-  assert.equal(completed.state, 'approved');
-  assert.equal((completed.results[0] as { id: string }).id, connection.id);
-  assert.equal((await f.http(connection.id, 'GH_TOKEN'))?.ok, true);
-  assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer owner-provided-key');
-  assert.equal((await f.connections.progress(started.flow.id)).kind, 'connected');
+  assert.equal(answer.state, 'accepted');
+  const started = await f.operations.continue(asked.executionId, { fields: { token: 'owner-provided-key' } });
+  if (!('kind' in started) || started.kind !== 'saved') throw new Error('Expected a saved connection.');
+  const completed = await sender.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(completed.state, 'succeeded');
+  assert.equal((completed.results[0] as { id: string }).id, started.resource.id);
 });
 
-test('承認依頼の取り消しで待機中の接続を止め、その依頼による再開を拒否する', async t => {
+test('依頼を取り消すと入力待ちの実行を取り消し、その実行の再開を拒否する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
-    operations: [{ name: 'connection.connect', input: {
-      ownerId: f.owner.actor.id, methodId: 'render:token', name: 'Requested', environmentId: f.environment.manifest.id,
-    } }] } }, ApprovalRequest);
-  await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  const started = await f.operations.continue(asked.id, { fields: { token: 'provided-key' } });
-  if (!('flow' in started)) throw new Error('Expected a pending connection.');
+    operations: [{ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+      methodId: 'render:token', name: 'Requested' } }] } }, ApprovalRequest);
   assert.equal((await sender.json('/api/requests/' + asked.id + '/cancel', { method: 'POST', body: {} }, ApprovalRequest)).state, 'cancelled');
-  assert.equal((await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution)).state, 'cancelled');
-  const progress = await f.tick(started.flow.id);
-  assert.equal(progress.kind, 'failed');
-  if (progress.kind === 'failed') assert.equal(progress.task.state, 'cancelled');
-  const resumed = await f.operations.continue(asked.id, { fields: { token: 'provided-key' } });
+  const resumed = await f.operations.continue(asked.executionId, { fields: { token: 'provided-key' } });
   assert.equal('state' in resumed && resumed.state, 'cancelled');
 });
 
@@ -202,7 +186,10 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
   const ask = async (operations: unknown[], to?: string) => {
     const response = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: { ...(to ? { to } : {}), operations } });
     assert.equal(response.statusCode, 201, response.body);
-    return ApprovalRequest.parse(response.json()).operations.map((operation) => operation.title);
+    const request = ApprovalRequest.parse(response.json());
+    const execution = await app.inject({ url: '/api/executions/' + request.executionId, headers });
+    assert.equal(execution.statusCode, 200, execution.body);
+    return Execution.parse(execution.json()).operations.map(operation => operation.title);
   };
   assert.deepEqual(await ask([{ name: 'relation.draw', input: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id } }]),
     [{ ja: 'アクセスを許可する', en: 'Allow access' }]);

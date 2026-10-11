@@ -7,7 +7,7 @@ import {
   Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify,
 } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
-import { OperationContext } from './operations.js';
+import { OperationContext } from './executions.js';
 
 export const Origin = z.url().refine(value => {
   const url = new URL(value);

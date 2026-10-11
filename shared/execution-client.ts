@@ -1,16 +1,17 @@
 import { z } from 'zod';
-import { AppSave, ConnectService, FunctionSave, Invocation, OperationExecution, RevokeConnection, RunOperation, ValueSave, WaitingOperation } from './operations.js';
-import type { OperationInvocation, OperationExecutionView } from './operations.js';
+import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Invocation, Execution, RevokeConnection, RunOperation, ValueSave, WaitingOperation } from './executions.js';
+import type { DefinitionCall, ExecutionView } from './executions.js';
 import { CatalogMethod, Id, Json, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import type { CustodyClient } from './client.js';
 import type { ConnectionClient, FlowProgress } from './connection-client.js';
 import { canonical, hash } from './authority.js';
-import { ContentTypes } from './custody.js';
-import { AppMaterial, requiresApp } from './connections.js';
+import { AccessPolicy, ContentTypes, permittedOperations } from './custody.js';
+import { AppMaterial, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from './connections.js';
+import { connectionFields } from './connection-fields.js';
 import { decode, encode } from './encryption.js';
-import { Task, RuntimeOperation } from './execution.js';
-import type { TaskView } from './execution.js';
+import { Task, RuntimeOperation } from './runtime-protocol.js';
+import type { TaskView } from './runtime-protocol.js';
 import type { AwsConnectionRequest } from './aws.js';
 import { AwsConnectionInput } from './aws.js';
 import { SealedContinuationStore } from './operation-continuations.js';
@@ -27,14 +28,14 @@ export interface PrivateOperationInput {
 }
 export const OperationMaterial = z.object({ value: z.string().optional(), clientSecret: z.string().optional(),
   fields: z.record(z.string(), z.string()).optional(), scopes: z.array(z.string()).optional(), aws: AwsConnectionInput.optional() }).strict();
-export type OperationResult = OperationExecutionView | FlowProgress | { kind: 'saved'; resource: ResourceView }
-  | { kind: 'run'; task: TaskView };
+export type ExecutionResultView = ExecutionView | FlowProgress | { kind: 'saved'; resource: ResourceView; executionId: string }
+  | { kind: 'run'; task: TaskView; executionId: string };
 
 // Normal forms, the CLI, and an execution awaiting input use this same keyholder implementation.
-export class OperationClient {
+export class ExecutionClient {
   readonly records: SealedContinuationStore;
   constructor(readonly custody: CustodyClient, readonly connections: ConnectionClient) { this.records = new SealedContinuationStore(custody); }
-  async start(invocation: OperationInvocation) {
+  async start(invocation: DefinitionCall) {
     if (invocation.name === 'run.execute') {
       const run = RunOperation.parse(invocation.input);
       if (!('programId' in run.operation)) {
@@ -46,19 +47,19 @@ export class OperationClient {
           programDigest: await hash(reviewedProgram(operation)) } } };
       }
     }
-    return this.custody.api.json('/api/operation-executions', { method: 'POST', body: { operations: [Invocation.parse(invocation)] } }, OperationExecution);
+    return this.custody.api.json('/api/executions', { method: 'POST', body: { operations: [Invocation.parse(invocation)] } }, Execution);
   }
   async plan(id: string) {
-    return this.custody.api.json('/api/operation-executions/' + Id.parse(id) + '/input', {}, WaitingOperation.extend({ id: Id }));
+    return this.custody.api.json('/api/executions/' + Id.parse(id) + '/input', {}, WaitingOperation.extend({ id: Id }));
   }
   async complete(id: string, index: number, proof: JsonValue) {
-    return this.custody.api.json('/api/operation-executions/' + id + '/complete', { method: 'POST', body: { index, proof } }, OperationExecution);
+    return this.custody.api.json('/api/executions/' + id + '/complete', { method: 'POST', body: { index, proof } }, Execution);
   }
   async configure(id: string, values: Record<string, JsonValue>) {
     const plan = await this.plan(id);
-    return this.custody.api.json('/api/operation-executions/' + id + '/input', { method: 'PATCH', body: { index: plan.index, values } }, OperationExecution);
+    return this.custody.api.json('/api/executions/' + id + '/input', { method: 'PATCH', body: { index: plan.index, values } }, Execution);
   }
-  async execute(invocation: OperationInvocation, material: PrivateOperationInput = {}): Promise<OperationResult> {
+  async execute(invocation: DefinitionCall, material: PrivateOperationInput = {}): Promise<ExecutionResultView> {
     const execution = await this.start(invocation);
     if (!execution.waiting) return execution;
     return this.continue(execution.id, material);
@@ -72,15 +73,26 @@ export class OperationClient {
   private async program(input: Exclude<z.infer<typeof RunOperation>['operation'], { programId: string }>) {
     return RuntimeOperation.parse(input);
   }
-  async continue(id: string, material: PrivateOperationInput = {}): Promise<OperationResult> {
-    const execution = await this.custody.api.json('/api/operation-executions/' + Id.parse(id), {}, OperationExecution);
+  async continue(id: string, material: PrivateOperationInput = {}): Promise<ExecutionResultView> {
+    const execution = await this.custody.api.json('/api/executions/' + Id.parse(id), {}, Execution);
     if (!execution.waiting) return execution;
     const plan = await this.plan(id), { name, input } = plan.invocation;
+    if (name === 'connection.authorize') {
+      const permission = AuthorizeConnection.parse(input), previous = await this.custody.read(permission.connectionId);
+      if (previous.version !== permission.version || previous.content.policy.ownerId !== permission.ownerId ||
+        previous.content.policy.contentType !== ContentTypes.tokenSet) throw new Error('Review the current connection before changing its permissions.');
+      const policy = await this.userPolicy(previous.content.policy, permission.users, permission.expiresAt);
+      const current = await this.custody.api.json('/api/resources/' + permission.connectionId, {}, Resource);
+      const resource = await this.custody.save(current.name, await this.custody.reveal(permission.connectionId), policy,
+        { previous, metadata: previous.content.metadata,
+          commit: async write => Resource.parse((await this.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
+      return { kind: 'saved', resource, executionId: id };
+    }
     if (name === 'function.save') {
       const client = new FunctionClient(this.custody.api, this.custody), authorization = await client.prepare(FunctionSave.parse(input));
       const completed = await this.complete(id, plan.index, Json.parse(authorization));
       await client.remember(authorization);
-      return { kind: 'saved', resource: Resource.parse(completed.results[plan.index]) };
+      return { kind: 'saved', resource: Resource.parse(completed.results[plan.index]), executionId: id };
     }
     if (name === 'variable.save' || name === 'app.save') {
       const destination = name === 'app.save' ? AppSave.parse(input) : ValueSave.parse(input);
@@ -108,21 +120,49 @@ export class OperationClient {
       }
       const resource = await this.custody.save(destination.name, bytes, policy, { previous, metadata,
         commit: async write => Resource.parse((await this.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
-      return { kind: 'saved' as const, resource };
+      return { kind: 'saved' as const, resource, executionId: id };
     }
     if (name === 'connection.connect') {
       if (plan.continuation?.kind === 'connection') return this.connections.progress(plan.continuation.id);
       const connection = ConnectService.parse(input), method = await this.method(connection.methodId);
+      if (method.kind === 'token') {
+        if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
+        const previous = connection.connectionId ? await this.custody.read(connection.connectionId) : undefined;
+        if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
+          throw new Error('Choose a connection belonging to this owner.');
+        const old = previous ? ConnectionMaterial.parse(JSON.parse(decode(await this.custody.reveal(connection.connectionId!)))) : null;
+        const fields = connectionFields(method.config.fields, material.fields ?? {}, old?.method.kind === 'token' ? old.fields : {});
+        const state = ConnectionMaterial.parse({ format: 2, methodId: connection.methodId, method,
+          generation: crypto.randomUUID(), appId: null, appGeneration: null, fields });
+        let policy = await this.custody.policy(connection.ownerId, ContentTypes.tokenSet, [], { previous: previous?.content.policy });
+        if (connection.users) policy = await this.userPolicy(policy, connection.users, undefined, false);
+        else if (previous) policy = previous.content.policy;
+        const resource = await this.custody.save(connection.name ?? method.name, encode(canonical(state)), policy,
+          { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
+            commit: async write => {
+              const completed = await this.complete(id, plan.index, write as unknown as JsonValue);
+              const result = completed.results[plan.index] as { id: string };
+              return this.custody.api.json('/api/resources/' + result.id, {}, Resource);
+            } });
+        return { kind: 'saved', resource, executionId: id };
+      }
       if (!connection.environmentId) throw new Error('Choose an execution environment before connecting.');
       let appId = connection.appId;
       if (requiresApp(method) && !appId) {
         if (!connection.clientId) throw new Error('Enter the application client ID.');
-        const saved = await this.execute({ name: 'app.save', input: { ownerId: connection.ownerId,
-          name: (connection.name ?? method.name).slice(0, 185) + ' application', methodId: connection.methodId,
-          clientId: connection.clientId, environmentIds: [connection.environmentId] } },
-          { clientSecret: material.clientSecret, fields: material.fields });
-        if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Save the application before connecting.');
-        appId = saved.resource.id;
+        const app = AppMaterial.parse({ format: 1, methodId: connection.methodId, clientId: connection.clientId,
+          generation: crypto.randomUUID(), fields: material.fields ?? {},
+          ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}) });
+        const environment = await this.custody.environment(connection.environmentId);
+        const policy = await this.custody.policy(connection.ownerId, ContentTypes.clientCredential, [environment]);
+        const saved = await this.custody.save((connection.name ?? method.name).slice(0, 185) + ' application', encode(canonical(app)), policy,
+          { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation },
+            commit: async write => {
+              const prepared = await this.custody.api.json('/api/executions/' + id + '/preparation', { method: 'POST',
+                body: { index: plan.index, proof: write } }, Execution);
+              return this.custody.api.json('/api/resources/' + prepared.operations[plan.index]!.input.appId, {}, Resource);
+            } });
+        appId = saved.id;
       }
       return this.connections.start({ ownerId: connection.ownerId, environmentId: connection.environmentId,
         name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
@@ -133,7 +173,7 @@ export class OperationClient {
     if (name === 'run.execute' || name === 'connection.revoke') {
       if (plan.continuation?.kind === 'run') {
         let task: TaskView;
-        try { task = await this.custody.api.json('/api/executions/' + plan.continuation.id, {}, Task); }
+        try { task = await this.custody.api.json('/api/runtime/runs/' + plan.continuation.id, {}, Task); }
         catch (error) {
           if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
           const request = await this.records.get(plan.continuation.id, DelegatedRun);
@@ -141,7 +181,7 @@ export class OperationClient {
           task = await this.custody.submitPrepared(request);
         }
         if (!['queued', 'running'].includes(task.state)) await this.complete(id, plan.index, { runId: task.id });
-        return { kind: 'run' as const, task };
+        return { kind: 'run' as const, task, executionId: id };
       }
       const revocation = name === 'connection.revoke' ? RevokeConnection.parse(input) : null;
       const run = revocation ? { ...revocation, operation: { kind: 'revoke' as const, input: { action: 'revoke', id: revocation.connectionId } }, save: {} } : RunOperation.parse(input);
@@ -159,11 +199,22 @@ export class OperationClient {
         ...(revocation ? { sourceIds: [revocation.connectionId] } : {}),
         operationContext: { id, index: plan.index, invocation: plan.invocation } });
       await this.records.put(prepared.intent.id, prepared);
-      await this.custody.api.json('/api/operation-executions/' + id + '/continuation', { method: 'PUT',
-        body: { index: plan.index, continuation: { kind: 'run', id: prepared.intent.id } } }, OperationExecution);
+      await this.custody.api.json('/api/executions/' + id + '/continuation', { method: 'PUT',
+        body: { index: plan.index, continuation: { kind: 'run', id: prepared.intent.id } } }, Execution);
       const task = await this.custody.submitPrepared(prepared);
-      return { kind: 'run' as const, task };
+      return { kind: 'run' as const, task, executionId: id };
     }
     throw new Error('Choose a supported keyholder operation.');
+  }
+  private async userPolicy(policy: z.infer<typeof AccessPolicy>, users: string[], expiresAt?: string, advance = true) {
+    const expiry = expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
+    const bindings = await Promise.all([...new Set(users)].map(async id => {
+      const { binding } = await this.custody.inspectIdentity(id);
+      await this.custody.trusted(binding);
+      return binding;
+    }));
+    return AccessPolicy.parse({ ...policy, revision: policy.revision + (advance ? 1 : 0),
+      grants: [...policy.grants.filter(grant => !('actor' in grant)), ...bindings.map(binding => ({ actor: binding, executor: binding,
+        operations: [...permittedOperations(policy.contentType)], origins: [], functionDigests: [], callerProgram: true, expiresAt: expiry }))] });
   }
 }

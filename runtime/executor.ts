@@ -8,8 +8,8 @@ import {
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import {
   ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
-} from '../shared/execution.js';
-import type { ExecutableOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
+} from '../shared/runtime-protocol.js';
+import type { ExecutableOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { functionProgram } from '../shared/functions.js';
 import { authorizeOperationContext } from '../shared/operation-authorization.js';
 import { atPointer, pointerParts, redact, setPointer } from '../shared/values.js';

@@ -7,7 +7,7 @@ import { ApprovalRequest, EnvironmentInput } from '../shared/contracts.js';
 import { buildApp } from '../server/app.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { signEnvironment } from '../shared/execution.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 import { Operations } from '../shared/custody.js';
 import { CommandProcess } from '../runtime/command.js';
 import { delegatedFixture } from './delegation-support.js';
@@ -143,7 +143,7 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
       contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } }] } });
   assert.equal(asked.statusCode, 201, asked.body);
   const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
-  assert.equal(answered.statusCode, 200, answered.body); assert.equal(ApprovalRequest.parse(answered.json()).state, 'approved');
+  assert.equal(answered.statusCode, 200, answered.body); assert.equal(ApprovalRequest.parse(answered.json()).state, 'accepted');
   const content = await app.inject({ url: '/api/resources/' + file.id + '/content', headers });
   assert.equal(content.body, 'two');
   const stale = await app.inject({ method: 'PUT', url: '/api/resources/' + file.id + '/content?version=' + file.version,

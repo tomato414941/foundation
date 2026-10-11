@@ -10,7 +10,7 @@ import { EnvironmentInput } from '../shared/contracts.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { SSHView, sshKeyBytes } from '../shared/ssh.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { signEnvironment } from '../shared/execution.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 import { Operations } from '../shared/custody.js';
 
 function publicKey() {

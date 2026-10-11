@@ -6,7 +6,7 @@ import { MemoryJournal } from './delegation-support.js';
 import { CustodyClient } from '../shared/client.js';
 import { FunctionClient } from '../shared/function-client.js';
 import { Operations } from '../shared/custody.js';
-import { signEnvironment } from '../shared/execution.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 import { JournalTrust } from '../runtime/trust.js';
 
 test('本番確認用の関数履歴とプリンシパルを片付け、利用者の関数履歴を保つ', async t => {
@@ -27,13 +27,13 @@ test('本番確認用の関数履歴とプリンシパルを片付け、利用�
   const functions = new FunctionClient(api, custody);
   const temporary = await functions.save({ ownerId: owner.actor.id, name: 'Verification function', definition: definition(environment.manifest.id) });
   const verification = await functions.invoke(temporary.id);
-  assert.equal((await functions.result(verification.id)).state, 'queued');
+  assert.equal((await functions.result(verification.id)).state, 'running');
   await functions.cancel(verification.id);
   await functions.remove(temporary.id);
   await f.context.resources.delete(owner.actor, await f.context.resources.get(environment.manifest.id));
   await cleanupIdentities(f.context.db, [owner.actor.id, executor.actor.id]);
   await assert.rejects(f.context.principals.get(owner.actor.id), { code: 'not_found' });
   await assert.rejects(f.context.principals.get(executor.actor.id), { code: 'not_found' });
-  assert.equal((await f.functions.result(history.id)).state, 'queued');
+  assert.equal((await f.functions.result(history.id)).state, 'running');
   assert.equal((await f.functions.get(existing.id)).name, 'User function');
 });

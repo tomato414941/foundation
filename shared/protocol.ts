@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Id, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, Signature, SignedBinding } from './authority.js';
 import { AccessPolicy, DelegatedRun, ProtectedContent } from './custody.js';
-import { ExecutionReceipt, SignedEnvironment, Task } from './execution.js';
+import { ExecutionReceipt, SignedEnvironment, Task } from './runtime-protocol.js';
 import { ConnectionLabels } from './connections.js';
 
 export const BoundRecipient = SignedBinding.extend({ name: Name });

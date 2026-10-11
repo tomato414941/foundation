@@ -26,7 +26,7 @@ import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
-import { operationClient } from '../custody';
+import { executionClient } from '../custody';
 import { availableEnvironments, EnvironmentChoice } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
@@ -59,10 +59,10 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       return { ok: true };
     }
     if (form.has('revoke')) {
-      const result = await (await operationClient()).execute({ name: 'connection.revoke',
+      const result = await (await executionClient()).execute({ name: 'connection.revoke',
         input: { ownerId: params.owner, environmentId: formText(form, 'environmentId'), connectionId: params.id } });
       if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('execution_required');
-      return redirect('/runs/' + result.task.id);
+      return redirect('/executions/' + result.task.intent.operationContext!.id);
     }
     await api(`${params.section === 'functions' ? '/functions' : '/resources'}/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
@@ -127,6 +127,9 @@ export default function ResourceDetail() {
               <Link to="edit">{t('edit')}</Link>
             </Button>
           )}
+          {can('update') && item.kind === 'connection' && <Button variant="outline" asChild>
+            <Link to="access">{t('authorizeConnection')}</Link>
+          </Button>}
           {can('share') && (
             <Button variant="ghost" asChild>
               <Link to="share">{t('share')}</Link>

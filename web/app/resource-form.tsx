@@ -14,7 +14,7 @@ import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable } from './keys';
-import { operationClient, custodyClient, functionClient } from './custody';
+import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
@@ -22,7 +22,7 @@ import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
-import { connectionSubmission } from './operation-form';
+import { connectionSubmission } from './execution-form';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -153,7 +153,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const existing = params.id ? await api((kind === 'function' ? '/functions/' : '/resources/') + params.id, {}, Resource) : null;
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
-      const client = await operationClient();
+      const client = await executionClient();
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
       const methodId = selected.id;
@@ -165,6 +165,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         name: name || existing?.name || selected.name,
         ...(connectionId ? { connectionId } : {}) }, form, selected, previous);
       const progress = await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
+      if ('kind' in progress && progress.kind === 'saved') return redirect(resourcePath(progress.resource));
       if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);
     }
@@ -181,7 +182,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     }
     let body: Record<string, unknown> = { kind, name };
     if (kind === 'variable' || kind === 'app') {
-      const client = await operationClient();
+      const client = await executionClient();
       const file = form.get('file');
       const value = file instanceof File && file.name ? new Uint8Array(await file.arrayBuffer()) : String(form.get('value') ?? '');
       const result = await client.execute({ name: kind === 'app' ? 'app.save' : 'variable.save', input: {
@@ -313,9 +314,9 @@ export default function ResourceForm() {
   const [fileName, setFileName] = useState('');
   const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
   const executor = data.environments.find((item) => item.id === environmentId);
-  const executorChoice = isProtected(data.kind) && (
+  const executorChoice = isProtected(data.kind) && !(data.kind === 'connection' && method?.kind === 'token') && (
     <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
-      selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} />
+      selected={data.kind === 'connection' ? [environmentId] : data.environmentId ? [data.environmentId] : data.selectedExecutors} />
   );
   const matchingApps = data.apps.filter(
     (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
@@ -497,7 +498,7 @@ export default function ResourceForm() {
                   </Panel>
                 )}
                 {executorChoice}
-                <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
+                <ConnectionPreparation method={data.kind === 'connection' && method?.kind !== 'token' ? method : undefined}
                   initial={data.connection} newConnection={data.kind === 'connection' && !existing}
                   executor={executor} />
                 {data.kind === 'environment' && (

@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CatalogMethod, Principal, Resource, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
-import type { OperationInvocation } from '../../shared/operations';
-import type { PrivateOperationInput } from '../../shared/operation-client';
+import type { DefinitionCall } from '../../shared/executions';
+import type { PrivateOperationInput } from '../../shared/execution-client';
 import type { ConnectionState } from '../../shared/connections';
 import { api, formText, ApiFailure } from './api';
 import { availableEnvironments, EnvironmentChoice } from './environments';
@@ -12,11 +12,10 @@ import { InputField, TextareaField } from './form-fields';
 import { Detail, JsonView } from './components';
 import { connectionMethodName } from './connection-method-labels';
 
-export async function loadOperationForm(invocation: OperationInvocation) {
+export async function loadExecutionForm(invocation: DefinitionCall) {
   const ownerId = String(invocation.input.ownerId);
   const usesMethod = invocation.name === 'connection.connect' || invocation.name === 'app.save';
-  const [environments, methods, owned, shared, owner] = await Promise.all([
-    availableEnvironments(ownerId),
+  const [methods, owned, shared, owner] = await Promise.all([
     usesMethod ? api('/connection-methods', {}, listOf(CatalogMethod)) : { items: [] },
     invocation.name === 'connection.connect' ? api('/principals/' + ownerId + '/resources?kind=app&limit=200', {}, listOf(Resource))
       .catch(error => { if (error instanceof ApiFailure && error.status === 403) return { items: [] }; throw error; }) : { items: [] },
@@ -27,22 +26,23 @@ export async function loadOperationForm(invocation: OperationInvocation) {
     }),
   ]);
   const method = methods.items.find(item => item.id === invocation.input.methodId);
+  const environments = method?.kind === 'token' || invocation.name === 'connection.authorize' ? [] : await availableEnvironments(ownerId);
   const apps = [...new Map([...owned.items, ...shared.items].filter(item => item.kind === 'app' &&
     item.data.methodId === invocation.input.methodId && item.permissions.includes('use')).map(item => [item.id, item])).values()];
   return { invocation, environments, method, apps, owner };
 }
-export type OperationFormData = Awaited<ReturnType<typeof loadOperationForm>>;
+export type ExecutionFormData = Awaited<ReturnType<typeof loadExecutionForm>>;
 
-export function connectionSubmission(input: OperationInvocation['input'], form: FormData, method: CatalogConnectionMethod, previous?: ConnectionState) {
+export function connectionSubmission(input: DefinitionCall['input'], form: FormData, method: CatalogConnectionMethod, previous?: ConnectionState) {
   const settings = connectionSettings(method, form, previous);
   const appId = formText(form, 'appId');
   return { input: { ...input, name: input.name ?? (formText(form, 'name') || method.name),
-    environmentId: input.environmentId ?? formText(form, 'environmentId'),
+    ...(method.kind !== 'token' ? { environmentId: input.environmentId ?? formText(form, 'environmentId') } : {}),
     ...(input.appId || (appId && appId !== 'new') ? { appId: input.appId ?? appId } : {}),
     ...(input.clientId || formText(form, 'clientId') ? { clientId: input.clientId ?? formText(form, 'clientId') } : {}) },
     material: { ...settings, clientSecret: formText(form, 'clientSecret') || undefined } };
 }
-export function operationSubmission(data: OperationFormData, form: FormData): { input: OperationInvocation['input']; material: PrivateOperationInput } {
+export function executionSubmission(data: ExecutionFormData, form: FormData): { input: DefinitionCall['input']; material: PrivateOperationInput } {
   const { name, input } = data.invocation;
   if (name === 'connection.connect') {
     if (!data.method) throw new ApiFailure('invalid_input');
@@ -59,7 +59,7 @@ export function operationSubmission(data: OperationFormData, form: FormData): { 
   return { input: { ...input, environmentId: input.environmentId ?? formText(form, 'environmentId') }, material: {} };
 }
 
-export function OperationInputFields({ data }: { data: OperationFormData }) {
+export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
   const { t } = useTranslation(), { name, input } = data.invocation;
   const definition = name === 'function.save' ? input.definition as { environmentId: string } : null;
   const [environmentId, setEnvironmentId] = useState(String(input.environmentId ?? definition?.environmentId ?? ''));
@@ -81,13 +81,13 @@ export function OperationInputFields({ data }: { data: OperationFormData }) {
         existing={existing} appMaterial={null} apps={data.apps} selectedAppId={typeof input.appId === 'string' ? input.appId : undefined}
         clientId={typeof input.clientId === 'string' && input.clientId ? input.clientId : undefined} />
     </>}
-    {Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
+    {data.method?.kind !== 'token' && (Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
       {input.environmentIds.map(id => data.environments.find(item => item.id === id)?.name ?? String(id)).join(', ') || '—'}
     </Detail> : fixedEnvironment ? <Detail label={t('executionDestination')}>
       {data.environments.find(item => item.id === fixedEnvironment)?.name ?? fixedEnvironment}
       <input type="hidden" name="environmentId" value={fixedEnvironment} />
     </Detail> : <EnvironmentChoice items={data.environments} multiple={name === 'variable.save' || name === 'app.save'}
-      selected={Array.isArray(input.environmentIds) ? input.environmentIds.map(String) : []} onChange={setEnvironmentId} />}
-    <ConnectionPreparation method={name === 'connection.connect' ? data.method : undefined} newConnection={!input.connectionId} executor={executor} />
+      selected={Array.isArray(input.environmentIds) ? input.environmentIds.map(String) : []} onChange={setEnvironmentId} />)}
+    <ConnectionPreparation method={name === 'connection.connect' && data.method?.kind !== 'token' ? data.method : undefined} newConnection={!input.connectionId} executor={executor} />
   </div>;
 }

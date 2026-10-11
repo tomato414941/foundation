@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
 import { Id } from '../shared/contracts.js';
 import type { CustodyContent } from '../shared/custody.js';
-import type { SignedReceipt } from '../shared/execution.js';
+import type { SignedReceipt } from '../shared/runtime-protocol.js';
 import { ClaimedExecution, OAuthRelay, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
 import type { ExecutionBroker } from './executor.js';
 import type { ConnectionBroker } from './connections.js';
@@ -24,11 +24,11 @@ export class HttpBroker implements ExecutionBroker {
   }
   claim(id: string) { return this.api.json('/api/environments/' + id + '/claim', { method: 'POST', body: {} }, ClaimedExecution); }
   renew(id: string, lease: string) {
-    return this.api.json('/api/executions/' + id + '/renew', { method: 'POST', body: { lease } }, z.object({ active: z.boolean() }));
+    return this.api.json('/api/runtime/runs/' + id + '/renew', { method: 'POST', body: { lease } }, z.object({ active: z.boolean() }));
   }
-  dispatch(id: string, lease: string) { return this.api.json('/api/executions/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
+  dispatch(id: string, lease: string) { return this.api.json('/api/runtime/runs/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
   finish(lease: string, receipt: SignedReceipt) {
-    return this.api.json('/api/executions/' + receipt.id + '/finish', { method: 'POST', body: { lease, receipt } }, Task);
+    return this.api.json('/api/runtime/runs/' + receipt.id + '/finish', { method: 'POST', body: { lease, receipt } }, Task);
   }
   capture(name: string, content: CustodyContent, labels?: ConnectionLabelValues) {
     return this.api.json('/api/executor/outputs', { method: 'POST', body: { name, content, ...(labels ? { labels } : {}) } },

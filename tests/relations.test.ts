@@ -136,17 +136,17 @@ test('片方の側しか持たない人が支払元の線を引くと、もう�
   const line = { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id };
   const asked = await call(owner, '/api/relations', line);
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.deepEqual(asked.json().responder, { id: sponsor.actor.id, name: 'Sponsor' });
-  assert.deepEqual(asked.json().proposal, { kind: 'line', subject: { id: sponsor.actor.id, name: 'Sponsor' },
+  assert.deepEqual((await call(owner, '/api/requests/' + asked.json().requests[0], undefined, 'GET')).json().to, { id: sponsor.actor.id, name: 'Sponsor' });
+  assert.deepEqual(asked.json().approval.proposal, { kind: 'line', subject: { id: sponsor.actor.id, name: 'Sponsor' },
     relation: 'payer', object: { id: bot.id, name: 'Bot' } });
   assert.equal(await f.billing.payer(bot.id), owner.actor.id);
-  assert.equal((await call(sponsor, '/api/requests/' + asked.json().id + '/approve')).json().state, 'approved');
+  assert.equal((await call(sponsor, '/api/requests/' + asked.json().requests[0] + '/approve')).json().state, 'accepted');
   assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
   await f.relations.erase(owner.actor, line);
   const offered = await call(sponsor, '/api/relations', line);
   assert.equal(offered.statusCode, 202, offered.body);
-  assert.deepEqual(offered.json().responder, { id: bot.id, name: 'Bot' });
-  assert.equal((await call(owner, '/api/requests/' + offered.json().id + '/approve')).json().state, 'approved');
+  assert.deepEqual((await call(sponsor, '/api/requests/' + offered.json().requests[0], undefined, 'GET')).json().to, { id: bot.id, name: 'Bot' });
+  assert.equal((await call(owner, '/api/requests/' + offered.json().requests[0] + '/approve')).json().state, 'accepted');
   assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
 });
 
@@ -158,8 +158,8 @@ test('共有を管理するだけの人は、相手を支払元にできず、�
   const bot = await f.principals.create('Helper bot', null, helper.actor.id);
   const asked = await call(helper, '/api/relations', { subjectId: owner.actor.id, relation: 'payer', objectId: bot.id });
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.equal(asked.json().responder.id, owner.actor.id);
-  assert.equal((await call(owner, '/api/requests/' + asked.json().id + '/decline')).json().state, 'declined');
+  assert.equal((await call(helper, '/api/requests/' + asked.json().requests[0], undefined, 'GET')).json().to.id, owner.actor.id);
+  assert.equal((await call(owner, '/api/requests/' + asked.json().requests[0] + '/decline')).json().state, 'declined');
   assert.equal(await f.billing.payer(bot.id), helper.actor.id);
 });
 
@@ -220,15 +220,15 @@ test('持ち主を移すと、受け取る側でも作れる人ならその場�
   await assert.rejects(f.relations.transfer(other.actor, file.id, other.actor.id), { code: 'forbidden' });
   const asked = await call(owner, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.deepEqual(asked.json().proposal, { kind: 'transfer', item: { id: file.id, name: 'report.txt' },
+  assert.deepEqual(asked.json().approval.proposal, { kind: 'transfer', item: { id: file.id, name: 'report.txt' },
     to: { id: other.actor.id, name: 'Other' } });
   assert.equal((await f.resources.get(file.id)).owner_id, team.id);
-  assert.equal((await call(other, '/api/requests/' + asked.json().id + '/approve')).json().state, 'approved');
+  assert.equal((await call(other, '/api/requests/' + asked.json().requests[0] + '/approve')).json().state, 'accepted');
   assert.equal((await f.resources.get(file.id)).owner_id, other.actor.id);
   const passed = await call(owner, '/api/principals/' + bot.id + '/transfer', { to: other.actor.id });
   assert.equal(passed.statusCode, 202, passed.body);
   assert.equal((await f.principals.get(bot.id)).owner_id, owner.actor.id);
-  assert.equal((await call(other, '/api/requests/' + passed.json().id + '/approve')).json().state, 'approved');
+  assert.equal((await call(other, '/api/requests/' + passed.json().requests[0] + '/approve')).json().state, 'accepted');
   assert.equal((await f.principals.get(bot.id)).owner_id, other.actor.id);
 });
 
@@ -242,7 +242,7 @@ test('承認までに頼んだ人が譲る権限を失っていると、承認�
   const asked = await call(helper, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
   assert.equal(asked.statusCode, 202, asked.body);
   await f.relations.erase(owner.actor, role);
-  assert.equal((await call(other, '/api/requests/' + asked.json().id + '/approve')).statusCode, 403);
+  assert.equal((await call(other, '/api/requests/' + asked.json().requests[0] + '/approve')).statusCode, 403);
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });
 
@@ -255,7 +255,7 @@ test('開始した鍵が取り消されると、その権限による所有者�
   const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
   assert.equal(asked.statusCode, 202, asked.body);
   await f.authentication.removeCredential(owner.actor, owner.actor.id, second.credential.id);
-  assert.equal((await call(other, '/api/operation-executions/' + asked.json().id + '/respond')).statusCode, 401);
+  assert.equal((await call(other, '/api/executions/' + asked.json().id + '/respond')).statusCode, 401);
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });
 
@@ -271,10 +271,10 @@ test('鍵で守られた項目は、新しい持ち主向けに封をした内�
     authorities: [other.binding], readers: [other.binding] }, 2, owner.binding, owner.keys, undefined, first);
   const asked = await call(owner, '/api/resources/' + row.id + '/custody', { name: row.name, version: row.version, content: passed }, 'PUT');
   assert.equal(asked.statusCode, 202, asked.body);
-  assert.deepEqual(asked.json().proposal, { kind: 'transfer', item: { id: row.id, name: 'Token' }, to: { id: other.actor.id, name: 'Other' } });
+  assert.deepEqual(asked.json().approval.proposal, { kind: 'transfer', item: { id: row.id, name: 'Token' }, to: { id: other.actor.id, name: 'Other' } });
   assert.equal((await f.resources.get(row.id)).owner_id, owner.actor.id);
-  const approvedResponse = await call(other, '/api/requests/' + asked.json().id + '/approve');
-  assert.equal(approvedResponse.json().state, 'approved', approvedResponse.body);
+  const approvedResponse = await call(other, '/api/requests/' + asked.json().requests[0] + '/approve');
+  assert.equal(approvedResponse.json().state, 'accepted', approvedResponse.body);
   assert.equal((await f.resources.get(row.id)).owner_id, other.actor.id);
   assert.equal(decode(await reveal((await f.custody.read(other.actor, row.id)).content, other.binding, other.keys.encryption)), 'kept value');
 });

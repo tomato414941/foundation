@@ -4,15 +4,15 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
-import { ExecutionInput, ExecutionResponse, Invocation, OperationDescription, OperationExecution, WaitingOperation } from '../shared/operations.js';
+import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution, WaitingOperation } from '../shared/executions.js';
 import { ContinuationEnvelope, continuationContext } from '../shared/operation-continuations.js';
 import { verify } from '../shared/authority.js';
 import { base64url, encode } from '../shared/encryption.js';
 
-export async function routesOperations(app: ApiApp, context: Context) {
-  const { operations, operationExecutions: executions } = context;
-  for (const endpoint of operations.endpoints) {
-    app.route({ method: endpoint.method, url: endpoint.path, schema: { ...endpoint.schema, response: Object.assign({} as Record<number, z.ZodType>, endpoint.schema.response, { 202: endpoint.schema.response?.[202] ? z.union([endpoint.schema.response[202], OperationExecution]) : OperationExecution }) }, bodyLimit: endpoint.bodyLimit,
+export async function routesExecutions(app: ApiApp, context: Context) {
+  const { definitions, executions } = context;
+  for (const endpoint of definitions.endpoints) {
+    app.route({ method: endpoint.method, url: endpoint.path, schema: { ...endpoint.schema, response: Object.assign({} as Record<number, z.ZodType>, endpoint.schema.response, { 202: endpoint.schema.response?.[202] ? z.union([endpoint.schema.response[202], Execution]) : Execution }) }, bodyLimit: endpoint.bodyLimit,
       handler: async (request, reply) => {
         const who = actor(request), input = C.JsonObject.parse(endpoint.input(
           request.params as Record<string, string>, request.body, request.query));
@@ -24,51 +24,61 @@ export async function routesOperations(app: ApiApp, context: Context) {
       },
     });
   }
-  app.get('/api/operations', { schema: { response: { 200: C.listOf(OperationDescription) } } }, request => {
+  app.get('/api/definitions', { schema: { response: { 200: C.listOf(DefinitionDescription) } } }, request => {
     actor(request);
-    return { items: [...operations.definitions.values()].map(definition => {
+    return { items: [...definitions.definitions.values()].map(definition => {
       const [ja, en] = typeof definition.title === 'function' ? definition.title({}) : definition.title;
       return { name: definition.name, title: { ja, en }, execution: definition.execution, configure: [...definition.configure],
         input: C.JsonObject.parse(z.toJSONSchema(definition.schema)) };
     }), next: null };
   });
-  app.post('/api/operations/:name', { schema: { params: Invocation.pick({ name: true }), body: C.JsonObject,
-    response: { 200: C.Json, 202: OperationExecution } } }, async (request, reply) => {
+  app.post('/api/definitions/:name/executions', { schema: { params: Invocation.pick({ name: true }), body: C.JsonObject,
+    response: { 201: Execution } } }, async (request, reply) => {
     const who = actor(request), execution = await executions.start(who, [{ name: request.params.name, input: request.body }]);
-    if (execution.wait) return reply.code(202).send(execution);
-    return execution.results[0];
+    return reply.code(201).send(execution);
   });
-  app.post('/api/operation-executions', { schema: { body: ExecutionInput, response: { 201: OperationExecution } } },
+  app.post('/api/executions', { schema: { body: ExecutionInput, response: { 201: Execution } } },
     async (request, reply) => reply.code(201).send(await executions.create(actor(request), request.body)));
-  app.get('/api/operation-executions', { schema: { querystring: C.PageQuery, response: { 200: C.listOf(OperationExecution) } } },
+  app.get('/api/executions', { schema: { querystring: C.PageQuery, response: { 200: C.listOf(Execution) } } },
     request => executions.list(actor(request), request.query.limit, request.query.after));
-  app.get('/api/operation-executions/:id', { schema: { params: C.IdParams, response: { 200: OperationExecution } } },
+  app.get('/api/principals/:id/executions', { schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(Execution) } } },
+    request => executions.list(actor(request), request.query.limit, request.query.after, request.params.id));
+  app.post('/api/functions/:id/executions', { schema: { params: C.IdParams,
+    body: (await import('../shared/function-api.js')).InvocationInput, response: { 201: Execution } } },
+    async (request, reply) => reply.code(201).send(await executions.create(actor(request), ExecutionInput.parse({ id: request.body.id,
+      operations: [{ name: 'function.invoke', input: { functionId: request.params.id, ...request.body } }] }))));
+  app.get('/api/executions/:id', { schema: { params: C.IdParams, response: { 200: Execution } } },
     request => executions.get(request.actor, request.params.id));
-  app.post('/api/operation-executions/:id/respond', { schema: { params: C.IdParams, body: ExecutionResponse,
-    response: { 200: OperationExecution } } }, request => executions.respond(actor(request), request.params.id,
+  app.post('/api/executions/:id/respond', { schema: { params: C.IdParams, body: ExecutionResponse,
+    response: { 200: Execution } } }, request => executions.respond(actor(request), request.params.id,
       request.body.values, request.body.code, request.body.configuration));
-  app.post('/api/operation-executions/:id/decline', { schema: { params: C.IdParams, body: z.object({}).strict(),
-    response: { 200: OperationExecution } } }, request => executions.cancel(actor(request), request.params.id, true));
-  app.post('/api/operation-executions/:id/cancel', { schema: { params: C.IdParams, body: z.object({}).strict(),
-    response: { 200: OperationExecution } } }, async request => {
+  app.post('/api/executions/:id/decline', { schema: { params: C.IdParams, body: z.object({}).strict(),
+    response: { 200: Execution } } }, request => executions.cancel(actor(request), request.params.id, true));
+  app.post('/api/executions/:id/cancel', { schema: { params: C.IdParams, body: z.object({}).strict(),
+    response: { 200: Execution } } }, async request => {
     const who = actor(request), id = request.params.id;
     return executions.cancel(who, id);
   });
-  app.get('/api/operation-executions/:id/input', { schema: { params: C.IdParams,
+  app.post('/api/executions/:id/resume', { schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: Execution } } },
+    request => executions.retry(actor(request), request.params.id));
+  app.get('/api/executions/:id/input', { schema: { params: C.IdParams,
     response: { 200: WaitingOperation.extend({ id: C.Id }) } } }, async request => {
     const { plan } = await executions.input(actor(request), request.params.id);
     return { id: request.params.id, ...plan };
   });
-  app.patch('/api/operation-executions/:id/input', { schema: { params: C.IdParams,
-    body: z.object({ index: z.number().int().nonnegative(), values: C.JsonObject }).strict(), response: { 200: OperationExecution } } },
+  app.patch('/api/executions/:id/input', { schema: { params: C.IdParams,
+    body: z.object({ index: z.number().int().nonnegative(), values: C.JsonObject }).strict(), response: { 200: Execution } } },
     request => executions.configure(actor(request), request.params.id, request.body.index, request.body.values));
-  app.put('/api/operation-executions/:id/continuation', { schema: { params: C.IdParams,
+  app.put('/api/executions/:id/continuation', { schema: { params: C.IdParams,
     body: z.object({ index: z.number().int().nonnegative(), continuation: WaitingOperation.shape.continuation.unwrap() }).strict(),
-    response: { 200: OperationExecution } } }, request => executions.track(actor(request), request.params.id,
+    response: { 200: Execution } } }, request => executions.track(actor(request), request.params.id,
       request.body.index, request.body.continuation));
-  app.post('/api/operation-executions/:id/complete', { bodyLimit: 40 * 1024 * 1024, schema: { params: C.IdParams,
-    body: z.object({ index: z.number().int().nonnegative(), proof: C.Json }).strict(), response: { 200: OperationExecution } } },
+  app.post('/api/executions/:id/complete', { bodyLimit: 40 * 1024 * 1024, schema: { params: C.IdParams,
+    body: z.object({ index: z.number().int().nonnegative(), proof: C.Json }).strict(), response: { 200: Execution } } },
     request => executions.complete(actor(request), request.params.id, request.body.index, request.body.proof));
+  app.post('/api/executions/:id/preparation', { bodyLimit: 40 * 1024 * 1024, schema: { params: C.IdParams,
+    body: z.object({ index: z.number().int().nonnegative(), proof: C.Json }).strict(), response: { 200: Execution } } },
+    request => executions.prepareInput(actor(request), request.params.id, request.body.index, request.body.proof));
   app.get('/api/operation-continuations/:id', { schema: { params: C.IdParams, response: { 200: ContinuationEnvelope.nullable() } } }, async request => {
     const who = actor(request);
     if (who.requestId) fail(403, 'forbidden', 'Sign in with your keys to continue this operation.');

@@ -8,7 +8,7 @@ import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
 import { SignedBinding } from '../shared/authority.js';
 
-export async function routesExecution(app: ApiApp, context: Context) {
+export async function routesRuntime(app: ApiApp, context: Context) {
   const { bindings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
   app.post('/api/oauth/relays', {
     schema: { body: P.RegisterRelay, response: { 201: P.OAuthRelay } },
@@ -75,22 +75,26 @@ export async function routesExecution(app: ApiApp, context: Context) {
   app.post('/api/environments/:id/claim', {
     schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: P.ClaimedExecution } },
   }, request => delegation.claim(actor(request), request.params.id));
-  app.post('/api/executions', {
+  app.post('/api/runtime/runs', {
     schema: { body: P.DelegatedRun, response: { 202: P.Task } },
-  }, async (request, reply) => reply.code(202).send(await delegation.submit(actor(request), request.body)));
-  app.get('/api/principals/:id/executions', {
+  }, async (request, reply) => {
+    const task = await delegation.submit(actor(request), request.body);
+    await context.executions.recordRuntime('run', task);
+    return reply.code(202).send(task);
+  });
+  app.get('/api/runtime/principals/:id/runs', {
     schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(P.Task) } },
   }, request => delegation.list(actor(request), request.params.id, request.query.limit, request.query.after));
-  app.get('/api/executions/:id', {
+  app.get('/api/runtime/runs/:id', {
     schema: { params: C.IdParams, response: { 200: P.Task } },
   }, request => delegation.get(actor(request), request.params.id));
-  app.post('/api/executions/:id/renew', {
+  app.post('/api/runtime/runs/:id/renew', {
     schema: { params: C.IdParams, body: P.Lease, response: { 200: z.object({ active: z.boolean() }) } },
   }, request => delegation.renew(actor(request), request.params.id, request.body.lease));
-  app.post('/api/executions/:id/dispatch', {
+  app.post('/api/runtime/runs/:id/dispatch', {
     schema: { params: C.IdParams, body: P.Lease, response: { 200: C.Ok } },
   }, request => delegation.dispatch(actor(request), request.params.id, request.body.lease));
-  app.post('/api/executions/:id/finish', {
+  app.post('/api/runtime/runs/:id/finish', {
     schema: { params: C.IdParams, body: P.Completion, response: { 200: P.Task } },
   }, request => {
     if (request.params.id !== request.body.receipt.id) fail(400, 'wrong_execution', 'Complete the selected execution.');

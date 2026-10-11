@@ -8,8 +8,8 @@ import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
 import { Operations, matchesPin, operationName, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
-import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/execution.js';
-import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
+import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
+import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { fail, required } from './errors.js';
 
 interface EnvironmentRow {

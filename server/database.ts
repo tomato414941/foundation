@@ -20,6 +20,11 @@ export class Database {
     const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
     await this.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
+      await client.query(`DO $$ BEGIN
+        IF to_regclass('operation_executions') IS NOT NULL AND to_regclass('executions') IS NULL THEN
+          ALTER TABLE operation_executions RENAME TO executions;
+        END IF;
+      END $$`);
       await client.query(schema);
     });
   }

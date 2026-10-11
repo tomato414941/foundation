@@ -3,10 +3,10 @@ import { FunctionDefinition, FunctionResource, Id, JsonObject, listOf } from './
 import type { FunctionSpec, JsonValue } from './contracts.js';
 import { KeyBinding, canonical, hash } from './authority.js';
 import { AccessPolicy, functionOperations, protect, reveal } from './custody.js';
-import { FunctionWrite, Invocation, publishFunction } from './function-api.js';
+import { FunctionWrite, publishFunction } from './function-api.js';
 import type { CustodyClient, JsonApi } from './client.js';
 import { ProtectedRead } from './protocol.js';
-import { FunctionSave, OperationExecution } from './operations.js';
+import { FunctionSave, Execution } from './executions.js';
 import { functionSources } from './functions.js';
 
 export class InvocationSubmissionError extends Error {
@@ -61,11 +61,11 @@ export class FunctionClient {
   async save(input: { ownerId: string; name: string; definition: FunctionSpec; resourceId?: string; version?: number }) {
     if (!this.custody) throw new Error('Use your encryption keys to approve a function definition.');
     const prepared = FunctionSave.parse(input);
-    const execution = await this.api.json('/api/operation-executions', { method: 'POST',
-      body: { operations: [{ name: 'function.save', input: JsonObject.parse(prepared) }] } }, OperationExecution);
+    const execution = await this.api.json('/api/executions', { method: 'POST',
+      body: { operations: [{ name: 'function.save', input: JsonObject.parse(prepared) }] } }, Execution);
     const authorization = await this.prepare(prepared);
-    const completed = await this.api.json('/api/operation-executions/' + execution.id + '/complete', { method: 'POST',
-      body: { index: execution.index, proof: authorization } }, OperationExecution);
+    const completed = await this.api.json('/api/executions/' + execution.id + '/complete', { method: 'POST',
+      body: { index: execution.index, proof: authorization } }, Execution);
     await this.remember(authorization);
     return FunctionResource.parse(completed.results[execution.index]);
   }
@@ -82,14 +82,14 @@ export class FunctionClient {
         options.ownerId ?? this.custody.binding.principalId, name, invocationId, environment, new Date(Date.now() + 3_600_000).toISOString());
     }
     try {
-      return await this.api.json('/api/functions/' + Id.parse(id) + '/invocations', { method: 'POST',
-        body: { id: invocationId, arguments: arguments_, outputs, ...(options.ownerId ? { ownerId: options.ownerId } : {}) } }, Invocation);
+      return await this.api.json('/api/functions/' + Id.parse(id) + '/executions', { method: 'POST',
+        body: { id: invocationId, arguments: arguments_, outputs, ...(options.ownerId ? { ownerId: options.ownerId } : {}) } }, Execution);
     } catch (error) {
       if (error instanceof Error && 'status' in error) throw error;
       throw new InvocationSubmissionError(invocationId, error);
     }
   }
-  result(id: string) { return this.api.json('/api/invocations/' + Id.parse(id), {}, Invocation); }
-  cancel(id: string) { return this.api.json('/api/invocations/' + Id.parse(id) + '/cancel', { method: 'POST', body: {} }, Invocation); }
+  result(id: string) { return this.api.json('/api/executions/' + Id.parse(id), {}, Execution); }
+  cancel(id: string) { return this.api.json('/api/executions/' + Id.parse(id) + '/cancel', { method: 'POST', body: {} }, Execution); }
   remove(id: string) { return this.api.json('/api/functions/' + Id.parse(id), { method: 'DELETE' }); }
 }

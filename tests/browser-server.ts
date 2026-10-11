@@ -7,7 +7,7 @@ import { Worker } from '../server/worker.js';
 import { randomBytes } from 'node:crypto';
 import { bindKeys, fingerprint, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
-import { signEnvironment } from '../shared/execution.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 import { Client } from '../cli/src/client.js';
 import { HttpBroker } from '../runtime/broker.js';
 import { Executor } from '../runtime/executor.js';

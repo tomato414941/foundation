@@ -107,15 +107,15 @@ try {
   const available = await call('foundation_functions', { query: 'Release function' });
   assert.ok(available.body.items.some(item => item.id === fn.id));
   const started = (await call('foundation_invoke_function', { functionId: fn.id, arguments: arguments_ })).body;
-  const result = await wait(() => call('foundation_invocation_result', { id: started.id }),
-    value => !['queued', 'running'].includes(value.state));
-  const returned = JSON.parse(result.text);
+  const result = await wait(() => call('foundation_execution_result', { id: started.id }),
+    value => !['waiting', 'running'].includes(value.state));
+  const returned = JSON.parse(result.text)[0];
   assert.equal(result.state, 'succeeded'); assert.deepEqual(returned.arguments, arguments_); assert.equal(returned.configured, true);
   assert.ok(!JSON.stringify(result).includes(secret));
   const capture = await caller.functions.invoke(fn.id, arguments_, { save: { '/output': 'Release output' } });
-  const captured = await wait(() => caller.functions.result(capture.id), value => !['queued', 'running'].includes(value.state));
-  assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.result), ['saved']);
-  const output = captured.result.saved['Release output']; resources.push(output);
+  const captured = await wait(() => caller.functions.result(capture.id), value => !['waiting', 'running'].includes(value.state));
+  assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.results[0]), ['saved']);
+  const output = captured.results[0].saved['Release output']; resources.push(output);
   assert.match(decode(await caller.custody.reveal(output)), /^[a-f0-9]{48}$/);
   finished = true;
 } finally {

@@ -15,7 +15,7 @@ import {
 import { cn } from 'cn';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from './api';
-import type { ApprovalView } from '../../shared/contracts';
+import type { Proposal } from '../../shared/contracts';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card';
@@ -130,7 +130,7 @@ export function Empty({ search = false }: { search?: boolean }) {
 }
 
 // What a proposed change does, in one sentence: the line it draws, or who becomes the owner.
-export function ProposalText({ proposal }: { proposal: NonNullable<ApprovalView['proposal']> }) {
+export function ProposalText({ proposal }: { proposal: import('zod').z.infer<typeof Proposal> }) {
   const { t } = useTranslation();
   return proposal.kind === 'line'
     ? t('line', { subject: proposal.subject.name, relation: t(proposal.relation), object: proposal.object.name })
@@ -143,7 +143,7 @@ export function State({ value, label }: { value: string; label?: string }) {
       variant="outline"
       className={cn(
         'gap-1.5 font-normal',
-        ['ready', 'succeeded', 'approved', 'running'].includes(value) &&
+        ['ready', 'succeeded', 'accepted', 'approved', 'running'].includes(value) &&
           'border-emerald-500/20 bg-emerald-500/5 text-emerald-300',
         ['failed', 'deleteFailed', 'reconnect', 'reconnect_required'].includes(value) &&
           'border-amber-500/20 bg-amber-500/5 text-amber-300',

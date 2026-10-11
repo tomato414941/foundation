@@ -25,16 +25,16 @@ import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
-import { Task } from '../../shared/execution.js';
-import type { TaskView } from '../../shared/execution.js';
+import { Task } from '../../shared/runtime-protocol.js';
+import type { TaskView } from '../../shared/runtime-protocol.js';
 import { Client, ApiError } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
-import { operationClient } from './operations.js';
-import { ExecutionInput, ExecutionResponse, Invocation, OperationDescription, OperationExecution } from '../../shared/operations.js';
-import { OperationMaterial } from '../../shared/operation-client.js';
+import { executionClient } from './executions.js';
+import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
+import { OperationMaterial } from '../../shared/execution-client.js';
 import { managedAgent } from './managed-agent.js';
 import { startMcp } from './mcp.js';
 import { FunctionClient } from '../../shared/function-client.js';
@@ -52,19 +52,19 @@ Usage: foundation <command> [options]
   status                               Show this machine and its accessible principals
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
-  operation list                       List user operations and their inputs
-  operation start --body JSON          Prepare operations and return their continuation URL
-  operation history                   List executions visible to this principal
-  operation respond ID --body JSON     Supply public inputs and consent
-  operation cancel ID                  Cancel a prepared operation
-  operation run NAME --body JSON       Execute an operation (private material via --fields)
-  operation continue ID [--fields JSON] Resume an operation awaiting private input
+  definition list                      List processing definitions and their inputs
+  execution start --body JSON          Prepare operations and return their continuation URL
+  execution history                   List executions visible to this principal
+  execution respond ID --body JSON     Supply public inputs and consent
+  execution cancel ID                  Cancel a prepared operation
+  execution run NAME --body JSON       Execute an operation (private material via --fields)
+  execution continue ID [--fields JSON] Resume an operation awaiting private input
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   agent start [--id ID]                Register this machine as an execution environment
   app NAME --method ID --client-id ID  Encrypt an OAuth application (--for ENV to allow use)
-  connect --method ID --environment ID Start a connection on the selected executor
+  connect --method ID                  Register a connection (--environment for OAuth/AWS)
   connect wait ID                      Continue after service authorization
   connect accept ID                    Save the reviewed connection and its permissions
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
@@ -76,12 +76,12 @@ Usage: foundation <command> [options]
   function create --body JSON         Approve and save a function definition
   function update ID --body JSON      Approve and replace a function definition
   function invoke ID [--arguments JSON] Invoke a function (--id ID for retries, --wait for result)
-  function result ID                  Read an invocation (--wait to wait for completion)
-  function cancel ID                  Cancel a function invocation
+  function result ID                  Read an execution (--wait to wait for completion)
+  function cancel ID                  Cancel a function execution
   function delete ID                  Delete a function
   run --environment ID -- COMMAND ...  Run a command in an environment
   wait ID [--timeout SECONDS]           Wait for a run to finish
-  retry ID                             Submit the same saved, signed execution request
+  retry ID                             Continue an execution using its saved consent
   request --body JSON                  Create an approval request
   request wait ID [--timeout SECONDS]  Wait for an approval request
   export --output FILE                 Download an encrypted account export
@@ -382,7 +382,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const operations = operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
+  const operations = executionClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
   const completed = await operations.execute({ name: 'variable.save', input: { ownerId: owner, name,
     ...(existing ? { resourceId: existing.id, version: previous!.version } : {}),
     ...(args.values.for ? { environmentIds: args.values.for.map(id => Id.parse(id)) } : {}) } }, { value: content });
@@ -393,8 +393,9 @@ async function keep(client: Client, args: Arguments, owner: string) {
 
 async function taskOutput(client: Client, task: TaskView, args: Arguments) {
   const result = await privateClient(client).custody.result(task);
-  await output({ id: task.id, state: task.state, environmentId: task.environmentId,
-    result: result?.result ?? null, error: result?.error ?? task.error }, args);
+  const execution = await client.json('/api/executions/' + (task.intent.operationContext?.id ?? task.id), {}, Execution);
+  if (result?.ok) execution.results[task.intent.operationContext?.index ?? 0] = result.result;
+  await output(execution, args);
 }
 async function main(argv: string[]) {
   const boundary = argv.indexOf('--'),
@@ -456,45 +457,52 @@ async function main(argv: string[]) {
       fields: await json(args.values.fields, {}), environments: args.values.for });
     await output(resource, args); return 0;
   }
-  if (command === 'operation') {
+  if (command === 'definition') {
+    if ((args.positionals[0] ?? 'list') !== 'list') throw new Error('Use foundation definition list.');
+    await output(await client.json('/api/definitions', {}, listOf(DefinitionDescription)), args); return 0;
+  }
+  if (command === 'execution') {
     const action = args.positionals[0] ?? 'list';
-    if (action === 'list') await output(await client.json('/api/operations', {}, listOf(OperationDescription)), args);
-    else if (action === 'history') await output(await client.json('/api/operation-executions', {}, listOf(OperationExecution)), args);
-    else if (action === 'get') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, OperationExecution), args);
-    else if (action === 'start') await output(await client.json('/api/operation-executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, OperationExecution), args);
-    else if (action === 'respond') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, OperationExecution), args);
-    else if (action === 'cancel') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, OperationExecution), args);
+    if (action === 'list') await output(await client.json('/api/definitions', {}, listOf(DefinitionDescription)), args);
+    else if (action === 'history') await output(await client.json('/api/executions', {}, listOf(Execution)), args);
+    else if (action === 'get') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, Execution), args);
+    else if (action === 'start') await output(await client.json('/api/executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, Execution), args);
+    else if (action === 'respond') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, Execution), args);
+    else if (action === 'cancel') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, Execution), args);
     else if (action === 'run' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
       const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
       if (invocation) {
-        const catalog = await client.json('/api/operations', {}, listOf(OperationDescription));
+        const catalog = await client.json('/api/definitions', {}, listOf(DefinitionDescription));
         const definition = catalog.items.find(item => item.name === invocation.name);
         if (!definition) throw new Error('Choose an available operation.');
         if (definition.execution === 'server') {
-          await output(await client.json('/api/operations/' + invocation.name, { method: 'POST', body: invocation.input }), args);
+          await output(await client.json('/api/definitions/' + invocation.name + '/executions', { method: 'POST', body: invocation.input }), args);
           return 0;
         }
       }
-      const operations = operationClient(client);
+      const operations = executionClient(client);
       const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
         : await operations.execute(invocation!, material);
       await output('flow' in result ? flowOutput(result) : result, args);
-    } else throw new Error('Choose operation list, start, respond, run, get, continue, or cancel.');
+    } else throw new Error('Choose execution list, start, respond, run, get, continue, or cancel.');
     return 0;
   }
   if (command === 'connect') {
     const flowClient = connectionClient(client), action = args.positionals[0] ?? 'start';
-    let progress: FlowProgress;
+    let progress: FlowProgress | Awaited<ReturnType<typeof startConnection>>;
     if (action === 'start') progress = await startConnection(client, { ownerId: owner,
-      environmentId: requireArgument(args.values.environment, 'Choose --environment ID.'),
+      environmentId: args.values.environment,
       methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
       appId: args.values.app, connectionId: args.values.connection,
       fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
       aws: args.values.aws ? await json(args.values.aws) : undefined,
       environments: args.values.for, redirectUri: args.values['redirect-uri'] });
     else {
-      const id = Id.parse(requireArgument(args.positionals[1], 'Supply a connection request ID.'));
+      const executionId = Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.'));
+      const execution = await client.json('/api/executions/' + executionId, {}, Execution);
+      if (!execution.waiting?.continuation) { await output(execution, args); return execution.state === 'succeeded' ? 0 : 1; }
+      const id = execution.waiting.continuation.id;
       if (action === 'accept') progress = await flowClient.accept(id);
       else if (action === 'cancel') progress = await flowClient.cancel(id);
       else if (action === 'complete') {
@@ -516,7 +524,13 @@ async function main(argv: string[]) {
   }
   if (command === 'retry') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply a saved execution ID.'));
-    await taskOutput(client, await privateClient(client).custody.resume(id), args); return 0;
+    const execution = await client.json('/api/executions/' + id, {}, Execution);
+    if (execution.state === 'failed')
+      await client.json('/api/executions/' + id + '/resume', { method: 'POST', body: {} }, Execution);
+    const result = await executionClient(client).continue(id);
+    if ('kind' in result && result.kind === 'run') await taskOutput(client, result.task, args);
+    else await output(result, args);
+    return 0;
   }
   if (command === 'api' || command === 'schema') {
     const method =
@@ -577,7 +591,7 @@ async function main(argv: string[]) {
         name: body.name, definition: body.definition, ...(id ? { resourceId: id, version: body.version ?? previous!.version } : {}) }), args);
       return 0;
     }
-    const id = Id.parse(requireArgument(args.positionals[1], 'Supply a function or invocation ID.'));
+    const id = Id.parse(requireArgument(args.positionals[1], 'Supply a function or execution ID.'));
     if (action === 'show') { await output(await functions.get(id), args); return 0; }
     if (action === 'delete') { await functions.remove(id); return 0; }
     if (action === 'cancel') { await output(await functions.cancel(id), args); return 0; }
@@ -588,7 +602,7 @@ async function main(argv: string[]) {
         { ownerId: owner, save, ...(args.values.id ? { id: Id.parse(args.values.id) } : {}) })
         : await functions.result(id);
       if (args.values.wait) result = await waitFor(() => functions.result(result.id),
-        value => value.error?.code === 'cancellation_pending' ? 'running' : value.state, seconds(args.values.timeout, 3600));
+        value => value.state, seconds(args.values.timeout, 3600));
       await output(result, args);
       return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
     }
@@ -606,14 +620,14 @@ async function main(argv: string[]) {
             timeoutSeconds: seconds(args.values.timeout, 60, 3600),
             inputs: await json(args.values.inputs, []),
           };
-    const started = await operationClient(client).execute({ name: 'run.execute', input: { ownerId: owner, environmentId,
+    const started = await executionClient(client).execute({ name: 'run.execute', input: { ownerId: owner, environmentId,
       operation: JsonObject.parse(input),
       save: z.record(z.string(), Name).parse(await json(args.values.save, {})) } });
     if (!('kind' in started) || started.kind !== 'run') throw new Error('Continue the pending run.');
     const run = started.task;
     const result = args.values.wait
       ? await waitFor(
-          () => client.json('/api/executions/' + run.id, {}, Task),
+          () => client.json('/api/runtime/runs/' + run.id, {}, Task),
           (value) => value.state,
           seconds(args.values.timeout, 3600),
         )
@@ -624,11 +638,17 @@ async function main(argv: string[]) {
   if (command === 'wait') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply a run ID.'));
     const result = await waitFor(
-      () => client.json('/api/executions/' + id, {}, Task),
+      () => client.json('/api/executions/' + id, {}, Execution),
       (value) => value.state,
       seconds(args.values.timeout, 3600),
     );
-    await taskOutput(client, result, args);
+    for (const step of result.steps) {
+      const run = step.runs.filter(run => run.kind === 'run').at(-1);
+      if (!run) continue;
+      const task = await client.json('/api/runtime/runs/' + run.id, {}, Task);
+      if (task.receipt) result.results[step.index] = (await privateClient(client).custody.result(task))?.result ?? null;
+    }
+    await output(result, args);
     return result.state === 'succeeded' ? 0 : 1;
   }
   if (command === 'join' || command === 'request') {
@@ -640,7 +660,7 @@ async function main(argv: string[]) {
         seconds(args.values.timeout, 1800),
       );
       await output(result, args);
-      return result.state === 'approved' ? 0 : 1;
+      return result.state === 'accepted' ? 0 : 1;
     }
     const input =
       command === 'join'
@@ -668,7 +688,7 @@ async function main(argv: string[]) {
         seconds(args.values.timeout, 1800),
       );
       await output(result, { ...args, values: { ...args.values, force: true } });
-      return result.state === 'approved' ? 0 : 1;
+      return result.state === 'accepted' ? 0 : 1;
     }
     return 0;
   }

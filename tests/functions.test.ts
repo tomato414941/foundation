@@ -80,7 +80,7 @@ test('呼び出し権限だけを持つ利用者がAPIトークンで関数を�
   await f.functionExecutor.tick();
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  assert.deepEqual(result.result, { message: text, configured: true, secret: '[redacted]' });
+  assert.deepEqual(result.results[0], { message: text, configured: true, secret: '[redacted]' });
   await assert.rejects(reveal(await f.context.custody.get(f.resource.id), f.stranger.binding, f.stranger.keys.encryption));
   await assert.rejects(client.submit(f.stranger.actor.id, f.environment.manifest.id, {
     kind: 'command', command: ['node', '-e', 'console.log(process.env.TOKEN)'],
@@ -113,7 +113,7 @@ test('JSONの引数の型を保ち、宣言と一致しない入力を受付時�
   await assert.rejects(f.functions.invoke(fn.id, { ...args, count: '0' }), error => (error as { status: number }).status === 400);
   const invocation = await f.functions.invoke(fn.id, args);
   await f.functionExecutor.tick();
-  assert.deepEqual((await f.functions.result(invocation.id)).result, args);
+  assert.deepEqual((await f.functions.result(invocation.id)).results[0], args);
 });
 
 test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型のまま設定する', async t => {
@@ -126,7 +126,7 @@ test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型�
   const args = { count: 0, enabled: false, payload: [1, { name: 'item' }, null] };
   const invocation = await f.functions.invoke(fn.id, args);
   await f.functionExecutor.tick();
-  assert.deepEqual((await f.functions.result(invocation.id)).result, { ...args, caption: 'Count 0', constructor: null });
+  assert.deepEqual((await f.functions.result(invocation.id)).results[0], { ...args, caption: 'Count 0', constructor: null });
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('count'), '0');
 });
 
@@ -140,7 +140,7 @@ test('承認された定義だけを実行し、変更後の関数を再承認�
   assert.equal((await f.functions.result(queued.id)).state, 'failed');
   const invocation = await f.functions.invoke(fn.id);
   await f.functionExecutor.tick();
-  assert.deepEqual((await f.functions.result(invocation.id)).result, { changed: true });
+  assert.deepEqual((await f.functions.result(invocation.id)).results[0], { changed: true });
 });
 
 test('共有許可を取り消した関数の待機中の呼び出しを開始前に止める', async t => {
@@ -180,7 +180,7 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
   await f.functionExecutor.tick();
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  const output = result.result as { saved: Record<string, string> };
+  const output = result.results[0] as { saved: Record<string, string> };
   assert.equal(decode(await client.reveal(output.saved.Count!)), '7');
   assert.equal(f.requests[0]!.headers!.authorization, 'Bearer confidential-value');
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('query'), 'hello world');
@@ -194,8 +194,8 @@ test('関数で生成した秘密を暗号化して保存し、呼び出す人�
   await f.functionExecutor.tick();
   const result = await f.functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  const output = result.result as { saved: Record<string, string> }, id = output.saved['Generated credential']!;
-  assert.deepEqual(result.result, { saved: { 'Generated credential': id } });
+  const output = result.results[0] as { saved: Record<string, string> }, id = output.saved['Generated credential']!;
+  assert.deepEqual(result.results[0], { saved: { 'Generated credential': id } });
   assert.match(decode(await f.client.reveal(id)), /^[a-f0-9]{32}$/);
 });
 
@@ -222,7 +222,7 @@ test('関数の入力を更新して新しい値を使い、呼び出しごと�
   for (let index = 0; index < 2; index++) {
     const invocation = await f.functions.invoke(fn.id);
     await f.functionExecutor.tick();
-    assert.deepEqual((await f.functions.result(invocation.id)).result, { count: 1, length: 'new-private-token-value'.length });
+    assert.deepEqual((await f.functions.result(invocation.id)).results[0], { count: 1, length: 'new-private-token-value'.length });
   }
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
 });
@@ -252,7 +252,7 @@ test('受付後に通信が途切れても呼び出しIDから確認し、同じ
   await assert.rejects(functions.invoke(fn.id), error => {
     assert.ok(error instanceof InvocationSubmissionError); id = error.invocationId; return true;
   });
-  assert.equal((await f.functions.result(id)).state, 'queued');
+  assert.equal((await f.functions.result(id)).state, 'running');
   assert.equal((await f.functions.invoke(fn.id, {}, { id })).id, id);
   await f.functionExecutor.tick();
   assert.equal((await f.functions.result(id)).state, 'succeeded');
@@ -312,7 +312,7 @@ test('開始前に期限が切れた処理を別のリースで引き受け、�
   const expired = (await broker.claim(f.environment.manifest.id))!;
   await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
   await f.context.invocations.recover();
-  assert.equal((await f.functions.result(invocation.id)).state, 'queued');
+  assert.equal((await f.functions.result(invocation.id)).state, 'running');
   await assert.rejects(broker.dispatch(invocation.id, expired.lease), error => (error as { code: string }).code === 'lease_lost');
   await f.functionExecutor.tick();
   assert.equal((await f.functions.result(invocation.id)).state, 'succeeded');
@@ -397,7 +397,7 @@ test('中止の応答が途切れた場合は結果不明として確定し、�
   await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
   await f.context.invocations.recover();
   const interrupted = await f.functions.result(invocation.id);
-  assert.equal(interrupted.state, 'uncertain'); assert.ok(interrupted.finishedAt);
+  assert.equal(interrupted.state, 'uncertain'); assert.ok((await f.context.invocations.get(f.owner.actor, invocation.id)).finishedAt);
   assert.equal(interrupted.error?.code, 'execution_interrupted');
   const value = { id: invocation.id, requestDigest: await hash(claim.request), state: 'cancelled' as const,
     result: null, error: { code: 'invocation_cancelled', message: 'The invocation was cancelled.' }, finishedAt: new Date().toISOString() };
@@ -414,7 +414,7 @@ test('待機中の呼び出しを中止し、実行中の処理も中止して�
   const worker = new FunctionExecutor(f.executor, f.functionExecutor.broker, f.journal, 10);
   const running = worker.tick();
   for (let attempt = 0; attempt < 200; attempt++) {
-    if ((await f.functions.result(active.id)).startedAt) break;
+    if ((await f.context.invocations.get(f.owner.actor, active.id)).startedAt) break;
     await delay(5);
   }
   assert.equal((await f.functions.cancel(active.id)).state, 'uncertain');
@@ -452,7 +452,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   await f.functionExecutor.tick();
   const result = await functions.result(task.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  assert.deepEqual(result!.result, { configured: true, secret: '[redacted]' });
+  assert.deepEqual(result!.results[0], { configured: true, secret: '[redacted]' });
   const renewed = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connectionId))));
   assert.equal(renewed.oauth?.accessToken, 'renewed-token');
   await assert.rejects(client.read(app.id));
@@ -473,5 +473,5 @@ test('Pythonの処理へ引数とファイル・JSONの入力を渡し、テキ�
   await f.functionExecutor.tick();
   const result = await f.functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  assert.equal(result.result, 'Product 15, file bytes 18\n');
+  assert.equal(result.results[0], 'Product 15, file bytes 18\n');
 });

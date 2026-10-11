@@ -5,7 +5,7 @@ import type { Delegation } from './delegation.js';
 import { publicUrl } from './transport.js';
 import { FunctionDefinition, validInputName } from '../shared/contracts.js';
 import type { FunctionSpec, HttpRequestInput, JsonValue, SourceReference } from '../shared/contracts.js';
-import { FunctionSave } from '../shared/operations.js';
+import { FunctionSave } from '../shared/executions.js';
 import { FunctionWrite, verifyFunction } from '../shared/function-api.js';
 import { canonical, hash } from '../shared/authority.js';
 import { ContentTypes, Operations, functionOperations } from '../shared/custody.js';

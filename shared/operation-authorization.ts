@@ -1,8 +1,8 @@
 import { canonical, hash } from './authority.js';
 import type { ExecutionIntent } from './custody.js';
-import { RuntimeOperation } from './execution.js';
-import type { ExecutionOperation } from './execution.js';
-import { ConnectService, RevokeConnection, RunOperation } from './operations.js';
+import { RuntimeOperation } from './runtime-protocol.js';
+import type { ExecutionOperation } from './runtime-protocol.js';
+import { ConnectService, RevokeConnection, RunOperation } from './executions.js';
 import { JsonObject, Name } from './contracts.js';
 import { z } from 'zod';
 

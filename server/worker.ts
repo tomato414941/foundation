@@ -39,7 +39,7 @@ export class Worker {
     this.schedule(() => this.context.delegation.recover(), 15_000);
     this.schedule(() => this.context.processes.recover(), 15_000);
     this.schedule(() => this.context.invocations.recover(), 15_000);
-    this.schedule(() => this.context.operationExecutions.recoverAll(), 15_000);
+    this.schedule(() => this.context.executions.recoverAll(), 15_000);
     this.schedule(() => this.context.connectionOperations.recover(), 15_000);
     this.schedule(async () => {
       await this.context.environments.enforcePayment();
@@ -52,7 +52,7 @@ export class Worker {
       await this.context.db.pool.query('DELETE FROM oauth_relays WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM sessions WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM request_links WHERE expires_at<now()');
-      await this.context.operationExecutions.expireAll();
+      await this.context.executions.expireAll();
     }, 60_000);
   }
   async stop() {

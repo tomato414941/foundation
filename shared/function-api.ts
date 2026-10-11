@@ -3,7 +3,7 @@ import { FunctionDefinition, Id, Json, JsonObject, Name, Time } from './contract
 import { KeyBinding, Signature, canonical, sign, validateBinding, verify } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import { ProtectedContent } from './custody.js';
-import { OutputDestination, TaskState } from './execution.js';
+import { OutputDestination, TaskState } from './runtime-protocol.js';
 
 export const FunctionPublication = z.object({
   format: z.literal(1), functionId: Id, ownerId: Id, revision: z.number().int().positive(),

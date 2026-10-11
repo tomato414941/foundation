@@ -8,7 +8,7 @@ import { FileJournal } from '../runtime/journal.js';
 import { CommandProcess, childEnvironment } from '../runtime/command.js';
 import { hash } from '../shared/authority.js';
 import { Operations, approvePolicy, prepareRun, reveal } from '../shared/custody.js';
-import { readReceipt } from '../shared/execution.js';
+import { readReceipt } from '../shared/runtime-protocol.js';
 import { decode, encode } from '../shared/encryption.js';
 import type { OutboundRequest, Transport } from '../server/transport.js';
 import type { JsonValue } from '../shared/contracts.js';

@@ -4,7 +4,7 @@ import { publicAddress, publicUrl } from '../server/transport.js';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { ConnectionMaterial } from '../shared/connections.js';
 import { decode } from '../shared/encryption.js';
-import { Task } from '../shared/execution.js';
+import { Task } from '../shared/runtime-protocol.js';
 
 test('公開HTTPSの送信先を受け入れ、プライベートアドレスへの送信を拒否する', () => {
   for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111'])
@@ -86,7 +86,7 @@ test('RenderのOAuth応答を暗号化して中継し、実行先で接続・更
   const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id,
     { kind: 'revoke', input: { action: 'revoke', id: saved.id } }, { sourceIds: [saved.id] });
   await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/executions/' + task.id, {}, Task));
+  const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
   assert.equal(result?.ok, true);
   assert.deepEqual(result?.result, { kind: 'revoked', id: saved.id });
   assert.equal(new URLSearchParams(String(f.requests.at(-1)!.body)).get('token'), 'render-refresh-2');

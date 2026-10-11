@@ -5,7 +5,7 @@ import { Delegation } from '../server/delegation.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import type { ExecutionIntent } from '../shared/custody.js';
-import { signEnvironment } from '../shared/execution.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 import { encode } from '../shared/encryption.js';
 import type { Journal } from '../runtime/journal.js';
 import type { ExecutionBroker } from '../runtime/executor.js';

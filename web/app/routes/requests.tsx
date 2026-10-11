@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/requests';
 import { ApprovalRequest, listOf } from '../../../shared/contracts';
 import { api, signedIn } from '../api';
-import { DateText, Empty, Page, Paging, ProposalText, State, usePolling } from '../components';
+import { DateText, Empty, Page, Paging, State, usePolling } from '../components';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   await signedIn(request);
   return api(
@@ -41,7 +41,7 @@ export default function Requests() {
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="font-medium wrap-anywhere">
-                      {item.proposal ? <ProposalText proposal={item.proposal} /> : item.message || item.from.name}
+                      {item.message || item.from.name}
                     </div>
                     <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
                       {

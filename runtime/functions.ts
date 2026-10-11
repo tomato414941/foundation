@@ -5,8 +5,8 @@ import { Invocation, ClaimedInvocation, InvocationCompletion, verifyFunction } f
 import type { Completion } from '../shared/function-api.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { ContentTypes, Operations } from '../shared/custody.js';
-import { FunctionOperation } from '../shared/execution.js';
-import { authorizeEnvironment } from '../shared/execution.js';
+import { FunctionOperation } from '../shared/runtime-protocol.js';
+import { authorizeEnvironment } from '../shared/runtime-protocol.js';
 import type { Journal } from './journal.js';
 import { DeliveryPending, Executor } from './executor.js';
 import { DomainError } from '../server/errors.js';
@@ -25,10 +25,10 @@ export class FunctionBroker {
     } };
   }
   claim(id: string) { return this.api.json('/api/environments/' + id + '/invocations/claim', { method: 'POST', body: {} }, ClaimedInvocation); }
-  dispatch(id: string, lease: string) { return this.api.json('/api/invocations/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
-  renew(id: string, lease: string) { return this.api.json('/api/invocations/' + id + '/renew', { method: 'POST', body: { lease } },
+  dispatch(id: string, lease: string) { return this.api.json('/api/runtime/functions/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
+  renew(id: string, lease: string) { return this.api.json('/api/runtime/functions/' + id + '/renew', { method: 'POST', body: { lease } },
     z.object({ active: z.boolean(), reason: z.enum(['cancelled', 'authorization_changed', 'lease_lost']).optional() })); }
-  finish(lease: string, completion: Completion) { return this.api.json('/api/invocations/' + completion.id + '/finish',
+  finish(lease: string, completion: Completion) { return this.api.json('/api/runtime/functions/' + completion.id + '/finish',
     { method: 'POST', body: { lease, completion } }, Invocation); }
 }
 interface Record {

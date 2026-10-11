@@ -6,13 +6,13 @@ import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes, approvePolicy } from './custody.js';
 import type { CustodyPolicy } from './custody.js';
 import { OAuthRelay, relayContext } from './protocol.js';
-import { Task } from './execution.js';
-import type { TaskView } from './execution.js';
+import { Task } from './runtime-protocol.js';
+import type { TaskView } from './runtime-protocol.js';
 import { decode, open } from './encryption.js';
 import { requiresApp } from './connections.js';
 import { connectionMethod, selectScopes } from './connection-methods.js';
 import type { AwsConnectionRequest } from './aws.js';
-import { OperationExecution, WaitingOperation } from './operations.js';
+import { Execution, WaitingOperation } from './executions.js';
 import { DelegatedRun } from './custody.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
@@ -56,7 +56,7 @@ export class ConnectionClient {
     execution: { id: string; index: number } }) {
     const id = crypto.randomUUID();
     const execution = input.execution;
-    const active = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+    const active = await this.custody.api.json('/api/executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     const approval = active.approval;
     if (active.index !== execution.index || active.invocation.name !== 'connection.connect' ||
       active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
@@ -68,8 +68,8 @@ export class ConnectionClient {
     const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
       ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
       ...(!active.invocation.input.name ? { name: input.name } : {}) };
-    if (Object.keys(values).length) await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', { method: 'PATCH',
-      body: { index: execution.index, values } }, OperationExecution);
+    if (Object.keys(values).length) await this.custody.api.json('/api/executions/' + execution.id + '/input', { method: 'PATCH',
+      body: { index: execution.index, values } }, Execution);
     const previous = input.connectionId ? await this.custody.read(input.connectionId) : null;
     if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId ||
       previous.content.metadata.methodId !== input.methodId)) throw new Error('Choose the existing connection and its method.');
@@ -91,27 +91,27 @@ export class ConnectionClient {
       execution, pendingRun: request, ...(approval ? { approval } : {}) };
     await this.custody.trust.rememberRun(request);
     await this.store.put(flow);
-    await this.custody.api.json('/api/operation-executions/' + execution.id + '/continuation', { method: 'PUT',
-      body: { index: execution.index, continuation: { kind: 'connection', id } } }, OperationExecution);
+    await this.custody.api.json('/api/executions/' + execution.id + '/continuation', { method: 'PUT',
+      body: { index: execution.index, continuation: { kind: 'connection', id } } }, Execution);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending' as const, flow, task };
   }
   private async operationContext(execution: ConnectionFlow['execution'], flowId: string) {
-    const plan = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+    const plan = await this.custody.api.json('/api/executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     if (plan.index !== execution.index) throw new Error('Continue the connection that is awaiting input.');
     return { ...execution, invocation: plan.invocation, continuationId: flowId };
   }
   async progress(id: string, relay = true): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step === 'connected') {
-      await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/complete', {
+      await this.custody.api.json('/api/executions/' + flow.execution.id + '/complete', {
         method: 'POST', body: { index: flow.execution.index, proof: { runId: flow.taskId, resourceId: flow.connectionId } },
-      }, OperationExecution);
+      }, Execution);
       return { kind: 'connected', flow, id: flow.connectionId! };
     }
     if (flow.step === 'cancelled') {
-      await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/cancel',
-        { method: 'POST', body: {} }, OperationExecution);
+      await this.custody.api.json('/api/executions/' + flow.execution.id + '/cancel',
+        { method: 'POST', body: {} }, Execution);
       return { kind: 'cancelled', flow };
     }
     if (flow.step === 'review') return { kind: 'review', flow, metadata: flow.review!.metadata };
@@ -129,7 +129,7 @@ export class ConnectionClient {
       return { kind: 'authorize', flow, url: flow.url! };
     }
     let task: TaskView;
-    try { task = await this.custody.api.json('/api/executions/' + flow.taskId, {}, Task); }
+    try { task = await this.custody.api.json('/api/runtime/runs/' + flow.taskId, {}, Task); }
     catch (error) {
       if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
       task = await this.custody.submitPrepared(flow.pendingRun);
@@ -203,7 +203,7 @@ export class ConnectionClient {
   async cancel(id: string) {
     const flow = await this.flow(id);
     if (['start', 'exchange', 'commit'].includes(flow.step))
-      await this.custody.api.json('/api/executions/' + flow.taskId + '/cancel', { method: 'POST', body: {} }, Task);
+      await this.custody.api.json('/api/runtime/runs/' + flow.taskId + '/cancel', { method: 'POST', body: {} }, Task);
     flow.step = 'cancelled';
     await this.store.put(flow);
     return this.progress(id);

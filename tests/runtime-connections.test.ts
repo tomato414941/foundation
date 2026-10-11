@@ -14,7 +14,7 @@ import { AppMaterial, ConnectionMaterial, connectionMetadata } from '../shared/c
 import { hash, canonical } from '../shared/authority.js';
 import { ContentTypes, Operations, approvePolicy, prepareRun, protect, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
-import { readReceipt } from '../shared/execution.js';
+import { readReceipt } from '../shared/runtime-protocol.js';
 import { decode, encode } from '../shared/encryption.js';
 import type { OutboundRequest, OutboundResponse, Transport } from '../server/transport.js';
 

@@ -4,7 +4,7 @@ import { Ok } from '../../shared/contracts';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
 import { ClientFailure, SubmissionPending } from '../../shared/client';
-import { OperationExecution } from '../../shared/operations';
+import { Execution } from '../../shared/executions';
 
 export class ApiFailure extends Error {
   constructor(
@@ -43,8 +43,8 @@ export async function api<T = unknown>(
     );
   return schema ? schema.parse(value) : (value as T);
 }
-// A change comes back done, or as the request that asks the other side to agree to it.
-export const Changed = z.union([Ok, OperationExecution]);
+// A change returns its result or an execution awaiting input or consent.
+export const Changed = z.union([Ok, Execution]);
 export async function session(request?: Request): Promise<SessionView> {
   return api('/session', { signal: request?.signal }, Session);
 }
