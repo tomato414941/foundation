@@ -97,6 +97,7 @@ class Provider {
         if (row.State.Name === 'stopping') row.State.Name = 'stopped';
         if (row.State.Name === 'shutting-down') {
           row.State.Name = 'terminated';
+          delete row.VpcId;
           this.volumes.find(volume => volume.VolumeId === row.BlockDeviceMappings[0].Ebs.VolumeId).State = 'available';
         }
       }

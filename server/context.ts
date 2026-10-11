@@ -46,10 +46,14 @@ export interface Dependencies {
 }
 export async function createContext(config: Configuration, deps: Dependencies = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
+  if (!deps.runner) {
+    const tables = await db.one<{ jobs: string | null; resources: string | null }>(
+      "SELECT to_regclass('environment_jobs') AS jobs,to_regclass('resources') AS resources");
+    if (tables?.jobs && tables.resources && await db.one(
+      "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND to_jsonb(j)->>'provider' IS DISTINCT FROM 'ec2' LIMIT 1"))
+      throw new Error('Migrate existing managed environment disks and provider records before starting the EC2 deployment.');
+  }
   await db.initialize();
-  if (!deps.runner && await db.one(
-    "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND j.provider IS DISTINCT FROM 'ec2' LIMIT 1"))
-    throw new Error('Migrate existing managed environment disks and provider records before starting the EC2 deployment.');
   const vault = await Vault.initialize(db, config),
     authorization = new Authorization(db),
     audit = new Audit(db),

@@ -129,12 +129,12 @@ test('SSH接続中も最長稼働時間を適用して環境を停止する', as
   assert.equal(s.runner.machines.get(s.row.id)!.state, 'stopped');
 });
 
-test('同じ所有者の環境を同時に作成し、それぞれのアドレスに標準SSHポートで接続する', async t => {
+test('同じ所有者の環境を同時に作成し、それぞれのSSH接続情報を返す', async t => {
   const s = await setup(t);
   const options = EnvironmentInput.parse({ lifetime: { idleSeconds: 60, maxSeconds: 600 } });
   const rows = await Promise.all([0, 1].map(() => s.c.environments.create(s.owner.actor, s.owner.actor.id, options)));
   for (const row of [s.row, ...rows]) {
-    await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [row.id]);
+    await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now()');
     await s.c.environments.tick();
   }
   const connections = await Promise.all([s.row, ...rows].map(row => s.c.environments.ssh(s.owner.actor, row.id)));

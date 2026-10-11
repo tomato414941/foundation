@@ -15,7 +15,11 @@ import type { ResourceRow } from '../server/resources.js';
 // Run against a disposable database schema and a public HTTPS test origin.
 const origin = process.env.EC2_TEST_ORIGIN;
 if (!origin || !process.env.EC2_ENVIRONMENT_AMI) throw new Error('Set EC2_TEST_ORIGIN and the EC2 environment configuration.');
+const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const execute = promisify(execFile), directory = await mkdtemp(join(tmpdir(), 'foundation-ec2-live-'));
+let interrupted = false;
+const stop = () => { interrupted = true; };
+process.on('SIGINT', stop); process.on('SIGTERM', stop);
 const f = await fixture({ ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => Boolean(entry[1]) &&
   (entry[0].startsWith('EC2_ENVIRONMENT_') || entry[0] === 'AWS_REGION' || entry[0] === 'ENVIRONMENT_COMMAND_IMAGE'))),
   FOUNDATION_ORIGIN: origin, FOUNDATION_BILLING_MODE: 'included', FOUNDATION_INCLUDED_ENVIRONMENTS: '10' });
@@ -25,7 +29,10 @@ const key = join(directory, 'key'), known = join(directory, 'known_hosts');
 await execute('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
 const publicKey = (await readFile(key + '.pub', 'utf8')).trim();
 const wait = async <T>(read: () => Promise<T>, ready: (value: T) => boolean): Promise<T> => {
-  for (let attempt = 0; attempt < 180; attempt++) { const value = await read(); if (ready(value)) return value; await delay(5_000); }
+  for (let attempt = 0; attempt < 180; attempt++) {
+    if (interrupted) throw new Error('Live verification interrupted.');
+    const value = await read(); if (ready(value)) return value; await delay(5_000);
+  }
   throw new Error('The environment did not finish the operation.');
 };
 const owners = [await f.person('EC2 test owner A'), await f.person('EC2 test owner B')];
@@ -45,6 +52,11 @@ try {
     rows.push(await c.resources.get(result.id));
     await c.environments.tick();
   }
+  await wait(async () => {
+    const count = await f.db.one<{ count: string }>('SELECT count(*) FROM environment_jobs WHERE machine_id IS NOT NULL');
+    if (Number(count?.count) < rows.length) await c.environments.tick();
+    return Number(count?.count);
+  }, count => count === rows.length);
   const connections = [];
   for (const row of rows) {
     const connection = await wait(() => c.environments.ssh({ id: row.owner_id }, row.id), value => value?.state === 'ready');
@@ -68,7 +80,7 @@ try {
     assert.equal((await ssh(host, 'cat /workspace/api.txt')).stdout, 'api-' + index);
     const otherInstances = instances.filter(value => value.PublicIpAddress !== host);
     for (const target of otherInstances) {
-      const probe = 'timeout 3 bash -c ' + JSON.stringify('echo > /dev/tcp/' + target.PrivateIpAddress + '/22') +
+      const probe = 'timeout 3 bash -c ' + quote('echo > /dev/tcp/' + target.PrivateIpAddress + '/22') +
         '; status=$?; test "$status" -eq 124 && printf blocked';
       assert.equal((await ssh(host, probe)).stdout, 'blocked');
     }
@@ -79,6 +91,8 @@ try {
     assert.equal(profile.stdout, '404');
   }
   console.log('Verified: three isolated VMs, SSH, API/workspace sharing, private network denial in both directions, and no guest AWS role.');
+  for (const [index, connection] of connections.entries())
+    assert.equal((await ssh(connection.host!, 'cat /workspace/marker.txt')).stdout, 'env-' + index);
   await c.environments.stop({ id: rows[0]!.owner_id }, await c.resources.get(rows[0]!.id));
   await f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [rows[0]!.id]);
   await c.environments.tick();
@@ -108,6 +122,7 @@ finally {
   await app.close();
   await f.close();
   await rm(directory, { recursive: true, force: true });
+  process.off('SIGINT', stop); process.off('SIGTERM', stop);
 }
 if (failures.length) throw new AggregateError(failures, 'Live EC2 verification failed.');
 console.log('Verified: deletion completed and all test instances, disks, and per-environment networks were removed.');

@@ -150,7 +150,8 @@ export class EC2Runner implements Runner {
     try {
       const rows = (await this.client.send(new DescribeInstancesCommand({ InstanceIds: [id] }))).Reservations?.flatMap(row => row.Instances ?? []) ?? [];
       const found = single(rows, 'instances');
-      if (found && (!owned(found) || found.VpcId !== this.config.EC2_ENVIRONMENT_VPC))
+      if (found && (!owned(found) || (found.VpcId !== this.config.EC2_ENVIRONMENT_VPC &&
+        !['shutting-down', 'terminated'].includes(found.State?.Name ?? ''))))
         fail(403, 'runner_resource', 'Choose a managed environment instance.');
       return found;
     } catch (error) { if (providerError(error, 'InvalidInstanceID.NotFound')) return null; throw error; }
@@ -186,8 +187,10 @@ export class EC2Runner implements Runner {
           FOUNDATION_EXECUTOR_BOOTSTRAP: environment.FOUNDATION_EXECUTOR_BOOTSTRAP ?? '' })
           .map(([key, value]) => key + '=' + JSON.stringify(value)).join('\n') + '\n';
         const userData = '#cloud-config\n' + JSON.stringify({ write_files: [{ path: '/etc/foundation/environment.env',
-          permissions: '0600', owner: 'root:root', encoding: 'b64', content: Buffer.from(content).toString('base64') }],
-          runcmd: [['systemctl', 'enable', '--now', 'foundation-environment.service']] });
+          permissions: '0600', owner: 'root:root', encoding: 'b64', content: Buffer.from(content).toString('base64') },
+          { path: '/etc/systemd/system/foundation-environment.service.d/runtime.conf', permissions: '0644', owner: 'root:root',
+            content: '[Service]\nRuntimeDirectory=sshd\nRuntimeDirectoryMode=0755\nStandardOutput=journal+console\nStandardError=journal+console\n' }],
+          runcmd: [['systemctl', 'daemon-reload'], ['systemctl', 'enable', '--now', 'foundation-environment.service']] });
         if (Buffer.byteLength(userData) > 16_384) fail(400, 'bootstrap_too_large', 'The environment configuration is too large.');
         try {
           machine = (await this.client.send(new RunInstancesCommand({ ImageId: image.ImageId, ClientToken: id,
@@ -252,14 +255,26 @@ export class EC2Runner implements Runner {
       const subnets = (await this.client.send(new DescribeSubnetsCommand({ Filters: filters(id) }))).Subnets ?? [];
       for (const subnet of subnets) {
         if (subnet.VpcId !== this.config.EC2_ENVIRONMENT_VPC) fail(403, 'runner_resource', 'Choose a managed environment subnet.');
-        try { await this.client.send(new DeleteSubnetCommand({ SubnetId: subnet.SubnetId })); }
-        catch (error) { if (!providerError(error, 'InvalidSubnetID.NotFound')) throw error; }
+        await this.wait(async () => {
+          try { await this.client.send(new DeleteSubnetCommand({ SubnetId: subnet.SubnetId })); return true; }
+          catch (error) {
+            if (providerError(error, 'InvalidSubnetID.NotFound')) return true;
+            if (providerError(error, 'DependencyViolation')) return false;
+            throw error;
+          }
+        }, value => value);
       }
       const groups = (await this.client.send(new DescribeSecurityGroupsCommand({ Filters: filters(id) }))).SecurityGroups ?? [];
       for (const group of groups) {
         if (group.VpcId !== this.config.EC2_ENVIRONMENT_VPC) fail(403, 'runner_resource', 'Choose a managed environment security group.');
-        try { await this.client.send(new DeleteSecurityGroupCommand({ GroupId: group.GroupId })); }
-        catch (error) { if (!providerError(error, 'InvalidGroup.NotFound')) throw error; }
+        await this.wait(async () => {
+          try { await this.client.send(new DeleteSecurityGroupCommand({ GroupId: group.GroupId })); return true; }
+          catch (error) {
+            if (providerError(error, 'InvalidGroup.NotFound')) return true;
+            if (providerError(error, 'DependencyViolation')) return false;
+            throw error;
+          }
+        }, value => value);
       }
       await this.wait(async () => {
         const subnet = await this.client.send(new DescribeSubnetsCommand({ Filters: filters(id) }));

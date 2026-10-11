@@ -193,7 +193,8 @@ export class Environments {
       `UPDATE environment_jobs j SET lease_until=now()+interval '2 minutes',lease_token=$1,attempts=attempts+1
        WHERE resource_id=(SELECT j.resource_id FROM environment_jobs j JOIN resources r ON r.id=j.resource_id
          WHERE (j.lease_until IS NULL OR j.lease_until<now()) AND j.retry_at<=now()
-           AND (r.data->>'state' IN ('starting','stopping') OR r.data->'deletion'->>'state'='pending')
+           AND (r.data->>'state'='starting' AND j.machine_id IS NULL
+             OR r.data->>'state'='stopping' OR r.data->'deletion'->>'state'='pending')
            AND coalesce(r.data->'deletion'->>'state','')<>'failed'
          ORDER BY r.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1) RETURNING j.*`, [lease]);
     if (!job) return false;
@@ -214,12 +215,14 @@ export class Environments {
           image: row.data.image, size: row.data.size, lifetime: row.data.lifetime,
         }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url') },
         async (machineId, volumeId, host) => {
-          await this.resources.db.pool.query(
-            'UPDATE environment_jobs SET machine_id=$3,volume_id=$4 WHERE resource_id=$1 AND lease_token=$2',
-            [row.id, lease, machineId, volumeId]);
-          await this.resources.db.pool.query(
-            "UPDATE resources SET data=jsonb_set(jsonb_set(data,'{startedAt}',to_jsonb(coalesce(data->>'startedAt',$2::text))),'{ssh,host}',to_jsonb($3::text)),version=version+1,updated_at=now() WHERE id=$1",
-            [row.id, new Date().toISOString(), host]);
+          await this.resources.db.transaction(async connection => {
+            await connection.query(
+              'UPDATE environment_jobs SET machine_id=$3,volume_id=$4 WHERE resource_id=$1 AND lease_token=$2',
+              [row.id, lease, machineId, volumeId]);
+            await connection.query(
+              "UPDATE resources SET data=jsonb_set(jsonb_set(data,'{startedAt}',to_jsonb(coalesce(data->>'startedAt',$2::text))),'{ssh,host}',to_jsonb($3::text)),version=version+1,updated_at=now() WHERE id=$1",
+              [row.id, new Date().toISOString(), host]);
+          });
         }, required(job.network_slot));
       } else if (row.data.state === 'stopping') {
         const machine = row.data.driver === 'attached' ? null : job.machine_id ?? await this.runner.find(row.id);
