@@ -1,4 +1,5 @@
 import type { AppState, ConnectionCommand, ConnectionState } from '../shared/connections.js';
+import type { ConnectionFactValues } from '../shared/connection-facts.js';
 
 export type ConnectionStart = Extract<ConnectionCommand, { action: 'start' }>;
 export type ConnectionCheckpoint = Record<string, unknown>;
@@ -22,6 +23,7 @@ export type AuthorizationResult = { kind: 'authorize'; url: string }
 
 // Providers handle authentication. Custody, approvals, journaling, and delivery belong to Connections.
 export interface ConnectionProvider {
+  facts(material: ConnectionState): ConnectionFactValues;
   validate(input: ConnectionStart, app: AppState | null): void;
   start(context: AuthorizationContext): Promise<AuthorizationResult>;
   exchange?(context: AuthorizationContext, parameters: string, checkpoint?: ConnectionCheckpoint): Promise<ConnectionState>;

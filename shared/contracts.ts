@@ -212,13 +212,13 @@ const methodMetadata = {
   docs: z.url().optional(),
   console: z.url().optional(),
 };
-const OAuthMethod = z
+export const OAuthMethod = z
   .object({ ...methodMetadata, kind: z.literal('oauth'), config: OAuthDefinition })
   .strict();
-const TokenMethod = z
+export const TokenMethod = z
   .object({ ...methodMetadata, kind: z.literal('token'), config: TokenDefinition })
   .strict();
-const AwsMethod = z.object({ ...methodMetadata, kind: z.literal('aws'), config: AwsDefinition }).strict();
+export const AwsMethod = z.object({ ...methodMetadata, kind: z.literal('aws'), config: AwsDefinition }).strict();
 export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod]);
 export type MethodDescription = z.infer<typeof MethodDefinition>;
 const methodCatalogMetadata = {

@@ -1,10 +1,12 @@
 import { z } from 'zod';
-import { AuthKind, Id, JsonObject, MethodDefinition, Name } from './contracts.js';
+import { AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, TokenMethod } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
-import { AwsConnectionInput, AwsConnectionMaterial, AwsConnectionInfo, awsConnectionInfo } from './aws.js';
+import { AwsConnectionInput, AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
 import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
+import { connectionFacts } from './connection-facts.js';
+import type { ConnectionFactValues } from './connection-facts.js';
 export { requiresApp } from './connection-methods.js';
 
 const Fields = z.record(z.string().max(100), z.string().max(16384));
@@ -20,18 +22,24 @@ export const TokenMaterial = z.object({
   account: z.string(), accountName: z.string(), accountVerified: z.boolean().optional(),
   scopesStatus: z.enum(['unknown', 'requested', 'reported']).optional(), extra: Fields, facts: JsonObject,
 }).strict();
-export const ConnectionMaterial = z.object({
+const materialMetadata = {
   format: z.literal(2), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
   appId: Id.nullable(), appGeneration: Id.nullable(),
   state: z.literal('reconnect').optional(),
-  oauth: TokenMaterial.optional(), fields: Fields.optional(),
-  aws: AwsConnectionMaterial.optional(),
-}).strict().superRefine((value, ctx) => {
-  if ((value.method.kind === 'oauth' && (!value.oauth || (requiresApp(value.method) && (!value.appId || !value.appGeneration)))) ||
-    (value.method.kind === 'token' && !value.fields) || (value.method.kind === 'aws' && !value.aws))
-    ctx.addIssue({ code: 'custom', message: 'Supply the material required by this connection method.' });
-  if (value.aws && value.method.kind !== 'aws')
-    ctx.addIssue({ code: 'custom', message: 'Use one AWS authentication configuration for this connection.' });
+};
+const unusedMaterial = z.never().optional();
+export const ConnectionMaterial = z.union([
+  z.object({ ...materialMetadata, method: OAuthMethod, oauth: TokenMaterial,
+    fields: unusedMaterial, aws: unusedMaterial }).strict(),
+  z.object({ ...materialMetadata, method: TokenMethod, fields: Fields,
+    oauth: unusedMaterial, aws: unusedMaterial }).strict(),
+  z.object({ ...materialMetadata, method: AwsMethod, aws: AwsConnectionMaterial,
+    oauth: unusedMaterial, fields: unusedMaterial }).strict(),
+]).superRefine((value, ctx) => {
+  if (value.method.kind === 'oauth' && requiresApp(value.method) && (!value.appId || !value.appGeneration))
+    ctx.addIssue({ code: 'custom', message: 'Bind the OAuth application required by this connection.' });
+  if (value.method.kind !== 'oauth' && value.appId !== null)
+    ctx.addIssue({ code: 'custom', message: 'Only OAuth connections use an application.' });
   if (Boolean(value.appId) !== Boolean(value.appGeneration))
     ctx.addIssue({ code: 'custom', message: 'Bind the application and its generation together.' });
   if (value.method.kind === 'oauth' && value.method.config.grantType === 'client_credentials' && !value.oauth?.requestedScopes)
@@ -51,26 +59,25 @@ export const ConnectionMetadata = z.object({
   aws: AwsConnectionInfo.optional(),
 }).strict();
 
-export async function connectionMetadata(state: ConnectionState) {
+export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
   const outputs = connectionMethod(state.method).outputs;
-  const authorizationDigest = await hash(connectionAuthorization(state));
+  const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
     methodId: state.methodId, methodKind: state.method.kind,
     generation: state.generation, authorizationDigest, appId: state.appId,
-    accountId: connectionAccount(state),
-    accountVerified: Boolean(state.aws || state.oauth?.accountVerified),
-    scopes: state.oauth?.scopes ?? [], scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
+    accountId: connectionAccount(state, facts),
+    accountVerified: facts.accountVerified,
+    scopes: facts.scopes, scopesStatus: facts.scopesStatus,
     outputs, state: state.state ?? 'ready',
-    ...(state.aws ? { aws: awsConnectionInfo(state.aws) } : {}),
+    ...facts.details,
   });
 }
 
 // What people read about a connection. The server stores these as given; they carry no authority.
 export const ConnectionLabels = z.object({ methodName: Name, account: z.string().max(2000) }).strict();
 export type ConnectionLabelValues = z.infer<typeof ConnectionLabels>;
-export function connectionLabels(state: ConnectionState): ConnectionLabelValues {
-  return { methodName: state.method.name, account: state.oauth?.accountName ??
-    (state.aws ? state.aws.identity.accountId + ' / ' + state.aws.identity.arn.split(':').at(-1) : state.method.name) };
+export function connectionLabels(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)): ConnectionLabelValues {
+  return { methodName: state.method.name, account: facts.accountName };
 }
 
 const FlowStart = z.object({

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConnectionMaterial } from '../shared/connections.js';
+import { tokenConnectionFacts } from '../shared/connection-facts.js';
 import type { ConnectionState } from '../shared/connections.js';
 import { atPointer, textValue } from '../shared/values.js';
 import { connectionFields } from './connection-fields.js';
@@ -10,6 +11,7 @@ function specification(value: ConnectionStart | ConnectionState) {
   return value.method.config;
 }
 export class TokenConnection implements ConnectionProvider {
+  facts = tokenConnectionFacts;
   validate(input: ConnectionStart) {
     connectionFields(specification(input).fields, input.fields);
   }

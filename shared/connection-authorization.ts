@@ -1,19 +1,20 @@
 import type { ConnectionState } from './connections.js';
-import { awsAuthorization, stableAwsArn } from './aws.js';
+import { connectionFacts } from './connection-facts.js';
+import type { ConnectionFactValues } from './connection-facts.js';
 
-export function connectionAccount(state: ConnectionState) {
-  return state.aws ? stableAwsArn(state.aws.identity.arn) : (state.oauth?.accountVerified ? state.oauth.account : null);
+export function connectionAccount(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
+  return facts.accountVerified ? facts.accountId : null;
 }
 
-export function connectionAuthorization(state: ConnectionState) {
+export function connectionAuthorization(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
   return {
     format: state.format,
     generation: state.generation, methodId: state.methodId, method: state.method,
     appId: state.appId, appGeneration: state.appGeneration,
-    account: state.oauth?.account ?? connectionAccount(state),
-    accountVerified: state.aws ? true : state.oauth?.accountVerified ?? false,
-    scopes: [...(state.oauth?.scopes ?? [])].sort(),
-    ...(state.aws ? { aws: awsAuthorization(state.aws) } : {}),
+    account: facts.accountId,
+    accountVerified: facts.accountVerified,
+    scopes: [...facts.scopes].sort(),
+    ...facts.authorization,
     ...(state.state ? { state: state.state } : {}),
   };
 }

@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { ConnectionMaterial } from '../shared/connections.js';
+import { awsConnectionFacts } from '../shared/connection-facts.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { fail } from '../server/errors.js';
 import type { AwsConnectionProvider } from './aws.js';
 import type { AuthorizationContext, ConnectionProvider, ConnectionStart } from './connection-provider.js';
 
 export class AwsConnection implements ConnectionProvider {
+  facts = awsConnectionFacts;
   constructor(readonly aws: AwsConnectionProvider) {}
   validate(input: ConnectionStart) {
     if (!input.aws) fail(400, 'aws_authentication_required', 'Choose AWS authentication for this executor.');

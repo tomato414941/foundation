@@ -65,6 +65,12 @@ export class Connections implements ExecutionExtension {
   private provider(method: MethodDescription): ConnectionProvider {
     return this.providers[connectionMethod(method).family];
   }
+  private metadata(material: ConnectionState) {
+    return connectionMetadata(material, this.provider(material.method).facts(material));
+  }
+  private labels(material: ConnectionState) {
+    return connectionLabels(material, this.provider(material.method).facts(material));
+  }
   private source(id: string, type: typeof ContentTypes.clientCredential | typeof ContentTypes.tokenSet, sources: CustodyContent[]) {
     const content = sources.find(source => source.policy.id === id && source.policy.contentType === type);
     if (!content) fail(409, 'input_required', 'Include the connection and its application in this execution.');
@@ -74,7 +80,7 @@ export class Connections implements ExecutionExtension {
     const material = ConnectionMaterial.safeParse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
     if (!material.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
     const result = material.data;
-    if ((await connectionMetadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
+    if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
     if (result.state === 'reconnect' && intent.operation !== Operations.revoke)
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
@@ -140,7 +146,7 @@ export class Connections implements ExecutionExtension {
       this.provider(action.method).validate(action, await this.startApp(action, intent, sources));
     } else if (action.action === 'commit') {
       const flow = await this.flow(action.flowId, intent), approval = await verifyPolicyApproval(action.approval);
-      if (!flow.material || action.authorizationDigest !== (await connectionMetadata(flow.material)).authorizationDigest ||
+      if (!flow.material || action.authorizationDigest !== (await this.metadata(flow.material)).authorizationDigest ||
         approval.policy.contentType !== ContentTypes.tokenSet || approval.policy.ownerId !== intent.ownerId || approval.policy.origin !== intent.origin ||
         canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
         !approval.policy.producers.some(producer => producer.runId === intent.id &&
@@ -172,7 +178,7 @@ export class Connections implements ExecutionExtension {
       if (action.action === 'refresh') {
         await this.provider(state.method).check?.(state, signal);
         const refreshed = await this.refresh(content, state, intent, sources, signal);
-        return { kind: 'refreshed', id: content.policy.id, ...(await connectionMetadata(refreshed)) };
+        return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
       }
       const provider = this.provider(state.method);
       if (!provider.revoke) fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
@@ -184,7 +190,7 @@ export class Connections implements ExecutionExtension {
   private async review(id: string, flow: Flow): Promise<JsonValue> {
     // The person reviewing reads the account and method by name; only the signed metadata is committed.
     return { kind: 'review', flowId: id, name: flow.input.name,
-      metadata: { ...await connectionMetadata(flow.material!), ...connectionLabels(flow.material!) } };
+      metadata: { ...await this.metadata(flow.material!), ...this.labels(flow.material!) } };
   }
   private async start(input: Extract<ConnectionCommand, { action: 'start' }>, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal) {
     if (await this.readFlow(input.flowId)) fail(409, 'flow_exists', 'Use a new connection request.');
@@ -222,14 +228,14 @@ export class Connections implements ExecutionExtension {
     if (!['review', 'committing'].includes(flow.phase)) fail(409, 'approval_required', 'Review this connection before saving.');
     if (!flow.content) {
       flow.content = await produceContent(encode(canonical(flow.material)), action.approval, intent.id,
-        this.binding, this.keys, await connectionMetadata(flow.material!));
+        this.binding, this.keys, await this.metadata(flow.material!));
       flow.phase = 'committing';
       await this.writeFlow(action.flowId, flow);
     } else if (canonical(flow.content.policy) !== canonical(action.approval.policy) || flow.content.creationRunId !== intent.id) {
       fail(409, 'connection_uncertain', 'Finish saving the previously approved connection before starting another save.');
     }
     let resource;
-    try { resource = await this.broker.capture(flow.input.name, flow.content, connectionLabels(flow.material!)); }
+    try { resource = await this.broker.capture(flow.input.name, flow.content, this.labels(flow.material!)); }
     catch (error) {
       if (error instanceof DomainError && error.status < 500) throw error;
       throw new DeliveryPending();
@@ -245,7 +251,7 @@ export class Connections implements ExecutionExtension {
     if (!flow?.content || flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) ||
       flow.content.creationRunId !== intent.id || canonical(flow.content.policy) !== canonical(action.approval.policy) ||
       !['committing', 'committed'].includes(flow.phase)) return null;
-    try { await this.broker.capture(flow.input.name, flow.content, connectionLabels(flow.material!)); }
+    try { await this.broker.capture(flow.input.name, flow.content, this.labels(flow.material!)); }
     catch (error) {
       if (error instanceof DomainError && error.status < 500) return null;
       throw new DeliveryPending();
@@ -264,7 +270,7 @@ export class Connections implements ExecutionExtension {
   }
 
   private async refreshed(record: Renewal, material: ConnectionState) {
-    const metadata = await connectionMetadata(material);
+    const metadata = await this.metadata(material);
     if (metadata.authorizationDigest !== record.previous.metadata.authorizationDigest)
       fail(409, 'connection_review', 'Review the changed service account or permissions before sharing the updated connection.');
     record.material = material;

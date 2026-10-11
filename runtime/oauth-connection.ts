@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { JsonObject } from '../shared/contracts.js';
 import { ConnectionMaterial, TokenMaterial } from '../shared/connections.js';
+import { oauthConnectionFacts } from '../shared/connection-facts.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { connectionMethod, selectScopes } from '../shared/connection-methods.js';
 import { OAuth } from '../server/oauth.js';
@@ -32,6 +33,7 @@ function checkpoint(value: ConnectionCheckpoint) {
 }
 
 export class OAuthConnection implements ConnectionProvider {
+  facts = oauthConnectionFacts;
   constructor(readonly transport: Transport) {}
   private oauth(signal?: AbortSignal) {
     return new OAuth({ send: request => this.transport.send({ ...request,
