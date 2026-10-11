@@ -6,7 +6,7 @@ import type { Authorization, Actor, ResourceIdentity } from './authorization.js'
 import { principal } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
-import { Resource, Name, ResourceKind } from '../shared/contracts.js';
+import { EnvironmentResource, Resource, Name, ResourceKind } from '../shared/contracts.js';
 import type {
   ResourceKindName,
   ResourceView,
@@ -118,7 +118,9 @@ export class Resources {
             : row.kind === 'function'
               ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
                 ...(permissions.includes('read') ? { environmentId: row.data.environmentId, program: row.data.program } : {}) }
-              : row.data;
+              : row.kind === 'environment'
+                ? EnvironmentResource.shape.data.strip().parse(row.data)
+                : row.data;
     return Resource.parse({
       id: row.id,
       ownerId: row.owner_id,

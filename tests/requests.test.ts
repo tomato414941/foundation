@@ -120,6 +120,31 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
   assert.equal(repeated.statusCode, 400, repeated.body);
 });
 
+test('実行環境の更新待機中と再開後も接続依頼と実行先を確認する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const environmentId = f.environment.manifest.id, sender = f.api(f.stranger.token);
+  const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
+    operations: [{ name: 'connection.connect', input: {
+      ownerId: f.owner.actor.id, methodId: 'huggingface:token', environmentId,
+    } }] } }, ApprovalRequest);
+  for (const paused of [true, false]) {
+    await f.context.delegation.maintenance({ id: f.executor.binding.principalId }, environmentId, paused);
+    const request = await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest);
+    assert.equal(request.canRespond, true);
+    assert.equal(request.state, 'pending');
+    const headers = { authorization: 'Bearer ' + f.owner.token };
+    const environment = await f.app.inject({ url: '/api/resources/' + environmentId, headers });
+    assert.equal(environment.statusCode, 200, environment.body);
+    assert.equal(environment.json().data.executorId, f.executor.binding.principalId);
+    assert.equal(environment.json().data.state, 'running');
+    const available = await f.app.inject({
+      url: '/api/principals/' + f.owner.actor.id + '/resources?kind=environment&limit=200', headers,
+    });
+    assert.equal(available.statusCode, 200, available.body);
+    assert.ok(available.json().items.some((item: { id: string }) => item.id === environmentId));
+  }
+});
+
 test('接続の承認後に実行先で認証情報を受け取り、暗号化した接続の作成結果を依頼元へ返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
