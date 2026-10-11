@@ -108,6 +108,15 @@ export class OperationExecutions {
     const rows = await this.db.all<ExecutionRow>("SELECT * FROM operation_executions WHERE expires_at<=now() AND state IN ('waiting','running','failed')");
     for (const row of rows) await this.expire(row);
   }
+  async recoverAll() {
+    const rows = await this.db.all<ExecutionRow>("SELECT * FROM operation_executions WHERE state='running' AND (lease_until IS NULL OR lease_until<now()) ORDER BY created_at");
+    const errors: unknown[] = [];
+    for (const row of rows) {
+      try { await this.recover(await this.expire(row)); }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Operation recovery failed.');
+  }
   async peek(id: string) {
     const row = await this.db.one<ExecutionRow>('SELECT * FROM operation_executions WHERE id=$1', [id]);
     if (!row) return null;

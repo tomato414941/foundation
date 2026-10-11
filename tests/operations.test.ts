@@ -307,7 +307,7 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   assert.equal(JSON.stringify(await f.context.vault.decrypt(saved.snapshot, 'operation-execution:' + execution.id)).includes('direct-ovh-secret'), false);
 });
 
-test('共通の操作から関数を公開して実行し、実行先の完了を同じ操作の結果に反映する', async t => {
+test('共通の操作から関数を公開して実行し、関数の終了後に準備済みの操作をバックグラウンドで続ける', async t => {
   const f = await flowFixture(() => jsonResponse({ message: 'function result' })); t.after(f.close);
   const publication = await f.operations.execute({ name: 'function.save', input: { ownerId: f.owner.actor.id,
     name: 'Operation function', definition: { environmentId: f.environment.manifest.id,
@@ -315,11 +315,14 @@ test('共通の操作から関数を公開して実行し、実行先の完了�
   if (!('kind' in publication) || publication.kind !== 'saved') throw new Error('Expected a published function.');
   const execution = await f.client.api.json('/api/operation-executions', { method: 'POST', body: { operations: [
     { name: 'function.invoke', input: { functionId: publication.resource.id, arguments: {} } },
+    { name: 'principal.rename', input: { id: f.owner.actor.id, name: 'Background completion' } },
   ] } }, OperationExecution);
   assert.equal(execution.state, 'running'); assert.equal(execution.wait, 'execution');
   const repeated = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
   assert.equal((repeated.results[0] as { id: string }).id, (execution.results[0] as { id: string }).id);
   await f.functionExecutor.tick();
+  await f.context.operationExecutions.recoverAll();
+  assert.equal((await f.context.principals.get(f.owner.actor.id)).name, 'Background completion');
   const completed = await f.client.api.json('/api/operation-executions/' + execution.id, {}, OperationExecution);
   assert.equal(completed.state, 'succeeded');
   assert.deepEqual((completed.results[0] as { result: unknown }).result, { message: 'function result' });
