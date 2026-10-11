@@ -817,6 +817,11 @@ const errors: Array<[string[], string, string]> = [
     'This operation changed. Reload it and review the details.',
   ],
   [
+    ['content_conflict'],
+    'この端末で前に確認した内容と食い違うため、続けられません。',
+    'This does not match what this device has already seen, so it cannot continue.',
+  ],
+  [
     ['execution_expired'],
     'この操作の有効期限が切れました。',
     'This operation has expired.',

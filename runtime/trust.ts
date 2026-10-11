@@ -11,11 +11,12 @@ export class JournalTrust implements TrustStore {
     await validateBinding(binding);
     await this.journal.write('identity_' + binding.principalId, binding);
   }
-  checkpoint(id: string) {
-    return this.journal.read<{ policy: CustodyPolicy; materialRevision: number; digest: string }>('checkpoint_' + id);
+  checkpoint(content: CustodyContent) {
+    return this.journal.read<{ policy: CustodyPolicy; materialRevision: number; digest: string }>(
+      'checkpoint_' + content.policy.format + '_' + content.policy.id);
   }
   async rememberContent(content: CustodyContent) {
-    await this.journal.write('checkpoint_' + content.policy.id, {
+    await this.journal.write('checkpoint_' + content.policy.format + '_' + content.policy.id, {
       policy: content.policy, materialRevision: content.materialRevision, digest: await hash(content),
     });
   }

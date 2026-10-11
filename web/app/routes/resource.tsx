@@ -101,7 +101,8 @@ export default function ResourceDetail() {
   const reveal = async () => {
     try {
       return await decryptVariable(item.id, session.principal!.id);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ApiFailure) || error.code !== 'key_locked') throw error;
       const result = await authenticate(session.principal!.id);
       if (!result.encrypted) throw new Error('key unavailable');
       return decryptVariable(item.id, session.principal!.id);

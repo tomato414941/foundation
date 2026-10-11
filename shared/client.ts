@@ -20,7 +20,9 @@ export interface JsonApi {
 export interface TrustStore {
   binding(principalId: string): Promise<BoundKeys | null>;
   rememberBinding(binding: BoundKeys): Promise<void>;
-  checkpoint(id: string): Promise<{ policy: CustodyPolicy; materialRevision: number; digest: string } | null>;
+  // What this device last observed of the content's item. Each policy format keeps its own record, so a
+  // new format starts fresh instead of reading records written in another one.
+  checkpoint(content: CustodyContent): Promise<{ policy: CustodyPolicy; materialRevision: number; digest: string } | null>;
   rememberContent(content: CustodyContent): Promise<void>;
   run(id: string): Promise<SealedRun | null>;
   rememberRun(request: SealedRun): Promise<void>;
@@ -78,16 +80,16 @@ export class CustodyClient {
     if (content.policy.id !== id || content.policy.origin !== this.origin) throw new Error('The encrypted content belongs to another item.');
     const author = policyAuthority(content);
     await this.trusted(author);
-    const observed = await this.trust.checkpoint(id);
+    const observed = await this.trust.checkpoint(content);
     if (observed) AccessPolicy.parse(observed.policy);
     if (observed) {
       if (content.policy.revision < observed.policy.revision || content.materialRevision < observed.materialRevision ||
         (content.policy.revision === observed.policy.revision && canonical(content.policy) !== canonical(observed.policy)) ||
         (content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
-        throw new Error('The encrypted content is older than this device has already observed.');
+        throw new ClientFailure('content_conflict', 'The encrypted content is older than this device has already observed.');
       if (content.policy.revision > observed.policy.revision &&
         !continuesPolicy(observed.policy, content))
-        throw new Error('An existing policy authority must approve the new recipients.');
+        throw new ClientFailure('content_conflict', 'An existing policy authority must approve the new recipients.');
     }
     await this.trust.rememberContent(content);
     return content;

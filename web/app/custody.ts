@@ -27,9 +27,12 @@ class BrowserTrust implements TrustStore {
   }
   binding(id: string) { return this.get<BoundKeys>('identity:' + id); }
   async rememberBinding(binding: BoundKeys) { await validateBinding(binding); await this.put('identity:' + binding.principalId, binding); }
-  checkpoint(id: string) { return this.get<{ policy: CustodyPolicy; materialRevision: number; digest: string }>('checkpoint:' + id); }
+  checkpoint(content: CustodyContent) {
+    return this.get<{ policy: CustodyPolicy; materialRevision: number; digest: string }>(
+      'checkpoint:' + content.policy.format + ':' + content.policy.id);
+  }
   async rememberContent(content: CustodyContent) {
-    await this.put('checkpoint:' + content.policy.id, {
+    await this.put('checkpoint:' + content.policy.format + ':' + content.policy.id, {
       policy: content.policy, materialRevision: content.materialRevision, digest: await hash(content),
     });
   }

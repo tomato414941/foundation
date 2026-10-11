@@ -6,6 +6,10 @@ import {
 import { AccessPolicy, ContentTypes, Operations, permittedOperations, authorizeUse, openRun, prepareRun, protect, renewContent, reveal, useContent, verifyContent, verifyRun } from '../shared/custody.js';
 import type { CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
+import { ClientFailure, CustodyClient } from '../shared/client.js';
+import type { JsonApi } from '../shared/client.js';
+import { JournalTrust } from '../runtime/trust.js';
+import { MemoryJournal } from './delegation-support.js';
 
 async function identity() {
   const keys = await newIdentityKeys();
@@ -86,6 +90,18 @@ test('権限、内容、宛先、版を検証してから暗号化データを�
   await assert.rejects(protect(encode('value'), policy, 1, stranger.binding, stranger.keys));
   const changedKeys = { ...owner.keys, signing: stranger.keys.signing };
   await assert.rejects(protect(encode('value'), policy, 1, owner.binding, changedKeys));
+});
+
+test('端末が前に確認したより古い内容を返されると、食い違いとして止める', async () => {
+  const { owner, policy } = await setup();
+  const first = await protect(encode('first'), policy, 1, owner.binding, owner.keys);
+  const second = await protect(encode('second'), policy, 2, owner.binding, owner.keys, undefined, first);
+  let served = second;
+  const api: JsonApi = { async json(_path, _options, schema) { return schema!.parse({ content: served, version: 1 }); } };
+  const client = new CustodyClient(api, policy.origin, owner.binding, owner.keys, new JournalTrust(new MemoryJournal()));
+  assert.equal(decode(await client.reveal(policy.id)), 'second');
+  served = first;
+  await assert.rejects(client.reveal(policy.id), error => error instanceof ClientFailure && error.code === 'content_conflict');
 });
 
 test('実行依頼を署名者、実行先、入力、結果の宛先、有効期限へ結び付ける', async () => {

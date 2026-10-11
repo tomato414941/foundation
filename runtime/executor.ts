@@ -176,10 +176,11 @@ export class Executor {
       const pin = intent.sources.find(pin => pin.id === source.policy.id);
       if (!pin || !await matchesPin(source, pin))
         throw new Error('An execution input changed.');
-      const checkpoint = await this.journal.read<{ policy: number; material: number }>('checkpoint_' + source.policy.id);
+      const checkpointId = 'checkpoint_' + source.policy.format + '_' + source.policy.id;
+      const checkpoint = await this.journal.read<{ policy: number; material: number }>(checkpointId);
       if (checkpoint && (source.policy.revision < checkpoint.policy || source.materialRevision < checkpoint.material))
         throw new Error('The execution input is older than this executor has already observed.');
-      await this.journal.write('checkpoint_' + source.policy.id,
+      await this.journal.write(checkpointId,
         { policy: source.policy.revision, material: source.materialRevision });
     }
     if (operation.kind === 'function' && (operation.functionId !== intent.functionId ||
