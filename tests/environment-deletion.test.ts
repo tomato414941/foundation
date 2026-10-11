@@ -61,6 +61,7 @@ test('稼働中の環境の削除を一度受け付け、停止とディスク�
   await c.environments.tick();
   assert.equal(runner.machines.size, 0);
   assert.equal(runner.volumes.size, 0);
+  assert.equal(runner.networks.size, 0);
   assert.equal((await app.inject({ method: 'GET', url: '/api/resources/' + row.id, headers })).statusCode, 404);
   assert.deepEqual((await app.inject({ method: 'GET', url: '/api/resources/' + row.id + '/deletion', headers })).json(),
     { state: 'complete', error: null });
@@ -69,8 +70,8 @@ test('稼働中の環境の削除を一度受け付け、停止とディスク�
   assert.equal((await f.audit.list(owner.actor.id)).items.filter(item => item.action === 'resource.delete').length, 1);
 });
 
-for (const phase of ['stop', 'removeVolume'] as const) test(
-  `${phase === 'stop' ? '停止' : 'ディスク削除'}の失敗理由を保存し、再試行で削除を完了して使用量を一度記録する`, async t => {
+for (const phase of ['stop', 'terminate', 'removeVolume', 'removeNetwork'] as const) test(
+  `${{stop:'停止',terminate:'VM削除',removeVolume:'ディスク削除',removeNetwork:'ネットワーク削除'}[phase]}の失敗理由を保存し、再試行で削除を完了して使用量を一度記録する`, async t => {
     const s = await setup(t), { c, f, owner, row, runner } = s;
     await register(s);
     let failOnce = true;
@@ -81,7 +82,7 @@ for (const phase of ['stop', 'removeVolume'] as const) test(
     });
     await c.environments.remove(owner.actor, await c.resources.get(row.id));
     await c.environments.tick();
-    const error = phase === 'stop' ? 'environment_stop_failed' : 'environment_disk_delete_failed';
+    const error = phase === 'removeVolume' ? 'environment_disk_delete_failed' : phase === 'removeNetwork' ? 'environment_network_delete_failed' : 'environment_stop_failed';
     assert.deepEqual(await c.environments.deletion(owner.actor, row.id), { state: 'failed', error });
     const restarted = await createContext(f.config, { db: f.db, runner });
     assert.deepEqual((await restarted.resources.get(row.id)).data.deletion, { state: 'failed', error });
@@ -90,6 +91,7 @@ for (const phase of ['stop', 'removeVolume'] as const) test(
     assert.deepEqual(await restarted.environments.deletion(owner.actor, row.id), { state: 'complete', error: null });
     assert.equal(runner.machines.size, 0);
     assert.equal(runner.volumes.size, 0);
+    assert.equal(runner.networks.size, 0);
     const usage = await f.db.all("SELECT * FROM billing_events WHERE reference=$1", ['environment:' + row.id]);
     assert.equal(usage.length, 1);
   });
@@ -118,6 +120,7 @@ test('起動処理中に削除を受け付け、起動の完了後に同じ環�
   assert.deepEqual(await restarted.environments.deletion(owner.actor, row.id), { state: 'complete', error: null });
   assert.equal(runner.machines.size, 0);
   assert.equal(runner.volumes.size, 0);
+  assert.equal(runner.networks.size, 0);
 });
 
 test('接続した端末の環境登録を削除し、端末の身元を引き続き利用する', async t => {
@@ -150,6 +153,7 @@ test('起動中に作成されたディスクを見つけ、起動が失敗し�
   await c.environments.tick();
   assert.equal((await c.environments.deletion(owner.actor, row.id)).state, 'complete');
   assert.equal(runner.volumes.size, 0);
+  assert.equal(runner.networks.size, 0);
 });
 
 async function commandRequest(s: Awaited<ReturnType<typeof setup>>, executor: Awaited<ReturnType<typeof register>>,

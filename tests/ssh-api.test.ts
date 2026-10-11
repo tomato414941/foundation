@@ -12,7 +12,6 @@ import { SSHView, sshKeyBytes } from '../shared/ssh.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { signEnvironment } from '../shared/execution.js';
 import { Operations } from '../shared/custody.js';
-import { DomainError } from '../server/errors.js';
 
 function publicKey() {
   const field = (value: Buffer) => {
@@ -21,10 +20,8 @@ function publicKey() {
   };
   return 'ssh-ed25519 ' + Buffer.concat([field(Buffer.from('ssh-ed25519')), field(randomBytes(32))]).toString('base64');
 }
-async function setup(t: TestContext, range = 2) {
-  const f = await fixture({ FOUNDATION_BILLING_MODE: 'included', FLY_SSH_HOST: 'ssh.foundation.test',
-    FOUNDATION_INCLUDED_ENVIRONMENTS: '10',
-    FLY_SSH_PORT_MIN: '24000', FLY_SSH_PORT_MAX: String(23999 + range) });
+async function setup(t: TestContext) {
+  const f = await fixture({ FOUNDATION_BILLING_MODE: 'included', FOUNDATION_INCLUDED_ENVIRONMENTS: '10' });
   t.after(f.close);
   const owner = await f.person(), other = await f.person('Other principal'), runner = new MemoryRunner();
   const c = await createContext(f.config, { db: f.db, runner }), app = await buildApp(c);
@@ -56,13 +53,13 @@ test('公開鍵を登録した環境の接続情報を返し、鍵の変更を�
   assert.equal((await app.inject({ url: '/api/session', headers })).json().features.ssh, true);
   const starting = SSHView.parse((await app.inject({ url, headers })).json());
   assert.equal(starting.state, 'starting');
-  assert.equal(starting.host, 'ssh.foundation.test');
-  assert.equal(starting.port, 24000);
+  assert.equal(starting.host, null);
+  assert.equal(starting.port, 22);
   assert.equal(starting.username, 'root');
   assert.equal(starting.workingDirectory, '/workspace');
   assert.deepEqual(starting.authorizedKeys, keys);
   const executor = await register(s);
-  assert.equal(s.runner.machines.get(row.id)!.environment.FOUNDATION_SSH_PORT, '24000');
+  assert.equal((await s.c.environments.ssh(s.owner.actor, row.id))!.host, row.id + '.ssh.foundation.test');
   const beat = (appliedRevision: number) => app.inject({ method: 'POST', url: url + '/heartbeat', headers: executor.headers,
     payload: { hostKey: executor.hostKey, appliedRevision, activeSessions: 0 } });
   const initial = await beat(0);
@@ -119,7 +116,7 @@ test('SSH接続中はアイドル停止を延期し、接続終了後にアイ�
   await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [s.row.id]);
   await s.c.environments.tick();
   assert.equal((await s.c.environments.ssh(s.owner.actor, s.row.id))!.state, 'stopped');
-  assert.equal(s.runner.machines.size, 0);
+  assert.equal(s.runner.machines.get(s.row.id)!.state, 'stopped');
 });
 
 test('SSH接続中も最長稼働時間を適用して環境を停止する', async t => {
@@ -129,28 +126,18 @@ test('SSH接続中も最長稼働時間を適用して環境を停止する', as
   await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [s.row.id]);
   await s.c.environments.tick();
   assert.equal((await s.c.environments.ssh(s.owner.actor, s.row.id))!.state, 'stopped');
-  assert.equal(s.runner.machines.size, 0);
+  assert.equal(s.runner.machines.get(s.row.id)!.state, 'stopped');
 });
 
-test('同時作成した環境へ別々のSSHポートを割り当て、停止を完了したポートを再利用する', async t => {
-  const s = await setup(t, 3);
+test('同じ所有者の環境を同時に作成し、それぞれのアドレスに標準SSHポートで接続する', async t => {
+  const s = await setup(t);
   const options = EnvironmentInput.parse({ lifetime: { idleSeconds: 60, maxSeconds: 600 } });
   const rows = await Promise.all([0, 1].map(() => s.c.environments.create(s.owner.actor, s.owner.actor.id, options)));
-  const ports = await Promise.all([s.row, ...rows].map(row => s.c.environments.ssh(s.owner.actor, row.id)));
-  assert.deepEqual(ports.map(value => value!.port).sort(), [24000, 24001, 24002]);
-  await assert.rejects(s.c.environments.create(s.owner.actor, s.owner.actor.id, options), { code: 'ssh_capacity' });
-  await register(s);
-  const stop = s.runner.stop.bind(s.runner);
-  let failed = false;
-  t.mock.method(s.runner, 'stop', async (id: string) => {
-    if (!failed) { failed = true; throw new DomainError(502, 'runner_unavailable', 'Provider unavailable'); }
-    return stop(id);
-  });
-  await s.c.environments.remove(s.owner.actor, await s.c.resources.get(s.row.id));
-  await s.c.environments.tick();
-  await assert.rejects(s.c.environments.create(s.owner.actor, s.owner.actor.id, options), { code: 'ssh_capacity' });
-  await s.c.environments.remove(s.owner.actor, await s.c.resources.get(s.row.id));
-  await s.c.environments.tick();
-  const next = await s.c.environments.create(s.owner.actor, s.owner.actor.id, options);
-  assert.equal((await s.c.environments.ssh(s.owner.actor, next.id))!.port, 24000);
+  for (const row of [s.row, ...rows]) {
+    await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [row.id]);
+    await s.c.environments.tick();
+  }
+  const connections = await Promise.all([s.row, ...rows].map(row => s.c.environments.ssh(s.owner.actor, row.id)));
+  assert.equal(new Set(connections.map(value => value!.host)).size, 3);
+  assert.deepEqual(connections.map(value => value!.port), [22, 22, 22]);
 });

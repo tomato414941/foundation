@@ -26,14 +26,14 @@ const Environment = z.object({
   STRIPE_COMPUTE_METER: z.string().default('foundation_compute_seconds'),
   STRIPE_STORAGE_METER: z.string().default('foundation_storage_byte_hours'),
   FOUNDATION_BUCKET: z.string().default(''),
-  FLY_API_TOKEN: z.string().default(''),
-  FLY_APP: z.string().default(''),
-  FLY_IMAGE: z.string().default(''),
-  FLY_COMMAND_IMAGE: z.string().default(''),
-  FLY_REGION: z.string().default('nrt'),
-  FLY_SSH_HOST: z.string().max(253).regex(/^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*|[a-fA-F0-9:]+)?$/).default(''),
-  FLY_SSH_PORT_MIN: z.coerce.number().int().min(1024).max(65535).default(20000),
-  FLY_SSH_PORT_MAX: z.coerce.number().int().min(1024).max(65535).default(59999),
+  ENVIRONMENT_COMMAND_IMAGE: z.string().default(''),
+  EC2_ENVIRONMENT_AMI: z.string().regex(/^(?:ami-[a-f0-9]+)?$/).default(''),
+  EC2_ENVIRONMENT_VPC: z.string().regex(/^(?:vpc-[a-f0-9]+)?$/).default(''),
+  EC2_ENVIRONMENT_ACL: z.string().regex(/^(?:acl-[a-f0-9]+)?$/).default(''),
+  EC2_ENVIRONMENT_DEFAULT_ACL: z.string().regex(/^(?:acl-[a-f0-9]+)?$/).default(''),
+  EC2_ENVIRONMENT_ROUTE_TABLE: z.string().regex(/^(?:rtb-[a-f0-9]+)?$/).default(''),
+  EC2_ENVIRONMENT_ZONE: z.string().default(''),
+  EC2_ENVIRONMENT_DISK_GB: z.coerce.number().int().min(16).max(1024).default(16),
   FOUNDATION_LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])
     .default('info'),
@@ -41,7 +41,6 @@ const Environment = z.object({
 export type Configuration = Awaited<ReturnType<typeof configuration>>;
 export async function configuration(env: NodeJS.ProcessEnv = process.env) {
   const value = Environment.parse(env);
-  if (value.FLY_SSH_PORT_MIN > value.FLY_SSH_PORT_MAX) throw new Error('The SSH port range is invalid.');
   const origin = new URL(value.FOUNDATION_ORIGIN);
   if (
     origin.pathname !== '/' ||

@@ -103,7 +103,7 @@ class BrowserRunner extends MemoryRunner {
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
-const fixtureData = await fixture({ FLY_SSH_HOST: 'ssh.foundation.test' });
+const fixtureData = await fixture();
 const port = Number(process.env.FOUNDATION_TEST_PORT ?? 3458);
 const origin = 'http://localhost:' + port;
 const context = await createContext(

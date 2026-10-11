@@ -18,9 +18,12 @@
     "check": "react-router typegen && tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "npm run build:cli && node --import tsx --test --test-timeout=60000 tests/*.test.ts",
     "test:ui": "python3 tests/browser.py",
-    "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts"
+    "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts",
+    "build:environment": "npm run build:cli && tsx deploy/environment/build-image.ts",
+    "test:ec2": "tsx tests/ec2-live.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-ec2": "3.1146.0",
     "@aws-sdk/client-iam": "3.1146.0",
     "@aws-sdk/client-kms": "3.1146.0",
     "@aws-sdk/client-s3": "3.1146.0",

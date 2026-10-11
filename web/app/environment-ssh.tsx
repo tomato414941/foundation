@@ -14,12 +14,12 @@ export function EnvironmentSSH({ item, canUpdate, busy, saved }: {
   const value = item.data.ssh;
   const state = !['starting', 'running'].includes(item.data.state) || item.data.deletion ? 'stopped'
     : item.data.state === 'starting' ? 'starting'
-    : value.appliedRevision !== value.revision || !value.hostKey ? 'configuring'
+    : !value.host || value.appliedRevision !== value.revision || !value.hostKey ? 'configuring'
     : value.authorizedKeys.length ? 'ready' : 'disabled';
   const ssh = SSHView.parse({ ...value, state });
   return <Panel title="SSH">
     {state !== 'ready' && <p aria-live="polite" className="text-sm leading-relaxed text-muted-foreground">{t('ssh.' + state)}</p>}
-    {state !== 'stopped' && <>
+    {state !== 'stopped' && value.host && <>
       <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
         <code className="min-w-0 flex-1 break-all font-mono text-sm">{sshCommand(ssh)}</code>
         <Copy value={sshCommand(ssh)} />

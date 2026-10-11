@@ -37,7 +37,7 @@ export const SSHPublicKey = z.string().trim().max(8192).refine(value => sshKeyBy
 export const SSHSettings = z.object({ authorizedKeys: z.array(SSHPublicKey).max(32) }).strict();
 export const SSHUpdate = SSHSettings.extend({ revision: z.number().int().positive().optional() });
 export const SSHConnection = SSHSettings.extend({
-  host: z.string().min(1).max(253), port: z.number().int().min(1024).max(65535),
+  host: z.string().min(1).max(253).nullable(), port: z.number().int().min(1).max(65535),
   username: z.literal('root'), workingDirectory: z.literal('/workspace'),
   hostKey: SSHPublicKey.nullable(), fingerprint: z.string().nullable(),
   revision: z.number().int().positive(), appliedRevision: z.number().int().nonnegative(),
@@ -48,11 +48,12 @@ export const SSHHeartbeat = z.object({
   hostKey: SSHPublicKey, appliedRevision: z.number().int().nonnegative(),
   activeSessions: z.number().int().min(0).max(1024),
 }).strict();
-export const SSHConfiguration = SSHSettings.extend({ port: z.number().int().min(1024).max(65535),
+export const SSHConfiguration = SSHSettings.extend({ port: z.number().int().min(1).max(65535),
   revision: z.number().int().positive() }).strict();
 export const SSHWorkerState = z.object({ configuration: SSHConfiguration.nullable() }).strict();
 export type SSHConnectionInfo = z.infer<typeof SSHView>;
 
 export function sshCommand(value: Pick<SSHConnectionInfo, 'host' | 'port' | 'username'>) {
+  if (!value.host) throw new Error('Wait for the SSH address.');
   return 'ssh -p ' + value.port + ' ' + value.username + '@' + value.host;
 }

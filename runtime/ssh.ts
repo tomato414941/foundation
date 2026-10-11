@@ -24,7 +24,7 @@ export class SSHServer {
   readonly sessions: string;
   constructor(readonly options: { directory: string; workspace: string; port: number;
     username?: string; listenAddress?: string; sessionCommand?: string; workspaceLink?: string }, readonly heartbeat: Heartbeat) {
-    if (!Number.isInteger(options.port) || options.port < 1024 || options.port > 65535) throw new Error('Use an allocated SSH port.');
+    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Use a valid SSH port.');
     for (const value of Object.values(options)) if (typeof value === 'string' && /[\r\n\0]/.test(value))
       throw new Error('Use SSH paths and addresses without control characters.');
     this.sessions = join(options.directory, 'sessions');

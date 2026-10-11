@@ -18,7 +18,7 @@ import { Billing, StripePayments } from './billing.js';
 import type { PaymentProvider } from './billing.js';
 import { Objects, S3Objects } from './objects.js';
 import type { ObjectStore } from './objects.js';
-import { FlyRunner } from './runner.js';
+import { EC2Runner } from './ec2-runner.js';
 import type { Runner } from './runner.js';
 import { Environments } from './environments.js';
 import { Integrations } from './integrations.js';
@@ -47,6 +47,9 @@ export interface Dependencies {
 export async function createContext(config: Configuration, deps: Dependencies = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
   await db.initialize();
+  if (!deps.runner && await db.one(
+    "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND j.provider IS DISTINCT FROM 'ec2' LIMIT 1"))
+    throw new Error('Migrate existing managed environment disks and provider records before starting the EC2 deployment.');
   const vault = await Vault.initialize(db, config),
     authorization = new Authorization(db),
     audit = new Audit(db),
@@ -70,7 +73,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     environments = new Environments(
       resources,
       billing,
-      deps.runner ?? new FlyRunner(config),
+      deps.runner ?? new EC2Runner(config),
       vault,
       config,
       delegation,

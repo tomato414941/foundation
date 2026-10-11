@@ -19,7 +19,7 @@ import { fail, failure, required } from './errors.js';
 interface Job {
   resource_id: string; machine_id: string | null; volume_id: string | null;
   bootstrap_ciphertext: string | null; bootstrap_digest: string | null;
-  bootstrap_expires_at: Date | null; enrollment_digest: string | null; attempts: number;
+  network_slot: number | null; bootstrap_expires_at: Date | null; enrollment_digest: string | null; attempts: number;
 }
 interface Deletion {
   resource_id: string; owner_id: string; actor_id: string | null;
@@ -29,7 +29,7 @@ export class Environments {
   constructor(readonly resources: Resources, readonly billing: Billing, readonly runner: Runner,
     readonly vault: Vault, readonly config: Configuration, readonly delegation: Delegation) {}
 
-  get sshEnabled() { return this.runner.enabled && Boolean(this.config.FLY_SSH_HOST); }
+  get sshEnabled() { return this.runner.enabled; }
 
   async create(actor: Actor, ownerId: string, options: EnvironmentOptions, name?: string) {
     if (!this.runner.enabled) fail(503, 'environments_unavailable', 'Environments are not configured.');
@@ -37,7 +37,7 @@ export class Environments {
       fail(403, 'forbidden', 'You cannot open environments for this principal.');
     if (options.lifetime.idleSeconds > options.lifetime.maxSeconds)
       fail(400, 'invalid_lifetime', 'The idle timeout cannot exceed the maximum lifetime.');
-    const image = options.image ?? this.config.FLY_COMMAND_IMAGE;
+    const image = options.image ?? this.config.ENVIRONMENT_COMMAND_IMAGE;
     if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(image))
       fail(400, 'image_required', 'Choose a command image pinned to its SHA-256 digest.');
     if (options.ssh?.authorizedKeys.length && !this.sshEnabled)
@@ -46,17 +46,16 @@ export class Environments {
       await this.billing.reserve(ownerId, 'compute',
         options.lifetime.maxSeconds * { small: 1, medium: 2, large: 4 }[options.size], connection);
       const id = randomUUID(), label = name ?? '実行環境 ' + id.slice(0, 8);
+      await connection.query("SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':environment_networks'))");
+      const network = await this.resources.db.one<{ slot: number }>(
+        `SELECT slot FROM generate_series(0,4091) AS slot
+         WHERE NOT EXISTS(SELECT 1 FROM environment_jobs WHERE network_slot=slot) ORDER BY slot LIMIT 1`, [], connection);
+      if (!network) fail(503, 'environment_capacity', 'All environment networks are in use. Try again later.');
       const { ssh: requestedSSH, ...settings } = options;
       let ssh: z.infer<typeof SSHConnection> | undefined;
       if (this.sshEnabled) {
-        await connection.query("SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':ssh_ports'))");
-        const available = await this.resources.db.one<{ port: number }>(
-          `SELECT port FROM generate_series($1::int,$2::int) AS port
-           WHERE NOT EXISTS(SELECT 1 FROM environment_jobs WHERE ssh_port=port) ORDER BY port LIMIT 1`,
-          [this.config.FLY_SSH_PORT_MIN, this.config.FLY_SSH_PORT_MAX], connection);
-        if (!available) fail(503, 'ssh_capacity', 'All SSH connection ports are in use. Try again later.');
         ssh = SSHConnection.parse({ authorizedKeys: requestedSSH?.authorizedKeys ?? [],
-          host: this.config.FLY_SSH_HOST, port: available.port, username: 'root', workingDirectory: '/workspace',
+          host: null, port: 22, username: 'root', workingDirectory: '/workspace',
           hostKey: null, fingerprint: null, revision: 1, appliedRevision: 0, activeSessions: 0 });
       }
       const executor = await this.resources.principals.create(label, null, undefined, connection);
@@ -68,9 +67,9 @@ export class Environments {
         state: 'starting', startedAt: null, stoppedAt: null, lastActiveAt: new Date().toISOString(), error: null,
       }, { id }, connection);
       await connection.query(
-        `INSERT INTO environment_jobs(resource_id,bootstrap_digest,bootstrap_ciphertext,bootstrap_expires_at,ssh_port)
-         VALUES($1,$2,$3,now()+interval '15 minutes',$4)`,
-        [id, digest(bootstrap.bootstrap), await this.vault.encrypt(bootstrap, 'executor-bootstrap:' + id), ssh?.port ?? null]);
+        `INSERT INTO environment_jobs(resource_id,bootstrap_digest,bootstrap_ciphertext,bootstrap_expires_at,provider,network_slot)
+         VALUES($1,$2,$3,now()+interval '15 minutes','ec2',$4)`,
+        [id, digest(bootstrap.bootstrap), await this.vault.encrypt(bootstrap, 'executor-bootstrap:' + id), network.slot]);
       await this.resources.audit.record(ownerId, actor.id, 'environment.create', id, { executorId: executor.id }, connection);
       return row;
     });
@@ -82,7 +81,7 @@ export class Environments {
     const ssh = SSHConnection.parse(row.data.ssh);
     const state = !['starting', 'running'].includes(String(row.data.state)) || row.data.deletion ? 'stopped'
       : row.data.state === 'starting' ? 'starting'
-      : ssh.appliedRevision !== ssh.revision || !ssh.hostKey ? 'configuring'
+      : !ssh.host || ssh.appliedRevision !== ssh.revision || !ssh.hostKey ? 'configuring'
       : ssh.authorizedKeys.length ? 'ready' : 'disabled';
     return SSHView.parse({ ...ssh, state });
   }
@@ -205,7 +204,7 @@ export class Environments {
         [row.id, lease]).catch(() => {});
     }, 30_000);
     renewal.unref();
-    let deletionStep: 'stop' | 'disk' | 'resource' = 'stop';
+    let deletionStep: 'stop' | 'disk' | 'network' | 'resource' = 'stop';
     try {
       if (row.data.state === 'starting') {
         await this.billing.requirePayment(row.owner_id);
@@ -213,16 +212,15 @@ export class Environments {
           required(job.bootstrap_ciphertext), 'executor-bootstrap:' + row.id));
         await this.runner.start(row.id, EnvironmentInput.parse({
           image: row.data.image, size: row.data.size, lifetime: row.data.lifetime,
-        }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url'),
-          ...(bootstrap.ssh ? { FOUNDATION_SSH_PORT: String(bootstrap.ssh.port) } : {}) },
-        async (machineId, volumeId) => {
+        }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url') },
+        async (machineId, volumeId, host) => {
           await this.resources.db.pool.query(
             'UPDATE environment_jobs SET machine_id=$3,volume_id=$4 WHERE resource_id=$1 AND lease_token=$2',
             [row.id, lease, machineId, volumeId]);
           await this.resources.db.pool.query(
-            "UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb($2::text)) WHERE id=$1 AND data->>'startedAt' IS NULL",
-            [row.id, new Date().toISOString()]);
-        });
+            "UPDATE resources SET data=jsonb_set(jsonb_set(data,'{startedAt}',to_jsonb(coalesce(data->>'startedAt',$2::text))),'{ssh,host}',to_jsonb($3::text)),version=version+1,updated_at=now() WHERE id=$1",
+            [row.id, new Date().toISOString(), host]);
+        }, required(job.network_slot));
       } else if (row.data.state === 'stopping') {
         const machine = row.data.driver === 'attached' ? null : job.machine_id ?? await this.runner.find(row.id);
         if (machine) await this.runner.stop(machine);
@@ -238,16 +236,19 @@ export class Environments {
             state: row.data.error ? 'failed' : 'stopped', stoppedAt: new Date().toISOString() } }, connection);
           await connection.query('DELETE FROM credentials WHERE environment_id=$1', [row.id]);
           await connection.query('UPDATE environment_jobs SET bootstrap_ciphertext=NULL,bootstrap_digest=NULL WHERE resource_id=$1', [row.id]);
-          await connection.query('UPDATE environment_jobs SET ssh_port=NULL WHERE resource_id=$1', [row.id]);
           await this.resources.audit.record(row.owner_id, null, 'environment.stop', row.id, { seconds }, connection);
         });
       }
       const deletion = await this.resources.db.one<Deletion>(
         "SELECT * FROM environment_deletions WHERE resource_id=$1 AND state='pending'", [row.id]);
       if (deletion && ['stopped', 'failed'].includes(String(row.data.state))) {
+        const machine = row.data.driver === 'attached' ? null : job.machine_id ?? await this.runner.find(row.id);
+        if (machine) await this.runner.terminate(machine);
         deletionStep = 'disk';
         const volume = row.data.driver === 'attached' ? null : job.volume_id ?? await this.runner.findVolume(row.id);
         if (volume) await this.runner.removeVolume(volume);
+        deletionStep = 'network';
+        if (row.data.driver !== 'attached') await this.runner.removeNetwork(row.id);
         deletionStep = 'resource';
         await this.resources.db.transaction(async connection => {
           await this.resources.delete({ id: deletion.actor_id ?? row.owner_id }, row, connection);
@@ -265,7 +266,8 @@ export class Environments {
       else if (deleting) await this.resources.db.transaction(async connection => {
         const cause = failure(error).code;
         const code = ['runner_unavailable', 'runner_response'].includes(cause)
-          ? deletionStep === 'disk' ? 'environment_disk_delete_failed' : 'environment_stop_failed' : cause;
+          ? deletionStep === 'disk' ? 'environment_disk_delete_failed'
+            : deletionStep === 'network' ? 'environment_network_delete_failed' : 'environment_stop_failed' : cause;
         await connection.query(
           "UPDATE environment_deletions SET state='failed',error=$2 WHERE resource_id=$1", [row.id, code]);
         await connection.query(

@@ -41,7 +41,7 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     FOUNDATION_DATA: dataDirectory,
     FOUNDATION_ORIGIN: 'https://foundation.test',
     FOUNDATION_LOG_LEVEL: 'silent',
-    FLY_COMMAND_IMAGE: 'docker.io/library/node@sha256:' + '1'.repeat(64),
+    ENVIRONMENT_COMMAND_IMAGE: 'docker.io/library/node@sha256:' + '1'.repeat(64),
     ...overrides,
   });
   const db = new Database(databaseUrl, { schema });

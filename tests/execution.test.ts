@@ -66,7 +66,7 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
   await f.db.pool.query("UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1", [row.id]);
   await c.environments.tick();
   assert.equal((await c.resources.get(row.id)).data.state, 'stopped');
-  assert.equal(runner.machines.size, 0);
+  assert.equal(runner.machines.get(row.id)!.state, 'stopped');
   assert.ok((await c.billing.usage(owner.actor.id)).computeSeconds >= 1);
   await c.billing.report(); await c.billing.report();
   assert.equal(payments.events.length, 1);

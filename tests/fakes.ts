@@ -47,23 +47,28 @@ export class MemoryObjects implements ObjectStore {
 }
 export class MemoryRunner implements Runner {
   readonly enabled = true;
-  machines = new Map<string, { environment: Record<string, string>; options: EnvironmentOptions }>();
+  machines = new Map<string, { environment: Record<string, string>; options: EnvironmentOptions; state: 'running' | 'stopped' }>();
   volumes = new Set<string>();
+  networks = new Set<string>();
   async start(
     id: string,
     options: EnvironmentOptions,
     environment: Record<string, string>,
-    created: (id: string, volume: string) => Promise<void>,
+    created: (id: string, volume: string, host: string) => Promise<void>,
   ) {
-    this.machines.set(id, { environment, options });
+    this.networks.add(id);
+    this.machines.set(id, { environment, options, state: 'running' });
     this.volumes.add('vol_' + id.replaceAll('-', ''));
-    await created(id, 'vol_' + id.replaceAll('-', ''));
+    await created(id, 'vol_' + id.replaceAll('-', ''), id + '.ssh.foundation.test');
     return id;
   }
   async removeVolume(id: string) { this.volumes.delete(id); }
   async stop(id: string) {
-    this.machines.delete(id);
+    const machine = this.machines.get(id);
+    if (machine) machine.state = 'stopped';
   }
+  async terminate(id: string) { this.machines.delete(id); }
+  async removeNetwork(id: string) { this.networks.delete(id); }
   async find(id: string) {
     return this.machines.has(id) ? id : null;
   }

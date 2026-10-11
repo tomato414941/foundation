@@ -1115,7 +1115,7 @@ class BrowserTests(unittest.TestCase):
             environment_id = page.url.rsplit("/", 1)[1]
             self.environments.append((page, environment_id))
             expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
-            expect(page.locator("code").filter(has_text="root@ssh.foundation.test")).to_be_visible()
+            expect(page.locator("code").filter(has_text=".ssh.foundation.test")).to_be_visible()
             expect(page.get_by_text("SSHホスト鍵の指紋", exact=True)).to_be_visible(timeout=20000)
             editor = page.get_by_role("textbox", name="SSH公開鍵", exact=True)
             expect(editor).to_have_value(public_keys[0])
