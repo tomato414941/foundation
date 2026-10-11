@@ -7,6 +7,7 @@ import time
 import unittest
 import urllib.request
 import uuid
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright, expect
 
@@ -820,6 +821,94 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "Language", "日本語")
         page.get_by_role("button", name="接続する", exact=True).click()
         self.accept_connection(page, "Existing AWS role")
+
+    def test_AWSで選んだ権限を確認し戻りリンクでロールを入力して接続する(self):
+        page, principal = self.passkey_account("AWS guided setup owner")
+        self.executor(page, principal)
+        page.context.route("https://console.aws.amazon.com/cloudformation/**",
+                           lambda route: route.fulfill(content_type="text/html", body="<h1>AWS setup fixture</h1>"))
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
+        self.select(page, "実行環境", "Browser executor")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Guided AWS role")
+        expect(page.get_by_role("combobox", name="新しいロールで許可する操作", exact=True)).to_have_text("読み取りのみ")
+        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
+        expect(link).to_be_visible()
+        parameters = parse_qs(urlparse(link.get_attribute("href")).fragment.split("?", 1)[1])
+        self.assertEqual(parameters["param_Policies"], ["arn:aws:iam::aws:policy/ReadOnlyAccess"])
+        self.select(page, "新しいロールで許可する操作", "管理者")
+        expect(page.get_by_text("このAWSアカウントのサービスとリソースを管理する広い権限です。", exact=False)).to_be_visible()
+        self.select(page, "言語", "English")
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("combobox", name="Allowed operations for the new role", exact=True)).to_have_text("Administrator")
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-guided-admin-en-mobile.png"), full_page=True, animations="disabled")
+        print("Rendered AWS setup (English): " + page.locator("main").inner_text(), flush=True)
+        self.select(page, "Language", "日本語")
+        page.set_viewport_size({"width": 1440, "height": 1050})
+        with page.expect_popup() as popup:
+            link.click()
+        aws = popup.value
+        aws.on("pageerror", lambda error: self.errors.append(str(error)))
+        aws.wait_for_load_state("networkidle")
+        parameters = parse_qs(urlparse(aws.url).fragment.split("?", 1)[1])
+        self.assertEqual(parameters["param_Policies"], ["arn:aws:iam::aws:policy/AdministratorAccess"])
+        callback = parameters["param_ReturnUrl"][0]
+        state = parse_qs(urlparse(callback).query)["state"][0]
+        role = "arn:aws:iam::999999999999:role/foundation-Example"
+        aws.goto(callback.replace(state, str(uuid.uuid4())) + "#arn=" + role)
+        expect(aws.get_by_text("このAWS設定の戻りリンクは利用できません。", exact=False)).to_be_visible()
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("")
+        aws.goto(callback + "#arn=" + role)
+        expect(aws.get_by_text("IAMロールの情報を受け取りました。", exact=False)).to_be_visible()
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value(role)
+        expect(page.get_by_text("IAMロールのARNを反映しました。", exact=False)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-guided-return-ja.png"), full_page=True, animations="disabled")
+        print("Rendered AWS setup (Japanese): " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "Guided AWS role")
+
+    def test_AWS設定中に接続条件を変えると前の戻りリンクを拒否する(self):
+        page, principal = self.passkey_account("AWS setup binding owner")
+        self.executor(page, principal)
+        page.context.route("https://console.aws.amazon.com/cloudformation/**",
+                           lambda route: route.fulfill(content_type="text/html", body="<h1>AWS setup fixture</h1>"))
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
+        self.select(page, "実行環境", "Browser executor")
+        with page.expect_popup() as popup:
+            page.get_by_role("link", name="AWSでIAMロールを作る", exact=True).click()
+        aws = popup.value
+        aws.wait_for_load_state("networkidle")
+        parameters = parse_qs(urlparse(aws.url).fragment.split("?", 1)[1])
+        page.get_by_label("External ID", exact=True).fill("changed-external-id")
+        aws.goto(parameters["param_ReturnUrl"][0] + "#arn=arn:aws:iam::999999999999:role/Previous")
+        expect(aws.get_by_text("このAWS設定の戻りリンクは利用できません。", exact=False)).to_be_visible()
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("")
+
+    def test_AWS設定の準備が失敗しても再試行して作成画面を開く(self):
+        page, principal = self.passkey_account("AWS setup retry owner")
+        self.executor(page, principal)
+        attempts = []
+
+        def prepare_template(route):
+            attempts.append(True)
+            if len(attempts) == 1:
+                route.fulfill(status=503, json={"error": {"code": "unavailable", "message": "Try again"}})
+            else:
+                route.continue_()
+
+        page.route("**/api/aws/role-template", prepare_template)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
+        self.select(page, "実行環境", "Browser executor")
+        expect(page.get_by_text("AWSの設定を準備できませんでした。", exact=False)).to_be_visible()
+        page.get_by_role("button", name="再試行", exact=True).click()
+        expect(page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)).to_be_visible()
+        self.assertEqual(len(attempts), 2)
 
     def test_AWSアクセスキーを保存し再接続で認証情報を引き継いで更新する(self):
         page, principal = self.passkey_account("AWS access key owner")

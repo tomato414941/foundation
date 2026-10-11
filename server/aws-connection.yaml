@@ -10,11 +10,14 @@ Parameters:
     Description: The value Foundation gave you for this connection. It is checked on every use.
     MinLength: 16
     MaxLength: 128
-    NoEcho: true
   Policies:
     Type: CommaDelimitedList
     Description: 'What the executor may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10.'
     Default: arn:aws:iam::aws:policy/ReadOnlyAccess
+  ReturnUrl:
+    Type: String
+    Description: The Foundation return link. Open the Connect output after the stack is created.
+    AllowedPattern: '^https?://[^\s]+/connections/aws/complete\?state=[0-9a-f-]{36}$'
 Resources:
   FoundationRole:
     Type: AWS::IAM::Role
@@ -32,5 +35,8 @@ Resources:
       ManagedPolicyArns: !Ref Policies
 Outputs:
   RoleArn:
-    Description: Paste this into Foundation to finish connecting.
+    Description: The IAM role created for this connection.
     Value: !GetAtt FoundationRole.Arn
+  Connect:
+    Description: Open this link to return the IAM role to your Foundation connection screen.
+    Value: !Sub '${ReturnUrl}#arn=${FoundationRole.Arn}'

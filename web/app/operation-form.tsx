@@ -4,6 +4,7 @@ import { CatalogMethod, Principal, Resource, listOf } from '../../shared/contrac
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import type { OperationInvocation } from '../../shared/operations';
 import type { PrivateOperationInput } from '../../shared/operation-client';
+import type { ConnectionState } from '../../shared/connections';
 import { api, formText, ApiFailure } from './api';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionSettings, connectionFields } from './connection-form';
@@ -32,8 +33,8 @@ export async function loadOperationForm(invocation: OperationInvocation) {
 }
 export type OperationFormData = Awaited<ReturnType<typeof loadOperationForm>>;
 
-export function connectionSubmission(input: OperationInvocation['input'], form: FormData, method: CatalogConnectionMethod) {
-  const settings = connectionSettings(method, form);
+export function connectionSubmission(input: OperationInvocation['input'], form: FormData, method: CatalogConnectionMethod, previous?: ConnectionState) {
+  const settings = connectionSettings(method, form, previous);
   const appId = formText(form, 'appId');
   return { input: { ...input, name: input.name ?? (formText(form, 'name') || method.name),
     environmentId: input.environmentId ?? formText(form, 'environmentId'),

@@ -16,7 +16,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { operationClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
-import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings, connectionInitialValues } from './connection-form';
+import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
@@ -160,8 +160,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
       const prepared = connectionSubmission({ ownerId: owner, methodId,
         name: name || existing?.name || selected.name,
-        ...(connectionId ? { connectionId } : {}) }, form, selected);
-      if (previous) prepared.material = { ...prepared.material, ...connectionSettings(selected, form, previous) };
+        ...(connectionId ? { connectionId } : {}) }, form, selected, previous);
       const progress = await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
       if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);

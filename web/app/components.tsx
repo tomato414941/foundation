@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { ReactNode } from 'react';
+import type { MouseEventHandler, ReactNode } from 'react';
 import { Link, Form, useNavigation, useRevalidator } from 'react-router';
 import {
   Check,
@@ -409,12 +409,13 @@ export function Paging({ next, search, param = 'after' }: { next: string | null;
   ) : null;
 }
 
-export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
+export function ExternalLink({ href, children, onClick }: { href: string; children: ReactNode; onClick?: MouseEventHandler<HTMLAnchorElement> }) {
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      onClick={onClick}
       className="inline-flex w-fit items-center gap-1.5 text-sm underline-offset-4 hover:underline"
     >
       {children}

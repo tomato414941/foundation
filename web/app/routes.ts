@@ -12,6 +12,7 @@ export default [
   route('devices/:id', 'routes/device.tsx'),
   route('services', 'routes/service-return.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
+  route('connections/aws/complete', 'routes/aws-role-complete.tsx'),
   route('connections/:id', 'routes/connection-flow.tsx'),
   route('shared', 'routes/shared.tsx'),
   route('runs/:id', 'routes/run.tsx'),
