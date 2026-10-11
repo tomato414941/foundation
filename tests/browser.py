@@ -448,7 +448,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="接続する", exact=True).click()
         self.accept_connection(page, "GitHub test")
         expect(page.get_by_role("heading", name="GitHub test", exact=True)).to_be_visible()
-        expect(page.get_by_text("GH_TOKEN", exact=False)).to_be_visible()
+        expect(page.get_by_text("GitHub", exact=True)).to_be_visible()
         page.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("Automation")
         page.get_by_role("button", name="作成", exact=True).click()

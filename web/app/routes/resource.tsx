@@ -16,7 +16,6 @@ import {
   DateText,
   Detail,
   ErrorNotice,
-  JsonView,
   Page,
   Panel,
   State,
@@ -174,11 +173,10 @@ export default function ResourceDetail() {
         </Panel>
       )}
       {item.kind === 'connection' && (
-        <Panel title={t('outputs')}>
+        <Panel>
           {item.data.state !== 'ready' && (
             <Notice tone={'warning'}>{t('state.' + item.data.state)}</Notice>
           )}
-          <JsonView value={item.data.outputs} />
           <p className="leading-relaxed text-muted-foreground text-sm">{t('connectionUseHelp')}</p>
           {can('update') && (
             <Button variant="outline" asChild>
@@ -259,10 +257,9 @@ export default function ResourceDetail() {
           </Panel>
         </>
       )}
-      {item.kind === 'function' && (
+      {item.kind === 'function' && (item.data.description || can('execute')) && (
         <Panel>
-          <p className="leading-relaxed">{item.data.description}</p>
-          <JsonView value={item.data} />
+          {item.data.description && <p className="leading-relaxed">{item.data.description}</p>}
           {can('execute') && (
             <Button variant="default" asChild>
               <Link to="run">{t('execute')}</Link>
@@ -270,15 +267,10 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
-      {(item.kind === 'service' || item.kind === 'app' || item.kind === 'method') && (
-        <Panel>
-          <JsonView value={item.data} />
-          {item.kind === 'method' && can('use') && (
-            <Button variant="ghost" asChild>
-              <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
-            </Button>
-          )}
-        </Panel>
+      {item.kind === 'method' && can('use') && (
+        <Button variant="ghost" asChild>
+          <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
+        </Button>
       )}
       {item.kind === 'environment' && can('delete') && <EnvironmentDelete item={item} />}
       {item.kind !== 'environment' && can('delete') && (

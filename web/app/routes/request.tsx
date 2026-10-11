@@ -118,7 +118,9 @@ export default function RequestPage() {
         <div className="flex min-w-0 flex-col gap-6">
           {!item.proposal && item.operations.map((operation, index) => (
             <Panel key={index} title={`${index + 1}. ${i18n.language === 'ja' ? operation.title.ja : operation.title.en}`}>
-              <JsonView value={operation.body ?? {}} />
+              {operation.body != null && (typeof operation.body !== 'object' || Object.keys(operation.body).length > 0) && (
+                <JsonView value={operation.body} />
+              )}
               {operation.inputs.map((input, inputIndex) => (
                 <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
                   {input.multiline ? (
@@ -128,7 +130,6 @@ export default function RequestPage() {
                       autoComplete="off"
                       disabled={!item.canRespond || !pending}
                       required={item.canRespond && pending}
-                      hint={input.pointer}
                       rows={3}
                     />
                   ) : (
@@ -139,7 +140,6 @@ export default function RequestPage() {
                       autoComplete="off"
                       disabled={!item.canRespond || !pending}
                       required={item.canRespond && pending}
-                      hint={input.pointer}
                     />
                   )}
                   {input.site && <ExternalLink href={input.site}>{t('serviceConsole')}</ExternalLink>}
@@ -184,11 +184,6 @@ export default function RequestPage() {
             {t('signinToApprove')}
           </Link>
         </Button>
-      )}
-      {!item.proposal && item.results.some((value) => value !== null) && (
-        <Panel title={t('result')}>
-          <JsonView value={item.results} />
-        </Panel>
       )}
       {!pending && item.returnUrl && (
         <Button variant="default" asChild>

@@ -6,7 +6,7 @@ import { Task } from '../../../shared/execution';
 import { actionResult, api, ApiFailure, errorCode, formText, signedIn } from '../api';
 import { Resource } from '../../../shared/contracts';
 import { custodyClient } from '../custody';
-import { DateText, Detail, ErrorNotice, JsonView, Notice, Page, Panel, State, usePolling } from '../components';
+import { DateText, Detail, ErrorNotice, Notice, Page, Panel, State, usePolling } from '../components';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   await signedIn(request);
   const task = await api('/executions/' + params.id, { signal: request.signal }, Task);
@@ -63,11 +63,6 @@ export default function RunPage() {
       {data.error && <ErrorNotice error={data.error} />}
       {decryptError && <Notice tone="info"><ErrorNotice error={decryptError} /><Link to="/account">{t('unlock')}</Link></Notice>}
       {decrypted?.error && <ErrorNotice error={decrypted.error.code} />}
-      {decrypted?.result !== null && decrypted?.result !== undefined && (
-        <Panel>
-          <JsonView value={decrypted.result} />
-        </Panel>
-      )}
       {decrypted?.ok && revokedConnection(data.kind, decrypted.result) && <Form method="post">
         <input type="hidden" name="intent" value="removeConnection" />
         <Button type="submit" variant="destructive">{t('removeRevokedConnection')}</Button>
