@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 import time
 import unittest
 import urllib.request
@@ -140,6 +141,77 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="保存", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
+
+    def test_完了した実行の処理と時刻を表示し鍵に応じて出力を案内する(self):
+        page, principal = self.passkey_account("Execution initiator")
+        environment_id = self.executor(page, principal, "dev-us").rsplit("/", 1)[1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials/new?kind=key")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Execution test key")
+        page.get_by_role("button", name="追加", exact=True).click()
+        token = page.get_by_role("textbox", name="APIキー", exact=True).input_value()
+        with tempfile.TemporaryDirectory() as config_directory:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = config_directory
+            login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
+                capture_output=True, text=True, input=token, env=environment, timeout=30)
+            self.assertEqual(login.returncode, 0, login.stderr)
+            fingerprint = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
+            trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", fingerprint["id"], "--fingerprint", fingerprint["fingerprint"]],
+                capture_output=True, text=True, env=environment, timeout=30)
+            self.assertEqual(trusted.returncode, 0, trusted.stderr)
+            executed = subprocess.run(["node", "cli/dist/cli.mjs", "run", "--environment", environment_id, "--wait", "--timeout", "20", "--",
+                "node", "-e", 'console.log("画面確認用の実行です。");console.error("補足の出力です。");'],
+                capture_output=True, text=True, env=environment, timeout=30)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            execution_id = json.loads(executed.stdout)["id"]
+        path = ORIGIN + "/executions/" + execution_id
+        page.goto(path)
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("heading", name="実行の詳細", exact=True)).to_be_visible()
+        expect(page.get_by_text("完了", exact=True)).to_be_visible()
+        expect(page.get_by_text("コマンドの実行", exact=True)).to_be_visible()
+        expect(page.locator("main").get_by_role("link", name="dev-us", exact=True)).to_be_visible()
+        for label in ["開始日時", "終了日時", "所要時間"]:
+            expect(page.locator("dt").filter(has_text=re.compile("^" + label + "$"))).to_be_visible()
+        expect(page.locator("main pre").filter(has_text="画面確認用の実行です。")).to_have_text("画面確認用の実行です。\n")
+        expect(page.locator("main pre").filter(has_text="補足の出力です。")).to_have_text("補足の出力です。\n")
+        expect(page.locator("main dl").filter(has=page.locator("dt", has_text="終了コード")).locator("dd")).to_have_text("0")
+        page.screenshot(path=str(ARTIFACTS / "execution-completed-output-ja.png"), full_page=True)
+        print("Rendered completed execution: " + page.locator("main").inner_text(), flush=True)
+        def change_receipt(route):
+            response = route.fetch()
+            task = response.json()
+            ciphertext = task["receipt"]["sealed"]["ciphertext"]
+            task["receipt"]["sealed"]["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
+            route.fulfill(response=response, json=task)
+        page.route("**/api/runtime/runs/*", change_receipt)
+        page.reload()
+        expect(page.get_by_text("完了", exact=True)).to_be_visible()
+        expect(page.get_by_role("alert")).to_have_text("出力を読み取れませんでした。ページを再読み込みしてください。")
+        page.unroute("**/api/runtime/runs/*", change_receipt)
+        reader, recipient = self.passkey_account("Execution viewer")
+        for object_id in [principal["id"], environment_id]:
+            granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "reader", "objectId": object_id}, headers={"origin": ORIGIN})
+            self.assertTrue(granted.ok, granted.text())
+        reader.goto(path)
+        reader.wait_for_load_state("networkidle")
+        expect(reader.get_by_text("完了", exact=True)).to_be_visible()
+        expect(reader.locator("main").get_by_role("link", name="dev-us", exact=True)).to_be_visible()
+        notice = reader.get_by_role("alert")
+        expect(notice).to_have_count(1)
+        expect(notice).to_have_text("出力は暗号化されています。このブラウザーでは、実行を開始したプリンシパルの鍵を利用できないため表示できません。")
+        reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-ja.png"), full_page=True)
+        print("Rendered completed execution for viewer: " + reader.locator("main").inner_text(), flush=True)
+        reader.reload()
+        expect(reader.get_by_text("完了", exact=True)).to_be_visible()
+        expect(notice).to_contain_text("出力は暗号化されています。")
+        self.select(reader, "言語", "English")
+        reader.set_viewport_size({"width": 390, "height": 844})
+        expect(reader.get_by_role("heading", name="Execution details", exact=True)).to_be_visible()
+        expect(reader.get_by_text("Completed", exact=True)).to_be_visible()
+        expect(notice).to_have_text("The output is encrypted. The initiating principal’s key is unavailable in this browser, so it cannot display the output.")
+        reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-mobile-en.png"), full_page=True)
+        print("Rendered execution detail (English): " + reader.locator("main").inner_text(), flush=True)
 
     def test_固定した関数を共有して秘密を使う処理の結果を受け取る(self):
         page, principal = self.passkey_account("Function owner")
@@ -1390,7 +1462,7 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual(completed["actorId"], principal["id"])
                 receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-complete-ja.png" if handoff else "operation-ovh-self-complete-ja.png")), full_page=True)
                 print("Rendered direct operation: " + receiver.locator("main").inner_text(), flush=True)
-                receiver.get_by_role("link", name="詳細", exact=True).last.click()
+                receiver.get_by_role("link", name="接続を開く", exact=True).click()
                 receiver.wait_for_url(f"**/p/{principal['id']}/services/{completed['results'][0]['id']}")
                 expect(receiver.get_by_role("heading", name="Direct OVH account", exact=True)).to_be_visible()
 
@@ -1407,7 +1479,7 @@ class BrowserTests(unittest.TestCase):
         asked = response.json()
         receiver.goto(asked["url"])
         receiver.wait_for_load_state("networkidle")
-        expect(receiver.get_by_text("1. サービスに接続する", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
         expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_be_visible()
         receiver.get_by_label("クライアントID", exact=True).fill("requested-ovh-client")
         receiver.get_by_label("クライアントシークレット", exact=True).fill("requested-ovh-secret")
@@ -1492,7 +1564,7 @@ class BrowserTests(unittest.TestCase):
         expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
         receiver.goto(sender.url)
         receiver.wait_for_load_state("networkidle")
-        expect(receiver.get_by_text("1. プリンシパルを作る", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="プリンシパルを作る", exact=True)).to_be_visible()
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible()

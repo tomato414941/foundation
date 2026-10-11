@@ -2,17 +2,16 @@ import { useEffect } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { clientLoader as rootLoader } from './root';
-import { ApprovalRequest, Resource } from '../../shared/contracts';
+import { ApprovalRequest } from '../../shared/contracts';
 import type { ApprovalView, JsonValue } from '../../shared/contracts';
 import { Execution } from '../../shared/executions';
 import type { DefinitionCall, ExecutionView } from '../../shared/executions';
-import { Task } from '../../shared/runtime-protocol';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, session } from './api';
-import { connectionClient, custodyClient, executionClient } from './custody';
+import { connectionClient, executionClient } from './custody';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
-import { resourcePath } from './navigation';
+import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
 import { Copy, DateText, Detail, ErrorNotice, ExternalLink, JsonView, Notice, Page, Panel, ProposalText, State, usePolling } from './components';
@@ -46,20 +45,14 @@ function configuration(invocation: DefinitionCall, input: DefinitionCall['input'
   return Object.fromEntries(fields.filter(key => input[key] !== undefined &&
     (invocation.input[key] == null || invocation.input[key] === '')).map(key => [key, input[key]!])) as Record<string, JsonValue>;
 }
-function ExecutionResultView({ invocation, value }: { invocation: DefinitionCall; value: JsonValue }) {
-  const { t } = useTranslation();
-  const resource = Resource.safeParse(value);
-  if (resource.success) return <Button asChild variant="outline"><Link to={resourcePath(resource.data)}>{resource.data.name}</Link></Button>;
-  if (value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'connected' &&
-    typeof value.id === 'string' && typeof invocation.input.ownerId === 'string')
-    return <Button asChild variant="outline"><Link to={resourcePath({ ownerId: invocation.input.ownerId, kind: 'connection', id: value.id })}>{t('details')}</Link></Button>;
-  return <JsonView value={value} />;
-}
 type PageArgs = { params: { id?: string }; request: Request };
 async function readItem(id: string, requestMode: boolean, signal?: AbortSignal) {
   let delivery = requestMode ? await api('/requests/' + id, { signal }, ApprovalRequest) : null;
   const execution = await api('/executions/' + (delivery?.executionId ?? id), { signal }, Execution);
-  if (!delivery && execution.approval?.requestId) delivery = await api('/requests/' + execution.approval.requestId, { signal }, ApprovalRequest);
+  if (!delivery && execution.requests.length) {
+    try { delivery = await api('/requests/' + execution.requests.at(-1), { signal }, ApprovalRequest); }
+    catch (error) { if (!(error instanceof ApiFailure && error.status === 403)) throw error; }
+  }
   return { ...execution, from: delivery?.from ?? execution.creator, to: delivery?.to ?? null,
     message: delivery?.message ?? '', proposal: execution.approval?.proposal ?? null, canRespond: execution.canContinue,
     url: requestMode ? delivery!.url : execution.url,
@@ -102,20 +95,8 @@ export async function clientLoader({ params, request }: PageArgs) {
   if (['waiting', 'running'].includes(item.state) && item.from.id === account.principal?.id)
     item.code = sessionStorage.getItem('foundation.request.' + (item.delivery?.id ?? item.id)) ?? undefined;
   else sessionStorage.removeItem('foundation.request.' + (item.delivery?.id ?? item.id));
-  const outputs: Record<number, JsonValue> = {};
-  if (!account.requestId && account.principal) for (const step of item.steps) {
-    const run = step.runs.filter(run => run.kind === 'run').at(-1);
-    if (!run || !['succeeded', 'failed', 'uncertain', 'cancelled'].includes(step.state)) continue;
-    try {
-      const task = await api('/runtime/runs/' + run.id, {}, Task);
-      if (task.receipt) {
-        const result = await (await custodyClient()).result(task);
-        if (result?.ok) outputs[step.index] = result.result;
-        else if (result?.error) operationError ??= result.error.code;
-      }
-    } catch (error) { operationError ??= errorCode(error); }
-  }
-  return { item, account, current, inputForm, progress, operationError, requestMode, outputs };
+  const details = await loadExecutionDetails(item, !!account.principal && !account.requestId, request.signal);
+  return { item, account, current, inputForm, progress, operationError, requestMode, details };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -157,41 +138,48 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, outputs } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, details } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
   const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
   const needsKeys = !!current && !!account.requestId;
-  const completedResults = item.results.flatMap((value, index) => value !== null &&
-    (item.steps[index]?.state === 'succeeded' || outputs[index] !== undefined) ? [{ index, value: outputs[index] ?? value }] : []);
+  const showSteps = pending || item.operations.length > 1;
+  const completedResults = item.steps.filter(step => {
+    const value = item.results[step.index];
+    return details.steps[step.index]?.output || step.state === 'succeeded' && value !== null && value !== undefined;
+  });
   useEffect(() => {
     if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle') void revalidator.revalidate();
   }, [account.requestId, root?.requestId, revalidator]);
   usePolling(pending, progress?.kind === 'pending' || progress?.kind === 'authorize' ? 2000 : 5000);
-  return <Page title={requestMode ? t('requests') : item.operations.length === 1 ? (i18n.language === 'ja' ? item.operations[0]!.title.ja : item.operations[0]!.title.en) : t('execution')} narrow>
+  return <Page title={t(requestMode ? 'requests' : 'executionDetail')} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     <Panel>
       <Detail label={t('status')}><State value={requestMode ? item.delivery!.state : item.state} /></Detail>
-      <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{item.from.name}<Copy value={item.from.id} /></Detail>
-      {(item.to || requestMode) && <Detail label={t(requestMode ? 'requestedTo' : 'operationResponder')}>{item.to?.name ?? '—'}</Detail>}
-      <Detail label={t('expires')}><DateText value={item.expiresAt} /></Detail>
+      {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}
+      <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{requestMode ? item.from.name : details.initiator.name}<Copy value={requestMode ? item.from.id : details.initiator.id} /></Detail>
+      {requestMode && <Detail label={t('requestedTo')}>{item.to?.name ?? '—'}</Detail>}
+      <Detail label={t('created')}><DateText value={item.createdAt} seconds /></Detail>
+      {!requestMode && item.operations.length === 1 && details.steps[0] && <ExecutionFacts details={details.steps[0]} environments={details.environments} />}
+      {pending && (requestMode || ['approval', 'input'].includes(item.wait ?? '')) && <Detail label={t('expires')}><DateText value={item.delivery?.expiresAt ?? item.expiresAt} /></Detail>}
       {item.proposal ? <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p> :
         (item.message || requestMode) && <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>}
       {item.code && <Detail label={t('code')}>{item.code}<Copy value={item.code} /></Detail>}
-      {requester && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(item.url).pathname}>{item.url}</Link><Copy value={item.url} /></Detail>}
-      {item.delivery && <Detail label={t(requestMode ? 'execution' : 'requests')}><Link className="underline underline-offset-4" to={(requestMode ? '/executions/' + item.id : '/requests/' + item.delivery.id)}>{t('details')}</Link></Detail>}
+      {requester && pending && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(item.url).pathname}>{item.url}</Link><Copy value={item.url} /></Detail>}
+      {item.delivery && <Detail label={t(requestMode ? 'execution' : 'requests')}><Link className="underline underline-offset-4" to={(requestMode ? '/executions/' + item.id : '/requests/' + item.delivery.id)}>{t(requestMode ? 'executionOpen' : 'requestOpen')}</Link></Detail>}
     </Panel>
-    <Form method="post">
+    {(showSteps || item.state === 'failed' && item.canRespond) && <Form method="post">
       <div className="flex min-w-0 flex-col gap-6">
-        {!item.proposal && item.operations.map((operation, index) => {
+        {!item.proposal && (pending || item.operations.length > 1) && item.operations.map((operation, index) => {
           const privateOperation = operation.execution === 'keyholder';
-          return <Panel key={index} title={`${index + 1}. ${i18n.language === 'ja' ? operation.title.ja : operation.title.en}`}>
+          return <Panel key={index} title={item.operations.length > 1 ? `${index + 1}. ${executionTitle(operation, i18n.language)}` : executionTitle(operation, i18n.language)}>
             {current?.index === index && inputForm && <ExecutionInputFields data={inputForm} />}
             {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} acceptIntent="acceptConnection" cancelIntent="cancel" />}
             {!privateOperation && awaitingApproval && <JsonView value={operation.input} />}
             <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>
-            {!privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
+            {item.operations.length > 1 && details.steps[index] && <ExecutionFacts details={details.steps[index]} environments={details.environments} />}
+            {pending && !privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
               {input.multiline ? <TextareaField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
                 disabled={!item.canRespond || !pending} required={item.canRespond && pending} rows={3} /> :
                 <InputField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
@@ -213,10 +201,18 @@ export default function ExecutionPage() {
         {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate variant="destructive">{t(requestMode && item.delivery?.state === 'pending' ? 'cancelRequest' : 'cancelOperation')}</Button>}
         {item.state === 'failed' && item.canRespond && !needsKeys && <Button type="submit" name="intent" value="resume">{t('retry')}</Button>}
       </div>
-    </Form>
+    </Form>}
     {completedResults.length > 0 && <Panel title={t('result')}>
-      <div className="flex flex-col items-start gap-4">{completedResults.map(({ value, index }) =>
-        <ExecutionResultView key={index} invocation={item.operations[index]!} value={value} />)}</div>
+      {requestMode && <Detail label={t('status')}><State value={item.state} /></Detail>}
+      <div className="flex min-w-0 flex-col gap-6">{completedResults.map(({ index }) => {
+        const value = item.results[index], output = details.steps[index]?.output;
+        const runtimeResult = value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'run';
+        return <div key={index} className="flex min-w-0 flex-col gap-4">
+          {item.operations.length > 1 && <h3 className="text-sm font-medium">{executionTitle(item.operations[index]!, i18n.language)}</h3>}
+          {runtimeResult || output && (item.operations[index]!.name === 'run.execute' || value == null) ? <ExecutionOutput output={output ?? { state: 'unavailable' }} invocation={item.operations[index]!} /> :
+            <ExecutionResult invocation={item.operations[index]!} value={value!} />}
+        </div>;
+      })}</div>
     </Panel>}
     {!account.principal && pending && <Button asChild><Link to={'/signin?returnTo=' + encodeURIComponent((requestMode ? '/requests/' : '/executions/') + (item.delivery?.id ?? item.id))}>{t('signinToApprove')}</Link></Button>}
     {!pending && item.returnUrl && <Button asChild><a href={item.returnUrl}>{t('returnToService', { name: item.from.name })}</a></Button>}

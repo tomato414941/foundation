@@ -155,12 +155,12 @@ export function State({ value, label }: { value: string; label?: string }) {
   );
 }
 
-export function DateText({ value }: { value: string | null }) {
+export function DateText({ value, seconds = false }: { value: string | null; seconds?: boolean }) {
   const { i18n } = useTranslation();
   return (
     <>
       {value
-        ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(
+        ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: seconds ? 'medium' : 'short' }).format(
             new Date(value),
           )
         : '—'}
