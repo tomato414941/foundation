@@ -205,6 +205,12 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
         page.get_by_role("button", name="Save", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
+        page.get_by_role("button", name="Delete", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
+        page.wait_for_url(f"**/p/{principal['id']}/functions")
+        expect(page.get_by_role("heading", name="Functions", exact=True)).to_be_visible()
+        reader.reload()
+        expect(reader.locator("main")).to_contain_text("Shared invocation")
 
     def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()

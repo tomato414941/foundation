@@ -32,7 +32,7 @@ export async function api<T = unknown>(
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiFailure('network', 0);
   }
-  const value: unknown = await response.json();
+  const value: unknown = response.status === 204 ? null : await response.json();
   if (!response.ok)
     throw new ApiFailure(
       response.status === 429

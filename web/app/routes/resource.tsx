@@ -32,7 +32,8 @@ import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
 import { sshSettings } from '../ssh';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
-  const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource).catch(async error => {
+  const resource = await api((params.section === 'functions' ? '/functions/' : '/resources/') + params.id,
+    { signal: request.signal }, Resource).catch(async error => {
     if (params.section === 'environments' && error instanceof ApiFailure && error.status === 404) {
       const deletion = await api('/resources/' + params.id + '/deletion', { signal: request.signal }, EnvironmentDeletion)
         .catch(() => null);
@@ -63,7 +64,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         { kind: 'revoke', input: { action: 'revoke', id: params.id } }, { sourceIds: [params.id] });
       return redirect('/runs/' + task.id);
     }
-    await api(`/resources/${params.id}`, { method: 'DELETE' });
+    await api(`${params.section === 'functions' ? '/functions' : '/resources'}/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
   });
 }

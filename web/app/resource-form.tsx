@@ -51,7 +51,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     shared,
     environments,
   ] = await Promise.all([
-    id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
+    id ? api((kind === 'function' ? '/functions/' : '/resources/') + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
       ? api('/catalog', { signal: request.signal }, listOf(CatalogEntry))
       : null,
@@ -150,7 +150,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const owner = params.owner!;
     const name = formText(form, 'name');
     const back = `/p/${owner}/${params.section}`;
-    const existing = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
+    const existing = params.id ? await api((kind === 'function' ? '/functions/' : '/resources/') + params.id, {}, Resource) : null;
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
       const client = await operationClient();
