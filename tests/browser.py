@@ -163,9 +163,16 @@ class BrowserTests(unittest.TestCase):
         function_path = page.url
         function_id = function_path.rsplit("/", 1)[1]
         reader, recipient = self.passkey_account("Function caller")
-        self.trust(reader, page, principal)
-        fingerprint = page.request.get(ORIGIN + "/__test/executor/" + environment + "/fingerprint").json()
-        self.trust_fingerprint(reader, fingerprint["id"], fingerprint["fingerprint"])
+        reader.evaluate("""() => new Promise((resolve, reject) => {
+          const request = indexedDB.open('foundation-keys', 2);
+          request.onsuccess = () => {
+            const db = request.result, transaction = db.transaction('keys', 'readwrite');
+            transaction.objectStore('keys').clear();
+            transaction.oncomplete = () => { db.close(); resolve(); };
+            transaction.onerror = () => reject(transaction.error);
+          };
+          request.onerror = () => reject(request.error);
+        })""")
         granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "runner", "objectId": function_id}, headers={"origin": ORIGIN})
         self.assertTrue(granted.ok, granted.text())
         reader.goto(function_path + "/run")
@@ -178,13 +185,15 @@ class BrowserTests(unittest.TestCase):
         reader.get_by_role("textbox", name="Payload", exact=True).fill(json.dumps({"items": [1, False, None]}))
         reader.screenshot(path=str(ARTIFACTS / "function-run-desktop-ja.png"), full_page=True)
         reader.get_by_role("button", name="実行", exact=True).click()
-        reader.wait_for_url("**/runs/*")
+        reader.wait_for_url("**/invocations/*")
         expect(reader.locator("main")).to_contain_text("Shared invocation", timeout=15000)
         expect(reader.locator("main")).to_contain_text('"configured": true')
         expect(reader.locator("main")).to_contain_text('"amount": 12.5')
         expect(reader.locator("main")).to_contain_text('"enabled": false')
         expect(reader.locator("main")).to_contain_text('"items": [')
         expect(reader.locator("main")).to_contain_text("[redacted]")
+        reader.screenshot(path=str(ARTIFACTS / "function-result-desktop-ja.png"), full_page=True)
+        print("Rendered function result: " + reader.locator("main").inner_text(), flush=True)
         self.assertEqual(reader.request.get(ORIGIN + "/api/resources/" + source + "/custody").status, 403)
         self.assertEqual(reader.request.get(ORIGIN + "/api/environments/" + environment + "/registration").status, 403)
         page.goto(function_path + "/edit")

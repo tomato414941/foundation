@@ -16,6 +16,7 @@ export default [
   route('connections/:id', 'routes/connection-flow.tsx'),
   route('shared', 'routes/shared.tsx'),
   route('runs/:id', 'routes/run.tsx'),
+  route('invocations/:id', 'routes/invocation.tsx'),
   route('p/:owner', 'routes/workspace.tsx', [
     index('routes/home.tsx'),
     route('principals', 'routes/principals.tsx'),

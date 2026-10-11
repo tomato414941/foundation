@@ -8,11 +8,11 @@ import { actionResult, api, ApiFailure, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
-import { operationClient } from './custody';
+import { operationClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 async function runResource(params: LoaderFunctionArgs['params']) {
   if (!params.id) return null;
-  const resource = await api('/resources/' + params.id, {}, Resource);
+  const resource = await api('/functions/' + params.id, {}, Resource);
   if (resource.kind !== 'function' || resource.ownerId !== params.owner)
     throw new Response('Not found', { status: 404 });
   return resource;
@@ -42,11 +42,9 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
           }
         } else if (text || parameter.required) args[parameter.name] = text;
       }
-      input = {
-        kind: 'function',
-        functionId: resource.id,
-        arguments: args,
-      };
+      const save = jsonField<Record<string, string>>(form, 'save', {});
+      const result = await (await functionClient(Object.keys(save).length > 0)).invoke(resource.id, args, { save });
+      return redirect('/invocations/' + result.id);
     } else
       input = {
         kind: 'http',
@@ -68,7 +66,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
       ownerId = client.custody.binding.principalId;
     }
     const result = await client.execute({ name: 'run.execute', input: { ownerId,
-      environmentId: resource?.kind === 'function' ? resource.data.environmentId : formText(form, 'environmentId'),
+      environmentId: formText(form, 'environmentId'),
       operation: input, save: jsonField(form, 'save', {}) } });
     if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('invalid_input');
     return redirect('/runs/' + result.task.id);

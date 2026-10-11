@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
-import { CatalogEntry, CatalogMethod, JsonObject, Resource, Payment, Usage, listOf } from '../../shared/contracts';
+import { CatalogEntry, CatalogMethod, FunctionDefinition, Resource, Payment, Usage, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod, HttpRequestInput } from '../../shared/contracts';
 import { decode } from '../../shared/encryption';
 import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
@@ -14,7 +14,7 @@ import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable } from './keys';
-import { operationClient, custodyClient } from './custody';
+import { operationClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
@@ -81,6 +81,9 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   let pinnedMethod: CatalogConnectionMethod | null = null;
   let connection: ReturnType<typeof connectionInitialValues> | undefined;
   let selectedExecutors: string[] = [];
+  if (kind === 'function') {
+    try { await custodyClient(); } catch { locked = true; }
+  }
   if (resource && isProtected(resource.kind)) {
     try {
       const client = await custodyClient(), item = await client.read(resource.id);
@@ -216,12 +219,11 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         parameters: jsonField(form, 'parameters', []),
         result: formText(form, 'result'),
       };
-      const saved = await (await operationClient()).execute({ name: 'function.save', input: JsonObject.parse({
-        ownerId: owner, name, definition,
+      const saved = await (await functionClient(true)).save({
+        ownerId: owner, name, definition: FunctionDefinition.parse(definition),
         ...(existing ? { resourceId: existing.id, version } : {}),
-      }) });
-      if (!('kind' in saved) || saved.kind !== 'saved') throw new ApiFailure('invalid_input');
-      return redirect(resourcePath(saved.resource));
+      });
+      return redirect(resourcePath(saved));
     } else if (kind === 'service' || kind === 'method')
       body.definition = { ...jsonField<Record<string, unknown>>(form, 'definition', {}), name };
     if (existing) {
@@ -325,7 +327,7 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable');
-  const spec = existing?.kind === 'function' ? existing.data : undefined;
+  const spec = existing?.kind === 'function' ? FunctionDefinition.parse(existing.data) : undefined;
   const [programKind, setProgramKind] = useState(spec?.program.kind ?? 'command');
   const unavailable =
     data.kind === 'environment'

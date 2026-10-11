@@ -6,6 +6,7 @@ import type { CustodyContent, CustodyPolicy, SealedRun } from '../../shared/cust
 import { ConnectionClient } from '../../shared/connection-client';
 import { RemoteFlowStore } from '../../shared/operation-continuations';
 import { OperationClient } from '../../shared/operation-client';
+import { FunctionClient } from '../../shared/function-client';
 import { api, ApiFailure, session } from './api';
 import { getIdentity } from './keys';
 import { stored } from './storage';
@@ -59,4 +60,8 @@ export async function connectionClient() {
 export async function operationClient() {
   const connections = await connectionClient();
   return new OperationClient(connections.custody, connections);
+}
+export async function functionClient(withKeys = false) {
+  return new FunctionClient({ json: (path, options, schema) => api(path.slice(4), options, schema) },
+    withKeys ? await custodyClient() : undefined);
 }

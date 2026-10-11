@@ -35,7 +35,7 @@ function inputOperation(item: ApprovalView, actorId: string) {
   return { index, invocation: { name: invocation.name, input: substitute(invocation.input, actorId, item.from.id) } as OperationInvocation };
 }
 function configuration(invocation: OperationInvocation, input: OperationInvocation['input']) {
-  const fields = invocation.name === 'function.save' ? [] : invocation.name === 'connection.connect' ? ['environmentId', 'name', 'appId', 'clientId'] :
+  const fields = invocation.name === 'connection.connect' ? ['environmentId', 'name', 'appId', 'clientId'] :
     invocation.name === 'run.execute' ? ['environmentId'] : ['environmentIds', 'name', 'clientId'];
   return Object.fromEntries(fields.filter(key => input[key] !== undefined &&
     (invocation.input[key] == null || invocation.input[key] === '')).map(key => [key, input[key]!])) as Record<string, JsonValue>;

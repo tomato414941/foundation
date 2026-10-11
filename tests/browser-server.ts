@@ -11,6 +11,7 @@ import { signEnvironment } from '../shared/execution.js';
 import { Client } from '../cli/src/client.js';
 import { HttpBroker } from '../runtime/broker.js';
 import { Executor } from '../runtime/executor.js';
+import { FunctionExecutor, FunctionBroker } from '../runtime/functions.js';
 import { Connections } from '../runtime/connections.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
@@ -21,6 +22,7 @@ import type { Transport } from '../server/transport.js';
 import type { AwsConnectionRequest } from '../shared/aws.js';
 
 const agents = new Map<string, Executor>();
+const functionAgents = new Map<string, FunctionExecutor>();
 const running = new Map<string, Promise<void>>();
 const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
 const awsRequests = new Map<string, AwsConnectionRequest[]>();
@@ -48,7 +50,7 @@ class BrowserRunner extends MemoryRunner {
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
     const registration = await signEnvironment({ format: 3, id, origin, ownerId: bootstrap.ownerId,
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
-      capabilities: Object.values(Operations), functionVersion: 1,
+      capabilities: Object.values(Operations), functionVersion: 2,
       isolation: 'container', commandImage: bootstrap.commandImage,
       awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
@@ -97,9 +99,10 @@ class BrowserRunner extends MemoryRunner {
                 AWS_DEFAULT_REGION: input.region, AWS_REGION: input.region } };
         },
       })));
+    functionAgents.set(id, new FunctionExecutor(agents.get(id)!, new FunctionBroker(client), journal));
     return machine;
   }
-  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); sshAgents.delete(id); await super.stop(id); }
+  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); await super.stop(id); }
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
@@ -175,7 +178,7 @@ try {
 worker.start();
 const executorTimer = setInterval(() => {
   for (const [id, agent] of agents) if (!running.has(id)) {
-    const task = agent.tick().then(async () => {
+    const task = agent.tick().then(() => functionAgents.get(id)?.tick()).then(async () => {
       const ssh = sshAgents.get(id);
       if (ssh) {
         const state = await ssh.client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST',
