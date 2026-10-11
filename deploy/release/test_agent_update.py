@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 import update_agent
@@ -86,6 +87,22 @@ class AgentUpdateTests(unittest.TestCase):
         self.assertEqual(self.metadata.read_bytes(), b'{"version":"5.0.1"}')
         self.assertEqual(self.identity.read_bytes(), self.saved_identity)
         self.assertEqual(self.calls[-1], {'paused': False})
+
+    def test_keeps_the_current_agent_while_production_verification_is_pending(self):
+        with patch.object(self, 'request', side_effect=urllib.error.HTTPError('https://example.com/api/release', 503, 'Pending', {}, None)):
+            self.update()
+        self.assertEqual(self.executable.read_bytes(), b'previous-cli')
+        self.assertEqual(self.identity.read_bytes(), self.saved_identity)
+
+    def test_keeps_the_current_agent_while_cli_publication_is_pending(self):
+        original = self.request
+        def pending(url, body=None, token=None):
+            if url.startswith('https://registry.npmjs.org/'):
+                raise urllib.error.HTTPError(url, 404, 'Not published', {}, None)
+            return original(url, body, token)
+        with patch.object(self, 'request', pending): self.update()
+        self.assertEqual(self.executable.read_bytes(), b'previous-cli')
+        self.assertEqual(self.identity.read_bytes(), self.saved_identity)
 
 
 if __name__ == '__main__':

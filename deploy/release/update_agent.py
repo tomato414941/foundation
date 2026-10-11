@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 
 def request(url, body=None, token=None):
@@ -42,12 +43,24 @@ def main():
     identities = json.loads(path.read_text())
     identity = next(value for value in identities["identities"] if value["principalId"] == identities["current"])
     origin = identity["origin"]
-    release = request(origin + "/api/release")
+    try:
+        release = request(origin + "/api/release")
+    except urllib.error.HTTPError as error:
+        if error.code != 503: raise
+        error.close()
+        print("The production release is being verified; the next scheduled update will retry.")
+        return
     executable = Path(shutil.which("foundation")).resolve()
     if hashlib.sha256(executable.read_bytes()).hexdigest() == release["cliSha256"]:
         print("The execution agent already uses the verified CLI."); return
     # Only the package selected by the verified production release may be installed.
-    pkg = request("https://registry.npmjs.org/%40tomato414941%2Ffoundation/" + release["cliVersion"])
+    try:
+        pkg = request("https://registry.npmjs.org/%40tomato414941%2Ffoundation/" + release["cliVersion"])
+    except urllib.error.HTTPError as error:
+        if error.code != 404: raise
+        error.close()
+        print("The verified CLI is awaiting publication; the next scheduled update will retry.")
+        return
     url = pkg["dist"]["tarball"]
     if not url.startswith("https://registry.npmjs.org/"): raise ValueError("Unexpected package origin.")
     with urllib.request.urlopen(url, timeout=60) as response: packed = response.read(40_000_001)
