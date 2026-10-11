@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tarfile
@@ -44,6 +45,8 @@ def main():
     manifest = validate(json.loads(Path(args.manifest).read_text()))
     instance = os.environ["FOUNDATION_INSTANCE_ID"]
     current = invocation(instance, ["docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' foundation-v1-foundation-1"], 60).strip()
+    if not re.fullmatch(r"[a-f0-9]{40}", current):
+        raise RuntimeError("The running container must identify its complete source commit.")
     if current != manifest["commit"]:
         result = subprocess.run(["git", "merge-base", "--is-ancestor", current, manifest["commit"]])
         if result.returncode == 1:

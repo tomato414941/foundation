@@ -51,6 +51,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends openssh-server
           sudo mkdir -p /run/sshd
           npm ci --include=dev --no-audit --no-fund
+      - name: Prepare the pinned command image
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$TEST_COMMAND_IMAGE"; then break; fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            sleep "$((attempt * 5))"
+          done
       - name: Check and test
         run: |
           npm run check
