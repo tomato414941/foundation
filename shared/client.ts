@@ -8,7 +8,7 @@ import {
   AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
   prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
-import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
+import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun, UseGrant } from './custody.js';
 import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
@@ -235,10 +235,16 @@ export class CustodyClient {
         (credential || grant.callerProgram));
       if (permitted || !source.policy.authorities.some(authority => canonical(authority) === canonical(this.binding))) continue;
       const previous = await this.read(source.policy.id), resource = await this.api.json('/api/resources/' + source.policy.id, {}, Resource);
-      const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1,
-        grants: [...previous.content.policy.grants, { actor: this.binding, executor: environment.manifest.executor,
-          operations: [...new Set([use, ...(source.policy.contentType === ContentTypes.tokenSet ? [Operations.refresh] : [])])],
-          origins: destination ? [destination] : [], functionDigests: [], callerProgram: !credential, expiresAt }] });
+      const grant = { actor: this.binding, executor: environment.manifest.executor,
+        operations: [...new Set([use, ...(source.policy.contentType === ContentTypes.tokenSet ? [Operations.refresh] : [])])],
+        origins: destination ? [destination] : [], functionDigests: [], callerProgram: !credential, expiresAt };
+      // Expired grants allow nothing, and grants differing only in expiry allow what the latest one does.
+      // Dropping the former and merging the latter keeps one grant per scope however often it is used.
+      const scope = (value: UseGrant) => canonical({ ...value, expiresAt: null });
+      const same = previous.content.policy.grants.filter(item => scope(item) === scope(grant));
+      const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1, grants: [
+        ...previous.content.policy.grants.filter(item => Date.parse(item.expiresAt) > Date.now() && scope(item) !== scope(grant)),
+        { ...grant, expiresAt: new Date(Math.max(Date.parse(expiresAt), ...same.map(item => Date.parse(item.expiresAt)))).toISOString() }] });
       await this.save(resource.name, await reveal(previous.content, this.binding, this.keys.encryption), policy,
         { previous, metadata: previous.content.metadata });
       sources[index] = (await this.read(source.policy.id)).content;
