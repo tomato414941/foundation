@@ -9,7 +9,7 @@ import { MemoryPayments } from './fakes.js';
 import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 
-test('代理は持ち主の物を使えるが決められず、一つだけ渡された操作はその物でだけできる', async (t) => {
+test('代理は持ち主の物を使い、変え、名前を変えられるが共有はできず、一つだけ渡された操作はその物でだけできる', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
@@ -19,7 +19,7 @@ test('代理は持ち主の物を使えるが決められず、一つだけ渡�
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'use'), true);
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'update'), true);
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'share'), false);
-  assert.equal(await f.authorization.holds(ai.actor.id, file, 'rename'), false);
+  assert.equal(await f.authorization.holds(ai.actor.id, file, 'rename'), true);
   assert.equal(await f.authorization.holds(owner.actor.id, file, 'rename'), true);
   await f.relations.draw(owner.actor, { subjectId: friend.actor.id, relation: 'reader', objectId: file.id });
   assert.equal(await f.authorization.holds(friend.actor.id, file, 'read'), true);
@@ -43,7 +43,7 @@ test('持ち主としてふるまえる者と一員だけがプリンシパル�
   assert.ok(!asMember.permissions.includes('transfer') && !asMember.permissions.includes('delete'));
   const asAgent = await f.principals.view(ai.actor, await f.principals.get(team.id));
   assert.deepEqual(asAgent.permissions, ['read', 'use', 'execute']);
-  assert.ok(asAgent.createKinds.includes('variable') && !asAgent.createKinds.includes('connection'));
+  assert.ok(['variable', 'connection', 'app'].every(kind => asAgent.createKinds.includes(kind)));
   assert.equal(await f.authorization.holds(team.id, principal(team.id), 'delete'), true);
 });
 
@@ -88,6 +88,56 @@ test('鍵で守られた項目の役割は署名した方針から書かれ、�
   assert.equal(await f.authorization.holds(viewer.actor.id, row, 'reveal'), false);
   await assert.rejects(f.relations.draw(owner.actor, { subjectId: viewer.actor.id, relation: 'revealer', objectId: row.id }),
     { code: 'rekey_required' });
+});
+
+test('鍵も渡した代理に持ち主の項目を暗号化し、代理は開いて書き換えられるが共有先は変えられず、線を外すと開けなくなる', async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
+  const id = crypto.randomUUID();
+  const initial = await protect(encode('owner value'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }), 1, owner.binding, owner.keys);
+  await f.custody.put(owner.actor, { name: 'Token', content: initial });
+  await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id });
+  assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'reveal'), false);
+  const line = { subjectId: ai.actor.id, relation: 'keyholder', objectId: owner.actor.id };
+  await assert.rejects(f.relations.draw(owner.actor, line), { code: 'rekey_required' });
+  const rekey = async (remove = false) => {
+    const plan = await f.principals.keySharing.plan(owner.actor, owner.actor.id, ai.actor.id, 'keyholder', f.db.pool, remove);
+    return Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, { version: item.version,
+      content: await protect(await reveal(item.content, owner.binding, owner.keys.encryption), item.policy,
+        item.content.materialRevision + 1, owner.binding, owner.keys, item.content.metadata, item.content) }])));
+  };
+  await f.relations.draw(owner.actor, line, await rekey());
+  const shared = await f.custody.read(ai.actor, id);
+  assert.equal(decode(await reveal(shared.content, ai.binding, ai.keys.encryption)), 'owner value');
+  assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'reveal'), true);
+  assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'share'), false);
+  await f.custody.put(ai.actor, { name: 'Token', version: shared.version, content: await protect(encode('agent value'),
+    shared.content.policy, shared.content.materialRevision + 1, ai.binding, ai.keys, undefined, shared.content) });
+  const changed = await f.custody.read(ai.actor, id);
+  await assert.rejects(f.custody.put(ai.actor, { name: 'Token', version: changed.version, content: await protect(encode('agent value'),
+    { ...changed.content.policy, revision: changed.content.policy.revision + 1, readers: [...changed.content.policy.readers, friend.binding] },
+    changed.content.materialRevision + 1, ai.binding, ai.keys, undefined, changed.content) }), { code: 'forbidden' });
+  await f.relations.erase(owner.actor, line, await rekey(true));
+  await assert.rejects(f.custody.read(ai.actor, id), { code: 'forbidden' });
+  const kept = await f.custody.read(owner.actor, id);
+  assert.equal(decode(await reveal(kept.content, owner.binding, owner.keys.encryption)), 'agent value');
+});
+
+test('代理は持ち主の物として鍵で守る項目を作れるが、作るときに他の相手とは共有できない', async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
+  await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id });
+  const sealed = (readers: typeof owner.binding[], signer: typeof owner) => protect(encode('value'), AccessPolicy.parse({ format: 2,
+    id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id, contentType: ContentTypes.value, revision: 1,
+    authorities: readers, readers, grants: [] }), 1, signer.binding, signer.keys);
+  const created = await f.custody.put(ai.actor, { name: 'Agent value', content: await sealed([owner.binding, ai.binding], ai) });
+  assert.equal(created.owner_id, owner.actor.id);
+  await assert.rejects(f.custody.put(ai.actor, { name: 'Shared value', content: await sealed([owner.binding, ai.binding, friend.binding], ai) }),
+    { code: 'forbidden' });
+  await f.custody.put(owner.actor, { name: 'Owner value', content: await sealed([owner.binding, friend.binding], owner) });
 });
 
 test('線を「主体は対象の関係」として、対象からも主体からも一覧する', async (t) => {

@@ -10,16 +10,18 @@ import { ContentTypes } from '../shared/custody.js';
 import { fail } from './errors.js';
 
 export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
+// The lines that change who opens what a principal holds: whom it belongs to, its members, and the agents given its keys.
+export type KeyRelation = 'owner' | 'member' | 'keyholder';
 
 export class KeySharing {
   constructor(readonly custody: Custody) {}
-  async plan(actor: Actor, target: string, subject: string, relation: 'owner' | 'member',
+  async plan(actor: Actor, target: string, subject: string, relation: KeyRelation,
     connection: Queryable = this.custody.resources.db.pool, remove = false) {
     const { resources, bindings } = this.custody;
     const descendants = await resources.authorization.find(target, 'principal', 'stands', connection);
-    // Whoever would act as an owner once the line is drawn or erased: the readers its items are sealed for.
+    // Whoever would open what an owner holds once the line is drawn or erased: the readers its items are sealed for.
     const change: Change = relation === 'owner' ? { owners: { [target]: subject } }
-      : { [remove ? 'remove' : 'add']: [{ subjectId: subject, relation: 'member', objectId: target }] };
+      : { [remove ? 'remove' : 'add']: [{ subjectId: subject, relation, objectId: target }] };
     const rows = await resources.db.all<Pick<ResourceRow, 'id' | 'owner_id' | 'name' | 'version'>>(
       `SELECT id,owner_id,name,version FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[])
        UNION ALL SELECT id,owner_id,'Execution result' AS name,(receipt#>>'{content,materialRevision}')::int AS version
@@ -31,7 +33,7 @@ export class KeySharing {
       const oldReaders = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
       const next = await resources.db.all<{ id: string }>(
         'SELECT id FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL ORDER BY id',
-        [await resources.authorization.holders(principal(row.owner_id), 'stands', connection, change)], connection);
+        [await resources.authorization.holders(principal(row.owner_id), 'open', connection, change)], connection);
       const readers: BoundKeys[] = await Promise.all(next.map(async item => (await bindings.current(item.id, connection)).binding));
       if (!readers.length) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
       const removed = (binding: BoundKeys) => oldReaders.has(binding.principalId) && !readers.some(next => next.id === binding.id);
@@ -58,7 +60,7 @@ export class KeySharing {
     }
     return { items, next: null };
   }
-  async apply(actor: Actor, target: string, subject: string, relation: 'owner' | 'member',
+  async apply(actor: Actor, target: string, subject: string, relation: KeyRelation,
     updates: KeyUpdates, connection: Queryable, remove = false) {
     const plan = await this.plan(actor, target, subject, relation, connection, remove);
     for (const item of plan.items) {

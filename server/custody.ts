@@ -26,6 +26,17 @@ export interface ProtectedWrite {
   data?: Record<string, JsonValue>;
   version?: number;
 }
+// Whom an item is shared with besides its signer: who opens it, signs for it, sees it, or has it used for them.
+// Signing an item is not sharing it, so one who may change it may still not change these. Expired grants give nothing.
+function sharedWith(policy: CustodyPolicy, signer: BoundKeys, now = Date.now()) {
+  const others = (values: BoundKeys[]) => [...new Set(values.map(value => value.principalId))].filter(id => id !== signer.principalId).sort();
+  return {
+    readers: others(policy.readers), authorities: others(policy.authorities),
+    observers: [...new Set(policy.observers ?? [])].filter(id => id !== signer.principalId).sort(),
+    grants: policy.grants.filter(grant => Date.parse(grant.expiresAt) > now && !('actor' in grant && grant.actor.id === signer.id))
+      .map(grant => canonical(grant)).sort(),
+  };
+}
 // Labels stay with the item until a writer gives new ones.
 const keptLabels = (data: Record<string, JsonValue> | undefined) => {
   const settings = ConnectionSettings.safeParse(data?.settings);
@@ -188,6 +199,7 @@ export class Custody {
       const current = await this.resources.db.one<ResourceRow>(
         'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection,
       );
+      let sealed = false;
       if (current) {
         if (current.kind !== kindOf(policy.contentType))
           fail(400, 'wrong_resource', 'Keep the same resource kind when updating an item.');
@@ -205,6 +217,9 @@ export class Custody {
             fail(403, 'forbidden', 'The existing policy must authorize its editor.');
           if (!continuesPolicy(previous.content.policy, content))
             fail(403, 'handoff_required', 'Authorize new ownership and editors with the existing authority.');
+          if (canonical(sharedWith(previous.content.policy, binding)) !== canonical(sharedWith(policy, binding)))
+            await this.resources.authorization.requireResource(actor, current, 'share', connection);
+          sealed = true;
           const policyChanged = await hash(previous.content.policy) !== await hash(policy);
           if (policy.revision !== previous.content.policy.revision + (policyChanged ? 1 : 0) ||
             content.materialRevision !== previous.content.materialRevision + 1)
@@ -221,9 +236,18 @@ export class Custody {
         if (policy.revision !== 1 || content.materialRevision !== 1)
           fail(400, 'invalid_revision', 'Begin encrypted custody at revision one.');
       }
-      for (const recipient of requiredReaders ?? (await this.recipients(policy.ownerId, connection)).map(item => item.binding)) {
+      const required = requiredReaders ?? (await this.recipients(policy.ownerId, connection)).map(item => item.binding);
+      for (const recipient of required) {
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
+      }
+      // Sealing something for the first time shares it beyond those who open what the owner holds only by one who
+      // may share what the owner holds.
+      if (!sealed) {
+        const expected = sharedWith({ ...policy, readers: required, authorities: required, observers: [], grants: [] }, binding).readers;
+        const given = sharedWith(policy, binding);
+        if ([...given.readers, ...given.authorities].some(id => !expected.includes(id)) || given.observers.length || given.grants.length)
+          await this.resources.authorization.requirePrincipal(actor, policy.ownerId, 'share', connection);
       }
       // Sealing it for another owner passes it on, which the new owner agrees to as to anything passed to it.
       if (current && current.owner_id !== policy.ownerId)
@@ -336,7 +360,7 @@ export class Custody {
     };
     for (const reader of content.policy.readers) add(reader.principalId, ['reader', 'revealer']);
     for (const observer of content.policy.observers ?? []) add(observer, ['reader']);
-    for (const authority of content.policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'sharer', 'user']);
+    for (const authority of content.policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'user']);
     for (const grant of content.policy.grants) {
       if ('actor' in grant) add(grant.actor.principalId, ['reader', 'user']);
       add(grant.executor.principalId, ['reader', 'user']);

@@ -12,7 +12,9 @@ import { rekeySharing } from '../keys';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
-const relationships = ['agent', 'member', 'payer'];
+const relationships = ['agent', 'keyholder', 'member', 'payer'];
+// Lines that change who opens what the principal holds: its items are sealed again in this browser before the line changes.
+const sealing = ['keyholder', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
   const page = (side: 'object' | 'subject', after: string | null) =>
@@ -40,8 +42,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       objectId = formText(form, 'objectId') || params.owner;
     const remove = formText(form, 'intent') === 'remove';
     const contents =
-      relation === 'member'
-        ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, objectId, remove: String(remove) }))
+      sealing.includes(relation)
+        ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, objectId, relation, remove: String(remove) }))
         : undefined;
     const changed = await api(
       '/relations',

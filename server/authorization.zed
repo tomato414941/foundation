@@ -13,6 +13,8 @@ definition principal {
   relation member: principal
   // Uses what this principal holds without deciding for it.
   relation agent: principal
+  // An agent also given the keys: it opens what this principal holds as well as using it.
+  relation keyholder: principal
   // Pays for what this principal uses. Drawn by the payer, who takes the cost on.
   relation payer: principal
   // One action each, given on its own.
@@ -28,7 +30,9 @@ definition principal {
   // Acts as this principal: itself, whoever acts as its owner, and whoever acts as one of its members.
   permission stands = self + owner->stands + member->stands
   // Uses what it holds: whoever acts as it, and its agents.
-  permission use = stands + agent->stands
+  permission use = stands + agent->stands + keyholder->stands
+  // Opens what it holds, which is encrypted for each of them: whoever acts as it, and the agents given its keys.
+  permission open = stands + keyholder->stands
 
   permission read = use + reader->stands
   permission create = stands + creator->stands
@@ -42,76 +46,72 @@ definition principal {
   permission delete = self + owner->stands
   permission transfer = owner->stands
 
-  // Making something it will hold. An agent makes what it may then change, and not what decides for its principal.
+  // Making something it will hold. An agent makes what it may then change.
   permission create_variable = create + use
-  permission create_connection = create
+  permission create_connection = create + use
   permission create_service = create + use
   permission create_method = create + use
-  permission create_app = create
+  permission create_app = create + use
   permission create_object = create + use
   permission create_environment = create + use
   permission create_function = create + use
 }
 
-// A value opened only where its policy says. An agent may use and change it; only those who act as the owner see it.
+// What a key protects: a value, a connection to a service, or an application used to connect. An agent uses,
+// changes and removes it, and those given the owner's keys see it. Whom it is shared with is decided by those who act
+// as the owner: the policy sealed with it lists every reader and signer, so changing them is sharing it.
 definition variable {
   relation owner: principal
   relation reader: principal
   relation editor: principal
-  relation sharer: principal
   relation revealer: principal
   relation user: principal
 
   permission read = owner->use + reader->stands
   permission update = owner->use + editor->stands
   permission delete = owner->use
-  permission share = owner->stands + sharer->stands
+  permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->stands + revealer->stands
+  permission reveal = owner->open + revealer->stands
   permission use = owner->use + user->stands
-  // A name is changed by one who may both change the thing and decide for it.
-  permission rename = update & share
+  permission rename = update
 }
 
-// What a service lets the owner do. An agent uses it; changing, removing and seeing it are the owner's.
 definition connection {
   relation owner: principal
   relation reader: principal
   relation editor: principal
-  relation sharer: principal
   relation revealer: principal
   relation user: principal
 
   permission read = owner->use + reader->stands
-  permission update = owner->stands + editor->stands
-  permission delete = owner->stands
-  permission share = owner->stands + sharer->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use
+  permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->stands + revealer->stands
+  permission reveal = owner->open + revealer->stands
   permission use = owner->use + user->stands
-  permission rename = update & share
+  permission rename = update
 }
 
-// An OAuth application, used to connect. An agent sees it is there; the rest is the owner's.
 definition app {
   relation owner: principal
   relation reader: principal
   relation editor: principal
-  relation sharer: principal
   relation revealer: principal
   relation user: principal
 
   permission read = owner->use + reader->stands
-  permission update = owner->stands + editor->stands
-  permission delete = owner->stands
-  permission share = owner->stands + sharer->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use
+  permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->stands + revealer->stands
-  permission use = owner->stands + user->stands
-  permission rename = update & share
+  permission reveal = owner->open + revealer->stands
+  permission use = owner->use + user->stands
+  permission rename = update
 }
 
-// A description of a service, holding nothing secret: an agent may change it. Connecting with it is the owner's.
+// A description of a service, holding nothing secret: an agent may use and change it.
 definition service {
   relation owner: principal
   relation reader: principal
@@ -126,8 +126,8 @@ definition service {
   permission delete = owner->use + deleter->stands
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
-  permission use = owner->stands + user->stands
-  permission rename = update & share
+  permission use = owner->use + user->stands
+  permission rename = update
 }
 
 // A way to connect to a service, as a service holds it.
@@ -145,8 +145,8 @@ definition method {
   permission delete = owner->use + deleter->stands
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
-  permission use = owner->stands + user->stands
-  permission rename = update & share
+  permission use = owner->use + user->stands
+  permission rename = update
 }
 
 // A file. An agent works with it as the owner does, short of deciding for it.
@@ -165,7 +165,7 @@ definition object {
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
   permission use = owner->use + user->stands
-  permission rename = update & share
+  permission rename = update
 }
 
 // Somewhere to run things. It stays with the principal it was made for, so it is not passed on.
@@ -179,12 +179,12 @@ definition environment {
   relation runner: principal
 
   permission read = owner->use + reader->stands
-  permission update = owner->stands + editor->stands
+  permission update = owner->use + editor->stands
   permission delete = owner->use + deleter->stands
   permission share = owner->stands + sharer->stands
   permission use = owner->use + user->stands
   permission execute = owner->use + runner->stands
-  permission rename = update & share
+  permission rename = update
 }
 
 // An operation the owner decided, run with what it uses.
@@ -203,5 +203,5 @@ definition function {
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
   permission execute = owner->use + runner->stands
-  permission rename = update & share
+  permission rename = update
 }
