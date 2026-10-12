@@ -203,10 +203,6 @@
             "GET /vps",
             "GET /vps/*"
           ],
-          "required": [
-            "GET /auth/details",
-            "GET /auth/currentCredential"
-          ],
           "separator": "\n",
           "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/api-right-delegation"
         },
@@ -276,7 +272,7 @@
         "identity": {
           "url": "{+apiBaseUrl}/auth/details",
           "headers": {
-          "Authorization": "Bearer {token}"
+            "Authorization": "Bearer {token}"
           },
           "id": [
             "/identities/0",

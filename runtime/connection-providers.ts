@@ -9,6 +9,6 @@ import { OvhConnection } from './ovh-connection.js';
 
 export function connectionProviders(transport: Transport, aws: AwsConnectionProvider):
   Readonly<Record<ConnectionFamily, ConnectionProvider>> {
-  return { oauth: new OAuthConnection(transport), token: new TokenConnection(transport), aws: new AwsConnection(aws),
-    ovh: new OvhConnection(transport) };
+  return { oauth: new OAuthConnection(transport), token: new TokenConnection(), aws: new AwsConnection(aws),
+    ovh: new OvhConnection() };
 }

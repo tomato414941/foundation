@@ -1,12 +1,12 @@
 import * as oauth from 'oauth4webapi';
-import { atPointer, textValue } from '../shared/values.js';
-import { publicUrl, responseJson } from './transport.js';
-import type { Transport } from './transport.js';
+import { atPointer, textValue } from './values.js';
+import { publicUrl, responseJson } from './http.js';
+import type { Transport } from './http.js';
 import { DomainError, fail } from './errors.js';
-import { oauthService } from './oauth-service.js';
-import { digest, expandUrl, lifetime, strings } from './oauth-values.js';
+import { basicCredentials, oauthService } from './oauth-service.js';
+import { expandUrl, lifetime, strings } from './oauth-values.js';
 import type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
-import { connectionValues, ConnectionFieldError } from '../shared/connection-fields.js';
+import { connectionValues, ConnectionFieldError } from './connection-fields.js';
 export { expandUrl } from './oauth-values.js';
 export type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 
@@ -104,7 +104,7 @@ export class OAuth {
     const { server, client } = this.configuration(spec, app);
     const endpoint = new URL(server.token_endpoint!);
     const normalized = { ...data };
-    // inspect() resolves the service account; OIDC ID tokens are not used to authenticate sessions.
+    // ID tokens are not used to authenticate Foundation sessions.
     delete normalized.id_token;
     oauthService(spec, endpoint.href).normalizeToken?.(normalized);
     if (normalized.expires_in !== undefined) normalized.expires_in = lifetime(normalized.expires_in);
@@ -232,11 +232,9 @@ export class OAuth {
     }
     const received = this.token(spec, data, scopes, previous);
     await checkpoint?.(received, data);
-    const result = await this.inspect(spec, app, received, data);
-    if (previous && result.account !== previous.account && !service.allowAccountChange)
-      fail(409, 'account_changed', 'Reconnect using the same service account.');
-    return result;
+    return received;
   }
+
   async clientCredentials(
     spec: OAuthSpec, app: OAuthApp, scopes: string[], previous?: OAuthToken, checkpoint?: TokenCheckpoint,
   ): Promise<OAuthToken> {
@@ -253,11 +251,9 @@ export class OAuth {
     const data = await this.tokenResponse(spec, app, response);
     const received = { ...this.token(spec, data, scopes, previous, Boolean(previous)), requestedScopes: scopes };
     await checkpoint?.(received, data);
-    const result = await this.inspect(spec, app, received, data);
-    if (previous && result.account !== previous.account)
-      fail(409, 'account_changed', 'Reconnect using the same service account.');
-    return result;
+    return received;
   }
+
   async refresh(spec: OAuthSpec, app: OAuthApp, previous: OAuthToken, checkpoint?: TokenCheckpoint): Promise<OAuthToken> {
     let current = previous;
     if (previous.expiresAt !== null && previous.expiresAt < Date.now() + 60_000) {
@@ -279,63 +275,7 @@ export class OAuth {
       current = this.token(spec, data, previous.scopes, previous, true);
       await checkpoint?.(current, data);
     }
-    if (spec.identity?.url || oauthService(spec).refreshInspection)
-      current = await this.inspect(spec, app, current);
-    if (current.account !== previous.account)
-      fail(409, 'account_changed', 'Reconnect using the same service account.');
     return current;
-  }
-  async inspect(
-    spec: OAuthSpec,
-    app: OAuthApp,
-    current: OAuthToken,
-    tokenResponse?: Record<string, unknown>,
-  ): Promise<OAuthToken> {
-    let data: Record<string, unknown> = tokenResponse ?? {};
-    const service = oauthService(spec);
-    if (service.inspect) return service.inspect({ spec, app, transport: this.transport, current,
-      configuration: () => this.configuration(spec, app),
-      authentication: method => this.authentication(app, method),
-      options: () => this.options(), json: response => this.json(response) });
-    if (spec.identity?.url) {
-      const url = expandUrl(spec.identity.url, {
-        ...this.appValues(spec, app), ...current.extra, accessToken: current.accessToken, refreshToken: current.refreshToken ?? '',
-      });
-      const identityService = oauthService(spec, url);
-      const response = await this.transport.send(identityService.identityRequest?.({ spec, app, transport: this.transport, url, current }) ?? {
-        url, method: spec.identity.method,
-        headers: { ...spec.identity.headers, authorization: 'Bearer ' + current.accessToken },
-      });
-      data = responseJson(response);
-      if (response.status === 401 || response.status === 403)
-        fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-      if (response.status >= 400) fail(502, 'invalid_response', 'The service account could not be verified.');
-      identityService.verifyIdentity?.({ spec, app, transport: this.transport, current, response, data });
-    } else if (spec.identity?.from === 'app') data = this.appValues(spec, app);
-    const first = (pointers: string | string[]) => {
-      for (const pointer of Array.isArray(pointers) ? pointers : [pointers]) {
-        const value = atPointer(data, pointer);
-        if ((typeof value === 'string' && value) || typeof value === 'number') return String(value);
-      }
-      return '';
-    };
-    const id = spec.identity?.id;
-    const account = id
-      ? Array.isArray(id)
-        ? id
-            .map((pointer) => first(pointer))
-            .filter(Boolean)
-            .join(':')
-        : first(id)
-      : current.account || app.fields.domain || app.fields.shop || digest(current.accessToken);
-    if (!account || account.length > 1000)
-      fail(502, 'invalid_response', 'The service account could not be verified.');
-    return {
-      ...current,
-      account,
-      accountName: spec.identity ? first(spec.identity.name) || account : account,
-      accountVerified: Boolean(spec.identity?.url || (spec.identity?.from === 'token' && tokenResponse)),
-    };
   }
   async revoke(spec: OAuthSpec, app: OAuthApp, current: OAuthToken) {
     if (!spec.revoke)
@@ -370,7 +310,7 @@ export class OAuth {
     if (spec.revoke.style === 'bearer') headers.authorization = 'Bearer ' + current.accessToken;
     else if (auth === 'basic')
       headers.authorization =
-        'Basic ' + Buffer.from(app.clientId + ':' + (app.clientSecret ?? '')).toString('base64');
+        'Basic ' + basicCredentials(app.clientId, app.clientSecret ?? '');
     const response = await this.transport.send(oauthService(spec).revokeRequest?.({
       spec, app, transport: this.transport, url, current,
     }) ?? {

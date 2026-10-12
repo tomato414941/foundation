@@ -73,7 +73,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     kind === 'connection'
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
-    isProtected(kind) || kind === 'function' ? availableEnvironments(params.owner!) : [],
+    ['variable', 'app', 'function'].includes(kind) ? availableEnvironments(params.owner!) : [],
     kind === 'environment' ? environmentReservations(params.owner!, request.signal) : 0,
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
@@ -96,7 +96,8 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
       if (resource.kind === 'connection') {
         const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
-        pinnedMethod = { ...state.method, id: state.methodId, builtin: false, availability: 'ready' };
+        pinnedMethod = methods?.items.find(method => method.id === state.methodId) ?? { ...state.method, id: state.methodId, builtin: false, availability: 'ready', defaultName: state.method.name,
+          registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
         connection = connectionInitialValues(state);
       }
     } catch { locked = true; }
@@ -167,7 +168,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       if (connectionId && connectionNeedsMaterial(selected, form))
         previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
       const prepared = connectionSubmission({ ownerId: owner, methodId,
-        name: name || existing?.name || selected.name,
+        name: name || existing?.name || selected.defaultName,
         ...(connectionId ? { connectionId } : {}) }, form, selected, previous);
       const progress = await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
       if ('kind' in progress && progress.kind === 'saved') return redirect(resourcePath(progress.resource));
@@ -290,8 +291,8 @@ export default function ResourceForm() {
     : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
   const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).application !== 'none');
   const preferred = (methods: CatalogConnectionMethod[]) =>
-    methods.find((item) => item.availability === 'ready') ??
-    methods[0];
+    methods.find(method => method.registration.device === 'browser' && !connectionMethod(method).requiresApp) ??
+    methods.find(method => method.registration.device === 'browser') ?? methods[0];
   const [serviceId, setServiceId] = useState(
     existing?.kind === 'connection'
       ? (existing.data.services[0]?.id ?? '')
@@ -314,14 +315,13 @@ export default function ResourceForm() {
       ? existing.data.methodId
       : (data.methodId ?? preferred(methods)?.id ?? ''),
   );
-  const method = data.pinnedMethod ?? eligibleMethods.find((item) => item.id === methodId);
+  const method = eligibleMethods.find((item) => item.id === methodId) ?? data.pinnedMethod ?? undefined;
   const [fileName, setFileName] = useState('');
-  const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
-  const executor = data.environments.find((item) => item.id === environmentId);
-  const executorChoice = isProtected(data.kind) && !(data.kind === 'connection' && method && !connectionMethod(method).requiresEnvironment) && (
-    <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
-      selected={data.kind === 'connection' ? [environmentId] : data.environmentId ? [data.environmentId] : data.selectedExecutors} />
-  );
+  const executorChoice = ['variable', 'app'].includes(data.kind) && <details className="rounded-md border p-4">
+    <summary className="cursor-pointer text-sm">{t('optionalExecutionAccess')}</summary>
+    <div className="mt-4"><EnvironmentChoice items={data.environments} multiple
+      selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} /></div>
+  </details>;
   const matchingApps = data.apps.filter(
     (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
   );
@@ -443,7 +443,7 @@ export default function ResourceForm() {
                     <SelectField
                       label={t('service')}
                       value={serviceId || 'none'}
-                      disabled={!!existing}
+                      disabled={!!existing && data.kind !== 'connection'}
                       onValueChange={(value) => {
                         const selectedId = value === 'none' ? '' : value;
                         setServiceId(selectedId);
@@ -469,17 +469,17 @@ export default function ResourceForm() {
                       name="methodId"
                       label={t('method')}
                       value={methodId}
-                      disabled={!!existing}
+                      disabled={!!existing && data.kind !== 'connection'}
                       onValueChange={(value) => setMethodId(value)}
                     >
-                      {(existing && method ? [method] : methods).map((item) => (
+                      {(existing && data.kind === 'app' && method ? [method] : [...methods, ...(data.pinnedMethod && !methods.some(item => item.id === data.pinnedMethod?.id) ? [data.pinnedMethod] : [])]).map((item) => (
                         <SelectItem key={item.id} value={item.id}>
                           {connectionMethodName(item.name, t, service?.name)}
                         </SelectItem>
                       ))}
                     </SelectField>
                     {existing && <input type="hidden" name="methodId" value={methodId} />}
-                    <ConnectionMethodHelp method={method} />
+                    <ConnectionMethodHelp method={method} connecting={data.kind === 'connection'} />
                     {!existing && !!existingConnections.length && (
                       <Notice tone={'info'}>
                         <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
@@ -498,13 +498,13 @@ export default function ResourceForm() {
                       </Notice>
                     )}
                     <ConnectionFields key={methodId} purpose={data.kind === 'app' ? 'app' : 'connection'}
-                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} />
+                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} reusableFields={data.connection?.reusableFields} />
                   </Panel>
                 )}
                 {executorChoice}
                 <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
                   initial={data.connection} newConnection={data.kind === 'connection' && !existing}
-                  executor={executor} />
+                  />
                 {data.kind === 'environment' && (
                   <EnvironmentForm owner={principal} usage={data.usage} reservedSeconds={data.reservedSeconds}
                     payment={data.payment} canManageBilling={principal.permissions.includes('manage_billing')}

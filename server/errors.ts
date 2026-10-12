@@ -1,19 +1,8 @@
 import { z } from 'zod';
-import type { JsonValue } from '../shared/contracts.js';
 
-export class DomainError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly details?: JsonValue,
-  ) {
-    super(message);
-  }
-}
-export function fail(status: number, code: string, message: string, details?: JsonValue): never {
-  throw new DomainError(status, code, message, details);
-}
+import { DomainError, fail } from '../shared/errors.js';
+export { DomainError, fail } from '../shared/errors.js';
+
 export function required<T>(value: T | null | undefined, message = 'The requested item was not found.'): T {
   if (value === null || value === undefined) fail(404, 'not_found', message);
   return value;

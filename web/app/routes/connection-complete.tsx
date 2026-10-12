@@ -1,13 +1,21 @@
 import { redirect } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/connection-complete';
-import { Id } from '../../../shared/contracts';
+import { Id, Resource } from '../../../shared/contracts';
+import { Execution } from '../../../shared/executions';
 import { Notice, Page } from '../components';
 import { connectionClient } from '../custody';
+import { api, signedIn } from '../api';
+import { resourcePath } from '../navigation';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  await signedIn(request);
   const id = Id.safeParse(new URL(request.url).searchParams.get('flow'));
   if (id.success) {
     const progress = await (await connectionClient()).progress(id.data);
+    if (progress.kind === 'connected') {
+      const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
+      return redirect(execution.requests.length ? '/requests/' + execution.requests.at(-1) : resourcePath(await api('/resources/' + progress.id, {}, Resource)));
+    }
     return redirect('/executions/' + progress.flow.execution.id);
   }
   return null;

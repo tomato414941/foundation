@@ -251,6 +251,10 @@ const methodCatalogMetadata = {
   id: z.string().min(1),
   builtin: z.boolean(),
   availability: z.enum(['ready', 'app-required', 'unavailable']),
+  defaultName: Name,
+  registration: z.object({ kind: z.enum(['input', 'authorization']),
+    device: z.enum(['browser', 'cli']), browserExchange: z.enum(['available', 'unavailable', 'unknown']),
+    tokenAlternatives: z.array(z.string()) }).strict(),
 };
 export const CatalogMethod = z.discriminatedUnion('kind', [
   OAuthMethod.extend(methodCatalogMetadata),
@@ -512,7 +516,8 @@ export type RequestedOperation = z.infer<typeof Operation>;
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
 export const DisplayedOperation = Operation.extend({ title: OperationTitle,
-  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()) });
+  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()),
+  environment: z.object({ required: z.boolean(), reason: OperationTitle.nullable() }).strict() });
 export const RequestInput = z
   .object({
     to: Id.optional(),

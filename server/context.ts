@@ -73,7 +73,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     custody = new Custody(resources, bindings, relations, config.origin),
     delegation = new Delegation(resources, bindings, custody, config.origin),
     connectionOperations = new ConnectionOperations(custody),
-    oauthRelays = new OAuthRelays(delegation);
+    oauthRelays = new OAuthRelays(delegation, () => executions);
   const processes = new Processes(resources, delegation);
   const invocations = new Invocations(functions, custody, delegation);
   principals.keySharing = new KeySharing(custody);

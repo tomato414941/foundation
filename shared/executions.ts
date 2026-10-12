@@ -16,8 +16,8 @@ export const RevokeConnection = z.object({ ownerId: Id, connectionId: Id, enviro
 export const AuthorizeConnection = z.object({ ownerId: Id, connectionId: Id, version: z.number().int().positive(),
   users: z.array(Id).max(32), expiresAt: z.iso.datetime().optional() }).strict();
 export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1).max(200),
-  connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional(), appId: Id.optional(),
-  environments: z.array(Id).max(32).optional(), redirectUri: z.url().optional(),
+  connectionId: Id.optional(), name: Name.optional(), appId: Id.optional(),
+  redirectUri: z.url().optional(),
   users: z.array(Id).max(32).optional(),
   scopes: z.array(z.string().min(1).max(1000)).max(200).optional(),
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
@@ -34,7 +34,8 @@ export const RunOperation = z.object({ ownerId: Id, environmentId: Id.optional()
   });
 
 export const DefinitionDescription = z.object({ name: Invocation.shape.name, title: OperationTitle,
-  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()), input: JsonObject }).strict();
+  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()),
+  environment: DisplayedOperation.shape.environment, input: JsonObject }).strict();
 export const ExecutionInput = z.object({ id: Id.optional(), operations: z.array(Operation).min(1).max(8), responderId: Id.optional(),
   message: z.string().max(1000).default(''), expiresInMinutes: z.number().int().min(1).max(1440).default(1440) }).strict();
 export const ExecutionResponse = z.object({ values: z.array(JsonObject).max(8).default([]),

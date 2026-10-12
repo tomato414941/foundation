@@ -19,14 +19,16 @@ export interface ConnectionFieldsProps {
   preparedScopes?: string[];
   fieldValues?: Record<string, string>;
   onFieldsChange?: (values: Record<string, string>) => void;
+  reusableFields?: string[];
 }
-export function ServiceFields({ method, fields, defaults = {}, existing, appMaterial, preparedFields = {}, fieldValues = {}, onFieldsChange }: {
+export function ServiceFields({ method, fields, defaults = {}, existing, appMaterial, preparedFields = {}, fieldValues = {}, onFieldsChange, reusableFields = [] }: {
   method: CatalogConnectionMethod; fields: ConnectionField[]; defaults?: Record<string, string>;
   existing: ResourceView | null; appMaterial: AppState | null;
   preparedFields?: Record<string, string>; fieldValues?: Record<string, string>;
   onFieldsChange?: (values: Record<string, string>) => void;
+  reusableFields?: string[];
 }) {
-  const { i18n } = useTranslation(), service = method.id.split(':')[0];
+  const { i18n, t } = useTranslation(), service = method.id.split(':')[0];
   return fields.map(field => {
     const label = i18n.language === 'ja' ? serviceLabels[`${service}.${method.kind}.${field.name}.label`] ?? field.label : field.label;
     const value = preparedFields[field.name] || fieldValues[field.name] || (existing?.kind === 'app' ? appMaterial?.fields[field.name] : '') || defaults[field.name] || '';
@@ -38,10 +40,11 @@ export function ServiceFields({ method, fields, defaults = {}, existing, appMate
       value={value} required={field.required ?? true} onValueChange={value => onFieldsChange?.({ [field.name]: value })}>
       {field.choices.map(choice => <SelectItem key={choice.value} value={choice.value}>{choice.label}</SelectItem>)}
     </SelectField>;
+    const reusable = field.secret !== false && reusableFields.includes(field.name);
     return <InputField key={field.name} name={'field.' + field.name} label={label}
-      type={field.secret !== false ? 'password' : 'text'} required={field.required ?? true} defaultValue={value}
+      type={field.secret !== false ? 'password' : 'text'} required={!reusable && (field.required ?? true)} defaultValue={value}
       onChange={field.secret !== false ? undefined : event => onFieldsChange?.({ [field.name]: event.target.value })}
       placeholder={field.placeholder} autoComplete="off"
-      hint={i18n.language === 'ja' ? serviceLabels[`${service}.${method.kind}.${field.name}.note`] ?? field.note : field.note} />;
+      hint={reusable ? t('unchangedSecret') : i18n.language === 'ja' ? serviceLabels[`${service}.${method.kind}.${field.name}.note`] ?? field.note : field.note} />;
   });
 }

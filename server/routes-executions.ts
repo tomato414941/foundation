@@ -29,6 +29,7 @@ export async function routesExecutions(app: ApiApp, context: Context) {
     return { items: [...definitions.definitions.values()].map(definition => {
       const [ja, en] = typeof definition.title === 'function' ? definition.title({}) : definition.title;
       return { name: definition.name, title: { ja, en }, execution: definition.execution, configure: [...definition.configure],
+        environment: definition.environment,
         input: C.JsonObject.parse(z.toJSONSchema(definition.schema)) };
     }), next: null };
   });

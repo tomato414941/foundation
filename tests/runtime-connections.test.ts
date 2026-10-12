@@ -58,15 +58,6 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
         ...(content.policy.contentType === ContentTypes.tokenSet ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
       }))) };
   }
-  async function run(input: JsonValue, sources: CustodyContent[] = [appContent], id = crypto.randomUUID()) {
-    const operation = { kind: 'connect', input }, authorization = await intent(operation, sources, Operations.connect, id);
-    await f.delegation.submit(f.owner.actor, await prepareRun(authorization, operation, f.owner.keys));
-    await executor.tick();
-    const task = await f.delegation.get(f.owner.actor, id);
-    const result = await readReceipt(task.receipt!, authorization, f.owner.binding.id, f.owner.keys);
-    assert.equal(task.state, 'succeeded', JSON.stringify(result.error));
-    return result.result as Record<string, JsonValue>;
-  }
   async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants'], state?: 'reconnect') {
     const material = ConnectionMaterial.parse({ format: 2, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
@@ -83,146 +74,8 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     return { material, content, authorization, sources: [content, appContent] };
   }
   return { ...f, method, policy, appMaterial, appContent, appPolicy, operations, journal, broker, connections,
-    requests, transport, run, storedConnection, worker: executor };
+    requests, transport, storedConnection, worker: executor };
 }
-
-test('選んだ実行先でOAuthコードを交換し、接続先と権限を確認してから承認した宛先へ保存する', async () => {
-  const f = await setup(request => request.url.endsWith('/token')
-    ? response({ access_token: 'runtime-access', refresh_token: 'runtime-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
-    : response({ id: 'account-1', name: 'Account' }));
-  try {
-    const flowId = crypto.randomUUID();
-    const started = await f.run({ action: 'start', flowId, name: 'My connection', methodId: 'provider:oauth',
-      method: f.method, appId: f.appPolicy.id, redirectUri: f.config.origin + '/oauth/callback' });
-    const url = new URL(String(started.url));
-    assert.equal(url.searchParams.get('client_id'), 'runtime-client');
-    assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-    const reviewed = await f.run({ action: 'exchange', flowId,
-      parameters: new URLSearchParams({ state: url.searchParams.get('state')!, code: 'approved-code' }).toString() });
-    assert.equal(reviewed.kind, 'review');
-    const metadata = reviewed.metadata as Record<string, JsonValue>;
-    assert.equal(metadata.account, 'Account');
-    assert.deepEqual(metadata.scopes, ['read']);
-    const runId = crypto.randomUUID();
-    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]), producers: [{ executor: f.executor.binding,
-      runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
-    const connected = await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
-      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [f.appContent], runId);
-    assert.equal(connected.id, policy.id);
-    const saved = await f.custody.read(f.owner.actor, policy.id);
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await reveal(saved.content, f.owner.binding, f.owner.keys.encryption))));
-    assert.equal(material.oauth!.refreshToken, 'runtime-refresh');
-    assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('client_secret'), 'runtime-client-secret');
-    assert.equal(f.requests.length, 2);
-  } finally { await f.close(); }
-});
-
-test('保存済みの認証待ち記録を読み取り、接続先を確認して承認した宛先へ保存する', async () => {
-  const f = await setup(request => request.url.endsWith('/token')
-    ? response({ access_token: 'continued-access', token_type: 'bearer', expires_in: 3600, scope: 'read' })
-    : response({ id: 'account-1', name: 'Account' }));
-  try {
-    const flowId = crypto.randomUUID();
-    await f.journal.write('connect_' + flowId, { actor: f.owner.binding, ownerId: f.owner.actor.id,
-      input: { action: 'start', flowId, name: 'Continued connection', methodId: 'provider:oauth',
-        method: f.method, appId: f.appPolicy.id, fields: {}, scopes: ['read'], redirectUri: f.config.origin + '/oauth/callback' },
-      app: f.appMaterial, state: 'previous-authorization-state', verifier: 'previous-proof-key-verifier',
-      expiresAt: Date.now() + 600_000, phase: 'authorize' });
-    const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
-      state: 'previous-authorization-state', code: 'continued-code',
-    }).toString() });
-    assert.equal(reviewed.kind, 'review');
-    assert.deepEqual((reviewed.metadata as Record<string, JsonValue>).scopes, ['read']);
-    const runId = crypto.randomUUID(), policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]),
-      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
-    const saved = await f.run({ action: 'commit', flowId,
-      authorizationDigest: (reviewed.metadata as Record<string, JsonValue>).authorizationDigest!,
-      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [f.appContent], runId);
-    assert.equal(saved.id, policy.id);
-    assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('code'), 'continued-code');
-  } finally { await f.close(); }
-});
-
-test('選び直したスコープと必須スコープでブラウザ認証を行う', async () => {
-  const f = await setup(() => response({}));
-  try {
-    const method = MethodDefinition.parse({ ...f.method, config: { ...f.method.config,
-      scopes: { default: ['read'], required: ['identity'] } } });
-    const started = await f.run({ action: 'start', flowId: crypto.randomUUID(), name: 'Selected scopes',
-      methodId: 'provider:oauth', method, appId: f.appPolicy.id, scopes: [],
-      redirectUri: f.config.origin + '/oauth/callback' });
-    assert.equal(new URL(String(started.url)).searchParams.get('scope'), 'identity');
-  } finally { await f.close(); }
-});
-
-test('AWSキーを選んだ実行先へ送り、確認した身元と認証情報を暗号化して保存して使用する', async t => {
-  t.mock.method(STSClient.prototype, 'send', async () => ({ Account: '123456789012',
-    Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
-  const f = await setup(() => response({}));
-  try {
-    const method = MethodDefinition.parse({ name: 'AWS', kind: 'aws', config: {} });
-    const flowId = crypto.randomUUID();
-    const reviewed = await f.run({ action: 'start', flowId, name: 'AWS keys', methodId: 'aws:authentication', method, appId: null,
-      aws: { authentication: { kind: 'access_key', accessKeyId: 'encrypted-aws-key', secretAccessKey: 'encrypted-aws-secret' },
-        region: 'us-west-2' } }, []);
-    const metadata = reviewed.metadata as Record<string, JsonValue>;
-    assert.equal(metadata.accountVerified, true);
-    assert.deepEqual(metadata.aws, { authentication: 'access_key', region: 'us-west-2', sourceAccountId: '123456789012',
-      sourceArn: 'arn:aws:iam::123456789012:user/operator' });
-    const runId = crypto.randomUUID();
-    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.command, Operations.refresh]),
-      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
-    await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
-      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId);
-    const saved = await f.custody.read(f.owner.actor, policy.id);
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await reveal(saved.content, f.owner.binding, f.owner.keys.encryption))));
-    assert.deepEqual(material.aws!.authentication, { kind: 'access_key', accessKeyId: 'encrypted-aws-key', secretAccessKey: 'encrypted-aws-secret' });
-    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 1,
-      policyDigest: await hash(policy), authorizationDigest: String(saved.content.metadata.authorizationDigest) }] };
-    assert.deepEqual(await f.connections.outputs(saved.content, authorization, [saved.content], new AbortController().signal), {
-      AWS_ACCESS_KEY_ID: 'encrypted-aws-key', AWS_SECRET_ACCESS_KEY: 'encrypted-aws-secret', AWS_SESSION_TOKEN: '',
-      AWS_DEFAULT_REGION: 'us-west-2', AWS_REGION: 'us-west-2',
-    });
-    const refreshed = await f.connections.execute({ action: 'refresh', id: policy.id },
-      { ...authorization, operation: Operations.refresh }, [saved.content], new AbortController().signal);
-    assert.equal((refreshed as Record<string, JsonValue>).kind, 'refreshed');
-  } finally { await f.close(); }
-});
-
-test('AWSの認証情報を同じ承認と共有許可のまま暗号化して更新し利用する', async t => {
-  t.mock.method(STSClient.prototype, 'send', async () => ({ Account: '123456789012',
-    Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
-  const f = await setup(() => response({}));
-  try {
-    const method = MethodDefinition.parse({ name: 'AWS', kind: 'aws', config: {} });
-    const flowId = crypto.randomUUID();
-    const reviewed = await f.run({ action: 'start', flowId, name: 'Renewable AWS credentials', methodId: 'aws:authentication',
-      method, appId: null,
-      aws: { authentication: { kind: 'access_key', accessKeyId: 'first-key', secretAccessKey: 'first-secret' }, region: 'us-west-2' } }, []);
-    const metadata = reviewed.metadata as Record<string, JsonValue>, runId = crypto.randomUUID();
-    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.command, Operations.refresh]),
-      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
-    await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
-      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId);
-    const previous = (await f.custody.read(f.owner.actor, policy.id)).content;
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await reveal(previous, f.owner.binding, f.owner.keys.encryption))));
-    material.aws!.authentication = { kind: 'access_key', accessKeyId: 'rotated-key', secretAccessKey: 'rotated-secret' };
-    const operation = await f.operations.prepare(f.executor.actor, crypto.randomUUID(), policy.id, previous.materialRevision);
-    await f.operations.dispatch(f.executor.actor, operation.id, operation.fence);
-    const updated = await renewContent(previous, encode(canonical(material)), f.executor.binding, f.executor.keys,
-      await connectionMetadata(material));
-    await f.operations.commit(f.executor.actor, operation.id, operation.fence, updated);
-    const saved = (await f.custody.read(f.owner.actor, policy.id)).content;
-    assert.equal(saved.materialRevision, 2);
-    assert.deepEqual(saved.policy, previous.policy);
-    assert.equal(saved.metadata.authorizationDigest, previous.metadata.authorizationDigest);
-    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 2,
-      policyDigest: await hash(policy), authorizationDigest: String(saved.metadata.authorizationDigest) }] };
-    const outputs = await f.connections.outputs(saved, authorization, [saved], new AbortController().signal);
-    assert.equal(outputs.AWS_ACCESS_KEY_ID, 'rotated-key');
-    assert.equal(outputs.AWS_SECRET_ACCESS_KEY, 'rotated-secret');
-  } finally { await f.close(); }
-});
 
 test('再認証が必要な接続は利用とトークン更新を再接続まで保留する', async () => {
   const f = await setup(() => response({ access_token: 'unexpected-access' }));
@@ -289,27 +142,6 @@ test('自動更新の依頼者と利用先を照合し、同じ委任で許可�
   } finally { await f.close(); }
 });
 
-test('トークン更新後のアカウント確認が途切れた場合、記録した新しいトークンで確認を再開する', async () => {
-  let inspections = 0;
-  const f = await setup(request => {
-    if (request.url.endsWith('/token')) return response({ access_token: 'new-access', refresh_token: 'new-refresh',
-      token_type: 'bearer', expires_in: 3600, scope: 'read' });
-    assert.equal(request.headers?.authorization, 'Bearer new-access');
-    if (++inspections === 1) throw new Error('account response lost');
-    return response({ id: 'account-1', name: 'Account' });
-  });
-  try {
-    const c = await f.storedConnection();
-    await assert.rejects(f.connections.outputs(c.content, c.authorization, c.sources, new AbortController().signal),
-      { code: 'connection_uncertain' });
-    await f.connections.reconcile();
-    const updated = (await f.custody.read(f.owner.actor, c.content.policy.id)).content;
-    assert.equal(updated.materialRevision, 2);
-    assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
-    assert.equal(inspections, 2);
-  } finally { await f.close(); }
-});
-
 test('更新で権限が変わった接続を確認待ちにして、利用者の再承認を要求する', async () => {
   const f = await setup(request => request.url.endsWith('/token')
     ? response({ access_token: 'broad-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read write' })
@@ -335,39 +167,6 @@ test('更新要求の結果が不明な場合は接続を保留し、別の実�
     await assert.rejects(f.operations.prepare(f.executor.actor, crypto.randomUUID(), c.content.policy.id, 1),
       { code: 'connection_uncertain' });
     assert.equal(f.requests.length, 1);
-  } finally { await f.close(); }
-});
-
-test('OAuth接続の保存応答が途切れた場合、記録した暗号文を再送して実行結果を確定する', async () => {
-  const f = await setup(request => request.url.endsWith('/token')
-    ? response({ access_token: 'runtime-access', refresh_token: 'runtime-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
-    : response({ id: 'account-1', name: 'Account' }));
-  try {
-    const flowId = crypto.randomUUID();
-    const started = await f.run({ action: 'start', flowId, name: 'Saved once', methodId: 'provider:oauth',
-      method: f.method, appId: f.appPolicy.id, redirectUri: f.config.origin + '/oauth/callback' });
-    const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
-      state: new URL(String(started.url)).searchParams.get('state')!, code: 'approved-code',
-    }).toString() });
-    const runId = crypto.randomUUID(), policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]), producers: [{
-      executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1,
-    }] };
-    const capture = f.broker.capture;
-    let attempts = 0;
-    f.broker.capture = async (name, content, labels) => {
-      const saved = await capture(name, content, labels);
-      if (++attempts === 1) throw new Error('saved response lost');
-      return saved;
-    };
-    await assert.rejects(f.run({ action: 'commit', flowId,
-      authorizationDigest: (reviewed.metadata as Record<string, JsonValue>).authorizationDigest!,
-      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId), DeliveryPending);
-    assert.deepEqual(await f.worker.reconcile(), []);
-    const task = await f.delegation.get(f.owner.actor, runId);
-    assert.equal(task.state, 'succeeded');
-    assert.equal((await f.custody.read(f.owner.actor, policy.id)).content.creationRunId, runId);
-    assert.equal(attempts, 2);
-    assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
   } finally { await f.close(); }
 });
 

@@ -332,12 +332,22 @@ CREATE TABLE IF NOT EXISTS connection_operations (
 CREATE UNIQUE INDEX IF NOT EXISTS connection_current_operation ON connection_operations(resource_id) WHERE state IN ('prepared','in_flight','uncertain');
 CREATE TABLE IF NOT EXISTS oauth_relays (
   id uuid PRIMARY KEY,
-  run_id uuid NOT NULL REFERENCES execution_tasks(id) ON DELETE CASCADE,
+  execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+  operation_index integer NOT NULL,
   actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  executor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  binding_id uuid NOT NULL,
   state_digest text NOT NULL UNIQUE,
   callback_digest text,
   sealed jsonb,
   expires_at timestamptz NOT NULL,
   received_at timestamptz
 );
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='oauth_relays' AND column_name='run_id') THEN
+    DELETE FROM oauth_relays;
+    ALTER TABLE oauth_relays DROP COLUMN run_id, DROP COLUMN executor_id,
+      ADD COLUMN execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+      ADD COLUMN operation_index integer NOT NULL, ADD COLUMN binding_id uuid NOT NULL;
+  END IF;
+END $$;

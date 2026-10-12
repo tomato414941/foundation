@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
+import type { CatalogConnectionMethod } from '../../shared/contracts';
 import type { ConnectionState } from '../../shared/connections';
 import type { ConnectionFamily } from '../../shared/connection-methods';
 import { connectionMethod } from '../../shared/connection-methods';
@@ -14,7 +14,6 @@ export interface ConnectionPreparationProps {
   method?: CatalogConnectionMethod;
   initial?: { aws: ReturnType<typeof awsFormValues> };
   newConnection: boolean;
-  executor?: ResourceView;
 }
 interface ConnectionForm {
   Fields?: ComponentType<ConnectionFieldsProps>;
@@ -31,8 +30,8 @@ const forms: Record<ConnectionFamily, ConnectionForm> = {
   ovh: { Fields: OvhConnectionFields, Help: OvhConnectionHelp,
     settings: form => form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\r?\n/).map(scope => scope.trim()).filter(Boolean) } : {} },
   aws: {
-    Preparation: ({ active, initial, newConnection, executor }) => <AwsConnectionForm active={active}
-      initial={initial?.aws} newConnection={newConnection} executor={executor} />,
+    Preparation: ({ active, initial, newConnection }) => <AwsConnectionForm active={active}
+      initial={initial?.aws} newConnection={newConnection} />,
     settings: (form, previous) => ({ aws: awsConnectionSettings(form, previous?.aws) }),
     needsMaterial: form => formText(form, 'awsAuthentication') !== 'environment' &&
       (!formText(form, 'awsSecretAccessKey') || (formText(form, 'awsAuthentication') === 'session' && !formText(form, 'awsSessionToken'))),
@@ -43,7 +42,8 @@ export function connectionForm(method: CatalogConnectionMethod) { return forms[c
 export function connectionNeedsMaterial(method: CatalogConnectionMethod, form: FormData) {
   return connectionForm(method).needsMaterial?.(form) ?? false;
 }
-export function connectionInitialValues(state: ConnectionState) { return { aws: awsFormValues(state) }; }
+export function connectionInitialValues(state: ConnectionState) { return { aws: awsFormValues(state),
+  reusableFields: Object.entries(state.fields ?? {}).filter(([, value]) => value).map(([name]) => name) }; }
 export function ConnectionPreparation(props: ConnectionPreparationProps) {
   const family = props.method ? connectionMethod(props.method).family : undefined;
   return Object.entries(forms).map(([key, form]) => form.Preparation

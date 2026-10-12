@@ -65,9 +65,8 @@ Usage: foundation <command> [options]
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   agent start [--id ID]                Register this machine as an execution environment
   app NAME --method ID --client-id ID  Encrypt an application (--for ENV to allow use)
-  connect --method ID                  Register a connection (--environment for API verification)
+  connect --method ID                  Encrypt and save a connection on this device
   connect wait ID                      Continue after service authorization
-  connect accept ID                    Save the reviewed connection and its permissions
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
@@ -504,27 +503,26 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'connect') {
+    if (args.values.environment || args.values.for) throw new Error('Register on this device. Select an execution environment when running a program.');
     const flowClient = connectionClient(client), action = args.positionals[0] ?? 'start';
     let progress: FlowProgress | Awaited<ReturnType<typeof startConnection>>;
     if (action === 'start') progress = await startConnection(client, { ownerId: owner,
-      environmentId: args.values.environment,
       methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
       appId: args.values.app, connectionId: args.values.connection,
       fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
       aws: args.values.aws ? await json(args.values.aws) : undefined,
-      environments: args.values.for, redirectUri: args.values['redirect-uri'] });
+      redirectUri: args.values['redirect-uri'] });
     else {
       const executionId = Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.'));
       const execution = await client.json('/api/executions/' + executionId, {}, Execution);
       if (!execution.waiting?.continuation) { await output(execution, args); return execution.state === 'succeeded' ? 0 : 1; }
       const id = execution.waiting.continuation.id;
-      if (action === 'accept') progress = await flowClient.accept(id);
-      else if (action === 'cancel') progress = await flowClient.cancel(id);
+      if (action === 'cancel') progress = await flowClient.cancel(id);
       else if (action === 'complete') {
         const value = await text(requireArgument(args.values.parameters, 'Supply the authorization response with --parameters.'));
         progress = await flowClient.complete(id, value.includes('://') ? new URL(value).search.slice(1) : value.replace(/^\?/, ''));
       } else if (action === 'status' || action === 'wait') progress = await flowClient.progress(id);
-      else throw new Error('Choose connect start, status, wait, complete, accept, or cancel.');
+      else throw new Error('Choose connect start, status, wait, complete, or cancel.');
     }
     if (args.values.wait || action === 'wait') {
       const deadline = Date.now() + seconds(args.values.timeout, 600) * 1000;

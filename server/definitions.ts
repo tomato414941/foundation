@@ -20,6 +20,7 @@ export interface ProcessingDefinition {
   title: Title;
   execution: 'server' | 'keyholder';
   configure: readonly string[];
+  environment: { required: boolean; reason: OperationTitle | null };
   secret(pointer: string): boolean;
   execute(actor: Actor, input: unknown): Promise<JsonValue>;
   complete?: (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) => Promise<JsonValue>;
@@ -45,7 +46,7 @@ export class DefinitionRegistry {
   readonly endpoints: OperationEndpoint[] = [];
   define<T extends z.ZodType>(name: string, schema: T, title: Title,
     execute: (actor: Actor, input: z.output<T>) => Promise<unknown>,
-    options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; secret?: (pointer: string) => boolean;
+    options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; environmentReason?: readonly [string, string]; secret?: (pointer: string) => boolean;
       complete?: (actor: Actor, input: z.output<T>, proof: JsonValue, execution: { id: string; index: number }) => Promise<unknown>;
       prepareInput?: (actor: Actor, input: z.output<T>, proof: JsonValue, connection: Queryable) => Promise<unknown>;
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
@@ -54,6 +55,8 @@ export class DefinitionRegistry {
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
       configure: options.configure ?? [], secret: options.secret ?? (() => false),
+      environment: { required: !!options.environmentReason,
+        reason: options.environmentReason ? { ja: options.environmentReason[0], en: options.environmentReason[1] } : null },
       ...(options.observe ? { observe: options.observe } : {}), ...(options.cancel ? { cancel: options.cancel } : {}),
       ...(options.review ? { review: options.review } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,

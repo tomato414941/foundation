@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
 import type { CatalogConnectionMethod } from '../../shared/contracts';
 import type { ConnectionState } from '../../shared/connections';
-import { ExternalLink } from './components';
+import { ExternalLink, Notice } from './components';
 import { connectionForm } from './connection-forms';
 import { OAuthConnectionFields } from './oauth-connection-form';
 import type { ConnectionFieldsProps } from './connection-fields';
@@ -16,9 +16,16 @@ export function connectionFields(form: FormData): Record<string, string> {
 export function connectionSettings(method: CatalogConnectionMethod, form: FormData, previous?: ConnectionState) {
   return { fields: connectionFields(form), ...connectionForm(method).settings?.(form, previous) };
 }
-export function ConnectionMethodHelp({ method }: { method?: CatalogConnectionMethod }) {
+export function ConnectionMethodHelp({ method, connecting = true }: { method?: CatalogConnectionMethod; connecting?: boolean }) {
+  const { t } = useTranslation();
   const Help = method ? connectionForm(method).Help : undefined;
-  return Help ? <Help method={method} /> : null;
+  return <>
+    {Help && <Help method={method} />}
+    {connecting && method?.registration.device === 'cli' && <Notice tone="info">
+      <p>{t('connectionCliHelp')}</p>
+      {method.registration.tokenAlternatives.length > 0 && <p className="mt-2">{t('connectionTokenAlternative')}</p>}
+    </Notice>}
+  </>;
 }
 export function ConnectionFields(props: ConnectionFieldsProps) {
   const { t } = useTranslation();

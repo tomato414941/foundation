@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { OAuthDefinition } from '../shared/contracts.js';
-import { OAuth } from '../server/oauth.js';
-import type { OAuthApp, OAuthToken } from '../server/oauth.js';
+import { OAuth } from '../shared/oauth.js';
+import type { OAuthApp, OAuthToken } from '../shared/oauth.js';
 import { PublicTransport } from '../server/transport.js';
 import type { OutboundRequest, OutboundResponse, Transport } from '../server/transport.js';
 import { DomainError } from '../server/errors.js';
@@ -111,7 +111,6 @@ test('記号を含むアプリ認証情報で認可コードを交換し、更�
   assert.equal(token.accessToken, 'access-1');
   const refreshed = await oauth.refresh(spec, app, token);
   assert.equal(refreshed.accessToken, 'access-2');
-  assert.equal(refreshed.account, 'account-1');
   await oauth.revoke(spec, app, refreshed);
   assert.equal(provider.requests.length, 3);
 });
@@ -136,7 +135,6 @@ test('保存済みトークンを更新し、更新用トークンと権限を�
   assert.equal(updated.refreshExpiresAt, old.refreshExpiresAt);
   assert.deepEqual(updated.scopes, old.scopes);
   assert.equal(updated.scopesStatus, 'reported');
-  assert.equal(updated.account, old.account);
   assert.deepEqual(updated.extra, old.extra);
   assert.ok(updated.expiresAt! > Date.now() + 3_500_000);
 });
@@ -160,7 +158,7 @@ test('クライアント認証が必要なアプリではシークレットの�
   assert.equal(provider.requests.length, 0);
 });
 
-test('NotionのJSON形式で認可コードを交換し、応答のワークスペースを接続先として確認する', async () => {
+test('NotionのJSON形式で認可コードを交換してトークンを取得する', async () => {
   const spec = await builtin('notion');
   const provider = new Provider((request) => {
     checkBasic(request);
@@ -186,8 +184,6 @@ test('NotionのJSON形式で認可コードを交換し、応答のワークス�
     [],
   );
   assert.equal(token.accessToken, 'notion-access');
-  assert.equal(token.account, 'workspace-1');
-  assert.equal(token.accountVerified, true);
   assert.equal(token.refreshToken, undefined);
 });
 
@@ -209,7 +205,6 @@ test('Shopifyの応答から接続し、更新用トークンで新しいアク�
   });
   const oauth = new OAuth(provider);
   const token = await oauth.exchange(spec, shopifyApp, authorization('shopify-code'), verifier, redirect, []);
-  assert.equal(token.account, 'example');
   assert.deepEqual(token.scopes, ['read_products', 'write_orders']);
   const refreshed = await oauth.refresh(spec, shopifyApp, token);
   assert.equal(refreshed.accessToken, 'shopify-access-2');
@@ -236,16 +231,13 @@ test('アプリ認証で取得した権限と要求したスコープを区別�
     const oauth = new OAuth(provider);
     const token = await oauth.clientCredentials(spec, app, scopes);
     assert.deepEqual(token.scopes, ['read', 'write']);
-    assert.equal(token.account, 'application-1');
-    assert.equal(token.accountVerified, true);
     const refreshed = await oauth.refresh(spec, app, token);
     assert.equal(refreshed.accessToken, 'app-access-2');
     assert.deepEqual(refreshed.requestedScopes, scopes);
-    assert.equal(refreshed.account, token.account);
   }
 });
 
-test('アプリ認証のClient IDと既定値を接続先の表示と利用する値に反映する', async () => {
+test('アプリ認証のClient IDと既定値を利用する値に反映する', async () => {
   const spec = definition({ grantType: 'client_credentials', authorizeUrl: undefined,
     tokenUrl: '{+apiBaseUrl}/token', defaults: { apiBaseUrl: 'https://provider.test', label: 'Default name' },
     fields: [{ name: 'label', label: 'Account name', required: false }],
@@ -257,9 +249,6 @@ test('アプリ認証のClient IDと既定値を接続先の表示と利用す�
   });
   const oauth = new OAuth(provider), application = { ...app, fields: { label: 'My service account' } };
   const token = await oauth.clientCredentials(spec, application, []);
-  assert.equal(token.account, app.clientId);
-  assert.equal(token.accountName, 'My service account');
-  assert.equal(token.accountVerified, false);
   assert.deepEqual(oauth.outputs(spec, application, token), {
     ACCESS_TOKEN: 'app-access', CLIENT_ID: app.clientId, API_BASE_URL: 'https://provider.test',
   });
@@ -285,12 +274,9 @@ test('OVHcloudのAPI接続先ごとにトークンを取得し同じサービス
     });
     const oauth = new OAuth(provider);
     const token = await oauth.clientCredentials(spec, account, spec.scopes.default);
-    assert.equal(token.account, app.clientId);
-    assert.equal(token.accountVerified, false);
     assert.deepEqual(token.scopes, ['all']);
     assert.equal(token.scopesStatus, 'reported');
     const refreshed = await oauth.refresh(spec, account, token);
-    assert.equal(refreshed.account, app.clientId);
     assert.deepEqual(oauth.outputs(spec, account, refreshed), {
       OVH_ACCESS_TOKEN: 'ovh-access-2', OVH_CLIENT_ID: app.clientId, OVH_API_BASE_URL: apiBaseUrl,
       OVH_ENDPOINT: endpoint, OVH_API_REGION: apiRegion, OVH_TOKEN_EXPIRES_AT: String(refreshed.expiresAt),
@@ -313,7 +299,7 @@ test('サービスのAPI接続先を検証し、定義した選択肢から認�
   assert.equal(provider.requests[0]!.url, 'https://ca.ovh.com/auth/oauth2/token');
 });
 
-test('Shopifyのアプリ認証からストアと権限を確認し、有効期限が近づいたトークンを再取得する', async () => {
+test('Shopifyのアプリ認証でトークンを取得し、有効期限が近づくと再取得する', async () => {
   const spec = await builtin('shopify', 'client_credentials');
   const shopifyApp = { ...app, fields: { shop: 'example' } };
   let grants = 0, inspections = 0;
@@ -333,16 +319,11 @@ test('Shopifyのアプリ認証からストアと権限を確認し、有効期�
   });
   const oauth = new OAuth(provider);
   const token = await oauth.clientCredentials(spec, shopifyApp, []);
-  assert.equal(token.account, 'gid://shopify/Shop/1');
-  assert.equal(token.accountName, 'Example shop');
-  assert.equal(token.accountVerified, true);
   assert.deepEqual(token.scopes, ['read_products', 'write_orders']);
   assert.equal(token.scopesStatus, 'reported');
   assert.ok(token.expiresAt! > Date.now() + 86_300_000);
   const refreshed = await oauth.refresh(spec, shopifyApp, { ...token, expiresAt: 0 });
   assert.equal(refreshed.accessToken, 'shopify-app-access-2');
-  assert.equal(refreshed.account, token.account);
-  assert.equal(inspections, 2);
   assert.deepEqual(oauth.outputs(spec, shopifyApp, refreshed), {
     SHOPIFY_SHOP: 'example', SHOPIFY_ACCESS_TOKEN: refreshed.accessToken,
     SHOPIFY_TOKEN_EXPIRES_AT: String(refreshed.expiresAt),
@@ -360,16 +341,7 @@ test('アプリ認証で拒否された認証情報や不正な期限を接続�
   }
 });
 
-test('Shopifyのアプリ認証で取得した接続先が指定したストアと一致することを確認する', async () => {
-  const spec = await builtin('shopify', 'client_credentials');
-  const provider = new Provider(request => request.url.endsWith('/access_token')
-    ? response({ access_token: 'shopify-access', expires_in: 86_400 })
-    : response({ data: { shop: { id: 'gid://shopify/Shop/2', name: 'Other shop', myshopifyDomain: 'other.myshopify.com' } } }));
-  await assert.rejects(new OAuth(provider).clientCredentials(spec, { ...app, fields: { shop: 'example' } }, []),
-    { code: 'invalid_response' });
-});
-
-test('eBayのRuNameで認可し、独自のトークン種別と照会結果を使って更新と失効を実行する', async () => {
+test('eBayのRuNameで認可し、独自のトークン種別で更新と失効を実行する', async () => {
   const spec = await builtin('ebay');
   const ebayApp = { ...app, fields: { ruName: 'Foundation-Application-RuName' } };
   let exchanges = 0;
@@ -404,15 +376,14 @@ test('eBayのRuNameで認可し、独自のトークン種別と照会結果を�
   const connected = await oauth.exchange(spec, ebayApp, authorization('ebay-code'), verifier, redirect, [
     'read',
   ]);
-  assert.equal(connected.account, 'seller-1');
-  assert.deepEqual(connected.scopes, ['read', 'write']);
+  assert.deepEqual(connected.scopes, ['read']);
   const refreshed = await oauth.refresh(spec, ebayApp, connected);
   assert.equal(refreshed.accessToken, 'ebay-access-2');
   assert.equal(refreshed.refreshToken, 'ebay-refresh');
   await oauth.revoke(spec, ebayApp, refreshed);
 });
 
-test('GitHubのJSON応答と報告された権限で接続し、専用APIで認可を解除する', async () => {
+test('GitHubのJSON応答からトークンを取得し、専用APIで認可を解除する', async () => {
   const spec = await builtin('github');
   const githubApp = { clientId: 'github-client', clientSecret: 'github-secret', fields: {} };
   const provider = new Provider((request) => {
@@ -441,14 +412,12 @@ test('GitHubのJSON応答と報告された権限で接続し、専用APIで認�
   const token = await oauth.exchange(spec, githubApp, authorization('github-code'), verifier, redirect, [
     'repo',
   ]);
-  assert.equal(token.account, '123');
-  assert.equal(token.accountName, 'person');
-  assert.deepEqual(token.scopes, ['read:org', 'repo']);
+  assert.deepEqual(token.scopes, ['repo']);
   assert.equal(token.scopesStatus, 'reported');
   await oauth.revoke(spec, githubApp, token);
 });
 
-test('Googleの接続名義をアカウントAPIで確認し、アプリ認証不要の失効要求を送信する', async () => {
+test('Googleのトークンを取得し、アプリ認証不要の失効要求を送信する', async () => {
   const spec = await builtin('google');
   const provider = new Provider((request) => {
     if (request.url === spec.tokenUrl)
@@ -471,12 +440,10 @@ test('Googleの接続名義をアカウントAPIで確認し、アプリ認証�
   });
   const oauth = new OAuth(provider);
   const token = await oauth.exchange(spec, app, authorization('google-code'), verifier, redirect, ['openid']);
-  assert.equal(token.account, 'google-account');
-  assert.equal(token.accountVerified, true);
   await oauth.revoke(spec, app, token);
 });
 
-test('OpenRouterのコードからAPIキーを取得し、キーの情報を接続へ反映する', async () => {
+test('OpenRouterのコードをPKCEで交換してAPIキーを取得する', async () => {
   const spec = await builtin('openrouter');
   const provider = new Provider((request) => {
     if (request.url === spec.tokenUrl) {
@@ -503,8 +470,6 @@ test('OpenRouterのコードからAPIキーを取得し、キーの情報を接�
     [],
   );
   assert.equal(token.accessToken, 'openrouter-key');
-  assert.equal(token.accountName, 'Foundation');
-  assert.equal(token.facts.is_management_key, false);
 });
 
 test('開始時のstateと設定した発行者を照合し、異なる認可応答を拒否する', async () => {

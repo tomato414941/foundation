@@ -1,3 +1,4 @@
+import { flowFixture } from './flow-support.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,39 +11,21 @@ import { delegatedFixture } from './delegation-support.js';
 import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
-test('OAuthの認可応答を開始した依頼者と実行先へ暗号化して中継し、同じ応答を一度だけ受け付ける', async (t) => {
-  const f = await delegatedFixture();
-  const context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
-    app = await buildApp(context);
-  t.after(async () => {
-    await app.close();
-    await f.close();
-  });
-  const input = { kind: 'connect', input: { action: 'start' } };
-  const intent = { ...f.intent, operation: Operations.connect, operationDigest: await hash(input), sources: [] };
-  await f.delegation.submit(f.owner.actor, await prepareRun(intent, input, f.owner.keys));
-  const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
-  await f.delegation.dispatch(f.executor.actor, intent.id, claim.lease);
-  const id = randomUUID(), state = 'runtime-generated-state';
-  const registered = await app.inject({ method: 'POST', url: '/api/oauth/relays',
-    headers: { authorization: 'Bearer ' + f.executor.token }, payload: {
-      id, runId: intent.id, stateDigest: await hash(state), expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    } });
-  assert.equal(registered.statusCode, 201, registered.body);
+test('OAuthの認可応答を開始したプリンシパルへ暗号化して中継し、同じ応答を受け付ける', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const app = await f.saveApp('google:oauth'), started = await f.authorize({ methodId: 'google:oauth', appId: app.id });
+  const state = new URL(started.url).searchParams.get('state')!;
   const parameters = new URLSearchParams({ state, code: 'authorization-code', iss: 'https://accounts.google.com' });
-  const callback = await app.inject({ url: '/oauth/callback?' + parameters });
-  assert.equal(callback.statusCode, 302, callback.body);
-  assert.equal(callback.headers.location, '/connections/complete?flow=' + id);
-  const relayed = await app.inject({ url: '/api/oauth/relays/' + id, headers: { authorization: 'Bearer ' + f.owner.token } });
-  assert.equal(relayed.statusCode, 200, relayed.body);
+  const callback = await f.app.inject('/oauth/callback?' + parameters);
+  assert.equal(callback.statusCode, 302);
+  assert.equal(callback.headers.location, '/connections/complete?flow=' + started.flow.id);
+  const relayed = await f.app.inject({ url: '/api/oauth/relays/' + started.flow.id, headers: { authorization: 'Bearer ' + f.owner.token } });
   const result = relayed.json();
   assert.equal(decode(await open(result.sealed, f.owner.keys.encryption, f.owner.binding.id, result.context)), parameters.toString());
-  assert.equal(decode(await open(result.sealed, f.executor.keys.encryption, f.executor.binding.id, result.context)), parameters.toString());
-  assert.equal((await app.inject({ url: '/oauth/callback?' + parameters })).headers.location, callback.headers.location);
+  assert.equal((await f.app.inject('/oauth/callback?' + parameters)).headers.location, callback.headers.location);
   parameters.set('code', 'another-code');
-  assert.equal((await app.inject({ url: '/oauth/callback?' + parameters })).headers.location, '/connections/complete?error=connection_expired');
-  assert.equal((await app.inject({ url: '/api/oauth/relays/' + id,
-    headers: { authorization: 'Bearer ' + f.stranger.token } })).statusCode, 403);
+  assert.equal((await f.app.inject('/oauth/callback?' + parameters)).headers.location, '/connections/complete?error=connection_expired');
+  assert.equal((await f.app.inject({ url: '/api/oauth/relays/' + started.flow.id, headers: { authorization: 'Bearer ' + f.stranger.token } })).statusCode, 403);
 });
 
 test('HTTP APIで登録し、変数を保存して同じ権限で一覧を取得する', async (t) => {

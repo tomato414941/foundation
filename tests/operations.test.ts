@@ -1,3 +1,4 @@
+import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
@@ -69,50 +70,23 @@ test('通常の画面と依頼の変数保存が鍵を持つ利用者の暗号�
   assert.deepEqual(resource.data, result.resource.data);
 });
 
-test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライアントから依頼内の接続を再開する', async t => {
-  const f = await flowFixture(request => request.url.includes('/oauth2/token')
-    ? jsonResponse({ access_token: 'ovh-access-token', token_type: 'Bearer', expires_in: 3600 }) : jsonResponse({ ok: true }));
-  t.after(f.close);
-  const sender = f.api(f.stranger.token), connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
-  const operations = new ExecutionClient(f.client, connections);
-  const before = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/executions', {}, listOf(Execution));
-  const send = f.client.api.json.bind(f.client.api);
-  const preparations: Array<{ path: string; body: unknown }> = [];
-  f.client.api.json = async (path, options, schema) => {
-    if (path.endsWith('/preparation')) preparations.push({ path, body: options?.body });
-    return send(path, options, schema);
-  };
+test('依頼でOVHのIDとSecretを暗号化して保存し、同じ実行に結果を記録する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
     { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'ovh:client_credentials', fields: { apiRegion: 'eu' }, name: 'OVH account' } },
   ] } }, ApprovalRequest);
-  const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {
-    configuration: [{ environmentId: f.environment.manifest.id, clientId: 'ovh-service-account' }],
+  await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {
+    configuration: [{ clientId: 'ovh-service-account' }],
   } }, ApprovalRequest);
-  const approved = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
-  assert.equal(answer.state, 'accepted');
-  assert.equal(approved.waiting?.invocation.input.clientId, 'ovh-service-account');
-  const start = await operations.continue(asked.executionId, { clientSecret: 'ovh-service-secret' });
-  if (!('flow' in start)) throw new Error('Expected a connection flow.');
-  const preparation = preparations[0];
-  assert.ok(preparation);
-  const repeated = await send(preparation.path, { method: 'POST', body: preparation.body }, Execution);
-  assert.equal(repeated.id, asked.executionId);
-  const saved = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
-  assert.deepEqual(saved.waiting?.continuation, { kind: 'connection', id: start.flow.id });
-  const fresh = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
-  await f.executor.tick();
-  assert.equal((await fresh.progress(start.flow.id)).kind, 'review');
-  await fresh.accept(start.flow.id); await f.executor.tick();
-  const completed = await fresh.progress(start.flow.id);
-  assert.equal(completed.kind, 'connected');
-  assert.equal((await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest)).state, 'accepted');
-  const tokenCall = f.requests.find(request => request.url.includes('/oauth2/token'))!;
-  assert.ok(String(tokenCall.body).includes('client_secret=ovh-service-secret'));
-  assert.ok(String(tokenCall.body).includes('client_id=ovh-service-account'));
-  const history = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/executions', {}, listOf(Execution));
-  assert.deepEqual(history.items.filter(item => !before.items.some(saved => saved.id === item.id)).map(item => item.id), [asked.executionId]);
-  assert.equal(history.items.find(item => item.id === asked.executionId)?.state, 'succeeded');
-  await assert.rejects(sender.json('/api/operation-continuations/' + start.flow.id), { code: 'forbidden' });
+  const saved = await f.operations.continue(asked.executionId, { clientSecret: 'ovh-service-secret' });
+  if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected saved credentials.');
+  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.resource.id))));
+  const app = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(material.appId!))));
+  assert.equal(app.clientId, 'ovh-service-account'); assert.equal(app.clientSecret, 'ovh-service-secret');
+  const completed = await sender.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.equal(completed.state, 'succeeded'); assert.equal((completed.results[0] as { id: string }).id, saved.resource.id);
+  await assert.rejects(sender.json('/api/resources/' + saved.resource.id + '/custody'), { code: 'forbidden' });
 });
 
 test('準備した接続設定を維持して不足する設定を補い、秘密の値を暗号化して保存する', async t => {
@@ -145,30 +119,6 @@ test('準備した接続設定を維持して不足する設定を補い、秘�
   assert.equal(saved.state, 'succeeded');
   const material = JSON.parse(decode(await f.client.reveal(result.resource.id)));
   assert.equal(material.fields.token, 'private-token');
-});
-
-test('実行先が署名した接続操作を承認済みのAPI区分と照合してから認証を送信する', async t => {
-  const f = await flowFixture(() => jsonResponse({ access_token: 'wrong-region-token', token_type: 'Bearer', expires_in: 3600 }));
-  t.after(f.close);
-  const handler = new ExecutionClient(f.client, f.connections), methodId = 'ovh:client_credentials';
-  const application = await f.saveApp(methodId, 'EU application', { apiRegion: 'eu' });
-  const execution = await handler.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-    methodId, appId: application.id, name: 'Prepared CA connection', environmentId: f.environment.manifest.id, fields: { apiRegion: 'ca' } } });
-  const plan = await handler.plan(execution.id), flowId = crypto.randomUUID();
-  const prepared = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'connect', input: {
-    action: 'start', flowId, name: 'Prepared CA connection', methodId, method: await f.method(methodId),
-    appId: application.id, fields: { apiRegion: 'eu' }, scopes: ['all'],
-  } }, { sourceIds: [application.id], operationContext: {
-    id: execution.id, index: plan.index, invocation: plan.invocation, continuationId: flowId,
-  } });
-  await f.client.api.json('/api/executions/' + execution.id + '/continuation', { method: 'PUT',
-    body: { index: plan.index, continuation: { kind: 'connection', id: flowId } } });
-  const task = await f.client.submitPrepared(prepared);
-  await f.executor.tick();
-  const failed = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
-  assert.equal(failed.state, 'failed');
-  assert.equal((await f.client.result(failed))?.error?.code, 'invalid_execution');
-  assert.equal(f.requests.length, 0);
 });
 
 test('承認したHTTP操作と署名した実行を結び付け、実行先が復号後に差し替えを拒否する', async t => {
@@ -325,15 +275,14 @@ test('前のログインを終了しても同じ本人の新しいログイン�
   assert.equal(decode(await f.client.reveal(completed.resource.id)), 'continued-private-value');
 });
 
-test('接続を取り消すと入力待ちの実行と待機中の処理を取り消した状態で保存する', async t => {
+test('認可待ちの接続を取り消すと実行を取り消した状態で保存する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const connections = new ConnectionClient(f.client, new RemoteFlowStore(f.client)), operations = new ExecutionClient(f.client, connections);
   const execution = await operations.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-    environmentId: f.environment.manifest.id, methodId: 'openrouter:oauth', name: 'Cancelled connection' } });
+    methodId: 'openrouter:oauth', name: 'Cancelled connection' } });
   const started = await operations.continue(execution.id);
   if (!('flow' in started)) throw new Error('Expected a connection.');
   assert.equal((await connections.cancel(started.flow.id)).kind, 'cancelled');
-  assert.equal((await f.client.api.json('/api/runtime/runs/' + started.flow.taskId, {}, Task)).state, 'cancelled');
   const resumed = await operations.continue(execution.id);
   assert.equal('state' in resumed && resumed.state, 'cancelled');
   assert.equal(await f.executor.tick(), false);
@@ -360,7 +309,7 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   const handler = new ExecutionClient(f.client, connections);
   const execution = await creator.json('/api/executions', { method: 'POST', body: {
     responderId: f.owner.actor.id, message: 'Connect OVHcloud', operations: [{ name: 'connection.connect',
-      input: { ownerId: '$approver', methodId: 'ovh:client_credentials', fields: { apiRegion: 'ca' }, name: 'Direct OVH', environmentId: f.environment.manifest.id } }],
+      input: { ownerId: '$approver', methodId: 'ovh:client_credentials', fields: { apiRegion: 'ca' }, name: 'Direct OVH' } }],
   } }, Execution);
   assert.equal(execution.wait, 'approval'); assert.equal(execution.creator.id, f.stranger.actor.id);
   assert.equal((await f.client.api.json('/api/requests/' + execution.requests[0], {}, ApprovalRequest)).to?.id, f.owner.actor.id);
@@ -371,14 +320,8 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   assert.deepEqual(responded.waiting?.invocation.input.fields, { apiRegion: 'ca' });
   await assert.rejects(handler.continue(execution.id, { clientSecret: 'direct-ovh-secret', fields: { apiRegion: 'eu' } }),
     { code: 'operation_changed' });
-  await assert.rejects(handler.configure(execution.id, { environmentId: f.stranger.actor.id }), { code: 'operation_changed' });
-  const started = await handler.continue(execution.id, { clientSecret: 'direct-ovh-secret' });
-  if (!('flow' in started)) throw new Error('Expected an OVH connection flow.');
-  await f.executor.tick();
-  const fresh = new ConnectionClient(f.client, new RemoteFlowStore(f.client));
-  assert.equal((await fresh.progress(started.flow.id)).kind, 'review');
-  await fresh.accept(started.flow.id); await f.executor.tick();
-  assert.equal((await fresh.progress(started.flow.id)).kind, 'connected');
+  const savedConnection = await handler.continue(execution.id, { clientSecret: 'direct-ovh-secret' });
+  assert.equal('kind' in savedConnection && savedConnection.kind, 'saved');
   const completed = await creator.json('/api/executions/' + execution.id, {}, Execution);
   assert.equal(completed.state, 'succeeded'); assert.equal(completed.id, execution.id);
   const resourceId = (completed.results[0] as { id: string }).id;
@@ -386,7 +329,6 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   assert.equal(connection.kind, 'connection');
   if (connection.kind === 'connection') assert.deepEqual(connection.data.fields, { apiRegion: 'ca' });
   await assert.rejects(creator.json('/api/resources/' + resourceId + '/custody'), { code: 'forbidden' });
-  await assert.rejects(creator.json('/api/operation-continuations/' + started.flow.id), { code: 'forbidden' });
   const saved = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [execution.id]);
   assert.ok(saved);
   assert.equal(JSON.stringify(await f.context.vault.decrypt(saved.snapshot, 'operation-execution:' + execution.id)).includes('direct-ovh-secret'), false);
@@ -466,14 +408,12 @@ test('共通の操作でGoogleの接続を解除し、指定した接続のア�
     : request.url.includes('/userinfo') ? jsonResponse({ sub: 'revoke-account', email: 'revoke@example.com', email_verified: true }) : jsonResponse({ ok: true }));
   t.after(f.close);
   const app = await f.saveApp('google:oauth');
-  const start = await f.start({ methodId: 'google:oauth', appId: app.id });
+  const start = await f.authorize({ methodId: 'google:oauth', appId: app.id });
   const authorization = await f.tick(start.flow.id);
   if (authorization.kind !== 'authorize') throw new Error('Expected Google authorization.');
   const state = new URL(authorization.url).searchParams.get('state')!;
   await f.connections.complete(start.flow.id, new URLSearchParams({ code: 'approved-code', state }).toString());
-  const review = await f.tick(start.flow.id);
-  assert.equal(review.kind, 'review', 'error' in review ? JSON.stringify(review.error) : review.kind);
-  const connection = await f.accept(start.flow.id);
+  const connection = await f.saved(start.flow.id);
   const revocation = await f.operations.execute({ name: 'connection.revoke', input: { ownerId: f.owner.actor.id,
     environmentId: f.environment.manifest.id, connectionId: connection.id } });
   if (!('kind' in revocation) || revocation.kind !== 'run') throw new Error('Expected a revocation run.');

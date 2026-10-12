@@ -20,7 +20,7 @@ export const AwsIdentity = z.object({ accountId: z.string().regex(/^\d{12}$/),
   arn: z.string().max(2000).regex(/^arn:aws(?:-us-gov|-cn)?:(?:iam|sts)::\d{12}:.+/) }).strict();
 export type VerifiedAwsIdentity = z.infer<typeof AwsIdentity>;
 export const AwsConnectionMaterial = AwsConnectionInput.extend({
-  sourceIdentity: AwsIdentity, identity: AwsIdentity,
+  sourceIdentity: AwsIdentity.optional(), identity: AwsIdentity.optional(),
 }).strict();
 export type AwsConnectionState = z.infer<typeof AwsConnectionMaterial>;
 
@@ -32,16 +32,17 @@ function identityAuthorization(identity: VerifiedAwsIdentity) {
 }
 export function awsAuthorization(state: AwsConnectionState) {
   return { authentication: state.authentication.kind, region: state.region, role: state.role ?? null,
-    sourceIdentity: identityAuthorization(state.sourceIdentity), identity: identityAuthorization(state.identity) };
+    ...(state.sourceIdentity ? { sourceIdentity: identityAuthorization(state.sourceIdentity) } : {}),
+    ...(state.identity ? { identity: identityAuthorization(state.identity) } : {}) };
 }
 
 export const AwsConnectionInfo = z.object({ authentication: z.enum(['access_key', 'session', 'environment']),
-  region: AwsRegion, sourceAccountId: z.string().regex(/^\d{12}$/), sourceArn: z.string().max(2000),
+  region: AwsRegion, sourceAccountId: z.string().regex(/^\d{12}$/).optional(), sourceArn: z.string().max(2000).optional(),
   roleArn: AwsRoleArn.optional(), expiresAt: z.number().int().positive().optional() }).strict();
 
 export function awsConnectionInfo(state: AwsConnectionState): z.infer<typeof AwsConnectionInfo> {
   return { authentication: state.authentication.kind, region: state.region,
-    sourceAccountId: state.sourceIdentity.accountId, sourceArn: state.sourceIdentity.arn,
+    ...(state.sourceIdentity ? { sourceAccountId: state.sourceIdentity.accountId, sourceArn: state.sourceIdentity.arn } : {}),
     ...(state.role ? { roleArn: state.role.arn } : {}),
     ...(state.authentication.kind === 'session' ? { expiresAt: state.authentication.expiresAt } : {}),
   };

@@ -17,13 +17,7 @@ test('Hugging Face接続を暗号化して保存し、HF_TOKENでHub APIを呼�
   assert.ok(method);
   assert.equal(method.availability, 'ready');
 
-  const started = await f.start({ methodId: method.id, fields: { token }, name: 'Model storage' });
-  const review = await f.tick(started.flow.id);
-  assert.equal(review.kind, 'review');
-  if (review.kind !== 'review') return;
-  assert.deepEqual(review.metadata.outputs, ['HF_TOKEN']);
-
-  const saved = await f.accept(started.flow.id);
+  const saved = await f.saveConnection({ methodId: method.id, fields: { token }, name: 'Model storage' });
   assert.equal(saved.kind, 'connection');
   if (saved.kind !== 'connection') return;
   assert.deepEqual(saved.data.services, [{ id: 'huggingface', name: 'Hugging Face' }]);

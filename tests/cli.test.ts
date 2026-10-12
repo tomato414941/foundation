@@ -421,27 +421,12 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
     AWS_ENDPOINT_URL_STS: 'http://127.0.0.1:' + (aws.address() as { port: number }).port });
   t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'AWS owner', '--origin', c.origin])).code, 0);
-  const environment = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  const start = await c.run(['connect', '--method', 'aws:authentication', '--environment', environment, '--name', 'AWS session role', '--aws', '@-'],
+  const connected = await c.run(['connect', '--method', 'aws:authentication', '--name', 'AWS session role', '--aws', '@-'],
     JSON.stringify({ authentication: { kind: 'session', accessKeyId: 'explicit-cli-key', secretAccessKey: 'explicit-cli-secret',
       sessionToken: 'explicit-cli-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
       role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } }));
-  assert.equal(start.code, 0, start.stderr);
-  const flow = JSON.parse(start.stdout).id;
-  const executed = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const reviewed = await c.run(['connect', 'status', flow]);
-  assert.equal(reviewed.code, 0, reviewed.stderr);
-  assert.equal(JSON.parse(reviewed.stdout).metadata.aws.authentication, 'session');
-  assert.equal(JSON.parse(reviewed.stdout).metadata.aws.roleArn, 'arn:aws:iam::999999999999:role/team/Example');
-  const accept = await c.run(['connect', 'accept', flow]);
-  assert.equal(accept.code, 0, accept.stderr);
-  const saved = await c.run(['agent', 'start', '--id', environment, '--once']);
-  assert.equal(saved.code, 0, saved.stderr);
-  const connected = await c.run(['connect', 'status', flow]);
-  const id = JSON.parse(connected.stdout).results[0].id;
+  assert.equal(connected.code, 0, connected.stderr);
+  const id = JSON.parse(connected.stdout).connectionId;
   const inputs = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION']
     .map(name => ({ name, source: { id, output: name } }));
   const used = await c.run(['exec', '--inputs', JSON.stringify(inputs), '--', process.execPath, '--input-type=module', '-e',
@@ -452,7 +437,7 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '999999999999');
   const assumes = requests.filter(request => request.action === 'AssumeRole');
-  assert.ok(assumes.length >= 2);
+  assert.equal(assumes.length, 1);
   assert.ok(assumes.every(request => request.authorization.includes('Credential=explicit-cli-key/')));
   assert.ok(assumes.every(request => request.session === 'explicit-cli-session'));
   assert.equal(requests.at(-1)!.session, 'assumed-cli-session');

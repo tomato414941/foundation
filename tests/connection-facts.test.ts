@@ -38,7 +38,7 @@ test('認証方式に対応する認証情報とアプリだけを受け付け�
   });
 });
 
-test('各方式のProviderが秘密を含まない確認結果を返し、承認と表示に同じ身元を使う', async t => {
+test('各方式のProviderが秘密を含まないメタデータを認証情報に結び付ける', async t => {
   const providers = {
     oauth: new OAuthConnection({ send: async () => { throw new Error('Not used by observations.'); } }),
     token: new TokenConnection(),
@@ -49,17 +49,7 @@ test('各方式のProviderが秘密を含まない確認結果を返し、承認
     assert.deepEqual(facts, connectionFacts(state));
     assert.equal(JSON.stringify(facts).includes('private-'), false);
     assert.equal(connectionAuthorization(state, facts).account, metadata.accountId);
-    assert.equal(connectionLabels(state, facts).account, facts.accountName);
+    assert.equal(connectionLabels(state).methodName, state.method.name);
     assert.deepEqual(metadata.scopes, facts.scopes);
   });
-});
-
-test('身元が未確認の認証情報を保存しても確認済みアカウントとして表示しない', async () => {
-  const oauth = materials()[0]!;
-  const state = ConnectionMaterial.parse({ ...oauth, oauth: { ...oauth.oauth!, accountVerified: false } });
-  const facts = connectionFacts(state), metadata = await connectionMetadata(state);
-  assert.equal(facts.accountVerified, false);
-  assert.equal(metadata.accountId, null);
-  assert.equal(metadata.accountVerified, false);
-  assert.equal(connectionAuthorization(state).account, 'account-1');
 });

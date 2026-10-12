@@ -48,7 +48,7 @@ export async function web(app: ApiApp) {
           "style-src-attr 'unsafe-inline'",
           "img-src 'self' data: blob:",
           "font-src 'self'",
-          "connect-src 'self'",
+          "connect-src 'self' https:",
           "object-src 'none'",
           "base-uri 'self'",
           "frame-ancestors 'none'",

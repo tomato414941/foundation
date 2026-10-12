@@ -30,8 +30,8 @@ export function OAuthConnectionFields(props: ConnectionFieldsProps) {
     secretRequired={spec ? spec.clientAuth !== 'none' : false}>
     {method && spec && <>
       {servicePreparation(method).scopes && <InputField name="scopes" label={t('scopes')}
-        defaultValue={selectScopes(spec.scopes, existing?.kind === 'connection' ? existing.data.scopes : undefined).join(' ')}
-        hint={requiredScopes.length ? t('scopesHelp') + ' ' + t('requiredScopesHelp', { scopes: requiredScopes.join(', ') }) : t('scopesHelp')} />}
+        defaultValue={selectScopes(spec.scopes, props.preparedScopes ?? (existing?.kind === 'connection' ? existing.data.scopes : undefined)).join(' ')}
+        readOnly={!!props.preparedScopes} hint={requiredScopes.length ? t('scopesHelp') + ' ' + t('requiredScopesHelp', { scopes: requiredScopes.join(', ') }) : t('scopesHelp')} />}
       {spec.scopes.docs && <ExternalLink href={spec.scopes.docs}>{t('docs')}</ExternalLink>}
     </>}
   </ApplicationConnectionFields>;

@@ -1,62 +1,12 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { request } from 'node:https';
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import { fail, DomainError } from './errors.js';
-import ipaddr from 'ipaddr.js';
+import { publicAddress, publicUrl } from '../shared/http.js';
+import type { Transport, OutboundRequest, OutboundResponse } from '../shared/http.js';
+export { publicAddress, publicUrl, responseJson } from '../shared/http.js';
+export type { Transport, OutboundRequest, OutboundResponse } from '../shared/http.js';
 
-export interface OutboundRequest {
-  url: string;
-  method?: string;
-  headers?: Record<string, string>;
-  body?: string | Uint8Array;
-  signal?: AbortSignal;
-  maxBytes?: number;
-}
-export interface OutboundResponse {
-  status: number;
-  headers: Record<string, string>;
-  body: Uint8Array;
-}
-export interface Transport {
-  send(input: OutboundRequest): Promise<OutboundResponse>;
-}
-const globalV6 = ipaddr.IPv6.parseCIDR('2000::/3');
-const publicRanges = new Set([
-  'unicast', 'amt', 'as112', 'as112v6', 'orchid2', 'droneRemoteIdProtocolEntityTags',
-]);
-export function publicAddress(address: string): boolean {
-  if (!isIP(address) || address.includes('%')) return false;
-  const parsed = ipaddr.parse(address);
-  return publicRanges.has(parsed.range()) &&
-    (!(parsed instanceof ipaddr.IPv6) || parsed.match(globalV6));
-}
-export function publicUrl(value: string, ownOrigin?: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    fail(400, 'invalid_url', 'Enter an absolute HTTPS URL.');
-  }
-  if (
-    url.protocol !== 'https:' ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    (url.port && url.port !== '443') ||
-    url.origin === ownOrigin
-  )
-    fail(400, 'invalid_url', 'Choose a public HTTPS destination.');
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    (isIP(host) && !publicAddress(host))
-  )
-    fail(400, 'private_destination', 'Choose a public HTTPS destination.');
-  return url;
-}
 export class PublicTransport implements Transport {
   constructor(readonly origin: string) {}
   async send(input: OutboundRequest): Promise<OutboundResponse> {
@@ -175,15 +125,4 @@ export class PublicTransport implements Transport {
       fail(502, 'service_unavailable', 'The service could not be reached. Try again.');
     }
   }
-}
-export function responseJson(response: OutboundResponse): Record<string, unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(Buffer.from(response.body).toString('utf8'));
-  } catch {
-    fail(502, 'invalid_response', 'The service returned an invalid response.');
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    fail(502, 'invalid_response', 'The service returned an invalid response.');
-  return value as Record<string, unknown>;
 }

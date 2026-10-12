@@ -33,13 +33,17 @@ function sts(t: TestContext) {
   });
   return { calls, identities };
 }
+const expected = (input: AwsConnectionRequest) => ({ ...input,
+  sourceIdentity: { accountId: source.Account, arn: source.Arn, principalId: source.UserId },
+  identity: { accountId: target.Account, arn: target.Arn, principalId: 'AROEXAMPLE' },
+});
 const authentications = (): AwsConnectionRequest['authentication'][] => [
   { kind: 'access_key', accessKeyId: 'input-key', secretAccessKey: 'input-secret' },
   { kind: 'session', accessKeyId: 'input-key', secretAccessKey: 'input-secret', sessionToken: 'input-session', expiresAt: expiresAt() },
   { kind: 'environment' },
 ];
 
-test('アクセスキー・一時認証情報・実行環境の認証でAWSの身元と利用する認証情報を確認する', async t => {
+test('アクセスキー・一時認証情報・実行端末の認証情報をSDKに渡す', async t => {
   for (const authentication of authentications()) await t.test(authentication.kind, async t => {
     environment(t); const { calls } = sts(t);
     const result = await new AwsConnections().obtain({ authentication, region: 'us-west-2' });
@@ -48,42 +52,38 @@ test('アクセスキー・一時認証情報・実行環境の認証でAWSの�
       AWS_SECRET_ACCESS_KEY: ambient ? 'environment-secret' : 'input-secret',
       AWS_SESSION_TOKEN: ambient ? 'environment-session' : authentication.kind === 'session' ? 'input-session' : '',
       AWS_DEFAULT_REGION: 'us-west-2', AWS_REGION: 'us-west-2' });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.key, result.credentials.AWS_ACCESS_KEY_ID);
-    assert.deepEqual(result.state.sourceIdentity, { accountId: source.Account, arn: source.Arn, principalId: source.UserId });
-    assert.deepEqual(result.state.identity, result.state.sourceIdentity);
     assert.deepEqual(result.state.authentication, authentication);
   });
 });
 
-test('各認証元から別のIAMロールを引き受け、検証したロールの認証情報を利用する', async t => {
+test('各認証元から別のIAMロールを引き受け、その認証情報を利用する', async t => {
   for (const authentication of authentications()) await t.test(authentication.kind, async t => {
     environment(t); const { calls } = sts(t);
     const result = await new AwsConnections().obtain({ authentication, region: 'ap-northeast-1', role });
     assert.deepEqual(calls.map(call => [call.kind, call.key]), [
-      ['identity', authentication.kind === 'environment' ? 'environment-key' : 'input-key'],
-      ['role', authentication.kind === 'environment' ? 'environment-key' : 'input-key'], ['identity', 'assumed-key'],
+      ['role', authentication.kind === 'environment' ? 'environment-key' : 'input-key'],
     ]);
-    assert.equal(calls[1]!.input!.RoleArn, role.arn);
-    assert.equal(calls[1]!.input!.ExternalId, role.externalId);
-    assert.equal(calls[1]!.input!.DurationSeconds, 3600);
+    assert.equal(calls[0]!.input!.RoleArn, role.arn);
+    assert.equal(calls[0]!.input!.ExternalId, role.externalId);
+    assert.equal(calls[0]!.input!.DurationSeconds, 3600);
     assert.deepEqual(result.credentials, { AWS_ACCESS_KEY_ID: 'assumed-key', AWS_SECRET_ACCESS_KEY: 'assumed-secret',
       AWS_SESSION_TOKEN: 'assumed-session', AWS_DEFAULT_REGION: 'ap-northeast-1', AWS_REGION: 'ap-northeast-1' });
-    assert.deepEqual(result.state.identity, { accountId: target.Account, arn: target.Arn, principalId: 'AROEXAMPLE' });
   });
 });
 
 test('External IDを指定しないロールも選んだ認証元で利用する', async t => {
   const { calls } = sts(t);
   await new AwsConnections().obtain({ authentication: authentications()[0]!, region: 'us-west-2', role: { arn: role.arn } });
-  assert.equal(calls[1]!.input!.RoleArn, role.arn);
-  assert.equal(calls[1]!.input!.ExternalId, undefined);
+  assert.equal(calls[0]!.input!.RoleArn, role.arn);
+  assert.equal(calls[0]!.input!.ExternalId, undefined);
 });
 
 test('ロールのセッションや実行環境のキーが更新されても同じ身元で接続を利用する', async t => {
   environment(t); const { identities } = sts(t), provider = new AwsConnections();
   identities.source = { Account: source.Account, Arn: 'arn:aws:sts::123456789012:assumed-role/Host/first', UserId: 'AROHOST:first' };
-  const first = await provider.obtain({ authentication: { kind: 'environment' }, region: 'us-west-2', role });
+  const input = { authentication: { kind: 'environment' as const }, region: 'us-west-2', role };
+  const pin = { ...expected(input), sourceIdentity: { accountId: source.Account, arn: identities.source.Arn, principalId: 'AROHOST' } };
+  const first = await provider.obtain(input, pin);
   process.env.AWS_ACCESS_KEY_ID = 'rotated-environment-key';
   identities.source = { ...identities.source, Arn: 'arn:aws:sts::123456789012:assumed-role/Host/next', UserId: 'AROHOST:next' };
   identities.target = { ...target, Arn: 'arn:aws:sts::999999999999:assumed-role/Example/next', UserId: 'AROEXAMPLE:next' };
@@ -96,7 +96,8 @@ test('ロールのセッションや実行環境のキーが更新されても�
 test('認証元またはロールの身元が変わったら再接続での確認を求める', async t => {
   for (const changed of ['source', 'target'] as const) await t.test(changed, async t => {
     const { identities } = sts(t), provider = new AwsConnections();
-    const first = await provider.obtain({ authentication: authentications()[0]!, region: 'us-west-2', role });
+    const input = { authentication: authentications()[0]!, region: 'us-west-2', role };
+    const first = await provider.obtain(input, expected(input));
     identities[changed] = { ...identities[changed], UserId: 'DIFFERENTPRINCIPAL:session' };
     await assert.rejects(provider.obtain(first.state, first.state), { code: 'account_changed' });
   });
@@ -108,8 +109,8 @@ test('指定したロールと異なるアカウント・パーティション�
     await t.test(Arn, async t => {
       const { identities } = sts(t);
       identities.target = { ...target, Arn, Account: Arn.split(':')[4]! };
-      await assert.rejects(new AwsConnections().obtain({ authentication: authentications()[0]!, region: 'us-west-2', role }),
-        { code: 'account_changed' });
+      const input = { authentication: authentications()[0]!, region: 'us-west-2', role };
+      await assert.rejects(new AwsConnections().obtain(input, expected(input)), { code: 'account_changed' });
     });
 });
 
@@ -121,20 +122,9 @@ test('期限切れの一時認証情報やAWSの期限切れ応答に対して�
   });
   await t.test('AWS expiry', async t => {
     t.mock.method(STSClient.prototype, 'send', async () => { throw Object.assign(new Error('Expired'), { name: 'ExpiredToken' }); });
-    await assert.rejects(new AwsConnections().obtain({ authentication: authentications()[1]!, region: 'us-west-2' }),
+    await assert.rejects(new AwsConnections().obtain({ authentication: authentications()[1]!, region: 'us-west-2', role }),
       { code: 'reconnect_required' });
   });
-});
-
-test('入力したAWSキーが拒否されたらその認証元のエラーを返す', async t => {
-  environment(t); const keys: string[] = [];
-  t.mock.method(STSClient.prototype, 'send', async function(this: STSClient) {
-    keys.push((await this.config.credentials()).accessKeyId);
-    throw Object.assign(new Error('Rejected'), { name: 'InvalidClientTokenId' });
-  });
-  await assert.rejects(new AwsConnections().obtain({ authentication: authentications()[0]!, region: 'us-west-2' }),
-    { code: 'aws_authentication_failed' });
-  assert.deepEqual(keys, ['input-key']);
 });
 
 test('ロールの引き受けが拒否されたら信頼ポリシーの確認を求める', async t => {

@@ -1,8 +1,7 @@
 import { Template } from '@fedify/uri-template';
-import { createHash } from 'node:crypto';
 import type { z } from 'zod';
-import type { OAuthDefinition } from '../shared/contracts.js';
-import { publicUrl } from './transport.js';
+import type { OAuthDefinition } from './contracts.js';
+import { publicUrl } from './http.js';
 import { fail } from './errors.js';
 
 export type OAuthSpec = z.infer<typeof OAuthDefinition>;
@@ -34,7 +33,6 @@ export function expandUrl(template: string, values: Record<string, string>): str
     fail(400, 'invalid_service_url', 'Check the service URL and its required fields.');
   }
 }
-export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 export const strings = (value: unknown, separator = ' ') =>
   typeof value === 'string' ? [...new Set(value.split(separator).filter(Boolean))].sort() : [];
 export const lifetime = (value: unknown) => {

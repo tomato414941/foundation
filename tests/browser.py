@@ -135,11 +135,14 @@ class BrowserTests(unittest.TestCase):
         self.trust_fingerprint(page, fingerprint["id"], fingerprint["fingerprint"])
         return path
 
-    def accept_connection(self, page, name):
-        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        page.get_by_role("button", name="保存", exact=True).click()
+    def saved_connection(self, page, name):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
+        return page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+
+    def allow_environment(self, page, name="Browser executor"):
+        page.get_by_text("実行環境での利用を許可する（任意）", exact=True).click()
+        page.get_by_role("checkbox", name=name, exact=True).check()
 
     def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
         owner, principal = self.passkey_account("Chancellor Rigel")
@@ -797,73 +800,6 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="AI GitHub connection", exact=True)).to_be_visible()
         self.assertEqual(page.url, connection_path)
 
-    def test_接続方法を選んで登録し共有分類から再利用してトークンを更新する(self):
-        page, principal = self.passkey_account("Connection owner")
-        root = f"{ORIGIN}/p/{principal['id']}"
-        methods = {
-            "personal": {"name": "Personal access", "kind": "token", "config": {
-                "fields": [{"name": "personalKey", "label": "Personal key", "secret": True}],
-                "outputs": {"PERSONAL_KEY": "/personalKey"},
-            }},
-            "project": {"name": "Project access", "kind": "token", "config": {
-                "fields": [{"name": "projectKey", "label": "Project key", "secret": True}],
-                "outputs": {"PROJECT_KEY": "/projectKey"},
-            }},
-        }
-        page.goto(root + "/definitions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Work APIs")
-        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"methods": methods}))
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Work APIs", exact=True)).to_be_visible()
-        service = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
-        page.goto(root + "/services/new")
-        self.select(page, "サービス", "Work APIs")
-        self.select(page, "接続方法", "Personal access")
-        page.get_by_label("Personal key").fill("personal-fixture-key")
-        self.select(page, "接続方法", "Project access")
-        page.get_by_label("Project key").fill("project-fixture-key")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Primary account")
-        page.screenshot(path=str(ARTIFACTS / "connection-method-ja.png"), full_page=True, animations="disabled")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
-        expect(page.get_by_text("外部サービスの権限は未確認", exact=True)).to_be_visible()
-        expect(page.get_by_text("接続先の名義は未確認", exact=True)).to_be_visible()
-        expect(page.get_by_text("Project access", exact=True)).to_be_visible()
-        connection_path = page.url
-        connection_id = connection_path.rsplit("/", 1)[1]
-        page.goto(root + "/definitions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Other workspace")
-        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"methods": {"shared": service["data"]["methods"]["project"]}}))
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Other workspace", exact=True)).to_be_visible()
-        page.goto(root + "/services/new")
-        self.select(page, "サービス", "Other workspace")
-        expect(page.get_by_text("この接続方法で登録済みの接続を利用できます。", exact=True)).to_be_visible()
-        page.get_by_role("link", name="Primary account", exact=True).click()
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
-        self.assertEqual(page.url, connection_path)
-        expect(page.get_by_text("Other workspace, Work APIs", exact=True)).to_be_visible()
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_be_disabled()
-        page.get_by_label("Project key").fill("rotated-fixture-key")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible(timeout=15000)
-        page.screenshot(path=str(ARTIFACTS / "connection-updated-ja.png"), full_page=True, animations="disabled")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
-        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.screenshot(path=str(ARTIFACTS / "connection-updated-mobile-en.png"), full_page=True, animations="disabled")
-        page.wait_for_url(connection_path)
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(page.url, connection_path)
-        connection = page.request.get(ORIGIN + "/api/resources/" + connection_id).json()
-        self.assertEqual(connection["data"]["methodId"], service["data"]["methods"]["project"])
-        self.assertEqual(connection["version"], 2)
-        expect(page.get_by_text("External permissions not verified", exact=True)).to_be_visible()
-        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.screenshot(path=str(ARTIFACTS / "connection-mobile-en.png"), full_page=True, animations="disabled")
-
     def test_独立した接続方法を登録しOAuthアプリを対応する方法に結び付ける(self):
         page, principal = self.passkey_account("Method owner")
         self.executor(page, principal)
@@ -903,454 +839,6 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_label("クライアントID", exact=True)).to_have_value("browser-client")
         expect(page.get_by_label("クライアントシークレット", exact=True)).to_be_visible()
         expect(page.get_by_label("コールバックURL", exact=True)).to_have_value(ORIGIN + "/oauth/callback")
-
-    def test_必須スコープの案内を表示し初期選択を外して接続を保存する(self):
-        page, principal = self.passkey_account("Scoped service owner")
-        environment_path = self.executor(page, principal)
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/methods/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Scoped service")
-        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"kind": "oauth", "config": {
-            "grantType": "client_credentials", "tokenUrl": "https://ca.ovh.com/auth/oauth2/token", "pkce": False,
-            "identity": {"from": "app", "id": "/clientId", "name": "/clientId"},
-            "scopes": {"default": ["optional"], "required": ["all"]},
-        }}))
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Scoped service", exact=True)).to_be_visible()
-        method_id = page.url.rsplit("/", 1)[1]
-        page.goto(root + "/apps/new")
-        self.select(page, "サービス", "すべての接続方法")
-        self.select(page, "接続方法", "Scoped service")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Scoped application")
-        page.get_by_label("クライアントID", exact=True).fill("browser-client")
-        page.get_by_label("クライアントシークレット", exact=True).fill("browser-client-secret")
-        page.get_by_role("checkbox", name="Browser executor", exact=True).check()
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Scoped application", exact=True)).to_be_visible()
-        page.goto(root + "/services/new?method=" + method_id)
-        self.select(page, "実行環境", "Browser executor")
-        expect(page.get_by_role("textbox", name="スコープ", exact=True)).to_have_value("all optional")
-        expect(page.get_by_text("この接続に必須のスコープ: all。", exact=False)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "connection-required-scopes-ja.png"), full_page=True, animations="disabled")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_text("Required scopes for this connection: all.", exact=False)).to_be_visible()
-        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.screenshot(path=str(ARTIFACTS / "connection-required-scopes-en.png"), full_page=True, animations="disabled")
-        self.select(page, "Language", "日本語")
-        page.get_by_role("textbox", name="スコープ", exact=True).fill("")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Selected scopes")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "Selected scopes")
-        connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
-        self.assertEqual(connection["data"]["scopes"], ["all"])
-        environment_id = environment_path.rsplit("/", 1)[1]
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/oauth").json()
-        self.assertEqual(requests, [{"clientId": "browser-client", "clientSecret": "browser-client-secret", "scope": "all"}])
-
-    def test_アプリ認証の案内を示し保存済みのアプリでOVHへ接続し再接続する(self):
-        page, principal = self.passkey_account("Application owner")
-        environment_path = self.executor(page, principal)
-        environment_id = environment_path.rsplit("/", 1)[1]
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/apps/new?method=ovh:client_credentials")
-        expect(page.get_by_text("アカウントを登録したAPI接続先（EU・CA・US）を使用します。", exact=False)).to_be_visible()
-        self.select(page, "アカウントのAPI接続先", "CA")
-        page.get_by_role("textbox", name="名前", exact=True).fill("OVH application")
-        page.get_by_label("クライアントID", exact=True).fill("browser-client")
-        page.get_by_label("クライアントシークレット", exact=True).fill("browser-client-secret")
-        page.get_by_role("checkbox", name="Browser executor", exact=True).check()
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="OVH application", exact=True)).to_be_visible()
-        application_path = page.url
-        application_id = application_path.rsplit("/", 1)[1]
-        before = page.request.get(ORIGIN + "/api/resources/" + application_id).json()
-        page.get_by_role("link", name="編集", exact=True).click()
-        expect(page.get_by_label("クライアントID", exact=True)).to_have_value("browser-client")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Saved OVH application")
-        page.get_by_role("button", name="保存", exact=True).click()
-        expect(page.get_by_role("heading", name="Saved OVH application", exact=True)).to_be_visible()
-        after = page.request.get(ORIGIN + "/api/resources/" + application_id).json()
-        self.assertEqual(after["data"]["generation"], before["data"]["generation"])
-        self.assertEqual(after["data"]["methodId"], "ovh:client_credentials")
-        self.assertEqual(after["data"]["fields"], {"apiRegion": "ca"})
-        page.goto(root + "/services/new?method=ovh:client_credentials")
-        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("Saved OVH application")
-        expect(page.get_by_label("スコープ", exact=True)).to_have_value("all")
-        self.select(page, "実行環境", "Browser executor")
-        page.get_by_role("textbox", name="名前", exact=True).fill("OVH account")
-        page.screenshot(path=str(ARTIFACTS / "connection-ovh-preparation-ja.png"), full_page=True, animations="disabled")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "OVH account")
-        connection_path = page.url
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("Saved OVH application")
-        expect(page.get_by_label("スコープ", exact=True)).to_have_value("all")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "OVH account")
-        self.assertEqual(page.url, connection_path)
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/oauth").json()
-        self.assertEqual(requests, [{"clientId": "browser-client", "clientSecret": "browser-client-secret", "scope": "all"}] * 2)
-        page.goto(root + "/apps/new?method=shopify:client_credentials")
-        expect(page.get_by_text("自分のShopify組織のストアにインストール済みのアプリを使用してください。", exact=False)).to_be_visible()
-        page.get_by_label("ストア名", exact=True).fill("example")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_text("Use an app installed on a store in your own Shopify organization.", exact=False)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "connection-shopify-preparation-en.png"), full_page=True, animations="disabled")
-
-    def test_OVHのAPIKeysとPATを入力し接続先を確認して保存する(self):
-        page, principal = self.passkey_account("OVH key owner")
-        self.executor(page, principal)
-        root = f"{ORIGIN}/p/{principal['id']}"
-        for method_id, name, fields, account in [
-            ("ovh:api_key", "OVH API Keys", {"Application Key": "browser-application", "Application Secret": "browser-app-secret", "Consumer Key": "browser-consumer-key"}, "aa12345-ovh"),
-            ("ovh:pat", "OVH PAT", {"Personal Access Token（PAT）": "browser-user-pat"}, "OVH operator"),
-        ]:
-            with self.subTest(method=method_id):
-                page.goto(root + "/services/new?method=" + method_id)
-                self.select(page, "アカウントのAPI接続先", "CA")
-                self.select(page, "実行環境", "Browser executor")
-                page.get_by_role("textbox", name="名前", exact=True).fill(name)
-                for label, value in fields.items():
-                    page.get_by_label(label, exact=True).fill(value)
-                bodies = []
-                page.on("request", lambda request: bodies.append(request.post_data or "") if "/api/" in request.url else None)
-                page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-input-ja.png")), full_page=True)
-                page.get_by_role("button", name="接続する", exact=True).click()
-                expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-                expect(page.get_by_text(account, exact=True)).to_be_visible()
-                page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-review-ja.png")), full_page=True)
-                self.accept_connection(page, name)
-                connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
-                self.assertEqual(connection["data"]["methodId"], method_id)
-                self.assertEqual(connection["data"]["fields"], {"apiRegion": "ca"})
-                self.assertTrue(connection["data"]["accountVerified"])
-                for label, value in fields.items():
-                    self.assertNotIn(value, "".join(bodies), "Credentials travel encrypted")
-                page.set_viewport_size({"width": 390, "height": 844})
-                self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-                page.set_viewport_size({"width": 1440, "height": 1050})
-
-    def test_OVHのブラウザ承認でAPI権限を確認して接続を保存する(self):
-        page, principal = self.passkey_account("OVH browser owner")
-        self.executor(page, principal)
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/apps/new?method=ovh:consumer_key")
-        self.select(page, "アカウントのAPI接続先", "CA")
-        page.get_by_role("textbox", name="名前", exact=True).fill("OVH API application")
-        page.get_by_label("Application Key", exact=True).fill("browser-application")
-        page.get_by_label("Application Secret", exact=True).fill("browser-app-secret")
-        page.get_by_role("checkbox", name="Browser executor", exact=True).check()
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="OVH API application", exact=True)).to_be_visible()
-        page.goto(root + "/services/new?method=ovh:consumer_key")
-        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("OVH API application")
-        page.get_by_label("OVHcloudのAPI権限", exact=True).fill("GET /vps\nPOST /vps/*")
-        self.select(page, "実行環境", "Browser executor")
-        page.get_by_role("textbox", name="名前", exact=True).fill("OVH browser account")
-        page.screenshot(path=str(ARTIFACTS / "ovh-browser-input-ja.png"), full_page=True)
-        page.get_by_role("button", name="接続する", exact=True).click()
-        authorize = page.get_by_role("link", name="サービスで認可する", exact=True)
-        expect(authorize).to_be_visible(timeout=15000)
-        url = authorize.get_attribute("href")
-        token = parse_qs(urlparse(url).query)["credentialToken"][0]
-        approved = page.request.post(ORIGIN + "/__test/ovh/approve", data={"credentialToken": token}).json()
-        page.goto(approved["redirection"])
-        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        page.screenshot(path=str(ARTIFACTS / "ovh-browser-review-ja.png"), full_page=True)
-        page.get_by_role("button", name="保存", exact=True).click()
-        connection_link = page.get_by_role("link", name="接続を開く", exact=True)
-        expect(connection_link).to_be_visible(timeout=15000)
-        connection_link.click()
-        expect(page.get_by_role("heading", name="OVH browser account", exact=True)).to_be_visible()
-        connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
-        self.assertIn("POST /vps/*", connection["data"]["scopes"])
-        self.assertTrue(connection["data"]["accountVerified"])
-
-    def test_選んだ実行先のAWSの身元を信頼するIAMロールをAWSで作るリンクを示す(self):
-        page, principal = self.passkey_account()
-        self.executor(page, principal)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
-        expect(link).to_be_visible()
-        href = link.get_attribute("href")
-        self.assertIn("console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?", href)
-        self.assertIn("templateURL=https%3A%2F%2Fobjects.example%2Fpublished%2Faws-connection.yaml", href)
-        self.assertIn("param_PrincipalArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fservice%2Ffoundation-test-executor", href)
-        external_id = re.search(r"param_ExternalId=([0-9a-f]{32})", href).group(1)
-        self.assertEqual(page.get_by_label("External ID", exact=True).input_value(), external_id)
-        page.get_by_label("External ID", exact=True).fill("edited-external-id")
-        page.get_by_label("リージョン", exact=True).fill("us-west-2")
-        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=edited-external-id"))
-        self.select(page, "サービス", "Render")
-        expect(page.get_by_label("API key", exact=True)).to_be_visible()
-        self.select(page, "サービス", "AWS")
-        expect(page.get_by_label("External ID", exact=True)).to_have_value("edited-external-id")
-        expect(page.get_by_label("リージョン", exact=True)).to_have_value("us-west-2")
-        expect(page.get_by_role("combobox", name="実行環境", exact=True)).to_have_text("Browser executor")
-        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=edited-external-id"))
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-role-ja.png"), full_page=True, animations="disabled")
-
-    def test_AWS接続を保存し再接続でロール設定と共有先を引き継ぐ(self):
-        page, principal = self.passkey_account("AWS owner")
-        reader, recipient = self.passkey_account("AWS reader")
-        self.trust(page, reader, recipient)
-        self.trust(reader, page, principal)
-        environment_path = self.executor(page, principal)
-        environment_id = environment_path.rsplit("/", 1)[1]
-        role = {"arn": "arn:aws:iam::123456789012:role/team/Example", "region": "us-west-2",
-                "externalId": "saved-external-id"}
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        page.get_by_role("textbox", name="名前", exact=True).fill("AWS account")
-        page.get_by_label("IAMロールのARN", exact=True).fill(role["arn"])
-        page.get_by_label("リージョン", exact=True).fill(role["region"])
-        page.get_by_label("External ID", exact=True).fill(role["externalId"])
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS account")
-        connection_path = page.url
-        connection_id = connection_path.rsplit("/", 1)[1]
-        page.get_by_role("link", name="共有", exact=True).click()
-        page.get_by_role("textbox", name="共有相手のプリンシパルID").fill(recipient["id"])
-        page.get_by_role("checkbox", name="内容を開く", exact=True).check()
-        page.get_by_role("button", name="権限を保存", exact=True).click()
-        expect(page.get_by_text("AWS reader", exact=True)).to_be_visible()
-        before = page.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").json()["content"]["policy"]
-        page.goto(connection_path)
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value(role["arn"])
-        expect(page.get_by_label("リージョン", exact=True)).to_have_value(role["region"])
-        expect(page.get_by_label("External ID", exact=True)).to_have_value(role["externalId"])
-        expect(page.get_by_role("combobox", name="実行環境", exact=True)).to_have_text("Browser executor")
-        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
-        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=saved-external-id"))
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-reconnect-ja.png"), full_page=True, animations="disabled")
-        print("Rendered AWS reconnect: " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS account")
-        self.assertEqual(page.url, connection_path)
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/roles").json()
-        self.assertGreaterEqual(len(requests), 2)
-        self.assertTrue(all(request == role for request in requests), requests)
-        after = page.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").json()["content"]["policy"]
-        self.assertEqual(after["readers"], before["readers"])
-        self.assertEqual(after["authorities"], before["authorities"])
-        self.assertEqual([grant["executor"] for grant in after["grants"]], [grant["executor"] for grant in before["grants"]])
-        self.assertTrue(reader.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").ok)
-
-    def test_AWSの身元が未確認の実行先を案内し既存ロールの接続を確認する(self):
-        page, principal = self.passkey_account("AWS identity owner")
-        self.executor(page, principal)
-
-        def unconfirmed_identity(route):
-            response = route.fetch()
-            data = response.json()
-            for item in data["items"]:
-                item["data"].pop("awsPrincipal", None)
-            route.fulfill(response=response, json=data)
-
-        page.route(re.compile(r"/api/principals/[^/]+/resources\?kind=environment"), unconfirmed_identity)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        expect(page.get_by_text("選んだ実行環境のAWSの身元を確認できません。", exact=False)).to_be_visible()
-        page.get_by_role("textbox", name="名前", exact=True).fill("Existing AWS role")
-        page.get_by_label("IAMロールのARN", exact=True).fill("arn:aws:iam::123456789012:role/team/Existing")
-        page.get_by_label("External ID", exact=True).fill("existing-external-id")
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-unconfirmed-ja.png"), full_page=True, animations="disabled")
-        print("Rendered AWS identity notice: " + page.get_by_role("alert").inner_text(), flush=True)
-        self.select(page, "言語", "English")
-        expect(page.get_by_text("Could not verify the chosen environment's AWS identity.", exact=False)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-unconfirmed-en.png"), full_page=True, animations="disabled")
-        self.select(page, "Language", "日本語")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "Existing AWS role")
-
-    def test_AWSで選んだ権限を確認し戻りリンクでロールを入力して接続する(self):
-        page, principal = self.passkey_account("AWS guided setup owner")
-        self.executor(page, principal)
-        page.context.route("https://console.aws.amazon.com/cloudformation/**",
-                           lambda route: route.fulfill(content_type="text/html", body="<h1>AWS setup fixture</h1>"))
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Guided AWS role")
-        expect(page.get_by_role("combobox", name="新しいロールで許可する操作", exact=True)).to_have_text("読み取りのみ")
-        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
-        expect(link).to_be_visible()
-        parameters = parse_qs(urlparse(link.get_attribute("href")).fragment.split("?", 1)[1])
-        self.assertEqual(parameters["param_Policies"], ["arn:aws:iam::aws:policy/ReadOnlyAccess"])
-        self.select(page, "新しいロールで許可する操作", "管理者")
-        expect(page.get_by_text("このAWSアカウントのサービスとリソースを管理する広い権限です。", exact=False)).to_be_visible()
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_role("combobox", name="Allowed operations for the new role", exact=True)).to_have_text("Administrator")
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-guided-admin-en-mobile.png"), full_page=True, animations="disabled")
-        print("Rendered AWS setup (English): " + page.locator("main").inner_text(), flush=True)
-        self.select(page, "Language", "日本語")
-        page.set_viewport_size({"width": 1440, "height": 1050})
-        with page.expect_popup() as popup:
-            link.click()
-        aws = popup.value
-        aws.on("pageerror", lambda error: self.errors.append(str(error)))
-        expect(aws).to_have_url(re.compile(r"^https://console\.aws\.amazon\.com/cloudformation/home\?"))
-        parameters = parse_qs(urlparse(aws.url).fragment.split("?", 1)[1])
-        self.assertEqual(parameters["param_Policies"], ["arn:aws:iam::aws:policy/AdministratorAccess"])
-        callback = parameters["param_ReturnUrl"][0]
-        state = parse_qs(urlparse(callback).query)["state"][0]
-        role = "arn:aws:iam::999999999999:role/foundation-Example"
-        aws.goto(callback.replace(state, str(uuid.uuid4())) + "#arn=" + role)
-        expect(aws.get_by_text("このAWS設定の戻りリンクは利用できません。", exact=False)).to_be_visible()
-        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("")
-        aws.goto(callback + "#arn=" + role)
-        expect(aws.get_by_text("IAMロールの情報を受け取りました。", exact=False)).to_be_visible()
-        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value(role)
-        expect(page.get_by_text("IAMロールのARNを反映しました。", exact=False)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-guided-return-ja.png"), full_page=True, animations="disabled")
-        print("Rendered AWS setup (Japanese): " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "Guided AWS role")
-
-    def test_AWS設定中に接続条件を変えると前の戻りリンクを拒否する(self):
-        page, principal = self.passkey_account("AWS setup binding owner")
-        self.executor(page, principal)
-        page.context.route("https://console.aws.amazon.com/cloudformation/**",
-                           lambda route: route.fulfill(content_type="text/html", body="<h1>AWS setup fixture</h1>"))
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        with page.expect_popup() as popup:
-            page.get_by_role("link", name="AWSでIAMロールを作る", exact=True).click()
-        aws = popup.value
-        expect(aws).to_have_url(re.compile(r"^https://console\.aws\.amazon\.com/cloudformation/home\?"))
-        parameters = parse_qs(urlparse(aws.url).fragment.split("?", 1)[1])
-        page.get_by_label("External ID", exact=True).fill("changed-external-id")
-        aws.goto(parameters["param_ReturnUrl"][0] + "#arn=arn:aws:iam::999999999999:role/Previous")
-        expect(aws.get_by_text("このAWS設定の戻りリンクは利用できません。", exact=False)).to_be_visible()
-        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("")
-
-    def test_AWS設定の準備が失敗しても再試行して作成画面を開く(self):
-        page, principal = self.passkey_account("AWS setup retry owner")
-        self.executor(page, principal)
-        attempts = []
-
-        def prepare_template(route):
-            attempts.append(True)
-            if len(attempts) == 1:
-                route.fulfill(status=503, json={"error": {"code": "unavailable", "message": "Try again"}})
-            else:
-                route.continue_()
-
-        page.route("**/api/aws/role-template", prepare_template)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        self.select(page, "実行環境", "Browser executor")
-        expect(page.get_by_text("AWSの設定を準備できませんでした。", exact=False)).to_be_visible()
-        page.get_by_role("button", name="再試行", exact=True).click()
-        expect(page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)).to_be_visible()
-        self.assertEqual(len(attempts), 2)
-
-    def test_AWSアクセスキーを保存し再接続で認証情報を引き継いで更新する(self):
-        page, principal = self.passkey_account("AWS access key owner")
-        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        expect(page.get_by_role("combobox", name="認証方法", exact=True)).to_have_text("アクセスキー")
-        page.get_by_role("textbox", name="名前", exact=True).fill("AWS keys")
-        page.get_by_label("アクセスキーID", exact=True).fill("browser-access-key")
-        page.get_by_label("シークレットアクセスキー", exact=True).fill("browser-access-secret")
-        page.get_by_label("リージョン", exact=True).fill("us-west-2")
-        self.select(page, "実行環境", "Browser executor")
-        expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-access-key-ja.png"), full_page=True, animations="disabled")
-        print("Rendered AWS keys: " + page.locator("main").inner_text(), flush=True)
-        self.select(page, "言語", "English")
-        expect(page.get_by_role("combobox", name="Authentication method", exact=True)).to_have_text("Access keys")
-        page.set_viewport_size({"width": 390, "height": 844})
-        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-access-key-en.png"), full_page=True, animations="disabled")
-        self.select(page, "Language", "日本語")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_text("AWSの認証元", exact=True)).to_be_visible()
-        expect(page.get_by_text("arn:aws:iam::123456789012:user/browser-operator", exact=True)).to_be_visible()
-        self.accept_connection(page, "AWS keys")
-        connection_path = page.url
-        connection_id = connection_path.rsplit("/", 1)[1]
-        resource = page.request.get(ORIGIN + "/api/resources/" + connection_id).json()
-        self.assertEqual(resource["data"]["aws"], {"authentication": "access_key", "region": "us-west-2",
-                         "sourceAccountId": "123456789012", "sourceArn": "arn:aws:iam::123456789012:user/browser-operator"})
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_label("アクセスキーID", exact=True)).to_have_value("browser-access-key")
-        expect(page.get_by_label("シークレットアクセスキー", exact=True)).to_have_value("")
-        expect(page.get_by_label("リージョン", exact=True)).to_have_value("us-west-2")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS keys")
-        self.assertEqual(page.url, connection_path)
-        page.get_by_role("link", name="再接続", exact=True).click()
-        page.get_by_label("アクセスキーID", exact=True).fill("updated-access-key")
-        page.get_by_label("シークレットアクセスキー", exact=True).fill("updated-access-secret")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS keys")
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
-        self.assertEqual([item["authentication"] for item in requests], [
-            {"kind": "access_key", "accessKeyId": "browser-access-key", "secretAccessKey": "browser-access-secret"},
-            {"kind": "access_key", "accessKeyId": "browser-access-key", "secretAccessKey": "browser-access-secret"},
-            {"kind": "access_key", "accessKeyId": "updated-access-key", "secretAccessKey": "updated-access-secret"}])
-
-    def test_AWS一時認証情報で追加ロールを保存し期限切れ時に再接続を案内する(self):
-        from datetime import datetime, timezone
-        page, principal = self.passkey_account("AWS temporary credentials owner")
-        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "一時認証情報")
-        page.get_by_role("textbox", name="名前", exact=True).fill("AWS temporary role")
-        page.get_by_label("アクセスキーID", exact=True).fill("temporary-key")
-        page.get_by_label("シークレットアクセスキー", exact=True).fill("temporary-secret")
-        page.get_by_label("セッショントークン", exact=True).fill("temporary-session")
-        expiration = datetime.fromtimestamp(time.time() + 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M")
-        page.get_by_label("有効期限", exact=True).fill(expiration)
-        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
-        page.get_by_label("IAMロールのARN", exact=True).fill("arn:aws:iam::999999999999:role/team/Example")
-        self.select(page, "実行環境", "Browser executor")
-        expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
-        page.screenshot(path=str(ARTIFACTS / "connection-aws-session-role-ja.png"), full_page=True, animations="disabled")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        expect(page.get_by_text("一時認証情報", exact=True)).to_be_visible()
-        self.accept_connection(page, "AWS temporary role")
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_label("有効期限", exact=True)).to_have_value(expiration)
-        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("arn:aws:iam::999999999999:role/team/Example")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS temporary role")
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
-        self.assertEqual(len(requests), 2)
-        self.assertEqual(requests[0], requests[1])
-        page.get_by_role("link", name="再接続", exact=True).click()
-        page.get_by_label("有効期限", exact=True).fill("2020-01-01T00:00")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("alert").filter(has_text="サービスに再接続してください。")).to_be_visible(timeout=15000)
-
-    def test_実行環境のAWS認証で追加ロールを指定せず接続を保存する(self):
-        page, principal = self.passkey_account("AWS environment credentials owner")
-        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:authentication")
-        self.select(page, "認証方法", "実行環境のAWS認証")
-        page.get_by_role("textbox", name="名前", exact=True).fill("AWS environment")
-        self.select(page, "実行環境", "Browser executor")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        self.accept_connection(page, "AWS environment")
-        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
-        self.assertEqual(requests, [{"authentication": {"kind": "environment"}, "region": "ap-northeast-1"}])
 
     def test_スマホで初期値のまま実行環境を作成して停止する(self):
         owner, principal = self.passkey_account("Mobile environment owner")
@@ -1622,134 +1110,6 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name="実行環境", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/environments")
 
-    def test_操作のリンクからOVHへ接続し同じ本人と別のプリンシパルの入力を完了する(self):
-        for handoff in [False, True]:
-            with self.subTest(handoff=handoff):
-                receiver, principal = self.passkey_account("Direct OVH owner")
-                sender = self.passkey_account("Direct OVH initiator")[0] if handoff else receiver
-                environment = self.executor(receiver, principal).rsplit("/", 1)[1]
-                if not handoff:
-                    receiver.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method=ovh:client_credentials")
-                    self.select(receiver, "アカウントのAPI接続先", "EU")
-                    receiver.get_by_role("textbox", name="名前", exact=True).fill("EU application")
-                    receiver.get_by_label("クライアントID", exact=True).fill("eu-client")
-                    receiver.get_by_label("クライアントシークレット", exact=True).fill("eu-secret")
-                    receiver.get_by_role("checkbox", name="Browser executor", exact=True).check()
-                    receiver.get_by_role("button", name="作成", exact=True).click()
-                    expect(receiver.get_by_role("heading", name="EU application", exact=True)).to_be_visible()
-                body = {"operations": [{"name": "connection.connect", "input": {
-                    "ownerId": principal["id"], "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Direct OVH account"
-                }}]}
-                if handoff:
-                    body["responderId"] = principal["id"]
-                    body["message"] = "OVHcloudへ接続してください。"
-                response = sender.request.post(ORIGIN + "/api/executions", data=body, headers={"origin": ORIGIN})
-                self.assertTrue(response.ok, response.text())
-                execution = response.json()
-                receiver.goto(execution["url"])
-                expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
-                expect(receiver.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("新しいアプリの認証情報を入力")
-                expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://ca.ovh.com/manager/")
-                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
-                receiver.get_by_label("クライアントID", exact=True).fill("direct-ovh-client")
-                receiver.get_by_label("クライアントシークレット", exact=True).fill("direct-ovh-secret")
-                self.select(receiver, "実行環境", "Browser executor")
-                bodies = []
-                receiver.on("request", lambda request: bodies.append(request.post_data or "") if "/executions/" in request.url else None)
-                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-input-ja.png" if handoff else "operation-ovh-self-input-ja.png")), full_page=True)
-                receiver.get_by_role("button", name="接続する", exact=True).click()
-                expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
-                self.assertEqual(receiver.url, execution["url"])
-                self.assertNotIn("direct-ovh-secret", "".join(bodies))
-                if handoff:
-                    signed_out = receiver.request.post(ORIGIN + "/api/auth/signout", data={}, headers={"origin": ORIGIN})
-                    self.assertTrue(signed_out.ok, signed_out.text())
-                    receiver.goto(execution["url"])
-                    receiver.wait_for_url("**/signin?returnTo=**")
-                    self.assertEqual(parse_qs(urlparse(receiver.url).query)["returnTo"], ["/executions/" + execution["id"]])
-                    receiver.get_by_role("button", name="パスキーでログイン", exact=True).click()
-                    receiver.wait_for_url(execution["url"])
-                else:
-                    receiver.reload()
-                expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-review-ja.png" if handoff else "operation-ovh-self-review-ja.png")), full_page=True)
-                receiver.get_by_role("button", name="保存", exact=True).click()
-                expect(receiver.get_by_text("完了", exact=True).first).to_be_visible(timeout=15000)
-                completed = sender.request.get(ORIGIN + "/api/executions/" + execution["id"]).json()
-                self.assertEqual(completed["state"], "succeeded")
-                self.assertEqual(completed["actorId"], principal["id"])
-                receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-complete-ja.png" if handoff else "operation-ovh-self-complete-ja.png")), full_page=True)
-                print("Rendered direct operation: " + receiver.locator("main").inner_text(), flush=True)
-                receiver.get_by_role("link", name="接続を開く", exact=True).click()
-                receiver.wait_for_url(f"**/p/{principal['id']}/services/{completed['results'][0]['id']}")
-                expect(receiver.get_by_role("heading", name="Direct OVH account", exact=True)).to_be_visible()
-                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
-
-    def test_依頼画面でOVHの認証情報を入力し再読込後に接続を確認して保存する(self):
-        sender, _ = self.passkey_account("OVH requester")
-        receiver, principal = self.passkey_account("OVH approver")
-        environment = self.executor(receiver, principal).rsplit("/", 1)[1]
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "message": "OVHcloudへ接続してください。", "operations": [{
-            "name": "connection.connect", "input": {
-                "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Requested OVH account"
-            }
-        }]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        asked = response.json()
-        receiver.goto(asked["url"])
-        expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://ca.ovh.com/manager/")
-        receiver.get_by_label("クライアントID", exact=True).fill("requested-ovh-client")
-        receiver.get_by_label("クライアントシークレット", exact=True).fill("requested-ovh-secret")
-        self.select(receiver, "実行環境", "Browser executor")
-        receiver.screenshot(path=str(ARTIFACTS / "request-ovh-input-ja.png"), full_page=True, animations="disabled")
-        approval_bodies = []
-        receiver.on("request", lambda request: approval_bodies.append(request.post_data) if request.url.endswith("/approve") else None)
-        receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(receiver.url, asked["url"])
-        self.assertEqual(len(approval_bodies), 1)
-        self.assertNotIn("requested-ovh-secret", approval_bodies[0])
-        receiver.reload()
-        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        receiver.screenshot(path=str(ARTIFACTS / "request-ovh-review-ja.png"), full_page=True, animations="disabled")
-        receiver.get_by_role("button", name="保存", exact=True).click()
-        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible(timeout=15000)
-        expect(receiver.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(receiver.url, asked["url"])
-        completed = sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()
-        self.assertEqual(completed["state"], "accepted")
-        execution = sender.request.get(ORIGIN + "/api/executions/" + completed["executionId"]).json()
-        self.assertEqual(execution["state"], "succeeded")
-        connection = receiver.request.get(ORIGIN + "/api/resources/" + execution["results"][0]["id"]).json()
-        self.assertEqual(connection["name"], "Requested OVH account")
-        self.assertEqual(connection["data"]["methodId"], "ovh:client_credentials")
-        self.assertEqual(connection["data"]["fields"], {"apiRegion": "ca"})
-        token_calls = receiver.request.get(ORIGIN + "/__test/executor/" + environment + "/oauth").json()
-        self.assertEqual(token_calls, [{"clientId": "requested-ovh-client", "clientSecret": "requested-ovh-secret", "scope": "all"}])
-
-    def test_依頼を承諾した後に接続の確認を取り消して実行を終了する(self):
-        sender, _ = self.passkey_account("Connection requester")
-        receiver, principal = self.passkey_account("Connection approver")
-        environment = self.executor(receiver, principal).rsplit("/", 1)[1]
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
-            "name": "connection.connect", "input": {
-                "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Cancelled OVH account", "environmentId": environment
-            }
-        }]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        asked = response.json()
-        receiver.goto(asked["url"])
-        receiver.get_by_label("クライアントID", exact=True).fill("cancelled-ovh-client")
-        receiver.get_by_label("クライアントシークレット", exact=True).fill("cancelled-ovh-secret")
-        receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
-        receiver.get_by_role("button", name="キャンセル", exact=True).click()
-        expect(receiver.get_by_text("取消済み", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "accepted")
-        self.assertEqual(receiver.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "cancelled")
-
     def test_依頼画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver")
@@ -1870,6 +1230,146 @@ class BrowserTests(unittest.TestCase):
         page.keyboard.press("Escape")
         expect(remove).to_be_focused()
         expect(page.get_by_role("textbox", name="名前", exact=True)).to_have_value("Updated keyboard account")
+
+    def test_ブラウザだけで各方式の認証情報を登録して保存内容を編集する(self):
+        page, principal = self.passkey_account("Credential owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        cases = [
+            ("ovh:api_key", "OVH keys", {"Application Key": "browser-application", "Application Secret": "browser-secret", "Consumer Key": "browser-consumer"}),
+            ("ovh:pat", "OVH personal token", {"Personal Access Token（PAT）": "browser-personal-token"}),
+            ("ovh:client_credentials", "OVH application", {"クライアントID": "browser-client", "クライアントシークレット": "browser-client-secret"}),
+            ("github:token", "GitHub key", {"Personal access token": "browser-github-token"}),
+        ]
+        bodies = []
+        page.on("request", lambda request: bodies.append(request.post_data or "")
+                if request.url.startswith(ORIGIN + "/api/") and request.method in ("POST", "PUT", "PATCH") else None)
+        for method_id, name, values in cases:
+            with self.subTest(method=method_id):
+                page.goto(root + "/services/new?method=" + method_id)
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                if method_id.startswith("ovh:"):
+                    self.select(page, "アカウントのAPI接続先", "CA")
+                for label, value in values.items():
+                    page.get_by_label(label, exact=True).fill(value)
+                page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-registration-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], method_id)
+                if method_id.startswith("ovh:"):
+                    self.assertEqual(saved["data"]["fields"], {"apiRegion": "ca"})
+                for label, value in values.items():
+                    if label not in ("クライアントID", "Application Key"):
+                        self.assertNotIn(value, "".join(bodies), "Credentials travel encrypted to Foundation")
+                path = page.url
+                page.get_by_role("link", name="再接続", exact=True).click()
+                page.get_by_role("button", name="接続する", exact=True).click()
+                self.saved_connection(page, name)
+                self.assertEqual(page.url, path)
+
+    def test_AWSキーとロール設定をブラウザで保存して更新する(self):
+        page, principal = self.passkey_account("AWS credential owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/services/new?method=aws:authentication")
+        page.get_by_role("textbox", name="名前", exact=True).fill("AWS keys")
+        page.get_by_label("アクセスキーID", exact=True).fill("AKIABROWSERTEST")
+        page.get_by_label("シークレットアクセスキー", exact=True).fill("browser-aws-secret")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
+        page.get_by_label("IAMロールのARN", exact=True).fill("arn:aws:iam::123456789012:role/Example")
+        page.get_by_label("External ID", exact=True).fill("browser-external-id")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "AWS keys")
+        self.assertEqual(saved["data"]["aws"]["roleArn"], "arn:aws:iam::123456789012:role/Example")
+        path = page.url
+        page.get_by_role("link", name="再接続", exact=True).click()
+        expect(page.get_by_label("アクセスキーID", exact=True)).to_have_value("AKIABROWSERTEST")
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("arn:aws:iam::123456789012:role/Example")
+        page.get_by_label("シークレットアクセスキー", exact=True).fill("updated-browser-secret")
+        page.set_viewport_size({"width": 390, "height": 844})
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "aws-registration-mobile-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.saved_connection(page, "AWS keys")
+        self.assertEqual(page.url, path)
+
+    def test_Googleの認可をブラウザで交換して接続を保存する(self):
+        page, principal = self.passkey_account("Browser authorization owner")
+        exchanges = []
+        def exchange(route):
+            exchanges.append(route.request.post_data)
+            route.fulfill(json={"access_token": "browser-google-token", "refresh_token": "browser-google-refresh", "token_type": "Bearer", "expires_in": 3600},
+                          headers={"access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
+        page.context.route("https://oauth2.googleapis.com/token", exchange)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=google:oauth")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Google account")
+        page.get_by_label("クライアントID", exact=True).fill("browser-google-client")
+        page.get_by_label("クライアントシークレット", exact=True).fill("browser-google-secret")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        link = page.get_by_role("link", name="サービスで認可する", exact=True)
+        expect(link).to_be_visible()
+        state = parse_qs(urlparse(link.get_attribute("href")).query)["state"][0]
+        page.goto(ORIGIN + "/oauth/callback?state=" + state + "&code=browser-google-code")
+        saved = self.saved_connection(page, "Google account")
+        self.assertEqual(saved["data"]["methodId"], "google:oauth")
+        self.assertEqual(len(exchanges), 1)
+        self.assertEqual(parse_qs(exchanges[0])["code"], ["browser-google-code"])
+        page.screenshot(path=str(ARTIFACTS / "google-browser-registration-ja.png"), full_page=True)
+
+    def test_OVHのブラウザ認可で取得したConsumerKeyを保存する(self):
+        page, principal = self.passkey_account("OVH browser owner")
+        issued = []
+        def issue(route):
+            if route.request.method == "OPTIONS":
+                route.fulfill(status=204, headers={"access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
+                return
+            issued.append(json.loads(route.request.post_data))
+            route.fulfill(json={"state": "pendingValidation", "consumerKey": "browser-consumer-key", "validationUrl": "https://auth.ca.ovhcloud.com/api/auth?credentialToken=browser"},
+                          headers={"access-control-allow-origin": ORIGIN})
+        page.context.route("https://ca.api.ovh.com/1.0/auth/credential", issue)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=ovh:consumer_key")
+        self.select(page, "アカウントのAPI接続先", "CA")
+        page.get_by_role("textbox", name="名前", exact=True).fill("OVH browser account")
+        page.get_by_label("Application Key", exact=True).fill("browser-application")
+        page.get_by_label("Application Secret", exact=True).fill("browser-secret")
+        page.get_by_label("OVHcloudのAPI権限", exact=True).fill("GET /vps\nPOST /vps/*")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_role("link", name="サービスで認可する", exact=True)).to_be_visible()
+        self.assertEqual(issued[0]["accessRules"], [{"method": "GET", "path": "/vps"}, {"method": "POST", "path": "/vps/*"}])
+        page.goto(issued[0]["redirection"])
+        saved = self.saved_connection(page, "OVH browser account")
+        self.assertEqual(saved["data"]["scopes"], ["GET /vps", "POST /vps/*"])
+        page.screenshot(path=str(ARTIFACTS / "ovh-browser-registration-ja.png"), full_page=True)
+
+    def test_CLIが必要な方式を認可前に案内し暗号化した入力からCLIへ引き継ぐ(self):
+        page, principal = self.passkey_account("CLI authorization owner")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=github:oauth")
+        expect(page.get_by_text("この方式の認可は、同じ端末のFoundation CLIで続けます。", exact=True)).to_be_visible()
+        expect(page.get_by_text("アクセストークンを入力する方式なら、ブラウザで保存できます。", exact=True)).to_be_visible()
+        page.get_by_label("クライアントID", exact=True).fill("github-client")
+        page.get_by_label("クライアントシークレット", exact=True).fill("github-client-secret")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "oauth-cli-registration-ja.png"), full_page=True)
+
+    def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
+        owner, principal = self.passkey_account("OVH request owner")
+        sender, requester = self.passkey_account("OVH requester")
+        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
+            "ownerId": "$approver", "methodId": "ovh:api_key", "fields": {"apiRegion": "ca"}, "name": "Requested OVH"
+        }}]}, headers={"origin": ORIGIN})
+        self.assertTrue(asked.ok, asked.text())
+        request = asked.json()
+        owner.goto(ORIGIN + "/requests/" + request["id"])
+        owner.get_by_label("Application Key", exact=True).fill("request-application")
+        owner.get_by_label("Application Secret", exact=True).fill("request-secret")
+        owner.get_by_label("Consumer Key", exact=True).fill("request-consumer")
+        owner.get_by_role("button", name="承認", exact=True).click()
+        expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+        completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+        self.assertEqual(completed["state"], "succeeded")
+        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        self.assertEqual(saved["data"]["methodId"], "ovh:api_key")
+        owner.screenshot(path=str(ARTIFACTS / "ovh-request-registration-ja.png"), full_page=True)
+
 
 
 if __name__ == "__main__":

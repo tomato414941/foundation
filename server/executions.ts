@@ -116,7 +116,8 @@ export class Executions {
       canCancel: !!actor && !actor.requestId && !['succeeded', 'cancelled'].includes(row.state) && [row.creator_id, row.actor_id].includes(actor.id),
       url: this.origin + '/executions/' + row.id,
       operations: snapshot.operations.map(operation => ({ ...operation, title: this.definitions.describe(operation),
-        execution: this.definitions.get(operation.name).execution, configure: [...this.definitions.get(operation.name).configure] })),
+        execution: this.definitions.get(operation.name).execution, configure: [...this.definitions.get(operation.name).configure],
+        environment: this.definitions.get(operation.name).environment })),
       index: snapshot.index, state: row.state, wait: row.wait,
       waiting: (row.wait === 'input' || row.wait === 'execution' && !!snapshot.continuation) && canRespond && (actor?.id === row.actor_id || actor?.requestId)
         ? { index: snapshot.index, invocation: { name: snapshot.operations[snapshot.index]!.name, input: snapshot.operations[snapshot.index]!.input },

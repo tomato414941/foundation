@@ -8,7 +8,7 @@ import type { ConnectionClient, FlowProgress } from './connection-client.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes, permittedOperations } from './custody.js';
 import { AppMaterial, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from './connections.js';
-import { connectionFields, suppliedConnectionFields, visibleConnectionFields } from './connection-fields.js';
+import { suppliedConnectionFields, visibleConnectionFields } from './connection-fields.js';
 import { decode, encode } from './encryption.js';
 import { Task, RuntimeOperation } from './runtime-protocol.js';
 import type { TaskView } from './runtime-protocol.js';
@@ -18,7 +18,9 @@ import { SealedContinuationStore } from './operation-continuations.js';
 import { DelegatedRun } from './custody.js';
 import { FunctionClient } from './function-client.js';
 import { PrivateProgram, reviewedProgram } from './operation-authorization.js';
-import { connectionMethod } from './connection-methods.js';
+import { connectionMethod, selectScopes } from './connection-methods.js';
+import { connectionPolicy } from './connection-policy.js';
+import { registrationMaterial, registrationApplication } from './connection-registration.js';
 
 export interface PrivateOperationInput {
   value?: string | Uint8Array;
@@ -35,6 +37,7 @@ export type ExecutionResultView = ExecutionView | FlowProgress | { kind: 'saved'
 // Normal forms, the CLI, and an execution awaiting input use this same keyholder implementation.
 export class ExecutionClient {
   readonly records: SealedContinuationStore;
+  private readonly connectionNames = new Map<string, string>();
   constructor(readonly custody: CustodyClient, readonly connections: ConnectionClient) { this.records = new SealedContinuationStore(custody); }
   async start(invocation: DefinitionCall) {
     if (invocation.name === 'run.execute') {
@@ -68,7 +71,8 @@ export class ExecutionClient {
   private async method(id: string) {
     const selected = (await this.custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod))).items.find(item => item.id === id);
     if (!selected) throw new Error('Choose an available connection method.');
-    const { id: _id, builtin: _builtin, availability: _availability, ...definition } = selected;
+    this.connectionNames.set(id, selected.defaultName);
+    const { id: _id, builtin: _builtin, availability: _availability, registration: _registration, defaultName: _defaultName, ...definition } = selected;
     return definition;
   }
   private async program(input: Exclude<z.infer<typeof RunOperation>['operation'], { programId: string }>) {
@@ -143,37 +147,24 @@ export class ExecutionClient {
     if (name === 'connection.connect') {
       if (plan.continuation?.kind === 'connection') return this.connections.progress(plan.continuation.id);
       const connection = ConnectService.parse(input), method = await this.method(connection.methodId);
-      if (method.kind === 'token' && !connectionMethod(method).requiresEnvironment) {
-        if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
-        const previous = connection.connectionId ? await this.custody.read(connection.connectionId) : undefined;
-        if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
-          throw new Error('Choose a connection belonging to this owner.');
-        const old = previous ? ConnectionMaterial.parse(JSON.parse(decode(await this.custody.reveal(connection.connectionId!)))) : null;
-        const fields = connectionFields(method.config.fields,
-          suppliedConnectionFields(method.config.fields, connection.fields ?? {}, material.fields ?? {}), old?.method.kind === 'token' ? old.fields : {});
-        const state = ConnectionMaterial.parse({ format: 2, methodId: connection.methodId, method,
-          generation: crypto.randomUUID(), appId: null, appGeneration: null, fields });
-        let policy = await this.custody.policy(connection.ownerId, ContentTypes.tokenSet, [], { previous: previous?.content.policy });
-        if (connection.users) policy = await this.userPolicy(policy, connection.users, undefined, false);
-        else if (previous) policy = previous.content.policy;
-        const resource = await this.custody.save(connection.name ?? method.name, encode(canonical(state)), policy,
-          { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
-            commit: async write => {
-              const completed = await this.complete(id, plan.index, write as unknown as JsonValue);
-              const result = completed.results[plan.index] as { id: string };
-              return this.custody.api.json('/api/resources/' + result.id, {}, Resource);
-            } });
-        return { kind: 'saved', resource, executionId: id };
+      if (!connection.name) {
+        await this.configure(id, { name: this.connectionNames.get(connection.methodId) ?? method.name });
+        return this.continue(id, material);
       }
-      if (!connection.environmentId) throw new Error('Choose an execution environment before connecting.');
+      if (material.scopes && !connection.scopes && (method.kind === 'oauth' || method.kind === 'ovh')) {
+        await this.configure(id, { scopes: material.scopes });
+        return this.continue(id, material);
+      }
+      if (material.scopes && connection.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
+        canonical(selectScopes(method.config.scopes, material.scopes).sort()) !== canonical(selectScopes(method.config.scopes, connection.scopes).sort()))
+        throw new Error('Use the service permissions prepared by this operation.');
       let appId = connection.appId;
       if (requiresApp(method) && !appId) {
         if (!connection.clientId) throw new Error('Enter the application client ID.');
         const app = AppMaterial.parse({ format: 1, methodId: connection.methodId, clientId: connection.clientId,
           generation: crypto.randomUUID(), fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
           ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}) });
-        const environment = await this.custody.environment(connection.environmentId);
-        const policy = await this.custody.policy(connection.ownerId, ContentTypes.clientCredential, [environment]);
+        const policy = await this.custody.policy(connection.ownerId, ContentTypes.clientCredential, []);
         const saved = await this.custody.save((connection.name ?? method.name).slice(0, 185) + ' application', encode(canonical(app)), policy,
           { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
               fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, app.fields) },
@@ -184,12 +175,32 @@ export class ExecutionClient {
             } });
         appId = saved.id;
       }
-      return this.connections.start({ ownerId: connection.ownerId, environmentId: connection.environmentId,
+      if (!connectionMethod(method).browserAuthorization) {
+        if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
+        const previous = connection.connectionId ? await this.custody.read(connection.connectionId) : undefined;
+        if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
+          throw new Error('Choose a connection belonging to this owner.');
+        const old = previous ? ConnectionMaterial.parse(JSON.parse(decode(await this.custody.reveal(connection.connectionId!)))) : undefined;
+        const app = registrationApplication({ methodId: connection.methodId, method, appId,
+          app: appId ? AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(appId)))) : null });
+        const state = registrationMaterial({ methodId: connection.methodId, method, appId: appId ?? null, app,
+          fields: suppliedConnectionFields(connectionMethod(method).fields, connection.fields ?? {}, material.fields ?? {}),
+          scopes: method.kind === 'oauth' ? selectScopes(method.config.scopes, connection.scopes) : [], aws: material.aws }, old);
+        const policy = await connectionPolicy(this.custody, connection.ownerId, previous?.content, connection.users);
+        const resource = await this.custody.save(connection.name ?? method.name, encode(canonical(state)), policy,
+          { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
+            commit: async write => {
+              const completed = await this.complete(id, plan.index, write as unknown as JsonValue);
+              const result = completed.results[plan.index] as { id: string };
+              return this.custody.api.json('/api/resources/' + result.id, {}, Resource);
+            } });
+        return { kind: 'saved', resource, executionId: id };
+      }
+      return this.connections.start({ ownerId: connection.ownerId,
         name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
         connectionId: connection.connectionId,
         fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
-        scopes: material.scopes ?? connection.scopes, aws: material.aws,
-        environments: connection.environments, redirectUri: connection.redirectUri,
+        scopes: connection.scopes, users: connection.users, redirectUri: connection.redirectUri,
         execution: { id, index: plan.index } });
     }
     if (name === 'run.execute' || name === 'connection.revoke') {

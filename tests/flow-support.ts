@@ -51,7 +51,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const client = new CustodyClient(api(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys, trust);
   const flows = new Map<string, ConnectionFlow>();
   const connections = new ConnectionClient(client, { async get(id) { return structuredClone(flows.get(id) ?? null); },
-    async put(flow) { flows.set(flow.id, structuredClone(flow)); } });
+    async put(flow) { flows.set(flow.id, structuredClone(flow)); } }, transport, 'cli');
   const operations = new ExecutionClient(client, connections);
   const broker = new HttpBroker(api(f.executor.token)), journal = new MemoryJournal();
   const runtimeConnections = new Connections(f.executor.binding, f.executor.keys, broker.connections(), journal, transport, aws);
@@ -63,7 +63,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     const catalog = await client.api.json('/api/connection-methods', {}, listOf(CatalogMethod));
     const selected = catalog.items.find(item => item.id === id)!;
     assert.ok(selected, id);
-    const { id: _id, builtin: _builtin, availability: _availability, ...definition } = selected;
+    const { id: _id, builtin: _builtin, availability: _availability, registration: _registration, defaultName: _defaultName, ...definition } = selected;
     return definition;
   };
   const saveApp = async (methodId: string, name = 'Application', fields = {}) => {
@@ -80,32 +80,26 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     connectionId?: string; appId?: string; aws?: AwsConnectionRequest }) {
     const { fields, scopes, aws, ...configuration } = input;
     const definition = await method(input.methodId);
-    if (definition.kind === 'token') {
-      const execution = await operations.start({ name: 'connection.connect', input: { ...configuration,
-        name: input.name ?? 'Account', ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id } });
-      const progress = await connections.start({ ...configuration, name: input.name ?? 'Account',
-        ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id, method: definition, fields, scopes,
-        execution: { id: execution.id, index: execution.index } });
-      if (progress.kind !== 'pending') throw new Error('Expected an executor connection step.');
-      return progress;
-    }
-    const progress = await operations.execute({ name: 'connection.connect', input: { ...configuration,
-      name: input.name ?? 'Account', ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id } }, { fields, scopes, aws });
-    if (!('kind' in progress) || progress.kind !== 'pending') throw new Error('Expected a pending connection.');
-    return progress;
+    return operations.execute({ name: 'connection.connect', input: { ...configuration,
+      name: input.name ?? 'Account', ownerId: f.owner.actor.id,
+      ...(scopes ? { scopes } : {}) } }, { fields, scopes, aws });
   }
-  async function tick(id: string) {
-    await executor.tick();
-    return connections.progress(id);
+  async function saveConnection(input: Parameters<typeof start>[0]) {
+    const result = await start(input);
+    if (!('kind' in result) || result.kind !== 'saved') throw new Error('Expected saved credentials.');
+    return result.resource;
   }
-  async function accept(id: string) {
-    const accepted = await connections.accept(id);
-    assert.equal(accepted.kind, 'pending');
-    const connected = await tick(id);
-    assert.equal(connected.kind, 'connected', JSON.stringify(connected));
-    if (connected.kind !== 'connected') throw new Error('Expected a completed connection.');
-    return client.api.json('/api/resources/' + connected.id, {}, Resource);
+  async function authorize(input: Parameters<typeof start>[0]) {
+    const result = await start(input);
+    if (!('kind' in result) || result.kind !== 'authorize') throw new Error('Expected browser authorization.');
+    return result;
   }
+  async function saved(id: string) {
+    const result = await connections.progress(id);
+    if (result.kind !== 'connected') throw new Error('Expected saved credentials.');
+    return client.api.json('/api/resources/' + result.id, {}, Resource);
+  }
+  async function tick(id: string) { return connections.progress(id); }
   async function http(id: string, output: string, url = 'https://api.example.com/items') {
     const task = await client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
       url, method: 'GET', headers: {}, bindings: [{ pointer: '/headers/authorization',
@@ -115,6 +109,6 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     return client.result(await client.api.json('/api/runtime/runs/' + task.id, {}, Task));
   }
   return { ...f, executorIdentity: f.executor, context, app, api, client, connections, operations, functions, functionExecutor, runtimeConnections, executor, journal, requests,
-    method, saveApp, start, tick, accept, http,
+    method, saveApp, start, authorize, saveConnection, tick, saved, http, transport, flows,
     async close() { await app.close(); await f.close(); } };
 }

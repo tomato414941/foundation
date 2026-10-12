@@ -179,7 +179,7 @@ export default function ExecutionPage() {
           const privateOperation = operation.execution === 'keyholder';
           return <Panel key={index} title={item.operations.length > 1 ? `${index + 1}. ${executionTitle(operation, i18n.language)}` : executionTitle(operation, i18n.language)}>
             {current?.index === index && inputForm && <ExecutionInputFields data={inputForm} />}
-            {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} acceptIntent="acceptConnection" cancelIntent="cancel" />}
+            {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" />}
             {!privateOperation && awaitingApproval && <JsonView value={operation.input} />}
             <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>
             {item.operations.length > 1 && details.steps[index] && <ExecutionFacts details={details.steps[index]} environments={details.environments} />}

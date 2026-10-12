@@ -1,3 +1,4 @@
+import { browserExchange, connectionMethod } from '../shared/connection-methods.js';
 import { readdir, readFile } from 'node:fs/promises';
 import {
   CatalogEntry,
@@ -114,16 +115,28 @@ export class Catalog {
       ...value,
       builtin: this.methods.has(id),
       availability: requiresApp(value) ? 'app-required' : 'ready',
+      defaultName: value.name,
+      registration: { kind: connectionMethod(value).browserAuthorization ? 'authorization' : 'input',
+        device: browserExchange(value) === 'unavailable' ? 'cli' : 'browser', browserExchange: browserExchange(value), tokenAlternatives: [] },
     });
   }
   async listMethods(actor: Actor): Promise<CatalogConnectionMethod[]> {
-    const custom = await this.usable(actor, 'method');
-    return [
+    const [custom, services] = await Promise.all([this.usable(actor, 'method'), this.services(actor)]);
+    const methods = [
       ...[...this.methods].map(([id, data]) => this.methodView(id, data)),
       ...custom.map((row) =>
         this.methodView(row.id, MethodDefinition.parse({ ...row.data, name: row.name })),
       ),
     ].sort((a, b) => a.name.localeCompare(b.name));
+    for (const method of methods) {
+      const names = [...new Set(services.filter(([, service]) => Object.values(service.methods).includes(method.id)).map(([, service]) => service.name))];
+      if (names.length === 1) method.defaultName = names[0]!;
+      if (method.registration.device !== 'cli') continue;
+      const siblings = new Set(services.filter(([, service]) => Object.values(service.methods).includes(method.id))
+        .flatMap(([, service]) => Object.values(service.methods)));
+      method.registration.tokenAlternatives = methods.filter(candidate => siblings.has(candidate.id) && candidate.kind === 'token').map(candidate => candidate.id);
+    }
+    return methods;
   }
   private async services(actor: Actor) {
     const custom = await this.usable(actor, 'service');

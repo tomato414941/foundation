@@ -224,6 +224,25 @@ export class CustodyClient {
     const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)
       : request ? request.bindings.flatMap(binding => binding.parts.flatMap(part => typeof part === 'string' ? [] : [part.id])) : [];
     const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
+    for (let index = 0; index < sources.length; index++) {
+      const source = sources[index]!, credential = source.policy.contentType === ContentTypes.clientCredential;
+      const use = credential && operation.kind !== 'revoke' ? Operations.refresh : Operations[operation.kind];
+      const destination = credential ? undefined : request ? new URL(request.url).origin : undefined;
+      const permitted = source.policy.grants.some(grant => 'actor' in grant &&
+        canonical(grant.actor) === canonical(this.binding) && canonical(grant.executor) === canonical(environment.manifest.executor) &&
+        grant.operations.includes(use) && Date.parse(grant.expiresAt) >= Date.parse(expiresAt) &&
+        (!destination || !grant.origins.length || grant.origins.includes(destination)) &&
+        (credential || grant.callerProgram));
+      if (permitted || !source.policy.authorities.some(authority => canonical(authority) === canonical(this.binding))) continue;
+      const previous = await this.read(source.policy.id), resource = await this.api.json('/api/resources/' + source.policy.id, {}, Resource);
+      const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1,
+        grants: [...previous.content.policy.grants, { actor: this.binding, executor: environment.manifest.executor,
+          operations: [...new Set([use, ...(source.policy.contentType === ContentTypes.tokenSet ? [Operations.refresh] : [])])],
+          origins: destination ? [destination] : [], functionDigests: [], callerProgram: !credential, expiresAt }] });
+      await this.save(resource.name, await reveal(previous.content, this.binding, this.keys.encryption), policy,
+        { previous, metadata: previous.content.metadata });
+      sources[index] = (await this.read(source.policy.id)).content;
+    }
     const resultPolicy = await this.policy(ownerId, ContentTypes.executionResult, [], { id });
     resultPolicy.producers = [{ executor: environment.manifest.executor, runId: id, expiresAt, materialRevision: 1 }];
     const intent: ExecutionIntent = { format: 2, id, origin: this.origin, ownerId, actor: this.binding,

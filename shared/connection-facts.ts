@@ -18,10 +18,11 @@ export const ConnectionFacts = z.object({
 export type ConnectionFactValues = z.infer<typeof ConnectionFacts>;
 
 export function oauthConnectionFacts(state: ConnectionState): ConnectionFactValues {
-  if (state.method.kind !== 'oauth' || !state.oauth) throw new Error('Use OAuth connection material.');
-  return ConnectionFacts.parse({ accountId: state.oauth.account, accountName: state.oauth.accountName,
-    accountVerified: state.oauth.accountVerified ?? false, scopes: state.oauth.scopes,
-    scopesStatus: state.oauth.scopesStatus ?? 'unknown', authorization: {}, details: {} });
+  if (state.method.kind !== 'oauth') throw new Error('Use OAuth connection material.');
+  const requestedScopes = 'requestedScopes' in state ? state.requestedScopes : undefined;
+  return ConnectionFacts.parse({ accountId: state.oauth?.account ?? '', accountName: state.oauth?.accountName ?? '',
+    accountVerified: state.oauth?.accountVerified ?? false, scopes: requestedScopes ?? state.oauth?.scopes ?? [],
+    scopesStatus: requestedScopes ? 'requested' : state.oauth?.scopesStatus ?? 'unknown', authorization: {}, details: {} });
 }
 export function tokenConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'token' || !state.fields) throw new Error('Use token connection material.');
@@ -30,8 +31,13 @@ export function tokenConnectionFacts(state: ConnectionState): ConnectionFactValu
     scopes: [], scopesStatus: 'unknown', authorization: {}, details: {} });
 }
 export function ovhConnectionFacts(state: ConnectionState): ConnectionFactValues {
-  if (state.method.kind !== 'ovh' || !('ovh' in state)) throw new Error('Use OVH connection material.');
-  const info = state.ovh;
+  if (state.method.kind !== 'ovh') throw new Error('Use OVH connection material.');
+  const info = 'ovh' in state ? state.ovh : undefined;
+  if (!info) {
+    const scopes = 'requestedScopes' in state ? state.requestedScopes : undefined;
+    return ConnectionFacts.parse({ accountId: null, accountName: '', accountVerified: false,
+      scopes: scopes ?? [], scopesStatus: scopes ? 'requested' : 'unknown', authorization: {}, details: {} });
+  }
   return ConnectionFacts.parse({ accountId: info.user ? info.account + '/' + info.user : info.account,
     accountName: info.account + (info.user ? ' / ' + info.user : ''), accountVerified: true,
     scopes: info.rules.map(rule => rule.method + ' ' + rule.path),
@@ -39,8 +45,8 @@ export function ovhConnectionFacts(state: ConnectionState): ConnectionFactValues
 }
 export function awsConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'aws' || !state.aws) throw new Error('Use AWS connection material.');
-  return ConnectionFacts.parse({ accountId: stableAwsArn(state.aws.identity.arn),
-    accountName: state.aws.identity.accountId + ' / ' + state.aws.identity.arn.split(':').at(-1), accountVerified: true,
+  return ConnectionFacts.parse({ accountId: state.aws.identity ? stableAwsArn(state.aws.identity.arn) : null,
+    accountName: state.aws.identity ? state.aws.identity.accountId + ' / ' + state.aws.identity.arn.split(':').at(-1) : '', accountVerified: Boolean(state.aws.identity),
     scopes: [], scopesStatus: 'unknown', authorization: { aws: awsAuthorization(state.aws) },
     details: { aws: awsConnectionInfo(state.aws) } });
 }

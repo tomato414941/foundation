@@ -1,3 +1,4 @@
+import { PublicTransport } from '../../server/transport.js';
 import type { Client } from './client.js';
 import { privateClient } from './custody.js';
 import { ConnectionClient } from '../../shared/connection-client.js';
@@ -6,6 +7,6 @@ import { ExecutionClient } from '../../shared/execution-client.js';
 import type { CustodyClient } from '../../shared/client.js';
 
 export function executionClient(client: Client, custody: CustodyClient = privateClient(client).custody) {
-  const connections = new ConnectionClient(custody, new RemoteFlowStore(custody));
+  const connections = new ConnectionClient(custody, new RemoteFlowStore(custody), new PublicTransport(custody.origin), 'cli');
   return new ExecutionClient(custody, connections);
 }

@@ -48,12 +48,12 @@ export class AwsConnections implements AwsConnectionProvider {
     const abortSignal = AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])]);
     let assuming = false;
     try {
-      // Freeze this attempt's source credentials so identity inspection and AssumeRole use the same source.
+      // Resolve the source once for this use and any role assumption.
       const sourceCredentials = configured ?? await client.config.credentials();
       checkExpiry(sourceCredentials.expiration);
       target = new STSClient({ region: input.region, credentials: sourceCredentials });
-      const sourceIdentity = identity(await target.send(new GetCallerIdentityCommand({}), { abortSignal }));
-      if (expected && !sameIdentity(sourceIdentity, expected.sourceIdentity))
+      const sourceIdentity = expected?.sourceIdentity ? identity(await target.send(new GetCallerIdentityCommand({}), { abortSignal })) : undefined;
+      if (expected?.sourceIdentity && sourceIdentity && !sameIdentity(sourceIdentity, expected.sourceIdentity))
         fail(409, 'account_changed', 'Reconnect to approve the current AWS authentication source.');
       let credentials = sourceCredentials, effectiveIdentity = sourceIdentity;
       if (input.role) {
@@ -68,16 +68,12 @@ export class AwsConnections implements AwsConnectionProvider {
         credentials = { accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey,
           sessionToken: key.SessionToken, expiration: key.Expiration };
         checkExpiry(credentials.expiration);
-        target.destroy();
-        target = new STSClient({ region: input.region, credentials });
-        effectiveIdentity = identity(await target.send(new GetCallerIdentityCommand({}), { abortSignal }));
-        const arn = input.role.arn.split(':');
-        if (effectiveIdentity.accountId !== arn[4] || effectiveIdentity.arn.split(':')[1] !== arn[1] ||
-          effectiveIdentity.arn.split(':')[5]?.split('/').slice(0, 2).join('/') !==
-            'assumed-role/' + input.role.arn.split('/').at(-1))
-          fail(502, 'account_changed', 'The requested AWS role could not be verified.');
+        if (expected?.identity) {
+          target.destroy(); target = new STSClient({ region: input.region, credentials });
+          effectiveIdentity = identity(await target.send(new GetCallerIdentityCommand({}), { abortSignal }));
+        }
       }
-      if (expected && !sameIdentity(effectiveIdentity, expected.identity))
+      if (expected?.identity && effectiveIdentity && !sameIdentity(effectiveIdentity, expected.identity))
         fail(409, 'account_changed', 'Reconnect to approve the current AWS account and role.');
       const state = AwsConnectionMaterial.parse({ ...input, sourceIdentity, identity: effectiveIdentity });
       return { state, credentials: {

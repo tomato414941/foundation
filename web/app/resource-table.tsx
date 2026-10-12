@@ -74,12 +74,6 @@ export function ResourceTable({
                           <p className="text-xs whitespace-normal text-muted-foreground wrap-anywhere">
                             {connectionMethodName(item.data.methodName, t)}
                           </p>
-                          <p className="text-xs whitespace-normal text-muted-foreground wrap-anywhere">
-                            {item.data.account || t('accountUnverified')}
-                            {item.data.account &&
-                              !item.data.accountVerified &&
-                              ' · ' + t('accountUnverified')}
-                          </p>
                         </>
                       )}
                       {ownerNames && item.ownerId !== ownerId && (

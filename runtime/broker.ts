@@ -4,7 +4,7 @@ import type { JsonApi } from '../shared/client.js';
 import { Id } from '../shared/contracts.js';
 import type { CustodyContent } from '../shared/custody.js';
 import type { SignedReceipt } from '../shared/runtime-protocol.js';
-import { ClaimedExecution, OAuthRelay, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
+import { ClaimedExecution, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
 import type { ExecutionBroker } from './executor.js';
 import type { ConnectionBroker } from './connections.js';
 import { DomainError } from '../server/errors.js';
@@ -37,8 +37,6 @@ export class HttpBroker implements ExecutionBroker {
   connections(): ConnectionBroker {
     const api = this.api;
     return {
-      relay: input => api.json('/api/oauth/relays', { method: 'POST', body: input }, OAuthRelay),
-      capture: (name, content, labels) => this.capture(name, content, labels),
       prepare: (id, resourceId, expectedRevision) => api.json('/api/connection-operations', {
         method: 'POST', body: { id, resourceId, expectedRevision },
       }, RenewalOperation),

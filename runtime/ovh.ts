@@ -1,9 +1,6 @@
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
-import { OvhConnectionInfo } from '../shared/ovh.js';
-import type { OvhInfo } from '../shared/ovh.js';
 import { fail } from '../server/errors.js';
-import { publicUrl, responseJson } from '../server/transport.js';
+import { publicUrl } from '../server/transport.js';
 import type { OutboundRequest, Transport } from '../server/transport.js';
 
 export interface OvhCredentials { applicationKey: string; applicationSecret: string; consumerKey: string }
@@ -13,13 +10,6 @@ export function ovhSignature(credentials: OvhCredentials, request: OutboundReque
   return '$1$' + createHash('sha1').update([credentials.applicationSecret, credentials.consumerKey,
     request.method ?? 'GET', request.url, body, String(timestamp)].join('+')).digest('hex');
 }
-
-const authentication = z.object({
-  account: z.string().min(1), identities: z.array(z.string()),
-  user: z.string().nullable(), description: z.string().nullable(), roles: z.array(z.string()).nullable(),
-});
-const credential = OvhConnectionInfo.pick({ credentialId: true, rules: true, allowedIPs: true })
-  .extend({ status: z.literal('validated'), expiration: z.iso.datetime().nullable() });
 
 export class OvhApi {
   private clock = new Map<string, { difference: number; checkedAt: number }>();
@@ -47,21 +37,4 @@ export class OvhApi {
       'X-Ovh-Timestamp': String(timestamp), 'X-Ovh-Signature': ovhSignature(credentials, request, timestamp) } });
   }
 
-  async inspect(base: string, credentials: OvhCredentials, signal: AbortSignal): Promise<OvhInfo> {
-    const details = await this.send(base, credentials, { url: base + '/auth/details', signal });
-    const current = await this.send(base, credentials, { url: base + '/auth/currentCredential', signal });
-    if ([details, current].some(response => response.status === 401 || response.status === 403))
-      fail(400, 'invalid_credentials', 'Check the OVHcloud keys, account region, and API permissions.');
-    if (details.status !== 200 || current.status !== 200)
-      fail(502, 'service_response', 'OVHcloud could not confirm this connection.');
-    const identity = authentication.safeParse(responseJson(details)), access = credential.safeParse(responseJson(current));
-    if (!identity.success || !access.success) fail(502, 'invalid_response', 'OVHcloud returned invalid authentication details.');
-    const expiresAt = access.data.expiration === null ? null : Date.parse(access.data.expiration);
-    if (expiresAt !== null && expiresAt <= Date.now()) fail(400, 'invalid_credentials', 'This OVHcloud API key has expired.');
-    return OvhConnectionInfo.parse({ ...identity.data, identities: [...identity.data.identities].sort(),
-      roles: identity.data.roles ? [...identity.data.roles].sort() : null,
-      credentialId: access.data.credentialId, rules: [...access.data.rules].sort((a, b) =>
-        (a.method + ' ' + a.path).localeCompare(b.method + ' ' + b.path)),
-      allowedIPs: access.data.allowedIPs ? [...access.data.allowedIPs].sort() : null, expiresAt });
-  }
 }

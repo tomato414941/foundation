@@ -41,9 +41,7 @@ test('同じ表示名で複数サービスへ接続し、それぞれの実行�
   t.after(f.close);
   const saved = [];
   for (const [methodId, output] of [['github:token', 'GH_TOKEN'], ['cloudflare:token', 'CLOUDFLARE_API_TOKEN']]) {
-    const started = await f.start({ methodId: methodId!, fields: { token: methodId + '-private-value' } });
-    assert.equal((await f.tick(started.flow.id)).kind, 'review');
-    const connection = await f.accept(started.flow.id);
+    const connection = await f.saveConnection({ methodId: methodId!, fields: { token: methodId + '-private-value' } });
     saved.push(connection.id);
     assert.equal((await f.http(connection.id, output!))?.ok, true);
     assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer ' + methodId + '-private-value');
@@ -51,7 +49,7 @@ test('同じ表示名で複数サービスへ接続し、それぞれの実行�
   assert.notEqual(saved[0], saved[1]);
 });
 
-test('RenderのOAuth応答を暗号化して中継し、実行先で接続・更新・解除を行う', async t => {
+test('RenderのOAuth応答を端末で交換し、利用時に更新して認可を取り消す', async t => {
   let exchange = 0;
   const f = await flowFixture(request => {
     if (request.url.endsWith('/oauth/token')) {
@@ -63,7 +61,7 @@ test('RenderのOAuth応答を暗号化して中継し、実行先で接続・更
   });
   t.after(f.close);
   const application = await f.saveApp('render:oauth');
-  const started = await f.start({ methodId: 'render:oauth', appId: application.id });
+  const started = await f.authorize({ methodId: 'render:oauth', appId: application.id });
   const authorized = await f.tick(started.flow.id);
   assert.equal(authorized.kind, 'authorize');
   if (authorized.kind !== 'authorize') return;
@@ -73,10 +71,7 @@ test('RenderのOAuth応答を暗号化して中継し、実行先で接続・更
     state: url.searchParams.get('state')!, code: 'render-code',
   }) });
   assert.equal(callback.statusCode, 302);
-  assert.equal((await f.connections.progress(started.flow.id)).kind, 'pending');
-  const review = await f.tick(started.flow.id);
-  assert.equal(review.kind, 'review', JSON.stringify('error' in review ? review.error : review.kind));
-  const saved = await f.accept(started.flow.id);
+  const saved = await f.saved(started.flow.id);
   assert.equal((await f.http(saved.id, 'RENDER_MCP_ACCESS_TOKEN', 'https://mcp.render.com/mcp'))?.ok, true);
   assert.equal(exchange, 2);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer render-access-2');
@@ -92,31 +87,26 @@ test('RenderのOAuth応答を暗号化して中継し、実行先で接続・更
   assert.equal(new URLSearchParams(String(f.requests.at(-1)!.body)).get('token'), 'render-refresh-2');
 });
 
-test('APIキーの更新を確認して同じ接続へ反映し、取り消した更新は元の値を保つ', async t => {
+test('入力待ちの更新を取り消すと元のキーを保ち、再登録で同じ接続を更新する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const started = await f.start({ methodId: 'render:token', fields: { token: 'original' } });
-  await f.tick(started.flow.id);
-  const saved = await f.accept(started.flow.id);
-  const cancelled = await f.start({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'discarded' } });
-  await f.tick(cancelled.flow.id);
-  await f.connections.cancel(cancelled.flow.id);
-  let material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
-  assert.equal(material.fields!.token, 'original');
-  const replacement = await f.start({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'updated' } });
-  await f.tick(replacement.flow.id);
-  assert.equal((await f.accept(replacement.flow.id)).id, saved.id);
-  material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
-  assert.equal(material.fields!.token, 'updated');
+  const saved = await f.saveConnection({ methodId: 'render:token', fields: { token: 'original' } });
+  const update = await f.operations.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+    methodId: 'render:token', connectionId: saved.id, name: saved.name } });
+  await f.client.api.json('/api/executions/' + update.id + '/cancel', { method: 'POST', body: {} });
+  assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id)))).fields!.token, 'original');
+  const replacement = await f.saveConnection({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'updated' } });
+  assert.equal(replacement.id, saved.id);
+  assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id)))).fields!.token, 'updated');
 });
 
-test('OpenRouterの公開PKCEフローを選んだ実行先で完了し、承認したキーでAPIを呼び出す', async t => {
+test('OpenRouterの公開PKCEフローでAPIキーを取得し、そのキーでAPIを呼び出す', async t => {
   const f = await flowFixture(request => {
     if (request.url.endsWith('/auth/keys')) return jsonResponse({ key: 'openrouter-private-key' });
     if (request.url.endsWith('/key')) return jsonResponse({ data: { label: 'Selected key' } });
     return jsonResponse({ ok: true });
   });
   t.after(f.close);
-  const started = await f.start({ methodId: 'openrouter:oauth' });
+  const started = await f.authorize({ methodId: 'openrouter:oauth' });
   const authorize = await f.tick(started.flow.id);
   assert.equal(authorize.kind, 'authorize');
   if (authorize.kind !== 'authorize') return;
@@ -125,26 +115,11 @@ test('OpenRouterの公開PKCEフローを選んだ実行先で完了し、承認
   await f.connections.complete(started.flow.id, new URLSearchParams({
     state: url.searchParams.get('state')!, code: 'openrouter-code',
   }).toString());
-  const review = await f.tick(started.flow.id);
-  assert.equal(review.kind, 'review', JSON.stringify(review));
-  const saved = await f.accept(started.flow.id);
+  const saved = await f.saved(started.flow.id);
   const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
-  assert.equal(material.oauth!.accountName, 'Selected key');
+  assert.equal(material.oauth!.accessToken, 'openrouter-private-key');
   assert.equal((await f.http(saved.id, 'OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/chat/completions'))?.ok, true);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer openrouter-private-key');
-});
-
-test('先に承認した接続を保持し、古い確認画面には最新の権限の再確認を求める', async t => {
-  const f = await flowFixture(); t.after(f.close);
-  const started = await f.start({ methodId: 'github:token', fields: { token: 'initial' } });
-  await f.tick(started.flow.id);
-  const saved = await f.accept(started.flow.id);
-  const first = await f.start({ methodId: 'github:token', connectionId: saved.id, fields: { token: 'first' } });
-  const second = await f.start({ methodId: 'github:token', connectionId: saved.id, fields: { token: 'second' } });
-  await f.tick(first.flow.id); await f.tick(second.flow.id);
-  await f.accept(first.flow.id);
-  await assert.rejects(f.connections.accept(second.flow.id), /recipients changed/);
-  assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id)))).fields!.token, 'first');
 });
 
 test('選択した実行先のワークロード権限でIAMロールを引き受ける', async t => {
@@ -160,10 +135,9 @@ test('選択した実行先のワークロード権限でIAMロールを引き�
   } });
   t.after(f.close);
   const role = { arn: 'arn:aws:iam::123456789012:role/Example', region: 'ap-northeast-1', externalId: 'exclusive-external-id' };
-  const started = await f.start({ methodId: 'aws:authentication',
+  const saved = await f.saveConnection({ methodId: 'aws:authentication',
     aws: { authentication: { kind: 'environment' }, region: role.region, role: { arn: role.arn, externalId: role.externalId } } });
-  assert.equal((await f.tick(started.flow.id)).kind, 'review');
-  const saved = await f.accept(started.flow.id);
+
   assert.equal((await f.http(saved.id, 'AWS_ACCESS_KEY_ID'))?.ok, true);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer role-key');
   assert.ok(obtained.every(item => item === role.arn + ':' + role.externalId));

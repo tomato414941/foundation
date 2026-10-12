@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
-import { PolicyApproval } from './custody.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
-import { AwsConnectionInput, AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
+import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
 import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
 import { ConnectionFacts, connectionFacts } from './connection-facts.js';
 import { OvhConnectionInfo } from './ovh.js';
@@ -31,11 +30,11 @@ const materialMetadata = {
 };
 const unusedMaterial = z.never().optional();
 export const ConnectionMaterial = z.union([
-  z.object({ ...materialMetadata, method: OAuthMethod, oauth: TokenMaterial,
+  z.object({ ...materialMetadata, method: OAuthMethod, oauth: TokenMaterial.optional(), requestedScopes: z.array(z.string()).optional(),
     fields: Fields.optional(), aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: TokenMethod, fields: Fields,
     facts: ConnectionFacts.optional(), oauth: unusedMaterial, aws: unusedMaterial }).strict(),
-  z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, ovh: OvhConnectionInfo,
+  z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, ovh: OvhConnectionInfo.optional(), requestedScopes: z.array(z.string()).optional(),
     oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: AwsMethod, aws: AwsConnectionMaterial,
     oauth: unusedMaterial, fields: unusedMaterial }).strict(),
@@ -50,7 +49,8 @@ export const ConnectionMaterial = z.union([
     ctx.addIssue({ code: 'custom', message: 'Use an application only when the connection requires one.' });
   if (Boolean(value.appId) !== Boolean(value.appGeneration))
     ctx.addIssue({ code: 'custom', message: 'Bind the application and its generation together.' });
-  if (value.method.kind === 'oauth' && value.method.config.grantType === 'client_credentials' && !value.oauth?.requestedScopes)
+  if (value.method.kind === 'oauth' && value.method.config.grantType === 'client_credentials' &&
+    !('requestedScopes' in value && value.requestedScopes) && !value.oauth?.requestedScopes)
     ctx.addIssue({ code: 'custom', message: 'Keep the selected scopes for client credentials renewal.' });
 });
 export type ConnectionState = z.infer<typeof ConnectionMaterial>;
@@ -89,28 +89,15 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
 export const ConnectionSettings = z.array(z.object({ name: z.string(), label: z.string(), value: z.string() }).strict());
 export const ConnectionLabels = z.object({ methodName: Name, account: z.string().max(2000), settings: ConnectionSettings.optional() }).strict();
 export type ConnectionLabelValues = z.infer<typeof ConnectionLabels>;
-export function connectionLabels(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)): ConnectionLabelValues {
+export function connectionLabels(state: ConnectionState): ConnectionLabelValues {
   const definitions = connectionMethod(state.method).fields;
   const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(definitions, state.fields) : {};
   const settings = definitions.filter(field => fields[field.name]).map(field => ({ name: field.name, label: field.label,
     value: field.choices?.find(choice => choice.value === fields[field.name])?.label ?? fields[field.name]! }));
-  return { methodName: state.method.name, account: facts.accountName, ...(settings.length ? { settings } : {}) };
+  return { methodName: state.method.name, account: '', ...(settings.length ? { settings } : {}) };
 }
 
-const FlowStart = z.object({
-  action: z.literal('start'), flowId: Id, name: Name,
-  methodId: z.string().min(1), method: MethodDefinition, appId: Id.nullable(),
-  fields: Fields.default({}), scopes: z.array(z.string().max(1000)).max(200).default([]),
-  redirectUri: z.url().optional(),
-  aws: AwsConnectionInput.optional(),
-}).strict().superRefine((value, ctx) => {
-  if (value.aws && value.method.kind !== 'aws')
-    ctx.addIssue({ code: 'custom', message: 'Choose one authentication configuration for this connection method.' });
-});
 export const ConnectionAction = z.discriminatedUnion('action', [
-  FlowStart,
-  z.object({ action: z.literal('exchange'), flowId: Id, parameters: z.string().max(16384) }).strict(),
-  z.object({ action: z.literal('commit'), flowId: Id, authorizationDigest: Fingerprint, approval: PolicyApproval }).strict(),
   z.object({ action: z.literal('refresh'), id: Id }).strict(),
   z.object({ action: z.literal('revoke'), id: Id }).strict(),
 ]);

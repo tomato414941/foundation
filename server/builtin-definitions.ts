@@ -5,7 +5,7 @@ import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Execution, 
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
-import { connectionMethod } from '../shared/connection-methods.js';
+import { connectionMethod, selectScopes } from '../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../shared/connection-fields.js';
 import { ContentTypes, Operations, permittedOperations } from '../shared/custody.js';
 import type { CustodyPolicy } from '../shared/custody.js';
@@ -171,7 +171,7 @@ export function builtinDefinitions(services: Services) {
   definitions.define('process.start', process, ['コマンドを実行する', 'Start a command'], async (who, input) => {
     const { id, environmentId, ownerId, actorId, state, createdAt } = await processes.create(who, input.environmentId, input.command);
     return { id, environmentId, ownerId, actorId, state, createdAt };
-  });
+  }, { environmentReason: ['指定した実行環境でコマンドを動かします。', 'Run the command in the selected execution environment.'] });
   bind({ name: 'process.start', method: 'POST', path: '/api/environments/:id/processes', schema: { params: C.IdParams,
     body: CreateProcess, response: { 202: CreatedProcess } }, input: (params, body) => ({ environmentId: params.id, command: body }), status: 202 });
   definitions.define('process.cancel', idInput, ['コマンドを中止する', 'Cancel a command'], (who, input) => processes.cancel(who, input.id));
@@ -292,7 +292,7 @@ export function builtinDefinitions(services: Services) {
     async (who, { functionId, functionVersion, ...input }) => {
       await reviewedFunction({ functionId, ...(functionVersion ? { functionVersion } : {}) });
       return invocations.create(who, functionId, input);
-    }, {
+    }, { environmentReason: ['関数に設定された実行環境で処理します。', 'Run in the execution environment configured for this function.'],
       review: (_who, input) => reviewedFunction(input), resolve: (_who, input) => reviewedFunction(C.JsonObject.parse(input)),
       observe: async (who, result) => {
         const current = await invocations.get(who, FunctionInvocation.parse(result).id);
@@ -336,15 +336,15 @@ export function builtinDefinitions(services: Services) {
       return resources.view(who, await custody.put(who, write));
     } });
   definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
-    { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId', 'users', 'fields'],
+    { execution: 'keyholder', configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       prepareInput: async (who, input, proof, connection) => {
         const method = await catalog.method(who, input.methodId);
-        if (!requiresApp(method) || !input.clientId || !input.environmentId || input.appId || await hash(method) !== input.methodDigest)
+        if (!requiresApp(method) || !input.clientId || input.appId || await hash(method) !== input.methodDigest)
           fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
         const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
           name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
-          clientId: input.clientId, fields: input.fields, environmentIds: [input.environmentId] }), proof, ContentTypes.clientCredential, connection);
+          clientId: input.clientId, fields: input.fields, environmentIds: [] }), proof, ContentTypes.clientCredential, connection);
         return { ...input, appId: app.id, fields: app.kind === 'app' ? app.data.fields : input.fields };
       },
       review: async (who, input) => {
@@ -357,40 +357,26 @@ export function builtinDefinitions(services: Services) {
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
         return { ...await reviewFields(who, input), methodDigest };
       },
-      complete: async (who, input, proof, execution) => {
-        const method = await catalog.method(who, input.methodId);
-        if (method.kind === 'token' && !connectionMethod(method).requiresEnvironment && P.ProtectedWrite.safeParse(proof).success) {
-          const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
-          const previous = input.connectionId ? await custody.get(input.connectionId) : null;
-          if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
-            write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
-            write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== 'token' || write.content.metadata.state !== 'ready')
-            fail(409, 'operation_changed', 'Save the token connection approved by this execution.');
-          await requireFields(who, input, write.content.metadata);
-          if (input.users) await approvedUsers(policy, input.users);
-          else if (canonical(policy.grants) !== canonical(previous?.policy.grants ?? []))
-            fail(409, 'operation_changed', 'Keep the approved connection permissions.');
-          const row = await custody.put(who, write);
-          return { kind: 'connected', id: row.id, metadata: write.content.metadata };
-        }
-        const evidence = z.object({ runId: C.Id, resourceId: C.Id }).strict().parse(proof);
-        const task = await delegation.get(who, evidence.runId), content = await custody.get(evidence.resourceId);
-        if (task.state !== 'succeeded' || task.kind !== 'connect' || task.intent.actor.principalId !== who.id ||
-          task.intent.operationContext?.id !== execution.id || task.intent.operationContext.index !== execution.index ||
-          task.intent.ownerId !== input.ownerId || (input.environmentId && task.environmentId !== input.environmentId) ||
-          (who.approvalId && (task.intent.approval?.id !== who.approvalId || task.intent.approval.index !== who.approvalIndex)) ||
-          content.creationRunId !== task.id || content.policy.contentType !== ContentTypes.tokenSet ||
-          content.policy.ownerId !== input.ownerId || content.metadata.methodId !== input.methodId ||
-          !content.policy.authorities.some(binding => canonical(binding) === canonical(task.intent.actor)) ||
-          (input.connectionId && content.policy.id !== input.connectionId))
-          fail(409, 'connection_required', 'Complete the connection prepared by this operation.');
-        await requireFields(who, input, content.metadata);
-        const row = await resources.get(content.policy.id);
-        if (input.name && row.name !== input.name) fail(409, 'operation_changed', 'Use the approved connection name.');
-        return { kind: 'connected', id: content.policy.id, metadata: content.metadata };
+      complete: async (who, input, proof) => {
+        const method = await catalog.method(who, input.methodId), write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
+        const previous = input.connectionId ? await custody.get(input.connectionId) : null;
+        if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
+          write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
+          write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== method.kind ||
+          write.content.metadata.appId !== (input.appId ?? null) || write.content.metadata.state !== 'ready')
+          fail(409, 'operation_changed', 'Save the connection approved by this execution.');
+        await requireFields(who, input, write.content.metadata);
+        if (input.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
+          canonical([...selectScopes(method.config.scopes, input.scopes)].sort()) !== canonical([...z.array(z.string()).parse(write.content.metadata.scopes)].sort()))
+          fail(409, 'operation_changed', 'Save the service permissions approved by this execution.');
+        if (input.users) await approvedUsers(policy, input.users);
+        else if (canonical(policy.grants) !== canonical(previous?.policy.grants ?? []))
+          fail(409, 'operation_changed', 'Keep the approved connection permissions.');
+        const row = await custody.put(who, write);
+        return { kind: 'connected', id: row.id, metadata: write.content.metadata };
       } });
   definitions.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Revoke a connection'], keyholder,
-    { execution: 'keyholder', configure: [], complete: async (who, input, proof, execution) => {
+    { execution: 'keyholder', configure: [], environmentReason: ['外部サービスの認可を実行環境から取り消します。', 'Revoke external service access from an execution environment.'], complete: async (who, input, proof, execution) => {
       const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
       if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
         task.intent.actor.principalId !== who.id || task.intent.ownerId !== input.ownerId || task.environmentId !== input.environmentId ||
@@ -402,7 +388,7 @@ export function builtinDefinitions(services: Services) {
       return result;
     } });
   definitions.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
-    { execution: 'keyholder', configure: ['environmentId'], secret: () => false,
+    { execution: 'keyholder', configure: ['environmentId'], environmentReason: ['HTTPリクエストやコマンドを実行環境で処理します。', 'Send the HTTP request or run the command in an execution environment.'], secret: () => false,
       complete: async (who, input, proof, execution) => {
         const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
         if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.intent.actor.principalId !== who.id ||

@@ -12,8 +12,7 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   await signedIn(request);
   return actionResult(async () => {
     const progress = await (await connectionClient()).progress(params.id);
-    if (progress.kind === 'connected') return redirect(progress.flow.approval
-      ? '/executions/' + progress.flow.execution.id : resourcePath(await api('/resources/' + progress.id, {}, Resource)));
+    if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
     return progress;
   });
 }
