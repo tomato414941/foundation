@@ -49,6 +49,21 @@ const words: Record<string, [string, string]> = {
   'errors.invalid_function_arguments': ['関数の引数を確認してください。', 'Check the function arguments.'],
   sshAuthorizedKeys: ['SSH公開鍵', 'SSH public keys'],
   sshAuthorizedKeysOptional: ['SSH公開鍵（任意）', 'SSH public keys (optional)'],
+  environmentNameHelp: ['未入力の場合は、自動で名前を付けます。', 'Leave empty to generate a name.'],
+  environmentCommandImage: ['コマンド用コンテナイメージ', 'Command container image'],
+  environmentCustomImage: ['指定したイメージを使用', 'Use the specified image'],
+  environmentImageHelp: ['空欄なら標準イメージを使用します。変更する場合は、sha256ダイジェストを含むイメージ名を指定してください。', 'Leave empty to use the default image. To change it, enter an image name with its sha256 digest.'],
+  environmentLifetime: ['停止条件', 'Stop conditions'],
+  environmentLifetimeSummary: ['未使用 {{idle}}分・最長 {{maximum}}分で停止', 'Stop after {{idle}} idle minutes or {{maximum}} total minutes'],
+  environmentLifetimeRange: ['停止時間は1〜1440分で指定してください。', 'Enter stop times between 1 and 1440 minutes.'],
+  environmentIdleTooLong: ['操作がないときの停止時間は、最長稼働時間以下にしてください。', 'The idle timeout must not exceed the maximum lifetime.'],
+  environmentSSHOptional: ['SSH接続を設定（任意）', 'Set up SSH access (optional)'],
+  environmentSSHUnconfigured: ['作成後にも設定できます', 'You can set it up after creation'],
+  environmentSSHKeyCount: ['公開鍵 {{count}}個', 'Public keys: {{count}}'],
+  environmentRequiredQuota: ['必要な利用枠 {{minutes}}分', 'Required quota: {{minutes}} minutes'],
+  environmentRemainingQuota: ['今月の残り {{minutes}}分', 'Remaining this month: {{minutes}} minutes'],
+  environmentQuotaInsufficient: ['利用枠が{{minutes}}分不足しています。サイズまたは最長稼働時間を変更してください。', 'The quota is {{minutes}} minutes short. Change the size or maximum lifetime.'],
+  environmentQuotaSettings: ['利用枠・支払いを確認', 'Review quota and billing'],
   sshKeysSaved: ['SSH公開鍵を保存しました。', 'SSH public keys saved.'],
   sshCreateHelp: ['公開鍵ファイル（.pub）の内容を1行に1つ入力してください。未指定でも、作成後に登録できます。',
     'Enter one public key from a .pub file per line. You can also add keys after creating the environment.'],
@@ -223,8 +238,6 @@ const words: Record<string, [string, string]> = {
   reveal: ['内容を表示', 'Reveal content'],
   hide: ['内容を隠す', 'Hide content'],
   value: ['値', 'Value'],
-  managedEnvironmentHelp: ['Foundationが運用する実行環境です。変数や接続を使う場合は、起動後にこの環境への使用を許可してください。',
-    'This environment is operated by Foundation. After startup, allow it to use any variables or connections it needs.'],
   verifyEnvironment: ['この実行環境の鍵を確認', 'Verify this environment’s keys'],
   removeRevokedConnection: ['アクセス取消済みの接続を削除', 'Remove the revoked connection'],
   keyLocked: [
@@ -630,10 +643,6 @@ Object.assign(words, {
   'singular.service': ['サービス定義', 'service definition'],
   'singular.method': ['接続方法', 'connection method'],
   'singular.app': ['OAuthアプリ', 'OAuth app'],
-  computeUsage: [
-    '今月の実行時間: {{used}} / {{limit}}分',
-    'Compute this month: {{used}} / {{limit}} minutes',
-  ],
 });
 const errors: Array<[string[], string, string]> = [
   [

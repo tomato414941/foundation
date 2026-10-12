@@ -126,7 +126,7 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(response.ok, response.text())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
-        page.get_by_role("button", name="起動", exact=True).click()
+        page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
         expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
         path = page.url
@@ -1283,15 +1283,17 @@ class BrowserTests(unittest.TestCase):
         requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
         self.assertEqual(requests, [{"authentication": {"kind": "environment"}, "region": "ap-northeast-1"}])
 
-    def test_スマホで初期値のまま実行環境を起動して停止する(self):
+    def test_スマホで初期値のまま実行環境を作成して停止する(self):
         owner, principal = self.passkey_account("Mobile environment owner")
         response = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(response.ok, response.text())
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_role("button", name="起動", exact=True)).to_be_enabled()
-        start = page.get_by_role("button", name="起動", exact=True)
+        expect(page.get_by_text("必要な利用枠 60分", exact=True)).to_be_visible()
+        expect(page.get_by_text("今月の残り 60分", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
+        start = page.get_by_role("button", name="作成", exact=True)
         for scroll in [0, 10000, 0]:
             page.evaluate("value => window.scrollTo(0, value)", scroll)
             box = start.bounding_box()
@@ -1313,6 +1315,44 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
 
+    def test_構成と停止条件に応じた利用枠を確認して実行環境を作成する(self):
+        page, principal = self.passkey_account("Quota environment owner")
+        paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(paid.ok, paid.text())
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Medium environment")
+        page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True).check()
+        expect(page.get_by_text("必要な利用枠 120分", exact=True)).to_be_visible()
+        expect(page.get_by_role("alert").filter(has_text="利用枠が60分不足しています")).to_be_visible()
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_disabled()
+        page.get_by_text("停止条件", exact=True).click()
+        page.get_by_role("spinbutton", name="最長稼働時間（分）", exact=True).fill("20")
+        expect(page.get_by_role("alert").filter(has_text="操作がないときの停止時間は、最長稼働時間以下にしてください")).to_be_visible()
+        page.get_by_role("spinbutton", name="操作がないときの停止時間（分）", exact=True).fill("15")
+        expect(page.get_by_text("必要な利用枠 40分", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
+        page.screenshot(path=str(ARTIFACTS / "environment-create-lifetime-desktop-ja.png"), full_page=True)
+        page.get_by_role("button", name="作成", exact=True).click()
+        page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
+        environment_id = page.url.rsplit("/", 1)[1]
+        self.environments.append((page, environment_id))
+        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+        response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
+        self.assertTrue(response.ok, response.text())
+        environment = response.json()
+        self.assertEqual(environment["data"]["size"], "medium")
+        self.assertEqual(environment["data"]["lifetime"], {"idleSeconds": 900, "maxSeconds": 1200})
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        expect(page.get_by_text("今月の残り 20分", exact=True)).to_be_visible()
+        expect(page.get_by_role("alert").filter(has_text="利用枠が40分不足しています")).to_be_visible()
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_disabled()
+        page.screenshot(path=str(ARTIFACTS / "environment-create-quota-mobile-ja.png"), full_page=True)
+        self.select(page, "言語", "English")
+        expect(page.get_by_text("Remaining this month: 20 minutes", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Create", exact=True)).to_be_disabled()
+        page.screenshot(path=str(ARTIFACTS / "environment-create-quota-mobile-en.png"), full_page=True)
+
     def test_スマホでSSH公開鍵を指定して接続情報を確認し公開鍵を変更する(self):
         import tempfile
         owner, principal = self.passkey_account("SSH environment owner")
@@ -1321,10 +1361,11 @@ class BrowserTests(unittest.TestCase):
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        page.get_by_text("SSH接続を設定（任意）", exact=True).click()
         keys = page.get_by_role("textbox", name="SSH公開鍵（任意）", exact=True)
         expect(keys).to_be_visible()
         keys.fill("invalid key")
-        page.get_by_role("button", name="起動", exact=True).click()
+        page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("alert").filter(has_text="SSH公開鍵を確認してください")).to_be_visible()
         with tempfile.TemporaryDirectory() as directory:
             public_keys = []
@@ -1333,7 +1374,7 @@ class BrowserTests(unittest.TestCase):
                 subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
                 public_keys.append(path.with_suffix(".pub").read_text().strip())
             keys.fill(public_keys[0])
-            page.get_by_role("button", name="起動", exact=True).click()
+            page.get_by_role("button", name="作成", exact=True).click()
             page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
             environment_id = page.url.rsplit("/", 1)[1]
             self.environments.append((page, environment_id))
@@ -1442,9 +1483,9 @@ class BrowserTests(unittest.TestCase):
         page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         page.set_viewport_size({"width": 390, "height": 844})
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_role("button", name="起動", exact=True)).to_be_enabled()
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
         page.screenshot(path=str(ARTIFACTS / "environment-create-ja.png"), full_page=True)
-        page.get_by_role("button", name="起動", exact=True).click()
+        page.get_by_role("button", name="作成", exact=True).click()
         page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
         path = page.url
         environment_id = path.rsplit("/", 1)[1]
@@ -1678,7 +1719,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="Create", exact=True).click()
         expect(page.get_by_role("heading", name="Create environment", exact=True)).to_be_visible()
         page.get_by_role("textbox", name="Name", exact=True).fill("Mobile worker")
-        self.select(page, "Size", "Medium — 2 CPU / 2 GB")
+        page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True).check()
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
         page.get_by_role("link", name="Cancel", exact=True).click()
         expect(page.get_by_role("heading", name="Environments", exact=True)).to_be_visible()

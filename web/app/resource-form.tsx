@@ -16,6 +16,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
+import { EnvironmentForm, environmentReservations } from './environment-form';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
@@ -50,6 +51,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connections,
     shared,
     environments,
+    reservedSeconds,
   ] = await Promise.all([
     id ? api((kind === 'function' ? '/functions/' : '/resources/') + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
@@ -71,6 +73,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
     isProtected(kind) || kind === 'function' ? availableEnvironments(params.owner!) : [],
+    kind === 'environment' ? environmentReservations(params.owner!, request.signal) : 0,
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -134,6 +137,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connection,
     appMaterial,
     environments,
+    reservedSeconds,
     selectedExecutors,
     content,
     binary,
@@ -360,7 +364,7 @@ export default function ResourceForm() {
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
-      {data.payment?.required && !data.payment.active && (
+      {data.kind !== 'environment' && data.payment?.required && !data.payment.active && (
         <Notice
           action={
             sessionData.principals.some(
@@ -389,7 +393,7 @@ export default function ResourceForm() {
         </Notice>
       ) : (
         <Form method="post" encType="multipart/form-data">
-          <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
+          <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(12rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
             <input type="hidden" name="version" value={existing?.version ?? ''} />
             {existing?.kind === 'connection' && (
               <input type="hidden" name="connectionId" value={existing.id} />
@@ -502,57 +506,10 @@ export default function ResourceForm() {
                   initial={data.connection} newConnection={data.kind === 'connection' && !existing}
                   executor={executor} />
                 {data.kind === 'environment' && (
-                  <>
-                    <Panel>
-                      {nameField}
-                      <InputField name="image" label={t('image')} placeholder={t('defaultImage')} />
-                      <SelectField name="size" label={t('size')} defaultValue="small">
-                        {['small', 'medium', 'large'].map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {t(value)}
-                          </SelectItem>
-                        ))}
-                      </SelectField>
-                      <InputField
-                        type="number"
-                        name="idle"
-                        label={t('idle')}
-                        defaultValue={60}
-                        required
-                        min={1}
-                        max={1440}
-                      />
-                      <InputField
-                        type="number"
-                        name="maximum"
-                        label={t('maximum')}
-                        defaultValue={60}
-                        required
-                        min={1}
-                        max={1440}
-                      />
-                      <Notice tone="info">{t('managedEnvironmentHelp')}</Notice>
-                    </Panel>
-                    {sessionData.features.ssh && <Panel title="SSH">
-                      <TextareaField name="sshKeys" label={t('sshAuthorizedKeysOptional')} rows={3}
-                        hint={t('sshCreateHelp')} spellCheck={false} autoCapitalize="off" autoCorrect="off"
-                        className="font-mono text-xs" />
-                    </Panel>}
-                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground">
-                      {data.usage && (
-                        <p className="leading-relaxed">
-                          {t('computeUsage', {
-                            used: Math.ceil(data.usage.computeSeconds / 60),
-                            limit: Math.floor(data.usage.computeLimit / 60),
-                          })}
-                        </p>
-                      )}
-                      <Link to={'/p/' + principal.id + '/settings/billing'}
-                        className="inline-flex min-h-11 items-center underline underline-offset-4 hover:text-foreground">
-                        {t('billing')}
-                      </Link>
-                    </div>
-                  </>
+                  <EnvironmentForm owner={principal} usage={data.usage} reservedSeconds={data.reservedSeconds}
+                    payment={data.payment} canManageBilling={principal.permissions.includes('manage_billing')}
+                    canManagePayment={sessionData.principals.some(item => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'))}
+                    ssh={sessionData.features.ssh} available={!unavailable} back={back} busy={navigation.state === 'submitting'} />
                 )}
                 {data.kind === 'function' && (
                   <>
@@ -611,20 +568,17 @@ export default function ResourceForm() {
                   />
                 )}
               </>
-            {!unavailable && !methodUnavailable && (
+            {data.kind !== 'environment' && !unavailable && !methodUnavailable && (
               <SaveBar
                 back={back}
-                fixedOnMobile={data.kind === 'environment'}
                 label={
                   data.kind === 'connection'
                     ? 'connect'
                     : existing
                       ? 'save'
-                      : data.kind === 'environment'
-                        ? 'start'
-                        : data.kind === 'object'
-                          ? 'upload'
-                          : 'create'
+                      : data.kind === 'object'
+                        ? 'upload'
+                        : 'create'
                 }
                 busy={navigation.state === 'submitting'}
               />
