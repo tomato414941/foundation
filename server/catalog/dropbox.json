@@ -25,16 +25,6 @@
           "DROPBOX_ACCESS_TOKEN": "/accessToken",
           "DROPBOX_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.dropboxapi.com/2/users/get_current_account",
-          "method": "POST",
-          "json": null,
-          "id": "/account_id",
-          "name": [
-            "/email",
-            "/name/display_name"
-          ]
-        },
         "revoke": {
           "url": "https://api.dropboxapi.com/2/auth/token/revoke",
           "style": "bearer"

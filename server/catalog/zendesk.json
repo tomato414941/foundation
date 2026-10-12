@@ -30,14 +30,6 @@
           "ZENDESK_SUBDOMAIN": "/subdomain",
           "ZENDESK_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://{subdomain}.zendesk.com/api/v2/users/me.json",
-          "id": "/user/id",
-          "name": [
-            "/user/email",
-            "/user/name"
-          ]
-        },
         "hint": "ZENDESK_SUBDOMAIN is the Zendesk subdomain (https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/...).",
         "scopes": {
           "default": [

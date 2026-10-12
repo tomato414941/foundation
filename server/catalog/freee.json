@@ -22,14 +22,6 @@
           "FREEE_ACCESS_TOKEN": "/accessToken",
           "FREEE_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.freee.co.jp/api/1/users/me",
-          "id": "/user/id",
-          "name": [
-            "/user/email",
-            "/user/display_name"
-          ]
-        },
         "revoke": {
           "url": "https://accounts.secure.freee.co.jp/public_api/revoke",
           "style": "rfc7009"

@@ -22,11 +22,6 @@
           "AIRTABLE_ACCESS_TOKEN": "/accessToken",
           "AIRTABLE_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.airtable.com/v0/meta/whoami",
-          "id": "/id",
-          "name": "/email"
-        },
         "scopes": {
           "default": [
             "user.email:read"

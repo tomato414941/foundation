@@ -22,14 +22,6 @@
           "HEROKU_ACCESS_TOKEN": "/accessToken",
           "HEROKU_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.heroku.com/account",
-          "headers": {
-            "accept": "application/vnd.heroku+json; version=3"
-          },
-          "id": "/id",
-          "name": "/email"
-        },
         "hint": "Send \"Accept: application/vnd.heroku+json; version=3\" with every request.",
         "scopes": {
           "default": [

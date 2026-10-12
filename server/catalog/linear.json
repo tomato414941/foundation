@@ -22,18 +22,6 @@
           "LINEAR_ACCESS_TOKEN": "/accessToken",
           "LINEAR_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.linear.app/graphql",
-          "method": "POST",
-          "json": {
-            "query": "{ viewer { id name email } }"
-          },
-          "id": "/data/viewer/id",
-          "name": [
-            "/data/viewer/email",
-            "/data/viewer/name"
-          ]
-        },
         "revoke": {
           "url": "https://api.linear.app/oauth/revoke",
           "style": "bearer"

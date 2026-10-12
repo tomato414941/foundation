@@ -22,14 +22,6 @@
           "GITLAB_ACCESS_TOKEN": "/accessToken",
           "GITLAB_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://gitlab.com/api/v4/user",
-          "id": "/id",
-          "name": [
-            "/username",
-            "/email"
-          ]
-        },
         "revoke": {
           "url": "https://gitlab.com/oauth/revoke",
           "style": "rfc7009"

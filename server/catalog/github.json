@@ -13,14 +13,6 @@
         "authorizeUrl": "https://github.com/login/oauth/authorize",
         "tokenUrl": "https://github.com/login/oauth/access_token",
         "tokenFormat": "json",
-        "identity": {
-          "url": "https://api.github.com/user",
-          "id": "/id",
-          "name": "/login",
-          "headers": {
-            "x-github-api-version": "2022-11-28"
-          }
-        },
         "revoke": {
           "url": "https://api.github.com/applications/{clientId}/grant",
           "style": "github"

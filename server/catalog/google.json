@@ -11,11 +11,6 @@
       "config": {
         "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
         "tokenUrl": "https://oauth2.googleapis.com/token",
-        "identity": {
-          "url": "https://openidconnect.googleapis.com/v1/userinfo",
-          "id": "/sub",
-          "name": "/email"
-        },
         "authorizeParams": {
           "access_type": "offline",
           "prompt": "consent",

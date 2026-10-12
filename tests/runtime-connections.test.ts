@@ -24,7 +24,6 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   const f = await delegatedFixture();
   const method = MethodDefinition.parse({ name: 'Provider', kind: 'oauth', config: {
     authorizeUrl: 'https://provider.example/authorize', tokenUrl: 'https://provider.example/token',
-    identity: { url: 'https://provider.example/account', id: '/id', name: '/name' },
     scopes: { default: ['read'] },
   } });
   const policy = (contentType: CustodyPolicy['contentType'], operations: CustodyPolicy['grants'][number]['operations']): CustodyPolicy => ({

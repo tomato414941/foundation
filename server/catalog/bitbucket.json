@@ -21,14 +21,6 @@
           "BITBUCKET_ACCESS_TOKEN": "/accessToken",
           "BITBUCKET_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.bitbucket.org/2.0/user",
-          "id": "/uuid",
-          "name": [
-            "/username",
-            "/display_name"
-          ]
-        },
         "scopes": {
           "default": [],
           "separator": " "

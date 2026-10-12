@@ -22,14 +22,6 @@
           "NETLIFY_ACCESS_TOKEN": "/accessToken",
           "NETLIFY_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.netlify.com/api/v1/user",
-          "id": "/id",
-          "name": [
-            "/email",
-            "/full_name"
-          ]
-        },
         "scopes": {
           "default": [],
           "separator": " "

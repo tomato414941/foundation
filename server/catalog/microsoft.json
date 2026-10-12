@@ -32,15 +32,6 @@
           "MICROSOFT_ACCESS_TOKEN": "/accessToken",
           "MICROSOFT_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://graph.microsoft.com/v1.0/me",
-          "id": "/id",
-          "name": [
-            "/mail",
-            "/userPrincipalName",
-            "/displayName"
-          ]
-        },
         "hint": "Scopes are Microsoft Graph permissions such as Mail.Read, Files.ReadWrite or Calendars.ReadWrite.",
         "scopes": {
           "default": [

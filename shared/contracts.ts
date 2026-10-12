@@ -175,6 +175,7 @@ export const OAuthDefinition = z.object({
   issuer: z.url().optional(),
   authorizeUrl: UrlTemplate.optional(),
   tokenUrl: UrlTemplate,
+  // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
   identity: z
     .object({
       url: UrlTemplate.optional(),
@@ -211,6 +212,7 @@ export const OAuthDefinition = z.object({
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),
   outputs: OutputMap,
+  // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
   identity: z.object({
     url: UrlTemplate,
     headers: z.record(z.string(), z.string()),

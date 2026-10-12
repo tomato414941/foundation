@@ -22,14 +22,6 @@
           "BOX_ACCESS_TOKEN": "/accessToken",
           "BOX_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.box.com/2.0/users/me",
-          "id": "/id",
-          "name": [
-            "/login",
-            "/name"
-          ]
-        },
         "revoke": {
           "url": "https://api.box.com/oauth2/revoke",
           "style": "rfc7009"

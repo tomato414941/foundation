@@ -22,17 +22,6 @@
           "HUBSPOT_ACCESS_TOKEN": "/accessToken",
           "HUBSPOT_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.hubapi.com/oauth/v1/access-tokens/{accessToken}",
-          "id": [
-            "/hub_id",
-            "/user_id"
-          ],
-          "name": [
-            "/user",
-            "/hub_domain"
-          ]
-        },
         "revoke": {
           "url": "https://api.hubapi.com/oauth/v1/refresh-tokens/{refreshToken}",
           "style": "delete"

@@ -22,14 +22,6 @@
           "SPOTIFY_ACCESS_TOKEN": "/accessToken",
           "SPOTIFY_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.spotify.com/v1/me",
-          "id": "/id",
-          "name": [
-            "/email",
-            "/display_name"
-          ]
-        },
         "scopes": {
           "default": [],
           "separator": " ",

@@ -141,8 +141,7 @@ test('初期スコープを選び直し、必須スコープと選択内容を�
     const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources',
       { method: 'POST', body: { kind: 'method', name: 'Scoped application', definition: {
         name: 'Scoped application', kind: 'oauth', config: { grantType: 'client_credentials',
-          tokenUrl: 'https://provider.example/token', scopes: { default: ['read'], required: ['identity'] },
-          identity: { from: 'app', id: '/clientId', name: '/clientId' } },
+          tokenUrl: 'https://provider.example/token', scopes: { default: ['read'], required: ['identity'] } },
       } } }, Resource);
     const app = await f.saveApp(method.id);
     const saved = await f.saveConnection({ methodId: method.id, appId: app.id,

@@ -428,7 +428,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST', body: {
     kind: 'method', name: 'Function OAuth', definition: {
     name: 'Function OAuth', kind: 'oauth', config: { authorizeUrl: 'https://service.example/authorize', tokenUrl: 'https://service.example/token',
-      scopes: { default: ['read'] }, identity: { url: 'https://service.example/account', id: '/id', name: '/name' } },
+      scopes: { default: ['read'] } },
   } } }, Resource);
   const app = await f.saveApp(method.id, 'Function application');
   if (app.kind !== 'app') throw new Error('Expected an application.');

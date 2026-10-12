@@ -22,14 +22,6 @@
           "CALENDLY_ACCESS_TOKEN": "/accessToken",
           "CALENDLY_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.calendly.com/users/me",
-          "id": "/resource/uri",
-          "name": [
-            "/resource/email",
-            "/resource/name"
-          ]
-        },
         "revoke": {
           "url": "https://auth.calendly.com/oauth/revoke",
           "style": "rfc7009"

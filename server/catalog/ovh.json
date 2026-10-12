@@ -11,11 +11,6 @@
         "tokenUrl": "{+tokenUrl}",
         "clientAuth": "body",
         "pkce": false,
-        "identity": {
-          "from": "app",
-          "id": "/clientId",
-          "name": "/clientId"
-        },
         "defaults": {},
         "scopes": {
           "default": [
@@ -147,7 +142,7 @@
           "OVH_ENDPOINT": "/endpoint",
           "OVH_API_REGION": "/apiRegion"
         },
-        "hint": "Use AK, AS, and CK issued for the selected account API region. Include GET /auth/details and GET /auth/currentCredential to verify the account and allowed API routes. OVHcloud SDKs accept OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY, and OVH_ENDPOINT."
+        "hint": "Use AK, AS, and CK issued for the selected account API region. OVHcloud SDKs accept OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY, and OVH_ENDPOINT."
       }
     },
     "consumer_key": {
@@ -214,7 +209,7 @@
           "OVH_ENDPOINT": "/endpoint",
           "OVH_API_REGION": "/apiRegion"
         },
-        "hint": "Use the Application Key and Application Secret of an OVHcloud API application for this account region. Enter one HTTP method and API path per permission. The customer approves these permissions on OVHcloud. The consumer key is encrypted on the selected executor."
+        "hint": "Use the Application Key and Application Secret of an OVHcloud API application for this account region. Enter one HTTP method and API path per permission. The customer approves these permissions on OVHcloud."
       }
     },
     "pat": {
@@ -269,21 +264,6 @@
             "note": "Issue this token for an IAM local user with the required permissions."
           }
         ],
-        "identity": {
-          "url": "{+apiBaseUrl}/auth/details",
-          "headers": {
-            "Authorization": "Bearer {token}"
-          },
-          "id": [
-            "/identities/0",
-            "/account"
-          ],
-          "name": [
-            "/description",
-            "/user",
-            "/account"
-          ]
-        },
         "outputs": {
           "OVH_ACCESS_TOKEN": "/token",
           "OVH_API_BASE_URL": "/apiBaseUrl",

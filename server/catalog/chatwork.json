@@ -22,14 +22,6 @@
           "CHATWORK_ACCESS_TOKEN": "/accessToken",
           "CHATWORK_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.chatwork.com/v2/me",
-          "id": "/account_id",
-          "name": [
-            "/name",
-            "/chatwork_id"
-          ]
-        },
         "scopes": {
           "default": [
             "users.profile.me:read",

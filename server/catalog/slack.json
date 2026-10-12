@@ -23,12 +23,6 @@
           "SLACK_TEAM_ID": "/account",
           "SLACK_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://slack.com/api/auth.test",
-          "method": "POST",
-          "id": "/team_id",
-          "name": "/team"
-        },
         "revoke": {
           "url": "https://slack.com/api/auth.revoke",
           "style": "bearer"

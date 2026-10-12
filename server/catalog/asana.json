@@ -22,14 +22,6 @@
           "ASANA_ACCESS_TOKEN": "/accessToken",
           "ASANA_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://app.asana.com/api/1.0/users/me",
-          "id": "/data/gid",
-          "name": [
-            "/data/email",
-            "/data/name"
-          ]
-        },
         "revoke": {
           "url": "https://app.asana.com/-/oauth_revoke",
           "style": "rfc7009"

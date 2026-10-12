@@ -22,14 +22,6 @@
           "DIGITALOCEAN_ACCESS_TOKEN": "/accessToken",
           "DIGITALOCEAN_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "from": "token",
-          "id": "/info/uuid",
-          "name": [
-            "/info/email",
-            "/info/name"
-          ]
-        },
         "scopes": {
           "default": [
             "read"

@@ -22,12 +22,6 @@
           "ZOOM_ACCESS_TOKEN": "/accessToken",
           "ZOOM_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "identity": {
-          "url": "https://api.zoom.us/v2/users/me",
-          "id": "/id",
-          "optional": true,
-          "name": "/email"
-        },
         "revoke": {
           "url": "https://zoom.us/oauth/revoke",
           "style": "rfc7009"

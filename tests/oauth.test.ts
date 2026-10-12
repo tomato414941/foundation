@@ -20,7 +20,6 @@ const definition = (options: Record<string, unknown> = {}) =>
   OAuthDefinition.parse({
     authorizeUrl: 'https://provider.test/authorize',
     tokenUrl: 'https://provider.test/token',
-    identity: { from: 'token', id: '/account_id', name: '/account_name' },
     revoke: { url: 'https://provider.test/revoke' },
     ...options,
   });
@@ -241,7 +240,6 @@ test('アプリ認証のClient IDと既定値を利用する値に反映する',
   const spec = definition({ grantType: 'client_credentials', authorizeUrl: undefined,
     tokenUrl: '{+apiBaseUrl}/token', defaults: { apiBaseUrl: 'https://provider.test', label: 'Default name' },
     fields: [{ name: 'label', label: 'Account name', required: false }],
-    identity: { from: 'app', id: '/clientId', name: '/label' },
     outputs: { ACCESS_TOKEN: '/accessToken', CLIENT_ID: '/clientId', API_BASE_URL: '/apiBaseUrl' } });
   const provider = new Provider(request => {
     assert.equal(request.url, 'https://provider.test/token');
@@ -394,11 +392,6 @@ test('GitHubのJSON応答からトークンを取得し、専用APIで認可を�
       assert.equal(body.client_secret, githubApp.clientSecret);
       return response({ access_token: 'github-access', token_type: 'bearer', scope: 'repo' });
     }
-    if (request.url === spec.identity!.url)
-      return {
-        ...response({ id: 123, login: 'person' }),
-        headers: { 'x-oauth-scopes': 'repo, read:org' },
-      };
     assert.equal(request.url, 'https://api.github.com/applications/github-client/grant');
     assert.equal(request.method, 'DELETE');
     assert.equal(
@@ -428,10 +421,6 @@ test('Googleのトークンを取得し、アプリ認証不要の失効要求�
         refresh_token: 'google-refresh',
         expires_in: 3600,
       });
-    if (request.url === spec.identity!.url) {
-      assert.equal(request.headers?.authorization, 'Bearer google-access');
-      return response({ sub: 'google-account', email: 'person@example.com', email_verified: true });
-    }
     assert.equal(request.url, spec.revoke!.url);
     assert.deepEqual(Object.fromEntries(new URLSearchParams(String(request.body))), {
       token: 'google-refresh',
