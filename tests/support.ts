@@ -20,9 +20,12 @@ import { KeySharing } from '../server/key-sharing.js';
 import { Billing, StripePayments } from '../server/billing.js';
 import type { PaymentProvider } from '../server/billing.js';
 
-export const databaseUrl =
-  process.env.TEST_DATABASE_URL ??
-  'postgres://foundation:foundation-local-test-only@127.0.0.1:55473/foundation_rebuild';
+function testDatabaseUrl() {
+  const value = process.env.TEST_DATABASE_URL;
+  if (!value) throw new Error('Run npm test or npm run test:ui, or set TEST_DATABASE_URL.');
+  return value;
+}
+export const databaseUrl = testDatabaseUrl();
 export class TestMailer implements Mailer {
   readonly enabled = true;
   readonly sent: Array<{ address: string; link: string; locale: 'ja' | 'en' }> = [];
