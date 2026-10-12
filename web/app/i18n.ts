@@ -531,6 +531,7 @@ const words: Record<string, [string, string]> = {
   'state.cancelled': ['取消済み', 'Cancelled'],
   'state.accepted': ['承諾済み', 'Accepted'],
   authorizedUsers: ['使用を許可する人・AI', 'Authorized people and agents'],
+  connectionName: ['接続', 'Connection'],
   authorizeConnection: ['使用許可を変更', 'Change use permissions'],
   connectionPermissionHelp: ['選んだ人・AIの端末へ認証情報を共有し、30日間の使用を許可します。', 'Share credentials with the selected people and agents and authorize use for 30 days.'],
   execution: ['実行', 'Execution'],

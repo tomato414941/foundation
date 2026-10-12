@@ -725,14 +725,23 @@ class BrowserTests(unittest.TestCase):
             trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
                 capture_output=True, text=True, env=environment)
             self.assertEqual(trusted.returncode, 0, trusted.stderr)
-            owner.goto(connection_path)
-            owner.get_by_role("link", name="使用許可を変更", exact=True).click()
-            expect(owner.locator("main")).to_contain_text("Chancellor Rigel")
-            owner.get_by_role("checkbox", name="dev-us の AI", exact=True).check()
+            connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
+            permission = subprocess.run(["node", "cli/dist/cli.mjs", "execution", "start", "--body", json.dumps({
+                "responderId": principal["id"], "message": "dev-us の AIでモデルを保存・取得します。",
+                "operations": [{"name": "connection.authorize", "input": {
+                    "ownerId": principal["id"], "connectionId": connection_id,
+                    "version": connection["version"], "users": [agent["id"]]
+                }}]
+            })], capture_output=True, text=True, env=environment)
+            self.assertEqual(permission.returncode, 0, permission.stderr)
+            permission_execution = json.loads(permission.stdout)
+            owner.goto(ORIGIN + "/requests/" + permission_execution["requests"][0])
+            expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
+            expect(owner.get_by_text("dev-us の AI", exact=True).last).to_be_visible()
+            expect(owner.get_by_text("使用を許可する人・AI", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
-            owner.get_by_role("button", name="保存", exact=True).click()
-            owner.wait_for_url("**/executions/*")
+            owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
             self.assertEqual(connection["ownerId"], principal["id"])

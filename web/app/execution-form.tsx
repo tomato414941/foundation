@@ -17,7 +17,8 @@ import { visibleConnectionFields } from '../../shared/connection-fields';
 export async function loadExecutionForm(invocation: DefinitionCall) {
   const ownerId = String(invocation.input.ownerId);
   const usesMethod = invocation.name === 'connection.connect' || invocation.name === 'app.save';
-  const [methods, owned, shared, owner] = await Promise.all([
+  const authorizing = invocation.name === 'connection.authorize';
+  const [methods, owned, shared, owner, connection, users] = await Promise.all([
     usesMethod ? api('/connection-methods', {}, listOf(CatalogMethod)) : { items: [] },
     invocation.name === 'connection.connect' ? api('/principals/' + ownerId + '/resources?kind=app&limit=200', {}, listOf(Resource))
       .catch(error => { if (error instanceof ApiFailure && error.status === 403) return { items: [] }; throw error; }) : { items: [] },
@@ -26,6 +27,9 @@ export async function loadExecutionForm(invocation: DefinitionCall) {
       if (error instanceof ApiFailure && error.status === 403) return { name: ownerId };
       throw error;
     }),
+    authorizing ? api('/resources/' + invocation.input.connectionId, {}, Resource) : null,
+    authorizing ? Promise.all((Array.isArray(invocation.input.users) ? invocation.input.users : []).map(id =>
+      api('/identities/' + String(id), {}, Principal.pick({ id: true, name: true, publicKey: true })))) : [],
   ]);
   const method = methods.items.find(item => item.id === invocation.input.methodId);
   const environments = method?.kind === 'token' || invocation.name === 'connection.authorize' ? [] : await availableEnvironments(ownerId);
@@ -34,7 +38,7 @@ export async function loadExecutionForm(invocation: DefinitionCall) {
     item.data.methodId === invocation.input.methodId && item.permissions.includes('use') &&
     Object.entries(preparedFields ?? {}).every(([name, value]) => !value || item.data.fields[name] === value))
     .map(item => [item.id, item])).values()];
-  return { invocation, environments, method, apps, owner };
+  return { invocation, environments, method, apps, owner, connection, users };
 }
 export type ExecutionFormData = Awaited<ReturnType<typeof loadExecutionForm>>;
 
@@ -62,7 +66,7 @@ export function executionSubmission(data: ExecutionFormData, form: FormData): { 
       material: { value: formText(form, 'value'), clientSecret: formText(form, 'clientSecret') || undefined,
         fields: connectionFields(form) } };
   }
-  if (name === 'function.save') return { input, material: {} };
+  if (name === 'function.save' || name === 'connection.authorize') return { input, material: {} };
   return { input: { ...input, environmentId: input.environmentId ?? formText(form, 'environmentId') }, material: {} };
 }
 
@@ -72,9 +76,15 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
   const [environmentId, setEnvironmentId] = useState(String(input.environmentId ?? definition?.environmentId ?? ''));
   const executor = data.environments.find(item => item.id === environmentId);
   const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId || definition?.environmentId;
+  const usesEnvironment = ['run.execute', 'function.save', 'variable.save', 'app.save', 'connection.revoke'].includes(name) ||
+    name === 'connection.connect' && data.method?.kind !== 'token';
   const existing: ResourceView | null = null;
   return <div className="flex min-w-0 flex-col gap-6">
     <Detail label={t('owner')}>{data.owner.name}</Detail>
+    {name === 'connection.authorize' && <>
+      <Detail label={t('connectionName')}>{data.connection?.name}</Detail>
+      <Detail label={t('authorizedUsers')}>{data.users.map(user => user.name).join(', ') || '—'}</Detail>
+    </>}
     {input.name ? <Detail label={t('name')}>{String(input.name)}</Detail> : ['variable.save', 'app.save', 'function.save', 'connection.connect'].includes(name) &&
       <InputField name="name" label={t('name')} defaultValue={data.method?.name ?? ''} required />}
     {data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
@@ -89,7 +99,7 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
         preparedFields={input.fields as Record<string, string> | undefined}
         clientId={typeof input.clientId === 'string' && input.clientId ? input.clientId : undefined} />
     </>}
-    {data.method?.kind !== 'token' && (Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
+    {usesEnvironment && (Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
       {input.environmentIds.map(id => data.environments.find(item => item.id === id)?.name ?? String(id)).join(', ') || '—'}
     </Detail> : fixedEnvironment ? <Detail label={t('executionDestination')}>
       {data.environments.find(item => item.id === fixedEnvironment)?.name ?? fixedEnvironment}
