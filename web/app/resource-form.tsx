@@ -443,7 +443,7 @@ export default function ResourceForm() {
                     <SelectField
                       label={t('service')}
                       value={serviceId || 'none'}
-                      disabled={!!existing && data.kind !== 'connection'}
+                      disabled={!!existing && !(existing.kind === 'connection' && !existing.data.services.length)}
                       onValueChange={(value) => {
                         const selectedId = value === 'none' ? '' : value;
                         setServiceId(selectedId);

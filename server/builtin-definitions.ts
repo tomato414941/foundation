@@ -238,6 +238,16 @@ export function builtinDefinitions(services: Services) {
     try { return { ...input, fields: publicConnectionFields(connectionMethod(method).fields, z.record(z.string(), z.string()).parse(input.fields)) }; }
     catch (error) { if (error instanceof ConnectionFieldError) fail(400, error.code, error.message); throw error; }
   };
+  // Saved secrets carry over when a connection changes its method, so keep it with the service it belongs to.
+  const sameService = async (who: Parameters<Catalog['method']>[0], input: { connectionId?: string; methodId: string }) => {
+    if (!input.connectionId) return;
+    const previous = String((await resources.get(input.connectionId)).data.methodId);
+    if (previous === input.methodId) return;
+    const services = await catalog.servicesForMethod(who, previous);
+    const next = new Set((await catalog.servicesForMethod(who, input.methodId)).map(service => service.id));
+    if (services.length && !services.some(service => next.has(service.id)))
+      fail(409, 'service_changed', 'Create a new connection for another service.');
+  };
   const requireFields = async (who: Parameters<Catalog['method']>[0], input: { methodId: string; fields?: Record<string, string> },
     metadata: Record<string, C.JsonValue>) => {
     await reviewFields(who, { methodId: input.methodId, fields: metadata.fields ?? {} });
@@ -350,14 +360,17 @@ export function builtinDefinitions(services: Services) {
       review: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, z.string().parse(input.methodId)));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        await sameService(who, z.object({ connectionId: C.Id.optional(), methodId: z.string() }).parse(input));
         return { ...await reviewFields(who, input), methodDigest };
       },
       resolve: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, input.methodId));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        await sameService(who, input);
         return { ...await reviewFields(who, input), methodDigest };
       },
       complete: async (who, input, proof) => {
+        await sameService(who, input);
         const method = await catalog.method(who, input.methodId), write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
         const previous = input.connectionId ? await custody.get(input.connectionId) : null;
         if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||

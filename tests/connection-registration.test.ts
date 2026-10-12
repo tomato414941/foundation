@@ -209,3 +209,15 @@ test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接�
   assert.deepEqual(current.content.policy.grants, previous.content.policy.grants);
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(custom.id));
 });
+
+test('既存の接続を同じサービスの別の方式で保存し直し、別のサービスの方式では保存しない', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const saved = await f.saveConnection({ methodId: 'ovh:pat', name: 'OVHcloud', fields: { apiRegion: 'ca', token: 'private-token' } });
+  await assert.rejects(f.saveConnection({ methodId: 'gitlab:token', connectionId: saved.id, name: 'OVHcloud', fields: { token: '' } }),
+    { code: 'service_changed' });
+  const moved = await f.saveConnection({ methodId: 'ovh:api_key', connectionId: saved.id, name: 'OVHcloud', fields: {
+    apiRegion: 'ca', applicationKey: 'application-key', applicationSecret: 'application-secret', consumerKey: 'consumer-key' } });
+  assert.equal(moved.id, saved.id);
+  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  assert.equal(material.methodId, 'ovh:api_key');
+});

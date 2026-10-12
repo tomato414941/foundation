@@ -605,6 +605,10 @@ const words: Record<string, [string, string]> = {
     'この項目を使用している接続や関数を先に解除してください。',
     'Remove connections or functions using this item first.',
   ],
+  'errors.service_changed': [
+    '接続のサービスは変更できません。別のサービスには新しい接続を作成してください。',
+    'A connection keeps its service. Create a new connection for another service.',
+  ],
   'errors.payment_required': ['支払い方法を登録してください。', 'Add a payment method to continue.'],
   'errors.quota_exceeded': ['使用量の上限に達しました。', 'The usage limit has been reached.'],
   'errors.storage_capacity': [
