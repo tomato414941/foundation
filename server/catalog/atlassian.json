@@ -55,11 +55,13 @@
             "name": "site",
             "label": "サイト",
             "placeholder": "example.atlassian.net",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.atlassian\\.net$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.atlassian\\.net$",
+            "secret": false
           },
           {
             "name": "email",
-            "label": "Atlassianアカウントのメールアドレス"
+            "label": "Atlassianアカウントのメールアドレス",
+            "secret": false
           },
           {
             "name": "token",

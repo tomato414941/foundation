@@ -14,6 +14,7 @@ export function connectionAuthorization(state: ConnectionState, facts: Connectio
     account: facts.accountId,
     accountVerified: facts.accountVerified,
     scopes: [...facts.scopes].sort(),
+    ...(state.method.kind === 'oauth' && state.fields && Object.keys(state.fields).length ? { fields: state.fields } : {}),
     ...facts.authorization,
     ...(state.state ? { state: state.state } : {}),
   };

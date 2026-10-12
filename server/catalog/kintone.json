@@ -21,7 +21,8 @@
             "label": "kintoneのドメイン",
             "required": true,
             "placeholder": "example.cybozu.com",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$",
+            "secret": false
           }
         ],
         "outputs": {
@@ -47,7 +48,8 @@
             "name": "domain",
             "label": "kintoneのドメイン",
             "placeholder": "example.cybozu.com",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$",
+            "secret": false
           },
           {
             "name": "token",

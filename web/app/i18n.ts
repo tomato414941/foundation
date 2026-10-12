@@ -283,8 +283,8 @@ const words: Record<string, [string, string]> = {
     'Use an app installed on a store in your own Shopify organization. Set its access scopes in the Dev Dashboard.',
   ],
   ovhApiRegionHelp: [
-    'アカウントを登録したAPI接続先（EU・CA・US）を選んでください。VPSの設置地域は注文時に指定します。',
-    'Choose the API region where your account was registered (EU, CA or US). Choose the VPS location when ordering.',
+    'アカウントを登録したAPI接続先（EU・CA・US）を使用します。VPSの設置地域は注文時に指定します。',
+    'Use the API region where your account was registered (EU, CA or US). Choose the VPS location when ordering.',
   ],
   ovhClientCredentialsHelp: [
     'OVHcloudで作成したサービスアカウントを使用してください。操作範囲はOVHcloudのIAMポリシーで設定します。スコープ「all」は全操作の許可を意味しません。',

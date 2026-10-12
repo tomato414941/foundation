@@ -65,6 +65,9 @@ export class ConnectionClient {
       (active.invocation.input.name && active.invocation.input.name !== input.name) ||
       (active.invocation.input.environmentId && active.invocation.input.environmentId !== input.environmentId))
       throw new Error('Use the connection and execution environment prepared by this operation.');
+    const preparedFields = active.invocation.input.fields as Record<string, string> | undefined;
+    for (const [key, value] of Object.entries(preparedFields ?? {})) if (value && input.fields?.[key] !== value)
+      throw new Error('Use the service settings prepared by this operation.');
     const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
       ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
       ...(!active.invocation.input.name ? { name: input.name } : {}) };

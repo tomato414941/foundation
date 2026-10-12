@@ -2,17 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { MethodDefinition, Resource, ServiceInputDefinition } from '../shared/contracts.js';
+import { AppMaterial } from '../shared/connections.js';
+import { canonical } from '../shared/authority.js';
+import { decode, encode } from '../shared/encryption.js';
 
 const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
   MethodDefinition.parse({ name, kind: 'token',
     config: { fields: [{ name: field, label: field, secret: true }], outputs: { [output]: '/' + field } } });
 
 test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実行でトークンを再取得する', async t => {
-  for (const [methodId, tokenUrl, apiBaseUrl] of [
-    ['ovh:client_credentials', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],
-    ['ovh:client_credentials_ca', 'https://ca.ovh.com/auth/oauth2/token', 'https://ca.api.ovh.com/1.0'],
-    ['ovh:client_credentials_us', 'https://us.ovhcloud.com/auth/oauth2/token', 'https://api.us.ovhcloud.com/1.0'],
-  ] as const) await t.test(methodId, async t => {
+  for (const [apiRegion, tokenUrl, apiBaseUrl] of [
+    ['eu', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],
+    ['ca', 'https://ca.ovh.com/auth/oauth2/token', 'https://ca.api.ovh.com/1.0'],
+    ['us', 'https://us.ovhcloud.com/auth/oauth2/token', 'https://api.us.ovhcloud.com/1.0'],
+  ] as const) await t.test(apiRegion, async t => {
+    const methodId = 'ovh:client_credentials';
     let grants = 0;
     const f = await flowFixture(request => {
       if (request.url === tokenUrl) {
@@ -27,7 +31,7 @@ test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実�
       assert.equal(request.headers?.authorization, 'Bearer ovh-access-2');
       return jsonResponse(['vps-test']);
     }); t.after(f.close);
-    const application = await f.saveApp(methodId);
+    const application = await f.saveApp(methodId, 'Application', { apiRegion });
     const started = await f.start({ methodId, appId: application.id });
     const reviewed = await f.tick(started.flow.id);
     assert.equal(reviewed.kind, 'review', JSON.stringify(reviewed));
@@ -39,8 +43,33 @@ test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実�
     assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', apiBaseUrl + '/vps'))?.ok, true);
     const renewed = await f.client.read(saved.id);
     assert.equal(renewed.content.materialRevision, 2);
+    const current = await f.client.api.json('/api/resources/' + saved.id, {}, Resource);
+    if (current.kind === 'connection') {
+      assert.deepEqual(current.data.fields, { apiRegion });
+      assert.equal(current.data.settings.find(setting => setting.name === 'apiRegion')?.value, apiRegion.toUpperCase());
+    }
     assert.equal(grants, 2);
   });
+});
+
+test('接続のAPI区分を維持し、アプリの設定が変わった場合は再接続を要求する', async t => {
+  let grants = 0;
+  const f = await flowFixture(() => {
+    grants++;
+    return jsonResponse({ access_token: 'fixed-region-token', token_type: 'Bearer', expires_in: 10, scope: 'all' });
+  }); t.after(f.close);
+  const application = await f.saveApp('ovh:client_credentials', 'OVH application', { apiRegion: 'ca' });
+  const started = await f.start({ methodId: 'ovh:client_credentials', appId: application.id });
+  assert.equal((await f.tick(started.flow.id)).kind, 'review');
+  const connection = await f.accept(started.flow.id), previous = await f.client.read(application.id);
+  const material = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(application.id))));
+  const changed = { ...material, fields: { apiRegion: 'eu' } };
+  await f.client.save(application.name, encode(canonical(changed)), { ...previous.content.policy, revision: previous.content.policy.revision + 1 },
+    { previous, metadata: { ...previous.content.metadata, fields: { apiRegion: 'eu' } } });
+  const result = await f.http(connection.id, 'OVH_ACCESS_TOKEN');
+  assert.equal(result?.ok, false);
+  assert.equal(result?.error?.code, 'app_changed');
+  assert.equal(grants, 1);
 });
 
 test('Shopifyのアプリ認証で接続先と権限を確認して保存し、利用時にトークンを更新する', async t => {

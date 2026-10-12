@@ -15,6 +15,8 @@ import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { canonical } from '../shared/authority.js';
 import { AppMaterial } from '../shared/connections.js';
+import { connectionMethod } from '../shared/connection-methods.js';
+import { visibleConnectionFields } from '../shared/connection-fields.js';
 import { ContentTypes } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
 import { Task } from '../shared/runtime-protocol.js';
@@ -70,6 +72,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     const policy = await client.policy(f.owner.actor.id, ContentTypes.clientCredential, [f.environment]);
     return client.save(name, encode(canonical(material)), policy, { metadata: {
       methodId, clientId: material.clientId, generation: material.generation,
+      fields: visibleConnectionFields(connectionMethod(await method(methodId)).fields, fields),
     } });
   };
   async function start(input: { methodId: string; fields?: Record<string, string>; name?: string;

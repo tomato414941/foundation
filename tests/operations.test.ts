@@ -79,7 +79,7 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
     return send(path, options, schema);
   };
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
-    { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'ovh:client_credentials', name: 'OVH account' } },
+    { name: 'connection.connect', input: { ownerId: '$approver', methodId: 'ovh:client_credentials', fields: { apiRegion: 'eu' }, name: 'OVH account' } },
   ] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {
     configuration: [{ environmentId: f.environment.manifest.id, clientId: 'ovh-service-account' }],
@@ -109,6 +109,27 @@ test('OVHのIDとSecretを接続時に暗号化して保存し、別のクライ
   assert.deepEqual(history.items.filter(item => !before.items.some(saved => saved.id === item.id)).map(item => item.id), [asked.executionId]);
   assert.equal(history.items.find(item => item.id === asked.executionId)?.state, 'succeeded');
   await assert.rejects(sender.json('/api/operation-continuations/' + start.flow.id), { code: 'forbidden' });
+});
+
+test('準備した接続設定を維持して不足する設定を補い、秘密の値を暗号化して保存する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const handler = new ExecutionClient(f.client, f.connections);
+  const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
+    { name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'zendesk:token',
+      name: 'Support account', fields: { subdomain: 'workspace' } } },
+  ] } }, Execution);
+  await handler.configure(execution.id, { fields: { email: 'owner@example.com' } });
+  const configured = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
+  assert.deepEqual(configured.waiting?.invocation.input.fields, { subdomain: 'workspace', email: 'owner@example.com' });
+  await assert.rejects(handler.configure(execution.id, { fields: { subdomain: 'other' } }), { code: 'operation_changed' });
+  await assert.rejects(handler.configure(execution.id, { fields: { token: 'private-token' } }), { code: 'encrypted_input_required' });
+  const result = await handler.continue(execution.id, { fields: { token: 'private-token' } });
+  if (!('kind' in result) || result.kind !== 'saved' || result.resource.kind !== 'connection') throw new Error('Expected a saved connection.');
+  assert.deepEqual(result.resource.data.fields, { subdomain: 'workspace', email: 'owner@example.com' });
+  const saved = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
+  assert.equal(saved.state, 'succeeded');
+  const material = JSON.parse(decode(await f.client.reveal(result.resource.id)));
+  assert.equal(material.fields.token, 'private-token');
 });
 
 test('承認したHTTP操作と署名した実行を結び付け、実行先が復号後に差し替えを拒否する', async t => {
@@ -300,7 +321,7 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   const handler = new ExecutionClient(f.client, connections);
   const execution = await creator.json('/api/executions', { method: 'POST', body: {
     responderId: f.owner.actor.id, message: 'Connect OVHcloud', operations: [{ name: 'connection.connect',
-      input: { ownerId: '$approver', methodId: 'ovh:client_credentials_ca', name: 'Direct OVH', environmentId: f.environment.manifest.id } }],
+      input: { ownerId: '$approver', methodId: 'ovh:client_credentials', fields: { apiRegion: 'ca' }, name: 'Direct OVH', environmentId: f.environment.manifest.id } }],
   } }, Execution);
   assert.equal(execution.wait, 'approval'); assert.equal(execution.creator.id, f.stranger.actor.id);
   assert.equal((await f.client.api.json('/api/requests/' + execution.requests[0], {}, ApprovalRequest)).to?.id, f.owner.actor.id);
@@ -308,6 +329,9 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   const responded = await f.client.api.json('/api/executions/' + execution.id + '/respond', { method: 'POST',
     body: { configuration: [{ clientId: 'direct-ovh-client' }] } }, Execution);
   assert.equal(responded.actorId, f.owner.actor.id); assert.equal(responded.wait, 'input');
+  assert.deepEqual(responded.waiting?.invocation.input.fields, { apiRegion: 'ca' });
+  await assert.rejects(handler.continue(execution.id, { clientSecret: 'direct-ovh-secret', fields: { apiRegion: 'eu' } }),
+    { code: 'operation_changed' });
   await assert.rejects(handler.configure(execution.id, { environmentId: f.stranger.actor.id }), { code: 'operation_changed' });
   const started = await handler.continue(execution.id, { clientSecret: 'direct-ovh-secret' });
   if (!('flow' in started)) throw new Error('Expected an OVH connection flow.');
@@ -319,6 +343,9 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
   const completed = await creator.json('/api/executions/' + execution.id, {}, Execution);
   assert.equal(completed.state, 'succeeded'); assert.equal(completed.id, execution.id);
   const resourceId = (completed.results[0] as { id: string }).id;
+  const connection = await f.client.api.json('/api/resources/' + resourceId, {}, Resource);
+  assert.equal(connection.kind, 'connection');
+  if (connection.kind === 'connection') assert.deepEqual(connection.data.fields, { apiRegion: 'ca' });
   await assert.rejects(creator.json('/api/resources/' + resourceId + '/custody'), { code: 'forbidden' });
   await assert.rejects(creator.json('/api/operation-continuations/' + started.flow.id), { code: 'forbidden' });
   const saved = await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [execution.id]);

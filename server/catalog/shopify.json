@@ -22,7 +22,8 @@
             "label": "ストア名",
             "required": true,
             "placeholder": "example（example.myshopify.com の場合）",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "secret": false
           }
         ],
         "outputs": {
@@ -60,7 +61,8 @@
             "label": "Store name",
             "required": true,
             "placeholder": "example",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "secret": false
           }
         ],
         "identity": {
@@ -93,7 +95,8 @@
             "name": "shop",
             "label": "ストア名",
             "placeholder": "example（example.myshopify.com の場合）",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "secret": false
           },
           {
             "name": "token",

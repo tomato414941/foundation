@@ -193,7 +193,7 @@ test('NotionのJSON形式で認可コードを交換し、応答のワークス�
 
 test('Shopifyの応答から接続し、更新用トークンで新しいアクセストークンを取得する', async () => {
   const spec = await builtin('shopify');
-  const shopifyApp = { ...app, fields: { shop: 'example', name: 'Example shop' } };
+  const shopifyApp = { ...app, fields: { shop: 'example' } };
   let exchanges = 0;
   const provider = new Provider((request) => {
     const form = new URLSearchParams(String(request.body));
@@ -248,6 +248,7 @@ test('アプリ認証で取得した権限と要求したスコープを区別�
 test('アプリ認証のClient IDと既定値を接続先の表示と利用する値に反映する', async () => {
   const spec = definition({ grantType: 'client_credentials', authorizeUrl: undefined,
     tokenUrl: '{+apiBaseUrl}/token', defaults: { apiBaseUrl: 'https://provider.test', label: 'Default name' },
+    fields: [{ name: 'label', label: 'Account name', required: false }],
     identity: { from: 'app', id: '/clientId', name: '/label' },
     outputs: { ACCESS_TOKEN: '/accessToken', CLIENT_ID: '/clientId', API_BASE_URL: '/apiBaseUrl' } });
   const provider = new Provider(request => {
@@ -265,12 +266,13 @@ test('アプリ認証のClient IDと既定値を接続先の表示と利用す�
 });
 
 test('OVHcloudのAPI接続先ごとにトークンを取得し同じサービスアカウントで再取得する', async () => {
-  for (const [method, endpoint, tokenUrl, apiBaseUrl] of [
-    ['client_credentials', 'ovh-eu', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],
-    ['client_credentials_ca', 'ovh-ca', 'https://ca.ovh.com/auth/oauth2/token', 'https://ca.api.ovh.com/1.0'],
-    ['client_credentials_us', 'ovh-us', 'https://us.ovhcloud.com/auth/oauth2/token', 'https://api.us.ovhcloud.com/1.0'],
+  for (const [apiRegion, endpoint, tokenUrl, apiBaseUrl] of [
+    ['eu', 'ovh-eu', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],
+    ['ca', 'ovh-ca', 'https://ca.ovh.com/auth/oauth2/token', 'https://ca.api.ovh.com/1.0'],
+    ['us', 'ovh-us', 'https://us.ovhcloud.com/auth/oauth2/token', 'https://api.us.ovhcloud.com/1.0'],
   ] as const) {
-    const spec = await builtin('ovh', method);
+    const spec = await builtin('ovh', 'client_credentials');
+    const account = { ...app, fields: { apiRegion } };
     let grants = 0;
     const provider = new Provider(request => {
       assert.equal(request.url, tokenUrl);
@@ -282,19 +284,33 @@ test('OVHcloudのAPI接続先ごとにトークンを取得し同じサービス
       return response({ access_token: 'ovh-access-' + ++grants, token_type: 'Bearer', expires_in: 10, scope: 'all' });
     });
     const oauth = new OAuth(provider);
-    const token = await oauth.clientCredentials(spec, app, spec.scopes.default);
+    const token = await oauth.clientCredentials(spec, account, spec.scopes.default);
     assert.equal(token.account, app.clientId);
     assert.equal(token.accountVerified, false);
     assert.deepEqual(token.scopes, ['all']);
     assert.equal(token.scopesStatus, 'reported');
-    const refreshed = await oauth.refresh(spec, app, token);
+    const refreshed = await oauth.refresh(spec, account, token);
     assert.equal(refreshed.account, app.clientId);
-    assert.deepEqual(oauth.outputs(spec, app, refreshed), {
+    assert.deepEqual(oauth.outputs(spec, account, refreshed), {
       OVH_ACCESS_TOKEN: 'ovh-access-2', OVH_CLIENT_ID: app.clientId, OVH_API_BASE_URL: apiBaseUrl,
-      OVH_ENDPOINT: endpoint, OVH_TOKEN_EXPIRES_AT: String(refreshed.expiresAt),
+      OVH_ENDPOINT: endpoint, OVH_API_REGION: apiRegion, OVH_TOKEN_EXPIRES_AT: String(refreshed.expiresAt),
     });
     assert.equal(grants, 2);
   }
+});
+
+test('サービスのAPI接続先を検証し、定義した選択肢から認証先を確定する', async () => {
+  const spec = await builtin('ovh', 'client_credentials');
+  const provider = new Provider(() => response({ access_token: 'validated-region', token_type: 'Bearer', expires_in: 3600 }));
+  const oauth = new OAuth(provider);
+  for (const [fields, code] of [
+    [{}, 'missing_field'],
+    [{ apiRegion: 'unknown' }, 'invalid_field'],
+    [{ apiRegion: 'ca', tokenUrl: 'https://unreviewed.test/token' }, 'invalid_field'],
+  ] as const) await assert.rejects(oauth.clientCredentials(spec, { ...app, fields }, ['all']), { code });
+  assert.equal(provider.requests.length, 0);
+  await oauth.clientCredentials(spec, { ...app, fields: { apiRegion: 'ca' } }, ['all']);
+  assert.equal(provider.requests[0]!.url, 'https://ca.ovh.com/auth/oauth2/token');
 });
 
 test('Shopifyのアプリ認証からストアと権限を確認し、有効期限が近づいたトークンを再取得する', async () => {

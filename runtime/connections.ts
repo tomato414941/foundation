@@ -100,6 +100,8 @@ export class Connections implements ExecutionExtension {
     const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);
     if (app.generation !== state.appGeneration)
       fail(409, 'app_changed', 'Reconnect this service with the current application.');
+    if (state.method.kind === 'oauth' && Object.entries(state.fields ?? {}).some(([key, value]) => app.fields[key] !== value))
+      fail(409, 'app_changed', 'Reconnect this service with the current application settings.');
     return app;
   }
   private async flow(id: string, intent: ExecutionIntent) {

@@ -5,6 +5,8 @@ import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Execution, 
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
+import { connectionMethod } from '../shared/connection-methods.js';
+import { publicConnectionFields, ConnectionFieldError } from '../shared/connection-fields.js';
 import { ContentTypes, Operations, permittedOperations } from '../shared/custody.js';
 import type { CustodyPolicy } from '../shared/custody.js';
 import type { Authorization } from './authorization.js';
@@ -230,6 +232,12 @@ export function builtinDefinitions(services: Services) {
       return input;
     } });
   const keyholder = async () => fail(400, 'keyholder_required', 'Continue this operation with your encryption keys.');
+  const reviewFields = async (who: Parameters<Catalog['method']>[0], input: Record<string, C.JsonValue>) => {
+    const method = await catalog.method(who, z.string().parse(input.methodId));
+    if (input.fields === undefined) return input;
+    try { return { ...input, fields: publicConnectionFields(connectionMethod(method).fields, z.record(z.string(), z.string()).parse(input.fields)) }; }
+    catch (error) { if (error instanceof ConnectionFieldError) fail(400, error.code, error.message); throw error; }
+  };
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
     proof: C.JsonValue, type: string, connection?: Queryable) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
@@ -247,14 +255,21 @@ export function builtinDefinitions(services: Services) {
       fail(409, 'operation_changed', 'Use the execution environments approved for this item.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
+    if ('methodId' in input) {
+      await reviewFields(who, { methodId: input.methodId, fields: write.content.metadata.fields ?? {} });
+      const fields = z.record(z.string(), z.string()).parse(write.content.metadata.fields ?? {});
+      if (Object.entries(input.fields ?? {}).some(([key, value]) => value && fields[key] !== value))
+        fail(409, 'operation_changed', 'Save the service settings approved for this application.');
+    }
     return resources.view(who, await custody.put(who, write, connection));
   };
   definitions.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
     { execution: 'keyholder', configure: ['environmentIds', 'name'], secret: pointer => pointer === '/value',
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.value) });
   definitions.define('app.save', AppSave, ['アプリを保存する', 'Save an application'], keyholder,
-    { execution: 'keyholder', configure: ['environmentIds', 'name', 'clientId'],
+    { execution: 'keyholder', configure: ['environmentIds', 'name', 'clientId', 'fields'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
+      review: reviewFields, resolve: reviewFields,
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
   definitions.define('function.save', FunctionSave, ['関数を保存する', 'Save a function'], keyholder,
     { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
@@ -319,7 +334,7 @@ export function builtinDefinitions(services: Services) {
       return resources.view(who, await custody.put(who, write));
     } });
   definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
-    { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId', 'users'],
+    { execution: 'keyholder', configure: ['environmentId', 'name', 'appId', 'clientId', 'users', 'fields'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       prepareInput: async (who, input, proof, connection) => {
         const method = await catalog.method(who, input.methodId);
@@ -327,18 +342,18 @@ export function builtinDefinitions(services: Services) {
           fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
         const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
           name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
-          clientId: input.clientId, environmentIds: [input.environmentId] }), proof, ContentTypes.clientCredential, connection);
-        return { ...input, appId: app.id };
+          clientId: input.clientId, fields: input.fields, environmentIds: [input.environmentId] }), proof, ContentTypes.clientCredential, connection);
+        return { ...input, appId: app.id, fields: app.kind === 'app' ? app.data.fields : input.fields };
       },
       review: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, z.string().parse(input.methodId)));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
-        return { ...input, methodDigest };
+        return { ...await reviewFields(who, input), methodDigest };
       },
       resolve: async (who, input) => {
         const methodDigest = await hash(await catalog.method(who, input.methodId));
         if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
-        return { ...input, methodDigest };
+        return { ...await reviewFields(who, input), methodDigest };
       },
       complete: async (who, input, proof, execution) => {
         const method = await catalog.method(who, input.methodId);

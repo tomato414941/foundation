@@ -89,11 +89,20 @@ export class DefinitionRegistry {
   }
   configure(input: DefinitionCall, values: Record<string, JsonValue>) {
     const invocation = structuredClone(input), definition = this.get(invocation.name);
+    const fill = (previous: JsonValue | undefined, value: JsonValue): JsonValue => {
+      if (previous == null || previous === '') return value;
+      if (typeof previous === 'object' && !Array.isArray(previous) && value && typeof value === 'object' && !Array.isArray(value)) {
+        const result = { ...previous };
+        for (const [key, next] of Object.entries(value)) result[key] = fill(result[key], next);
+        return result;
+      }
+      if (JSON.stringify(previous) !== JSON.stringify(value)) fail(400, 'operation_changed', 'Use the operation prepared by the requester.');
+      return previous;
+    };
     for (const [key, value] of Object.entries(values)) {
-      if (!definition.configure.includes(key) || (invocation.input[key] != null && invocation.input[key] !== '' &&
-        JSON.stringify(invocation.input[key]) !== JSON.stringify(value)))
+      if (!definition.configure.includes(key))
         fail(400, 'operation_changed', 'Use the operation prepared by the requester.');
-      invocation.input[key] = value;
+      invocation.input[key] = fill(invocation.input[key], value);
     }
     return invocation;
   }

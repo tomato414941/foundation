@@ -8,7 +8,7 @@ import type { ConnectionClient, FlowProgress } from './connection-client.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes, permittedOperations } from './custody.js';
 import { AppMaterial, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from './connections.js';
-import { connectionFields } from './connection-fields.js';
+import { connectionFields, suppliedConnectionFields, visibleConnectionFields } from './connection-fields.js';
 import { decode, encode } from './encryption.js';
 import { Task, RuntimeOperation } from './runtime-protocol.js';
 import type { TaskView } from './runtime-protocol.js';
@@ -77,6 +77,21 @@ export class ExecutionClient {
     const execution = await this.custody.api.json('/api/executions/' + Id.parse(id), {}, Execution);
     if (!execution.waiting) return execution;
     const plan = await this.plan(id), { name, input } = plan.invocation;
+    if (name === 'app.save' || name === 'connection.connect') {
+      const method = await this.method(String(input.methodId)), definitions = method.kind === 'aws' ? [] : method.config.fields;
+      let fields = visibleConnectionFields(definitions, material.fields ?? {});
+      if (name === 'connection.connect' && input.appId) {
+        const app = await this.custody.api.json('/api/resources/' + Id.parse(input.appId), {}, Resource);
+        if (app.kind !== 'app') throw new Error('Choose an OAuth application.');
+        fields = { ...app.data.fields, ...fields };
+      }
+      const prepared = input.fields as Record<string, string> | undefined;
+      const completed = suppliedConnectionFields(definitions, prepared ?? {}, fields);
+      if (Object.entries(fields).some(([key, value]) => prepared?.[key] !== value)) {
+        await this.configure(id, { fields: completed });
+        return this.continue(id, material);
+      }
+    }
     if (name === 'connection.authorize') {
       const permission = AuthorizeConnection.parse(input), previous = await this.custody.read(permission.connectionId);
       if (previous.version !== permission.version || previous.content.policy.ownerId !== permission.ownerId ||
@@ -108,12 +123,14 @@ export class ExecutionClient {
       if (name === 'app.save') {
         const application = AppSave.parse(input);
         const old = previous ? AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(previous.content.policy.id)))) : null;
-        const fields = { ...application.fields, ...material.fields };
+        const method = await this.method(application.methodId);
+        const fields = suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, application.fields ?? {}, material.fields ?? {});
         const same = old && old.methodId === application.methodId && old.clientId === application.clientId && canonical(old.fields) === canonical(fields);
         const app = AppMaterial.parse({ format: 1, methodId: application.methodId, clientId: application.clientId, fields,
           generation: same ? old.generation : crypto.randomUUID(),
           ...(material.clientSecret || old?.clientSecret ? { clientSecret: material.clientSecret || old?.clientSecret } : {}) });
-        bytes = encode(canonical(app)); metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation };
+        bytes = encode(canonical(app)); metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
+          fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, fields) };
       } else {
         if (material.value === undefined) throw new Error('Enter the value to save.');
         bytes = typeof material.value === 'string' ? encode(material.value) : material.value;
@@ -131,7 +148,8 @@ export class ExecutionClient {
         if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
           throw new Error('Choose a connection belonging to this owner.');
         const old = previous ? ConnectionMaterial.parse(JSON.parse(decode(await this.custody.reveal(connection.connectionId!)))) : null;
-        const fields = connectionFields(method.config.fields, material.fields ?? {}, old?.method.kind === 'token' ? old.fields : {});
+        const fields = connectionFields(method.config.fields,
+          suppliedConnectionFields(method.config.fields, connection.fields ?? {}, material.fields ?? {}), old?.method.kind === 'token' ? old.fields : {});
         const state = ConnectionMaterial.parse({ format: 2, methodId: connection.methodId, method,
           generation: crypto.randomUUID(), appId: null, appGeneration: null, fields });
         let policy = await this.custody.policy(connection.ownerId, ContentTypes.tokenSet, [], { previous: previous?.content.policy });
@@ -151,12 +169,13 @@ export class ExecutionClient {
       if (requiresApp(method) && !appId) {
         if (!connection.clientId) throw new Error('Enter the application client ID.');
         const app = AppMaterial.parse({ format: 1, methodId: connection.methodId, clientId: connection.clientId,
-          generation: crypto.randomUUID(), fields: material.fields ?? {},
+          generation: crypto.randomUUID(), fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
           ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}) });
         const environment = await this.custody.environment(connection.environmentId);
         const policy = await this.custody.policy(connection.ownerId, ContentTypes.clientCredential, [environment]);
         const saved = await this.custody.save((connection.name ?? method.name).slice(0, 185) + ' application', encode(canonical(app)), policy,
-          { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation },
+          { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
+              fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, app.fields) },
             commit: async write => {
               const prepared = await this.custody.api.json('/api/executions/' + id + '/preparation', { method: 'POST',
                 body: { index: plan.index, proof: write } }, Execution);
@@ -166,7 +185,9 @@ export class ExecutionClient {
       }
       return this.connections.start({ ownerId: connection.ownerId, environmentId: connection.environmentId,
         name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
-        connectionId: connection.connectionId, fields: material.fields, scopes: material.scopes, aws: material.aws,
+        connectionId: connection.connectionId,
+        fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
+        scopes: material.scopes, aws: material.aws,
         environments: connection.environments, redirectUri: connection.redirectUri,
         execution: { id, index: plan.index } });
     }

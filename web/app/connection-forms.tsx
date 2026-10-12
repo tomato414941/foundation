@@ -21,15 +21,13 @@ interface ConnectionForm {
   Preparation?: ComponentType<ConnectionPreparationProps & { active: boolean }>;
   settings?(form: FormData, previous?: ConnectionState): { scopes?: string[]; aws?: ReturnType<typeof awsConnectionSettings> };
   needsMaterial?(form: FormData): boolean;
-  console(method: CatalogConnectionMethod): string | undefined;
 }
 const forms: Record<ConnectionFamily, ConnectionForm> = {
-  oauth: { Fields: OAuthConnectionFields, Help: OAuthConnectionHelp, console: method => method.console,
+  oauth: { Fields: OAuthConnectionFields, Help: OAuthConnectionHelp,
     settings: form => form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {} },
-  token: { Fields: ({ purpose, method, existing, appMaterial }) => purpose === 'connection' && method?.kind === 'token'
-    ? <ServiceFields method={method} fields={method.config.fields} existing={existing} appMaterial={appMaterial} /> : null,
-    console: method => method.kind === 'token' ? method.config.console ?? method.console : method.console },
-  aws: { console: method => method.console,
+  token: { Fields: props => props.purpose === 'connection' && props.method?.kind === 'token'
+    ? <ServiceFields {...props} method={props.method} fields={props.method.config.fields} /> : null },
+  aws: {
     Preparation: ({ active, initial, newConnection, executor }) => <AwsConnectionForm active={active}
       initial={initial?.aws} newConnection={newConnection} executor={executor} />,
     settings: (form, previous) => ({ aws: awsConnectionSettings(form, previous?.aws) }),

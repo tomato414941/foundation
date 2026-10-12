@@ -2,14 +2,16 @@ import { useTranslation } from 'react-i18next';
 import type { ConnectionView } from '../../shared/contracts';
 import { Detail } from './components';
 import { AwsConnectionFacts } from './aws-connection-facts';
+import { ConnectionSettings } from './connection-settings';
 export type ConnectionFactsValue = Pick<
   ConnectionView['data'],
-  'account' | 'accountId' | 'accountVerified' | 'scopes' | 'scopesStatus' | 'aws'
+  'account' | 'accountId' | 'accountVerified' | 'scopes' | 'scopesStatus' | 'aws' | 'methodId' | 'settings'
 >;
 export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
   const { t } = useTranslation();
   return (
     <>
+      <ConnectionSettings methodId={value.methodId} settings={value.settings} />
       <Detail label={t('accountName')}>
         {value.account || t('accountUnverified')}
         {value.account && !value.accountVerified && (

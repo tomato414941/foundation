@@ -944,8 +944,9 @@ class BrowserTests(unittest.TestCase):
         environment_path = self.executor(page, principal)
         environment_id = environment_path.rsplit("/", 1)[1]
         root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/apps/new?method=ovh:client_credentials_ca")
-        expect(page.get_by_text("アカウントを登録したAPI接続先（EU・CA・US）を選んでください。", exact=False)).to_be_visible()
+        page.goto(root + "/apps/new?method=ovh:client_credentials")
+        expect(page.get_by_text("アカウントを登録したAPI接続先（EU・CA・US）を使用します。", exact=False)).to_be_visible()
+        self.select(page, "アカウントのAPI接続先", "CA")
         page.get_by_role("textbox", name="名前", exact=True).fill("OVH application")
         page.get_by_label("クライアントID", exact=True).fill("browser-client")
         page.get_by_label("クライアントシークレット", exact=True).fill("browser-client-secret")
@@ -962,8 +963,9 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="Saved OVH application", exact=True)).to_be_visible()
         after = page.request.get(ORIGIN + "/api/resources/" + application_id).json()
         self.assertEqual(after["data"]["generation"], before["data"]["generation"])
-        self.assertEqual(after["data"]["methodId"], "ovh:client_credentials_ca")
-        page.goto(root + "/services/new?method=ovh:client_credentials_ca")
+        self.assertEqual(after["data"]["methodId"], "ovh:client_credentials")
+        self.assertEqual(after["data"]["fields"], {"apiRegion": "ca"})
+        page.goto(root + "/services/new?method=ovh:client_credentials")
         expect(page.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("Saved OVH application")
         expect(page.get_by_label("スコープ", exact=True)).to_have_value("all")
         self.select(page, "実行環境", "Browser executor")
@@ -1467,8 +1469,17 @@ class BrowserTests(unittest.TestCase):
                 receiver, principal = self.passkey_account("Direct OVH owner")
                 sender = self.passkey_account("Direct OVH initiator")[0] if handoff else receiver
                 environment = self.executor(receiver, principal).rsplit("/", 1)[1]
+                if not handoff:
+                    receiver.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method=ovh:client_credentials")
+                    self.select(receiver, "アカウントのAPI接続先", "EU")
+                    receiver.get_by_role("textbox", name="名前", exact=True).fill("EU application")
+                    receiver.get_by_label("クライアントID", exact=True).fill("eu-client")
+                    receiver.get_by_label("クライアントシークレット", exact=True).fill("eu-secret")
+                    receiver.get_by_role("checkbox", name="Browser executor", exact=True).check()
+                    receiver.get_by_role("button", name="作成", exact=True).click()
+                    expect(receiver.get_by_role("heading", name="EU application", exact=True)).to_be_visible()
                 body = {"operations": [{"name": "connection.connect", "input": {
-                    "ownerId": principal["id"], "methodId": "ovh:client_credentials_ca", "name": "Direct OVH account"
+                    "ownerId": principal["id"], "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Direct OVH account"
                 }}]}
                 if handoff:
                     body["responderId"] = principal["id"]
@@ -1478,7 +1489,9 @@ class BrowserTests(unittest.TestCase):
                 execution = response.json()
                 receiver.goto(execution["url"])
                 expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
-                expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_be_visible()
+                expect(receiver.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("新しいアプリの認証情報を入力")
+                expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://ca.ovh.com/manager/")
+                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
                 receiver.get_by_label("クライアントID", exact=True).fill("direct-ovh-client")
                 receiver.get_by_label("クライアントシークレット", exact=True).fill("direct-ovh-secret")
                 self.select(receiver, "実行環境", "Browser executor")
@@ -1487,6 +1500,7 @@ class BrowserTests(unittest.TestCase):
                 receiver.screenshot(path=str(ARTIFACTS / ("operation-ovh-handoff-input-ja.png" if handoff else "operation-ovh-self-input-ja.png")), full_page=True)
                 receiver.get_by_role("button", name="接続する", exact=True).click()
                 expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
                 self.assertEqual(receiver.url, execution["url"])
                 self.assertNotIn("direct-ovh-secret", "".join(bodies))
                 if handoff:
@@ -1511,6 +1525,7 @@ class BrowserTests(unittest.TestCase):
                 receiver.get_by_role("link", name="接続を開く", exact=True).click()
                 receiver.wait_for_url(f"**/p/{principal['id']}/services/{completed['results'][0]['id']}")
                 expect(receiver.get_by_role("heading", name="Direct OVH account", exact=True)).to_be_visible()
+                expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
 
     def test_依頼画面でOVHの認証情報を入力し再読込後に接続を確認して保存する(self):
         sender, _ = self.passkey_account("OVH requester")
@@ -1518,14 +1533,14 @@ class BrowserTests(unittest.TestCase):
         environment = self.executor(receiver, principal).rsplit("/", 1)[1]
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "message": "OVHcloudへ接続してください。", "operations": [{
             "name": "connection.connect", "input": {
-                "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Requested OVH account"
+                "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Requested OVH account"
             }
         }]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         receiver.goto(asked["url"])
         expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://ca.ovh.com/manager/")
         receiver.get_by_label("クライアントID", exact=True).fill("requested-ovh-client")
         receiver.get_by_label("クライアントシークレット", exact=True).fill("requested-ovh-secret")
         self.select(receiver, "実行環境", "Browser executor")
@@ -1550,7 +1565,8 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(execution["state"], "succeeded")
         connection = receiver.request.get(ORIGIN + "/api/resources/" + execution["results"][0]["id"]).json()
         self.assertEqual(connection["name"], "Requested OVH account")
-        self.assertEqual(connection["data"]["methodId"], "ovh:client_credentials_ca")
+        self.assertEqual(connection["data"]["methodId"], "ovh:client_credentials")
+        self.assertEqual(connection["data"]["fields"], {"apiRegion": "ca"})
         token_calls = receiver.request.get(ORIGIN + "/__test/executor/" + environment + "/oauth").json()
         self.assertEqual(token_calls, [{"clientId": "requested-ovh-client", "clientSecret": "requested-ovh-secret", "scope": "all"}])
 
@@ -1560,7 +1576,7 @@ class BrowserTests(unittest.TestCase):
         environment = self.executor(receiver, principal).rsplit("/", 1)[1]
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
             "name": "connection.connect", "input": {
-                "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Cancelled OVH account", "environmentId": environment
+                "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Cancelled OVH account", "environmentId": environment
             }
         }]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())

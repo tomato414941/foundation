@@ -22,17 +22,23 @@ export function OAuthConnectionHelp({ method }: { method?: CatalogConnectionMeth
     </Notice>}
   </>;
 }
-export function OAuthConnectionFields({ purpose, method, existing, appMaterial, apps, selectedAppId, clientId }: ConnectionFieldsProps) {
+export function OAuthConnectionFields({ purpose, method, existing, appMaterial, apps, selectedAppId, clientId, preparedFields, fieldValues, onFieldsChange }: ConnectionFieldsProps) {
   const { t } = useTranslation();
   const spec = method?.kind === 'oauth' ? method.config : undefined;
   const behavior = method ? connectionMethod(method) : undefined;
   const requiredScopes = spec?.scopes.required ?? [];
   const [appId, setAppId] = useState(selectedAppId ?? (existing?.kind === 'connection' ? existing.data.appId ?? 'new' : apps[0]?.id ?? 'new'));
   const inline = purpose === 'connection' && behavior?.requiresApp && appId === 'new';
+  const selected = apps.find(item => item.id === appId);
+  const applicationFields = selected?.kind === 'app' ? selected.data.fields : {};
   return <>
     {purpose === 'connection' && method && spec && <>
       {behavior?.requiresApp && <SelectField name="appId" label={t('app')}
-        value={appId} onValueChange={setAppId} disabled={!!selectedAppId}>
+        value={appId} onValueChange={value => {
+          setAppId(value);
+          const app = apps.find(item => item.id === value);
+          if (app?.kind === 'app') onFieldsChange?.(app.data.fields);
+        }} disabled={!!selectedAppId}>
         {apps.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
         <SelectItem value="new">{t('newApplication')}</SelectItem>
       </SelectField>}
@@ -50,7 +56,11 @@ export function OAuthConnectionFields({ purpose, method, existing, appMaterial, 
       {(!method || behavior?.browserAuthorization) && <InputField label={t('callbackUrl')}
         value={typeof window !== 'undefined' ? window.location.origin + '/oauth/callback' : ''} readOnly />}
       {method && spec && <ServiceFields method={method} fields={spec.fields} defaults={spec.defaults}
-        existing={existing} appMaterial={appMaterial} />}
+        existing={existing} appMaterial={appMaterial} preparedFields={preparedFields}
+        fieldValues={fieldValues} onFieldsChange={onFieldsChange} />}
     </>}
+    {purpose === 'connection' && !inline && method && spec && <ServiceFields method={method}
+      fields={spec.fields.filter(field => field.secret === false)} defaults={spec.defaults} existing={existing} appMaterial={null}
+      preparedFields={{ ...applicationFields, ...preparedFields }} fieldValues={fieldValues} onFieldsChange={onFieldsChange} />}
   </>;
 }

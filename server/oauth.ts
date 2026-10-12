@@ -6,13 +6,15 @@ import { DomainError, fail } from './errors.js';
 import { oauthService } from './oauth-service.js';
 import { digest, expandUrl, lifetime, strings } from './oauth-values.js';
 import type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
+import { connectionValues, ConnectionFieldError } from '../shared/connection-fields.js';
 export { expandUrl } from './oauth-values.js';
 export type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 
 export class OAuth {
   constructor(readonly transport: Transport) {}
   private appValues(spec: OAuthSpec, app: OAuthApp) {
-    return { ...spec.defaults, ...app.fields, clientId: app.clientId };
+    try { return { ...connectionValues(spec.fields, app.fields, spec.defaults), clientId: app.clientId }; }
+    catch (error) { if (error instanceof ConnectionFieldError) fail(400, error.code, error.message); throw error; }
   }
   async authorize(
     spec: OAuthSpec,

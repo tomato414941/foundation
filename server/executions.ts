@@ -277,8 +277,7 @@ export class Executions {
         try { if (atPointer(operation.input, field.pointer) === undefined) throw new Error(); }
         catch { fail(400, 'invalid_pointer', 'Place each requested field in the operation input.'); }
       }
-      if (definition.execution === 'keyholder' && (['value', 'clientSecret'].some(key => operation.input[key] !== undefined && operation.input[key] !== '') ||
-        operation.input.fields && Object.values(operation.input.fields as Record<string, JsonValue>).some(value => value !== '')))
+      if (definition.execution === 'keyholder' && ['value', 'clientSecret'].some(key => operation.input[key] !== undefined && operation.input[key] !== ''))
         fail(400, 'encrypted_input_required', 'Supply private material directly with your encryption keys.');
       if (definition.review) operation.input = await definition.review(actor, operation.input);
     }
@@ -626,7 +625,8 @@ export class Executions {
     return this.locked(id, async () => {
       const { row, snapshot, plan } = await this.input(actor, id);
       if (plan.index !== index || snapshot.continuation) fail(409, 'execution_changed', 'Continue the operation already in progress.');
-      snapshot.operations[index] = { ...snapshot.operations[index]!, ...this.definitions.prepare(this.definitions.configure(plan.invocation, values)).invocation };
+      const prepared = await this.definitions.prepareFor(actor, this.definitions.configure(plan.invocation, values));
+      snapshot.operations[index] = { ...snapshot.operations[index]!, ...prepared.invocation };
       await this.save(row, snapshot, 'waiting', 'input');
       return this.view(row, snapshot);
     });

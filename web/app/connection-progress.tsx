@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import type { FlowProgress } from '../../shared/connection-client';
 import { AwsConnectionInfo } from '../../shared/aws';
 import { AwsConnectionFacts } from './aws-connection-facts';
+import { ConnectionSettings } from './connection-settings';
 import { Button } from './components/ui/button';
 import { Detail, ErrorNotice, ExternalLink, Notice, Panel, State } from './components';
 
@@ -14,6 +15,7 @@ export function ConnectionProgress({ progress, acceptIntent = 'accept', cancelIn
     {progress.kind === 'pending' && <Notice tone="info">{t('connectionPending')}</Notice>}
     {progress.kind === 'authorize' && <ExternalLink href={progress.url}>{t('authorizeService')}</ExternalLink>}
     {progress.kind === 'review' && <Panel title={t('connectionApprove')}>
+      <ConnectionSettings methodId={String(progress.metadata.methodId ?? '')} settings={progress.metadata.settings} />
       <Detail label={t('accountName')}>{String(progress.metadata.account ?? t('accountUnverified'))}</Detail>
       {!progress.metadata.accountVerified && <Notice tone="warning">{t('accountUnverified')}</Notice>}
       {aws.success ? <AwsConnectionFacts value={aws.data} /> :

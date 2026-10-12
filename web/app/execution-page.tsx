@@ -43,7 +43,9 @@ function inputOperation(item: PageExecution, actorId: string) {
 }
 function configuration(invocation: DefinitionCall, input: DefinitionCall['input'], fields: string[]) {
   return Object.fromEntries(fields.filter(key => input[key] !== undefined &&
-    (invocation.input[key] == null || invocation.input[key] === '')).map(key => [key, input[key]!])) as Record<string, JsonValue>;
+    (invocation.input[key] == null || invocation.input[key] === '' ||
+      typeof input[key] === 'object' && !Array.isArray(input[key]) && JSON.stringify(invocation.input[key]) !== JSON.stringify(input[key])))
+    .map(key => [key, input[key]!])) as Record<string, JsonValue>;
 }
 type PageArgs = { params: { id?: string }; request: Request };
 async function readItem(id: string, requestMode: boolean, signal?: AbortSignal) {

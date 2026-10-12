@@ -10,6 +10,7 @@ import type { OAuthToken } from '../server/oauth.js';
 import type { Transport } from '../server/transport.js';
 import { fail } from '../server/errors.js';
 import { connectionFields } from './connection-fields.js';
+import { visibleConnectionFields } from '../shared/connection-fields.js';
 import type { AuthorizationContext, ConnectionCheckpoint, ConnectionProvider, ConnectionStart, RenewalContext } from './connection-provider.js';
 
 function specification(value: ConnectionStart | ConnectionState) {
@@ -25,8 +26,10 @@ function scopes(input: ConnectionStart) {
   return selectScopes(definition, input.scopes);
 }
 function material(input: ConnectionStart, app: AppState, token: OAuthToken) {
+  const fields = visibleConnectionFields(specification(input).fields, app.fields);
   return ConnectionMaterial.parse({ format: 2, methodId: input.methodId, method: input.method,
-    generation: randomUUID(), appId: input.appId, appGeneration: input.appId ? app.generation : null, oauth: token });
+    generation: randomUUID(), appId: input.appId, appGeneration: input.appId ? app.generation : null, oauth: token,
+    ...(Object.keys(fields).length ? { fields } : {}) });
 }
 function checkpoint(value: ConnectionCheckpoint) {
   return { token: TokenMaterial.parse(value.token), response: JsonObject.parse(value.response) };
@@ -44,6 +47,9 @@ export class OAuthConnection implements ConnectionProvider {
     const spec = specification(input), value = application(app);
     oauthService(spec);
     connectionFields(spec.fields, value.fields, spec.defaults);
+    for (const field of spec.fields) if (field.secret === false && input.fields[field.name]) {
+      if (value.fields[field.name] !== input.fields[field.name]) fail(409, 'wrong_app', 'Choose an application with the approved service settings.');
+    }
     if (connectionMethod(input.method).requiresApp && spec.clientAuth !== 'none' && !value.clientSecret)
       fail(409, 'app_required', 'Add a client secret to this OAuth application.');
   }

@@ -23,7 +23,8 @@
           {
             "name": "ruName",
             "label": "RuName",
-            "required": true
+            "required": true,
+            "secret": false
           }
         ],
         "revoke": {

@@ -43,7 +43,8 @@
         "fields": [
           {
             "name": "email",
-            "label": "Atlassianアカウントのメールアドレス"
+            "label": "Atlassianアカウントのメールアドレス",
+            "secret": false
           },
           {
             "name": "token",

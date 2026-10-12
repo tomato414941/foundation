@@ -137,6 +137,11 @@ export const ApiError = z.object({
 });
 export const Ok = z.object({ ok: z.literal(true) });
 
+const FieldChoice = z.object({
+  value: z.string().min(1).max(200),
+  label: z.string().min(1).max(200),
+  values: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), z.string()).default({}),
+}).strict();
 const Field = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/),
   label: z.string(),
@@ -145,6 +150,11 @@ const Field = z.object({
   placeholder: z.string().optional(),
   note: z.string().optional(),
   pattern: z.string().optional(),
+  choices: z.array(FieldChoice).min(1).max(100).optional(),
+}).superRefine((field, context) => {
+  const choices = field.choices ?? [];
+  if (new Set(choices.map(choice => choice.value)).size !== choices.length)
+    context.addIssue({ code: 'custom', path: ['choices'], message: 'Use a unique value for each choice.' });
 });
 const OutputMap = z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string());
 const Scopes = z.object({
@@ -210,7 +220,7 @@ export const AwsDefinition = z.object({ hint: z.string().optional() }).strict();
 const methodMetadata = {
   name: Name,
   docs: z.url().optional(),
-  console: z.url().optional(),
+  console: UrlTemplate.optional(),
 };
 export const OAuthMethod = z
   .object({ ...methodMetadata, kind: z.literal('oauth'), config: OAuthDefinition })
@@ -373,6 +383,8 @@ export const ConnectionResource = z.object({
   data: z.object({
     ...custodyMetadata,
     methodId: z.string(),
+    fields: z.record(z.string(), z.string()).default({}),
+    settings: z.array(z.object({ name: z.string(), label: z.string(), value: z.string() })).default([]),
     methodName: z.string(),
     methodKind: AuthKind,
     services: z.array(z.object({ id: z.string(), name: Name })).default([]),

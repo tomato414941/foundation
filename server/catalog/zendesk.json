@@ -21,7 +21,8 @@
             "label": "サブドメイン",
             "required": true,
             "placeholder": "example（example.zendesk.com の場合）",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "secret": false
           }
         ],
         "outputs": {
@@ -57,11 +58,13 @@
             "name": "subdomain",
             "label": "サブドメイン",
             "placeholder": "example（example.zendesk.com の場合）",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "secret": false
           },
           {
             "name": "email",
-            "label": "Zendeskのメールアドレス"
+            "label": "Zendeskのメールアドレス",
+            "secret": false
           },
           {
             "name": "token",

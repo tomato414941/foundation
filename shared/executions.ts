@@ -9,7 +9,7 @@ const destination = z.object({ ownerId: Id, name: Name, resourceId: Id.optional(
 // Secret material is supplied to the keyholder implementation, never to these public inputs.
 export const ValueSave = destination.extend({ value: z.literal('').optional() });
 export const AppSave = destination.extend({ methodId: z.string().min(1).max(200), clientId: z.string().max(1000),
-  fields: z.record(z.string(), z.literal('')).default({}), clientSecret: z.literal('').optional() });
+  fields: z.record(z.string(), z.string()).optional(), clientSecret: z.literal('').optional() });
 export const FunctionSave = z.object({ ownerId: Id, name: Name, definition: FunctionDefinition,
   resourceId: Id.optional(), version: z.number().int().positive().optional() }).strict();
 export const RevokeConnection = z.object({ ownerId: Id, connectionId: Id, environmentId: Id }).strict();
@@ -20,7 +20,7 @@ export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1
   environments: z.array(Id).max(32).optional(), redirectUri: z.url().optional(),
   users: z.array(Id).max(32).optional(),
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
-  clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.literal('')).optional(),
+  clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.string()).optional(),
   clientSecret: z.literal('').optional() }).strict();
 export const RunOperation = z.object({ ownerId: Id, environmentId: Id.optional(),
   operation: z.union([

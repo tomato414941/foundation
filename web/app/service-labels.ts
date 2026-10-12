@@ -1,4 +1,5 @@
 export const serviceLabels: Record<string, string> = {
+  'ovh.oauth.apiRegion.label': 'アカウントのAPI接続先',
   'airtable.token.token.label': 'Personal access token',
   'asana.token.token.label': 'Personal access token',
   'atlassian.token.site.label': 'サイト',

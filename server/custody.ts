@@ -9,7 +9,7 @@ import { ContentTypes, ProtectedContent, contentLimit, continuesPolicy, policyAu
 import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
-import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
+import { AppMetadata, ConnectionMetadata, ConnectionSettings } from '../shared/connections.js';
 import type { ConnectionLabelValues } from '../shared/connections.js';
 import { kindOf } from '../shared/protected.js';
 import { project } from './relations.js';
@@ -27,8 +27,11 @@ export interface ProtectedWrite {
   version?: number;
 }
 // Labels stay with the item until a writer gives new ones.
-const keptLabels = (data: Record<string, JsonValue> | undefined) =>
-  Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!]));
+const keptLabels = (data: Record<string, JsonValue> | undefined) => {
+  const settings = ConnectionSettings.safeParse(data?.settings);
+  return { ...Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!])),
+    ...(settings.success ? { settings: settings.data } : {}) };
+};
 
 export class Custody {
   constructor(
