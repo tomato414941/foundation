@@ -1,0 +1,30 @@
+{
+  "id": "hetzner",
+  "name": "Hetzner Cloud",
+  "api": "https://api.hetzner.cloud/v1",
+  "docs": "https://docs.hetzner.cloud/reference/cloud",
+  "console": "https://console.hetzner.com/",
+  "methods": {
+    "cloud-api-token": {
+      "name": "Hetzner Cloud · Enter API token",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API token",
+            "secret": true,
+            "note": "Create a token in the target project's Security → API tokens page. Choose Read to inspect resources or Read & Write to manage them."
+          }
+        ],
+        "console": "https://console.hetzner.com/",
+        "outputs": {
+          "HCLOUD_TOKEN": "/token"
+        },
+        "hint": "Use HCLOUD_TOKEN with the hcloud CLI or as a Bearer token for the Hetzner Cloud API at https://api.hetzner.cloud/v1. Access is limited to the project and permissions selected when the token was created."
+      },
+      "docs": "https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/",
+      "console": "https://console.hetzner.com/"
+    }
+  }
+}

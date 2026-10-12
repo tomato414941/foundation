@@ -17,6 +17,9 @@ export const serviceLabels: Record<string, string> = {
   'github.token.token.label': 'Personal access token',
   'gitlab.token.token.label': 'Personal access token',
   'heroku.token.token.label': 'API key',
+  'hetzner.token.token.label': 'APIトークン',
+  'hetzner.token.token.note':
+    '対象プロジェクトの「Security → API tokens」でトークンを作成してください。確認だけならRead、変更も行うならRead & Writeを選びます。',
   'huggingface.token.token.label': 'ユーザーアクセストークン',
   'huggingface.token.token.note':
     '必要なリポジトリとバケットへのアクセス権を持つFine-grainedトークンを入力してください。アップロードや更新には書き込み権限が必要です。',
