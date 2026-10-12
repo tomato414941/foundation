@@ -150,7 +150,7 @@ const words: Record<string, [string, string]> = {
   environments: ['実行環境', 'Environments'],
   functions: ['関数', 'Functions'],
   definitions: ['サービス定義', 'Service definitions'],
-  apps: ['OAuthアプリ', 'OAuth apps'],
+  apps: ['接続用アプリ', 'Connection apps'],
   principals: ['プリンシパル', 'Principals'],
   requests: ['依頼', 'Requests'],
   operation: ['操作', 'Operation'],
@@ -302,6 +302,27 @@ const words: Record<string, [string, string]> = {
     'OVHcloudで作成したサービスアカウントを使用してください。操作範囲はOVHcloudのIAMポリシーで設定します。スコープ「all」は全操作の許可を意味しません。',
     'Use a service account created in OVHcloud. Configure allowed operations in OVHcloud IAM policies. The all scope does not grant permission for every operation.',
   ],
+  ovhApiKeysHelp: [
+    'OVHcloudで発行したApplication Key・Application Secret・Consumer Keyを入力してください。接続先と権限の確認には、GET /auth/details と GET /auth/currentCredential の許可が必要です。',
+    'Enter the Application Key, Application Secret, and Consumer Key issued by OVHcloud. Allow GET /auth/details and GET /auth/currentCredential to verify the account and API permissions.',
+  ],
+  ovhBrowserHelp: [
+    '登録済みのOVHcloud APIアプリを選び、必要なAPI権限を指定してください。次にOVHcloudへ移動して、ログインと権限の承認を行います。',
+    'Choose a registered OVHcloud API application and the API permissions you need. Continue to OVHcloud to sign in and approve access.',
+  ],
+  ovhApplicationKey: ['Application Key', 'Application Key'],
+  ovhApplicationSecret: ['Application Secret', 'Application Secret'],
+  ovhApiPermissions: ['OVHcloudのAPI権限', 'OVHcloud API permissions'],
+  ovhKeyExpiresAt: ['APIキーの有効期限', 'API key expires'],
+  ovhAllowedIPs: ['接続元IPの制限', 'Allowed source IPs'],
+  ovhIamPermissionsHelp: [
+    'このキーに許可されたAPIの範囲です。IAMポリシーによる制限も適用されます。',
+    'These are the API routes allowed for this key. IAM policy restrictions also apply.',
+  ],
+  ovhApiPermissionsHelp: [
+    '1行に1つ、HTTPメソッドとAPIパスを入力します。例: GET /vps/*。接続確認に必要な2つの権限も含まれます。',
+    'Enter one HTTP method and API path per line, for example GET /vps/*. The two permissions needed to verify the connection are also included.',
+  ],
   existingConnections: [
     'この接続方法で登録済みの接続を利用できます。',
     'You can use an existing connection with this method.',
@@ -311,8 +332,8 @@ const words: Record<string, [string, string]> = {
     'This connection method is currently unavailable.',
   ],
   appRequired: [
-    'この接続方法用のOAuthアプリを登録してください。',
-    'Register an OAuth app for this connection method.',
+    'この接続方法用のアプリを登録してください。',
+    'Register an application for this connection method.',
   ],
   accountUnverified: ['接続先の名義は未確認', 'Account identity not verified'],
   scopesUnknown: ['外部サービスの権限は未確認', 'External permissions not verified'],
@@ -326,7 +347,7 @@ const words: Record<string, [string, string]> = {
   oauth: ['OAuth', 'OAuth'],
   token: ['APIキー・トークン', 'API key or token'],
   role: ['IAMロール', 'IAM role'],
-  app: ['OAuthアプリ', 'OAuth app'],
+  app: ['接続用アプリ', 'Connection app'],
   foundationApp: ['Foundation', 'Foundation'],
   scopes: ['スコープ', 'Scopes'],
   scopesHelp: [
@@ -641,7 +662,7 @@ Object.assign(words, {
   'singular.function': ['関数', 'function'],
   'singular.service': ['サービス定義', 'service definition'],
   'singular.method': ['接続方法', 'connection method'],
-  'singular.app': ['OAuthアプリ', 'OAuth app'],
+  'singular.app': ['接続用アプリ', 'Connection app'],
 });
 const errors: Array<[string[], string, string]> = [
   [
@@ -725,13 +746,13 @@ const errors: Array<[string[], string, string]> = [
   ],
   [
     ['oauth_unavailable', 'app_required'],
-    'このサービス用のOAuthアプリを登録して選択してください。',
-    'Register and select an OAuth app for this service.',
+    'このサービス用のアプリを登録して選択してください。',
+    'Register and select an application for this service.',
   ],
   [
     ['wrong_app', 'wrong_connection'],
-    'サービス、接続方法、OAuthアプリの組み合わせを確認してください。',
-    'Check the selected service, connection method, and OAuth app.',
+    'サービス、接続方法、アプリの組み合わせを確認してください。',
+    'Check the selected service, connection method, and application.',
   ],
   [
     ['connection_target_changed'],
@@ -744,6 +765,21 @@ const errors: Array<[string[], string, string]> = [
     'This feature is currently unavailable.',
   ],
   [['reconnect_required'], 'サービスに再接続してください。', 'Reconnect this service to continue.'],
+  [
+    ['invalid_credentials'],
+    '認証情報、アカウントのAPI接続先、サービス側の権限を確認してください。',
+    'Check the credentials, account API region, and permissions at the service.',
+  ],
+  [
+    ['invalid_scope'],
+    'API権限の指定を確認してください。',
+    'Check the requested API permissions.',
+  ],
+  [
+    ['invalid_destination'],
+    'この接続に指定されたAPI接続先を使用してください。',
+    'Use the API endpoint selected for this connection.',
+  ],
   [
     [
       'account_changed',

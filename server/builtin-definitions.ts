@@ -359,7 +359,7 @@ export function builtinDefinitions(services: Services) {
       },
       complete: async (who, input, proof, execution) => {
         const method = await catalog.method(who, input.methodId);
-        if (method.kind === 'token' && P.ProtectedWrite.safeParse(proof).success) {
+        if (method.kind === 'token' && !connectionMethod(method).requiresEnvironment && P.ProtectedWrite.safeParse(proof).success) {
           const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
           const previous = input.connectionId ? await custody.get(input.connectionId) : null;
           if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||

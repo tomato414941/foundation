@@ -25,8 +25,17 @@ export function oauthConnectionFacts(state: ConnectionState): ConnectionFactValu
 }
 export function tokenConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'token' || !state.fields) throw new Error('Use token connection material.');
+  if ('facts' in state && state.facts) return ConnectionFacts.parse(state.facts);
   return ConnectionFacts.parse({ accountId: null, accountName: state.method.name, accountVerified: false,
     scopes: [], scopesStatus: 'unknown', authorization: {}, details: {} });
+}
+export function ovhConnectionFacts(state: ConnectionState): ConnectionFactValues {
+  if (state.method.kind !== 'ovh' || !('ovh' in state)) throw new Error('Use OVH connection material.');
+  const info = state.ovh;
+  return ConnectionFacts.parse({ accountId: info.user ? info.account + '/' + info.user : info.account,
+    accountName: info.account + (info.user ? ' / ' + info.user : ''), accountVerified: true,
+    scopes: info.rules.map(rule => rule.method + ' ' + rule.path),
+    scopesStatus: 'reported', authorization: { ovh: info }, details: { ovh: info } });
 }
 export function awsConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'aws' || !state.aws) throw new Error('Use AWS connection material.');
@@ -36,6 +45,6 @@ export function awsConnectionFacts(state: ConnectionState): ConnectionFactValues
     details: { aws: awsConnectionInfo(state.aws) } });
 }
 const projections: Record<AuthKindName, (state: ConnectionState) => ConnectionFactValues> = {
-  oauth: oauthConnectionFacts, token: tokenConnectionFacts, aws: awsConnectionFacts,
+  oauth: oauthConnectionFacts, token: tokenConnectionFacts, aws: awsConnectionFacts, ovh: ovhConnectionFacts,
 };
 export function connectionFacts(state: ConnectionState): ConnectionFactValues { return projections[state.method.kind](state); }

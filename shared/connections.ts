@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, TokenMethod } from './contracts.js';
+import { AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
 import { AwsConnectionInput, AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
 import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
-import { connectionFacts } from './connection-facts.js';
+import { ConnectionFacts, connectionFacts } from './connection-facts.js';
+import { OvhConnectionInfo } from './ovh.js';
 import type { ConnectionFactValues } from './connection-facts.js';
 import { publicConnectionFields, visibleConnectionFields } from './connection-fields.js';
 export { requiresApp } from './connection-methods.js';
@@ -33,6 +34,8 @@ export const ConnectionMaterial = z.union([
   z.object({ ...materialMetadata, method: OAuthMethod, oauth: TokenMaterial,
     fields: Fields.optional(), aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: TokenMethod, fields: Fields,
+    facts: ConnectionFacts.optional(), oauth: unusedMaterial, aws: unusedMaterial }).strict(),
+  z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, ovh: OvhConnectionInfo,
     oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: AwsMethod, aws: AwsConnectionMaterial,
     oauth: unusedMaterial, fields: unusedMaterial }).strict(),
@@ -41,10 +44,10 @@ export const ConnectionMaterial = z.union([
     try { publicConnectionFields(value.method.config.fields, value.fields); }
     catch { ctx.addIssue({ code: 'custom', path: ['fields'], message: 'Keep only declared public settings in the connection.' }); }
   }
-  if (value.method.kind === 'oauth' && requiresApp(value.method) && (!value.appId || !value.appGeneration))
-    ctx.addIssue({ code: 'custom', message: 'Bind the OAuth application required by this connection.' });
-  if (value.method.kind !== 'oauth' && value.appId !== null)
-    ctx.addIssue({ code: 'custom', message: 'Only OAuth connections use an application.' });
+  if (requiresApp(value.method) && (!value.appId || !value.appGeneration))
+    ctx.addIssue({ code: 'custom', message: 'Bind the application required by this connection.' });
+  if (!requiresApp(value.method) && value.appId !== null)
+    ctx.addIssue({ code: 'custom', message: 'Use an application only when the connection requires one.' });
   if (Boolean(value.appId) !== Boolean(value.appGeneration))
     ctx.addIssue({ code: 'custom', message: 'Bind the application and its generation together.' });
   if (value.method.kind === 'oauth' && value.method.config.grantType === 'client_credentials' && !value.oauth?.requestedScopes)
@@ -63,6 +66,7 @@ export const ConnectionMetadata = z.object({
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
   fields: Fields.optional(),
   aws: AwsConnectionInfo.optional(),
+  ovh: OvhConnectionInfo.optional(),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {

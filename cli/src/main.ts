@@ -64,8 +64,8 @@ Usage: foundation <command> [options]
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   agent start [--id ID]                Register this machine as an execution environment
-  app NAME --method ID --client-id ID  Encrypt an OAuth application (--for ENV to allow use)
-  connect --method ID                  Register a connection (--environment for OAuth/AWS)
+  app NAME --method ID --client-id ID  Encrypt an application (--for ENV to allow use)
+  connect --method ID                  Register a connection (--environment for API verification)
   connect wait ID                      Continue after service authorization
   connect accept ID                    Save the reviewed connection and its permissions
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
@@ -93,10 +93,10 @@ Options:
   --name NAME            How this machine appears when it signs in (default: host name)
   --origin URL           Choose a server when signing in or registering
   --for ID               Allow this executor to use the content (repeatable)
-  --app ID               OAuth application to use for a connection
+  --app ID               Application to use for a connection
   --fields JSON          Connection or application fields (@FILE or @- accepted)
   --aws JSON             AWS authentication, region, and optional role (@FILE or @- recommended)
-  --client-secret VALUE  OAuth application secret (@FILE or @- recommended)
+  --client-secret VALUE  Application secret (@FILE or @- recommended)
   --isolation MODE       process for trusted local code, or container
   --image IMAGE          Command container image pinned with @sha256:DIGEST
   --inputs JSON         Inputs for exec or a remote command (default: [])

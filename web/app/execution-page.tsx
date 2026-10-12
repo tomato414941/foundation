@@ -149,6 +149,8 @@ export default function ExecutionPage() {
   const showSteps = pending || item.operations.length > 1;
   const completedResults = item.steps.filter(step => {
     const value = item.results[step.index];
+    if (step.state !== 'succeeded' && value && typeof value === 'object' && !Array.isArray(value) && value.pending === true)
+      return false;
     return details.steps[step.index]?.output || step.state === 'succeeded' && value !== null && value !== undefined;
   });
   useEffect(() => {

@@ -57,7 +57,7 @@ export class Custody {
     ];
     for (const value of values) {
       const row = await this.resources.get(value.id, connection);
-      if (row.kind !== value.kind) fail(400, 'wrong_kind', 'Choose a matching connection method and OAuth application.');
+      if (row.kind !== value.kind) fail(400, 'wrong_kind', 'Choose a matching connection method and application.');
       await this.resources.authorization.requireResource(actor, row, 'use', connection);
     }
     await this.resources.references(content.policy.id, values.map(value => value.id), connection);

@@ -32,7 +32,7 @@ export async function loadExecutionForm(invocation: DefinitionCall) {
       api('/identities/' + String(id), {}, Principal.pick({ id: true, name: true, publicKey: true })))) : [],
   ]);
   const method = methods.items.find(item => item.id === invocation.input.methodId);
-  const environments = method?.kind === 'token' || invocation.name === 'connection.authorize' ? [] : await availableEnvironments(ownerId);
+  const environments = method && !connectionMethod(method).requiresEnvironment || invocation.name === 'connection.authorize' ? [] : await availableEnvironments(ownerId);
   const preparedFields = invocation.input.fields as Record<string, string> | undefined;
   const apps = [...new Map([...owned.items, ...shared.items].filter(item => item.kind === 'app' &&
     item.data.methodId === invocation.input.methodId && item.permissions.includes('use') &&
@@ -47,7 +47,7 @@ export function connectionSubmission(input: DefinitionCall['input'], form: FormD
   const appId = formText(form, 'appId');
   return { input: { ...input, name: input.name ?? (formText(form, 'name') || method.name),
     fields: { ...(input.fields as Record<string, string> | undefined), ...visibleConnectionFields(connectionMethod(method).fields, settings.fields) },
-    ...(method.kind !== 'token' ? { environmentId: input.environmentId ?? formText(form, 'environmentId') } : {}),
+    ...(connectionMethod(method).requiresEnvironment ? { environmentId: input.environmentId ?? formText(form, 'environmentId') } : {}),
     ...(input.appId || (appId && appId !== 'new') ? { appId: input.appId ?? appId } : {}),
     ...(input.clientId || formText(form, 'clientId') ? { clientId: input.clientId ?? formText(form, 'clientId') } : {}) },
     material: { ...settings, clientSecret: formText(form, 'clientSecret') || undefined } };
@@ -77,7 +77,7 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
   const executor = data.environments.find(item => item.id === environmentId);
   const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId || definition?.environmentId;
   const usesEnvironment = ['run.execute', 'function.save', 'variable.save', 'app.save', 'connection.revoke'].includes(name) ||
-    name === 'connection.connect' && data.method?.kind !== 'token';
+    name === 'connection.connect' && !!data.method && connectionMethod(data.method).requiresEnvironment;
   const existing: ResourceView | null = null;
   return <div className="flex min-w-0 flex-col gap-6">
     <Detail label={t('owner')}>{data.owner.name}</Detail>
@@ -97,6 +97,7 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
       <ConnectionFields purpose={name === 'app.save' ? 'app' : 'connection'} method={data.method}
         existing={existing} appMaterial={null} apps={data.apps} selectedAppId={typeof input.appId === 'string' ? input.appId : undefined}
         preparedFields={input.fields as Record<string, string> | undefined}
+        preparedScopes={input.scopes as string[] | undefined}
         clientId={typeof input.clientId === 'string' && input.clientId ? input.clientId : undefined} />
     </>}
     {usesEnvironment && (Array.isArray(input.environmentIds) ? <Detail label={t('approvedExecutors')}>
@@ -106,6 +107,6 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
       <input type="hidden" name="environmentId" value={fixedEnvironment} />
     </Detail> : <EnvironmentChoice items={data.environments} multiple={name === 'variable.save' || name === 'app.save'}
       selected={Array.isArray(input.environmentIds) ? input.environmentIds.map(String) : []} onChange={setEnvironmentId} />)}
-    <ConnectionPreparation method={name === 'connection.connect' && data.method?.kind !== 'token' ? data.method : undefined} newConnection={!input.connectionId} executor={executor} />
+    <ConnectionPreparation method={name === 'connection.connect' ? data.method : undefined} newConnection={!input.connectionId} executor={executor} />
   </div>;
 }

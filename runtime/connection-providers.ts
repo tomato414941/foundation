@@ -5,8 +5,10 @@ import type { ConnectionProvider } from './connection-provider.js';
 import { AwsConnection } from './aws-connection.js';
 import { OAuthConnection } from './oauth-connection.js';
 import { TokenConnection } from './token-connection.js';
+import { OvhConnection } from './ovh-connection.js';
 
 export function connectionProviders(transport: Transport, aws: AwsConnectionProvider):
   Readonly<Record<ConnectionFamily, ConnectionProvider>> {
-  return { oauth: new OAuthConnection(transport), token: new TokenConnection(), aws: new AwsConnection(aws) };
+  return { oauth: new OAuthConnection(transport), token: new TokenConnection(transport), aws: new AwsConnection(aws),
+    ovh: new OvhConnection(transport) };
 }

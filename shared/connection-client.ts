@@ -25,6 +25,7 @@ export const FlowRecord = z.object({
   execution: z.object({ id: Id, index: z.number().int().nonnegative() }).strict(),
   pendingRun: DelegatedRun,
   url: z.url().nullable(), review: Review.nullable(), connectionId: Id.nullable(),
+  authorizationState: z.string().nullable(),
 }).strict();
 export type ConnectionFlow = z.infer<typeof FlowRecord>;
 export interface FlowStore {
@@ -68,6 +69,10 @@ export class ConnectionClient {
     const preparedFields = active.invocation.input.fields as Record<string, string> | undefined;
     for (const [key, value] of Object.entries(preparedFields ?? {})) if (value && input.fields?.[key] !== value)
       throw new Error('Use the service settings prepared by this operation.');
+    const preparedScopes = active.invocation.input.scopes as string[] | undefined;
+    if (preparedScopes && (input.method.kind === 'oauth' || input.method.kind === 'ovh') &&
+      canonical(selectScopes(input.method.config.scopes, preparedScopes).sort()) !== canonical(selectScopes(input.method.config.scopes, input.scopes).sort()))
+      throw new Error('Use the service permissions prepared by this operation.');
     const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
       ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
       ...(!active.invocation.input.name ? { name: input.name } : {}) };
@@ -83,14 +88,15 @@ export class ConnectionClient {
     const appId = requiresApp(input.method) ? Id.parse(input.appId) : null;
     const request = await this.custody.prepare(input.ownerId, input.environmentId, { kind: 'connect', input: {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
-      fields: input.fields ?? {}, scopes: input.method.kind === 'oauth' ? selectScopes(input.method.config.scopes, input.scopes) : [],
+      fields: input.fields ?? {}, scopes: input.method.kind === 'oauth' || input.method.kind === 'ovh'
+        ? selectScopes(input.method.config.scopes, input.scopes) : [],
       ...(input.aws ? { aws: input.aws } : {}),
       ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval, operationContext: await this.operationContext(execution, id) });
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,
       appId, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
-      step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, review: null, connectionId: null,
+      step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, authorizationState: null, review: null, connectionId: null,
       execution, pendingRun: request, ...(approval ? { approval } : {}) };
     await this.custody.trust.rememberRun(request);
     await this.store.put(flow);
@@ -141,10 +147,10 @@ export class ConnectionClient {
     const result = await this.custody.result(task);
     if (!result?.ok) return { kind: 'failed', flow, task, error: result?.error ?? task.error };
     if (flow.step === 'start') {
-      const authorized = z.object({ kind: z.literal('authorize'), flowId: Id, url: z.url() }).strict().safeParse(result.result);
+      const authorized = z.object({ kind: z.literal('authorize'), flowId: Id, state: z.string().min(1), url: z.url() }).strict().safeParse(result.result);
       if (authorized.success) {
         if (authorized.data.flowId !== id) throw new Error('The result belongs to another connection request.');
-        flow.step = 'authorize'; flow.url = authorized.data.url;
+        flow.step = 'authorize'; flow.url = authorized.data.url; flow.authorizationState = authorized.data.state;
         await this.store.put(flow);
         return { kind: 'authorize', flow, url: flow.url };
       }
@@ -166,7 +172,7 @@ export class ConnectionClient {
     const flow = await this.flow(id);
     if (flow.step !== 'authorize') return this.progress(id, false);
     const query = new URLSearchParams(parameters);
-    if (query.getAll('state').length !== 1 || query.get('state') !== new URL(flow.url!).searchParams.get('state'))
+    if (!flow.authorizationState || query.getAll('state').length !== 1 || query.get('state') !== flow.authorizationState)
       throw new Error('The authorization response does not match this connection request.');
     if (query.has('error')) {
       flow.step = 'cancelled'; await this.store.put(flow);

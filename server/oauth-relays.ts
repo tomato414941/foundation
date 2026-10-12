@@ -48,8 +48,7 @@ export class OAuthRelays {
     return this.view(row);
   }
   async receive(parameters: URLSearchParams) {
-    if (parameters.toString().length > 20000 || parameters.getAll('state').length !== 1 ||
-      (!parameters.has('code') && !parameters.has('error')))
+    if (parameters.toString().length > 20000 || parameters.getAll('state').length !== 1)
       fail(400, 'invalid_state', 'Start the connection again.');
     const state = parameters.get('state')!, digest = await hash(state), callback = parameters.toString();
     const row = await this.db.one<RelayRow>('SELECT * FROM oauth_relays WHERE state_digest=$1 AND expires_at>now()', [digest]);

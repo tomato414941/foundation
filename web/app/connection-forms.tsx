@@ -5,6 +5,7 @@ import type { ConnectionFamily } from '../../shared/connection-methods';
 import { connectionMethod } from '../../shared/connection-methods';
 import { AwsConnectionForm, awsConnectionSettings, awsFormValues } from './aws-connection-form';
 import { OAuthConnectionFields, OAuthConnectionHelp } from './oauth-connection-form';
+import { OvhConnectionFields, OvhConnectionHelp } from './ovh-connection-form';
 import { ServiceFields } from './connection-fields';
 import type { ConnectionFieldsProps } from './connection-fields';
 import { formText } from './api';
@@ -27,6 +28,8 @@ const forms: Record<ConnectionFamily, ConnectionForm> = {
     settings: form => form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {} },
   token: { Fields: props => props.purpose === 'connection' && props.method?.kind === 'token'
     ? <ServiceFields {...props} method={props.method} fields={props.method.config.fields} /> : null },
+  ovh: { Fields: OvhConnectionFields, Help: OvhConnectionHelp,
+    settings: form => form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\r?\n/).map(scope => scope.trim()).filter(Boolean) } : {} },
   aws: {
     Preparation: ({ active, initial, newConnection, executor }) => <AwsConnectionForm active={active}
       initial={initial?.aws} newConnection={newConnection} executor={executor} />,

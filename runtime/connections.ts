@@ -5,6 +5,7 @@ import type { JsonValue, MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from '../shared/connections.js';
 import type { AppState, ConnectionCommand, ConnectionLabelValues, ConnectionState } from '../shared/connections.js';
 import { connectionMethod } from '../shared/connection-methods.js';
+import { visibleConnectionFields } from '../shared/connection-fields.js';
 import { ContentTypes, Operations, authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
@@ -100,7 +101,8 @@ export class Connections implements ExecutionExtension {
     const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);
     if (app.generation !== state.appGeneration)
       fail(409, 'app_changed', 'Reconnect this service with the current application.');
-    if (state.method.kind === 'oauth' && Object.entries(state.fields ?? {}).some(([key, value]) => app.fields[key] !== value))
+    if (connectionMethod(state.method).requiresApp && state.method.kind !== 'aws' &&
+      Object.entries(visibleConnectionFields(state.method.config.fields, state.fields ?? {})).some(([key, value]) => app.fields[key] !== value))
       fail(409, 'app_changed', 'Reconnect this service with the current application settings.');
     return app;
   }
@@ -136,7 +138,7 @@ export class Connections implements ExecutionExtension {
     if (intent.operation !== expected) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     if (action.action === 'start') {
       if (requiresApp(action.method) && !action.appId)
-        fail(400, 'app_required', 'Choose an OAuth application.');
+        fail(400, 'app_required', 'Choose a connection application.');
       if (connectionMethod(action.method).browserAuthorization) {
         if (!action.redirectUri) fail(400, 'invalid_redirect', 'Choose a callback URL.');
         const redirect = new URL(action.redirectUri);
@@ -178,7 +180,7 @@ export class Connections implements ExecutionExtension {
       if (action.action === 'commit') return await this.commit(action, intent);
       const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
       if (action.action === 'refresh') {
-        await this.provider(state.method).check?.(state, signal);
+        await this.provider(state.method).check?.(state, signal, await this.connectionApp(state, intent, sources));
         const refreshed = await this.refresh(content, state, intent, sources, signal);
         return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
       }
@@ -209,8 +211,7 @@ export class Connections implements ExecutionExtension {
     }
     if (input.redirectUri === intent.origin + '/oauth/callback') await this.broker.relay?.({ id: input.flowId,
       runId: intent.id, stateDigest: await hash(flow.state), expiresAt: new Date(flow.expiresAt).toISOString() });
-    return { kind: 'authorize', flowId: input.flowId,
-      url: result.url };
+    return { kind: 'authorize', flowId: input.flowId, state: flow.state, url: result.url };
   }
   private async exchange(action: Extract<ConnectionCommand, { action: 'exchange' }>, intent: ExecutionIntent, signal: AbortSignal) {
     const flow = await this.flow(action.flowId, intent);
@@ -248,6 +249,18 @@ export class Connections implements ExecutionExtension {
   }
   async recover(input: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null> {
     const action = ConnectionAction.parse(input);
+    if (action.action === 'start') {
+      const flow = await this.readFlow(action.flowId);
+      if (!flow || !flow.checkpoint || flow.phase !== 'received' || flow.expiresAt <= Date.now() ||
+        flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) || canonical(flow.input) !== canonical(action)) return null;
+      const provider = this.provider(action.method);
+      if (!provider.resume) return null;
+      const resumed = await provider.resume(this.authorization(action.flowId, flow, AbortSignal.timeout(20_000)), flow.checkpoint);
+      if (resumed.kind !== 'authorize') return null;
+      if (action.redirectUri === intent.origin + '/oauth/callback') await this.broker.relay?.({ id: action.flowId,
+        runId: intent.id, stateDigest: await hash(flow.state), expiresAt: new Date(flow.expiresAt).toISOString() });
+      return { kind: 'authorize', flowId: action.flowId, state: flow.state, url: resumed.url };
+    }
     if (action.action !== 'commit') return null;
     const flow = await this.readFlow(action.flowId);
     if (!flow?.content || flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) ||

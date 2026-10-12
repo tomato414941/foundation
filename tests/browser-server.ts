@@ -20,6 +20,7 @@ import { DomainError } from '../server/errors.js';
 import { SSHWorkerState } from '../shared/ssh.js';
 import type { Transport } from '../server/transport.js';
 import type { AwsConnectionRequest } from '../shared/aws.js';
+import { ovhSignature } from '../runtime/ovh.js';
 
 const agents = new Map<string, Executor>();
 const functionAgents = new Map<string, FunctionExecutor>();
@@ -27,6 +28,7 @@ const running = new Map<string, Promise<void>>();
 const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
 const awsRequests = new Map<string, AwsConnectionRequest[]>();
 const oauthRequests = new Map<string, Array<{ clientId: string | null; clientSecret: string | null; scope: string | null }>>();
+const ovhApprovals = new Map<string, { redirection: string; consumerKey: string; rules: Array<{ method: string; path: string }>; approved: boolean }>();
 const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
@@ -58,6 +60,33 @@ class BrowserRunner extends MemoryRunner {
       hostKey: 'ssh-ed25519 ' + Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), randomBytes(32)]).toString('base64') });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
     const transport: Transport = { async send(request) {
+      if (request.url.startsWith('https://ca.api.ovh.com/1.0/')) {
+        const response = (body: unknown, status = 200) => ({ status, headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(JSON.stringify(body)) });
+        if (request.url.endsWith('/auth/time')) return response(Math.floor(Date.now() / 1000));
+        if (request.url.endsWith('/auth/credential')) {
+          const body = JSON.parse(String(request.body)), token = crypto.randomUUID();
+          ovhApprovals.set(token, { redirection: body.redirection, rules: body.accessRules,
+            consumerKey: 'consumer-' + token, approved: false });
+          return response({ state: 'pendingValidation', consumerKey: 'consumer-' + token,
+            validationUrl: 'https://auth.ca.ovhcloud.com/api/auth?credentialToken=' + token });
+        }
+        const bearer = request.headers?.Authorization?.startsWith('Bearer ');
+        const consumerKey = request.headers?.['X-Ovh-Consumer'];
+        const approval = [...ovhApprovals.values()].find(value => value.consumerKey === consumerKey);
+        if (!bearer) {
+          if (approval && !approval.approved) return response({ message: 'Not approved' }, 403);
+          const credentials = { applicationKey: request.headers?.['X-Ovh-Application'] ?? '', applicationSecret: 'browser-app-secret', consumerKey: consumerKey ?? '' };
+          if (request.headers?.['X-Ovh-Signature'] !== ovhSignature(credentials, request, Number(request.headers?.['X-Ovh-Timestamp'])))
+            return response({ message: 'Invalid signature' }, 403);
+        }
+        if (request.url.endsWith('/auth/details')) return response({ account: 'aa12345-ovh',
+          identities: ['urn:v1:ca:identity:' + (bearer ? 'user:aa12345-ovh/operator' : 'account:aa12345-ovh')],
+          user: bearer ? 'operator' : null, description: bearer ? 'OVH operator' : 'OVH account', roles: null });
+        if (request.url.endsWith('/auth/currentCredential')) return response({ credentialId: 123,
+          status: 'validated', expiration: null, allowedIPs: null,
+          rules: approval?.rules ?? [{ method: 'GET', path: '/auth/details' }, { method: 'GET', path: '/auth/currentCredential' }, { method: 'GET', path: '/vps/*' }] });
+      }
       if (request.url === 'https://ca.ovh.com/auth/oauth2/token') {
         const form = new URLSearchParams(String(request.body ?? ''));
         const requests = oauthRequests.get(id) ?? [];
@@ -141,6 +170,12 @@ app.get('/__test/ready', async () => ({ pid: process.pid }));
 app.get<{ Params: { id: string } }>('/__test/executor/:id/roles', async request => roleRequests.get(request.params.id) ?? []);
 app.get<{ Params: { id: string } }>('/__test/executor/:id/aws', async request => awsRequests.get(request.params.id) ?? []);
 app.get<{ Params: { id: string } }>('/__test/executor/:id/oauth', async request => oauthRequests.get(request.params.id) ?? []);
+app.post<{ Body: { credentialToken: string } }>('/__test/ovh/approve', async request => {
+  const approval = ovhApprovals.get(request.body.credentialToken);
+  if (!approval) throw new Error('Choose an existing OVH authorization request.');
+  approval.approved = true;
+  return { redirection: approval.redirection };
+});
 app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold' | 'fail' | 'release' } }>(
   '/__test/deletion/:id', async request => {
     const { id } = request.params;

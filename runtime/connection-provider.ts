@@ -26,11 +26,12 @@ export interface ConnectionProvider {
   facts(material: ConnectionState): ConnectionFactValues;
   validate(input: ConnectionStart, app: AppState | null): void;
   start(context: AuthorizationContext): Promise<AuthorizationResult>;
+  resume?(context: AuthorizationContext, checkpoint: ConnectionCheckpoint): Promise<AuthorizationResult>;
   exchange?(context: AuthorizationContext, parameters: string, checkpoint?: ConnectionCheckpoint): Promise<ConnectionState>;
   needsRenewal(material: ConnectionState): boolean;
   renew?(context: RenewalContext): Promise<ConnectionState>;
   recover?(material: ConnectionState, app: AppState | null, checkpoint: ConnectionCheckpoint): Promise<ConnectionState>;
-  check?(material: ConnectionState, signal: AbortSignal): Promise<void>;
+  check?(material: ConnectionState, signal: AbortSignal, app: AppState | null): Promise<void>;
   outputs(material: ConnectionState, app: AppState | null, signal: AbortSignal): Promise<Record<string, string>>;
   revoke?(material: ConnectionState, app: AppState | null, signal: AbortSignal): Promise<void>;
 }

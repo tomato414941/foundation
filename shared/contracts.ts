@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SSHConnection, SSHSettings } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
+import { OvhConnectionInfo } from './ovh.js';
 
 if (typeof window !== 'undefined') z.config({ jitless: true });
 
@@ -210,13 +211,27 @@ export const OAuthDefinition = z.object({
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),
   outputs: OutputMap,
+  identity: z.object({
+    url: UrlTemplate,
+    headers: z.record(z.string(), z.string()),
+    id: PointerList,
+    name: PointerList,
+  }).strict().optional(),
   console: z.url().optional(),
   instructions: z.string().optional(),
   hint: z.string().optional(),
 });
-export const AuthKind = z.enum(['oauth', 'token', 'aws']);
+export const AuthKind = z.enum(['oauth', 'token', 'aws', 'ovh']);
 export type AuthKindName = z.infer<typeof AuthKind>;
 export const AwsDefinition = z.object({ hint: z.string().optional() }).strict();
+export const OvhDefinition = z.object({
+  authorization: z.enum(['api_key', 'consumer_key']),
+  apiBaseUrl: UrlTemplate,
+  fields: z.array(Field).min(1),
+  scopes: Scopes.default({ default: [], separator: '\n' }),
+  outputs: OutputMap,
+  hint: z.string().optional(),
+}).strict();
 const methodMetadata = {
   name: Name,
   docs: z.url().optional(),
@@ -229,7 +244,8 @@ export const TokenMethod = z
   .object({ ...methodMetadata, kind: z.literal('token'), config: TokenDefinition })
   .strict();
 export const AwsMethod = z.object({ ...methodMetadata, kind: z.literal('aws'), config: AwsDefinition }).strict();
-export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod]);
+export const OvhMethod = z.object({ ...methodMetadata, kind: z.literal('ovh'), config: OvhDefinition }).strict();
+export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod, OvhMethod]);
 export type MethodDescription = z.infer<typeof MethodDefinition>;
 const methodCatalogMetadata = {
   id: z.string().min(1),
@@ -240,6 +256,7 @@ export const CatalogMethod = z.discriminatedUnion('kind', [
   OAuthMethod.extend(methodCatalogMetadata),
   TokenMethod.extend(methodCatalogMetadata),
   AwsMethod.extend(methodCatalogMetadata),
+  OvhMethod.extend(methodCatalogMetadata),
 ]);
 export type CatalogConnectionMethod = z.infer<typeof CatalogMethod>;
 export const MethodKey = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
@@ -399,6 +416,7 @@ export const ConnectionResource = z.object({
     generation: Id.optional(),
     authorizationDigest: z.string().optional(),
     aws: AwsConnectionInfo.optional(),
+    ovh: OvhConnectionInfo.optional(),
   }),
 });
 export const ServiceResource = z.object({

@@ -19,6 +19,7 @@ export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1
   connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional(), appId: Id.optional(),
   environments: z.array(Id).max(32).optional(), redirectUri: z.url().optional(),
   users: z.array(Id).max(32).optional(),
+  scopes: z.array(z.string().min(1).max(1000)).max(200).optional(),
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.string()).optional(),
   clientSecret: z.literal('').optional() }).strict();

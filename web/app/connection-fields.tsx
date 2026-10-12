@@ -16,6 +16,7 @@ export interface ConnectionFieldsProps {
   selectedAppId?: string;
   clientId?: string;
   preparedFields?: Record<string, string>;
+  preparedScopes?: string[];
   fieldValues?: Record<string, string>;
   onFieldsChange?: (values: Record<string, string>) => void;
 }

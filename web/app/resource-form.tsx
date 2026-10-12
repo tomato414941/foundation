@@ -23,6 +23,7 @@ import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
+import { connectionMethod } from '../../shared/connection-methods';
 import { connectionSubmission } from './execution-form';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
@@ -287,10 +288,9 @@ export default function ResourceForm() {
   const back = existing
     ? resourcePath(existing)
     : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
-  const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || item.kind === 'oauth');
+  const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).application !== 'none');
   const preferred = (methods: CatalogConnectionMethod[]) =>
-    methods.find((item) => item.kind === 'oauth' && item.availability === 'ready') ??
-    methods.find((item) => item.kind === 'token') ??
+    methods.find((item) => item.availability === 'ready') ??
     methods[0];
   const [serviceId, setServiceId] = useState(
     existing?.kind === 'connection'
@@ -318,7 +318,7 @@ export default function ResourceForm() {
   const [fileName, setFileName] = useState('');
   const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
   const executor = data.environments.find((item) => item.id === environmentId);
-  const executorChoice = isProtected(data.kind) && !(data.kind === 'connection' && method?.kind === 'token') && (
+  const executorChoice = isProtected(data.kind) && !(data.kind === 'connection' && method && !connectionMethod(method).requiresEnvironment) && (
     <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
       selected={data.kind === 'connection' ? [environmentId] : data.environmentId ? [data.environmentId] : data.selectedExecutors} />
   );
@@ -456,7 +456,7 @@ export default function ResourceForm() {
                         .filter(
                           (item) =>
                             data.kind !== 'app' ||
-                            Object.values(item.methods).some((method) => method.kind === 'oauth'),
+                            Object.values(item.methods).some((method) => connectionMethod(method).application !== 'none'),
                         )
                         .map((item) => (
                           <SelectItem key={item.id} value={item.id}>
@@ -502,7 +502,7 @@ export default function ResourceForm() {
                   </Panel>
                 )}
                 {executorChoice}
-                <ConnectionPreparation method={data.kind === 'connection' && method?.kind !== 'token' ? method : undefined}
+                <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
                   initial={data.connection} newConnection={data.kind === 'connection' && !existing}
                   executor={executor} />
                 {data.kind === 'environment' && (

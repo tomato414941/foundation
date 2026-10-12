@@ -4,6 +4,7 @@ import { executionClient } from './executions.js';
 import { CatalogMethod, Id, Name, Resource, listOf } from '../../shared/contracts.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 import { AwsConnectionInput } from '../../shared/aws.js';
+import { connectionMethod } from '../../shared/connection-methods.js';
 
 export async function method(client: Client, id: string) {
   const catalog = await client.json('/api/connection-methods', {}, listOf(CatalogMethod));
@@ -20,7 +21,7 @@ export async function saveApp(client: Client, input: {
   clientSecret?: string; fields: unknown; environments?: string[];
 }) {
   const definition = await method(client, input.methodId);
-  if (definition.kind !== 'oauth') throw new Error('Choose an OAuth connection method for this application.');
+  if (connectionMethod(definition).application === 'none') throw new Error('Choose a connection method that uses an application.');
   const operations = executionClient(client);
   const previous = input.id ? await operations.custody.read(Id.parse(input.id)) : undefined;
   const result = await operations.execute({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),

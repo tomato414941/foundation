@@ -2,6 +2,8 @@ import { useTranslation } from 'react-i18next';
 import type { FlowProgress } from '../../shared/connection-client';
 import { AwsConnectionInfo } from '../../shared/aws';
 import { AwsConnectionFacts } from './aws-connection-facts';
+import { OvhConnectionInfo } from '../../shared/ovh';
+import { OvhConnectionFacts } from './ovh-connection-facts';
 import { ConnectionSettings } from './connection-settings';
 import { Button } from './components/ui/button';
 import { Detail, ErrorNotice, ExternalLink, Notice, Panel, State } from './components';
@@ -11,6 +13,7 @@ export function ConnectionProgress({ progress, acceptIntent = 'accept', cancelIn
 }) {
   const { t } = useTranslation();
   const aws = AwsConnectionInfo.safeParse(progress.kind === 'review' ? progress.metadata.aws : undefined);
+  const ovh = OvhConnectionInfo.safeParse(progress.kind === 'review' ? progress.metadata.ovh : undefined);
   return <div className="flex min-w-0 flex-col gap-6">
     {progress.kind === 'pending' && <Notice tone="info">{t('connectionPending')}</Notice>}
     {progress.kind === 'authorize' && <ExternalLink href={progress.url}>{t('authorizeService')}</ExternalLink>}
@@ -18,7 +21,7 @@ export function ConnectionProgress({ progress, acceptIntent = 'accept', cancelIn
       <ConnectionSettings methodId={String(progress.metadata.methodId ?? '')} settings={progress.metadata.settings} />
       <Detail label={t('accountName')}>{String(progress.metadata.account ?? t('accountUnverified'))}</Detail>
       {!progress.metadata.accountVerified && <Notice tone="warning">{t('accountUnverified')}</Notice>}
-      {aws.success ? <AwsConnectionFacts value={aws.data} /> :
+      {aws.success ? <AwsConnectionFacts value={aws.data} /> : ovh.success ? <OvhConnectionFacts value={ovh.data} /> :
         <Detail label={t('scopes')}>{Array.isArray(progress.metadata.scopes) && progress.metadata.scopes.length
           ? progress.metadata.scopes.join(', ') : t('scopesUnknown')}</Detail>}
       <Button type="submit" name="intent" value={acceptIntent}>{t('save')}</Button>

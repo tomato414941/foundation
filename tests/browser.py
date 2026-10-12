@@ -893,7 +893,7 @@ class BrowserTests(unittest.TestCase):
         application_edit_path = page.url
         page.goto(root + "/services/new?method=" + method_id)
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("Workspace sign-in")
-        expect(page.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("Workspace application")
+        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("Workspace application")
         expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
         page.screenshot(path=str(ARTIFACTS / "connection-oauth-app-ja.png"), full_page=True, animations="disabled")
         catalog = page.request.get(ORIGIN + "/api/connection-methods").json()
@@ -975,7 +975,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(after["data"]["methodId"], "ovh:client_credentials")
         self.assertEqual(after["data"]["fields"], {"apiRegion": "ca"})
         page.goto(root + "/services/new?method=ovh:client_credentials")
-        expect(page.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("Saved OVH application")
+        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("Saved OVH application")
         expect(page.get_by_label("スコープ", exact=True)).to_have_value("all")
         self.select(page, "実行環境", "Browser executor")
         page.get_by_role("textbox", name="名前", exact=True).fill("OVH account")
@@ -984,7 +984,7 @@ class BrowserTests(unittest.TestCase):
         self.accept_connection(page, "OVH account")
         connection_path = page.url
         page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("Saved OVH application")
+        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("Saved OVH application")
         expect(page.get_by_label("スコープ", exact=True)).to_have_value("all")
         page.get_by_role("button", name="接続する", exact=True).click()
         self.accept_connection(page, "OVH account")
@@ -998,6 +998,75 @@ class BrowserTests(unittest.TestCase):
         page.set_viewport_size({"width": 390, "height": 844})
         expect(page.get_by_text("Use an app installed on a store in your own Shopify organization.", exact=False)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "connection-shopify-preparation-en.png"), full_page=True, animations="disabled")
+
+    def test_OVHのAPIKeysとPATを入力し接続先を確認して保存する(self):
+        page, principal = self.passkey_account("OVH key owner")
+        self.executor(page, principal)
+        root = f"{ORIGIN}/p/{principal['id']}"
+        for method_id, name, fields, account in [
+            ("ovh:api_key", "OVH API Keys", {"Application Key": "browser-application", "Application Secret": "browser-app-secret", "Consumer Key": "browser-consumer-key"}, "aa12345-ovh"),
+            ("ovh:pat", "OVH PAT", {"Personal Access Token（PAT）": "browser-user-pat"}, "OVH operator"),
+        ]:
+            with self.subTest(method=method_id):
+                page.goto(root + "/services/new?method=" + method_id)
+                self.select(page, "アカウントのAPI接続先", "CA")
+                self.select(page, "実行環境", "Browser executor")
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                for label, value in fields.items():
+                    page.get_by_label(label, exact=True).fill(value)
+                bodies = []
+                page.on("request", lambda request: bodies.append(request.post_data or "") if "/api/" in request.url else None)
+                page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+                expect(page.get_by_text(account, exact=True)).to_be_visible()
+                page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-review-ja.png")), full_page=True)
+                self.accept_connection(page, name)
+                connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+                self.assertEqual(connection["data"]["methodId"], method_id)
+                self.assertEqual(connection["data"]["fields"], {"apiRegion": "ca"})
+                self.assertTrue(connection["data"]["accountVerified"])
+                for label, value in fields.items():
+                    self.assertNotIn(value, "".join(bodies), "Credentials travel encrypted")
+                page.set_viewport_size({"width": 390, "height": 844})
+                self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+                page.set_viewport_size({"width": 1440, "height": 1050})
+
+    def test_OVHのブラウザ承認でAPI権限を確認して接続を保存する(self):
+        page, principal = self.passkey_account("OVH browser owner")
+        self.executor(page, principal)
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/apps/new?method=ovh:consumer_key")
+        self.select(page, "アカウントのAPI接続先", "CA")
+        page.get_by_role("textbox", name="名前", exact=True).fill("OVH API application")
+        page.get_by_label("Application Key", exact=True).fill("browser-application")
+        page.get_by_label("Application Secret", exact=True).fill("browser-app-secret")
+        page.get_by_role("checkbox", name="Browser executor", exact=True).check()
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="OVH API application", exact=True)).to_be_visible()
+        page.goto(root + "/services/new?method=ovh:consumer_key")
+        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("OVH API application")
+        page.get_by_label("OVHcloudのAPI権限", exact=True).fill("GET /vps\nPOST /vps/*")
+        self.select(page, "実行環境", "Browser executor")
+        page.get_by_role("textbox", name="名前", exact=True).fill("OVH browser account")
+        page.screenshot(path=str(ARTIFACTS / "ovh-browser-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        authorize = page.get_by_role("link", name="サービスで認可する", exact=True)
+        expect(authorize).to_be_visible(timeout=15000)
+        url = authorize.get_attribute("href")
+        token = parse_qs(urlparse(url).query)["credentialToken"][0]
+        approved = page.request.post(ORIGIN + "/__test/ovh/approve", data={"credentialToken": token}).json()
+        page.goto(approved["redirection"])
+        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        page.screenshot(path=str(ARTIFACTS / "ovh-browser-review-ja.png"), full_page=True)
+        page.get_by_role("button", name="保存", exact=True).click()
+        connection_link = page.get_by_role("link", name="接続を開く", exact=True)
+        expect(connection_link).to_be_visible(timeout=15000)
+        connection_link.click()
+        expect(page.get_by_role("heading", name="OVH browser account", exact=True)).to_be_visible()
+        connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+        self.assertIn("POST /vps/*", connection["data"]["scopes"])
+        self.assertTrue(connection["data"]["accountVerified"])
 
     def test_選んだ実行先のAWSの身元を信頼するIAMロールをAWSで作るリンクを示す(self):
         page, principal = self.passkey_account()
@@ -1579,7 +1648,7 @@ class BrowserTests(unittest.TestCase):
                 execution = response.json()
                 receiver.goto(execution["url"])
                 expect(receiver.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
-                expect(receiver.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("新しいアプリの認証情報を入力")
+                expect(receiver.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("新しいアプリの認証情報を入力")
                 expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://ca.ovh.com/manager/")
                 expect(receiver.get_by_text("CA", exact=True)).to_be_visible()
                 receiver.get_by_label("クライアントID", exact=True).fill("direct-ovh-client")

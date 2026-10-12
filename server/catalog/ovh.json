@@ -1,7 +1,7 @@
 {
   "id": "ovh",
   "name": "OVHcloud",
-  "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
+  "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps",
   "methods": {
     "client_credentials": {
       "name": "OVHcloud · Connect with app credentials",
@@ -75,6 +75,227 @@
       },
       "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
       "console": "https://{consoleHost}/manager/"
+    },
+    "api_key": {
+      "name": "OVHcloud · Enter API key",
+      "kind": "ovh",
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps",
+      "console": "https://{authHost}/api/createToken",
+      "config": {
+        "authorization": "api_key",
+        "apiBaseUrl": "{+apiBaseUrl}",
+        "fields": [
+          {
+            "name": "apiRegion",
+            "label": "Account API region",
+            "required": true,
+            "choices": [
+              {
+                "value": "eu",
+                "label": "EU",
+                "values": {
+                  "apiBaseUrl": "https://eu.api.ovh.com/1.0",
+                  "endpoint": "ovh-eu",
+                  "consoleHost": "www.ovh.com",
+                  "authHost": "auth.eu.ovhcloud.com"
+                }
+              },
+              {
+                "value": "ca",
+                "label": "CA",
+                "values": {
+                  "apiBaseUrl": "https://ca.api.ovh.com/1.0",
+                  "endpoint": "ovh-ca",
+                  "consoleHost": "ca.ovh.com",
+                  "authHost": "auth.ca.ovhcloud.com"
+                }
+              },
+              {
+                "value": "us",
+                "label": "US",
+                "values": {
+                  "apiBaseUrl": "https://api.us.ovhcloud.com/1.0",
+                  "endpoint": "ovh-us",
+                  "consoleHost": "us.ovhcloud.com",
+                  "authHost": "auth.us.ovhcloud.com"
+                }
+              }
+            ],
+            "secret": false
+          },
+          {
+            "name": "applicationKey",
+            "label": "Application Key",
+            "secret": true
+          },
+          {
+            "name": "applicationSecret",
+            "label": "Application Secret",
+            "secret": true
+          },
+          {
+            "name": "consumerKey",
+            "label": "Consumer Key",
+            "secret": true
+          }
+        ],
+        "outputs": {
+          "OVH_APPLICATION_KEY": "/applicationKey",
+          "OVH_APPLICATION_SECRET": "/applicationSecret",
+          "OVH_CONSUMER_KEY": "/consumerKey",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_API_REGION": "/apiRegion"
+        },
+        "hint": "Use AK, AS, and CK issued for the selected account API region. Include GET /auth/details and GET /auth/currentCredential to verify the account and allowed API routes. OVHcloud SDKs accept OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY, and OVH_ENDPOINT."
+      }
+    },
+    "consumer_key": {
+      "name": "OVHcloud · Connect in browser",
+      "kind": "ovh",
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/api-right-delegation",
+      "console": "https://{authHost}/api/createApp",
+      "config": {
+        "authorization": "consumer_key",
+        "apiBaseUrl": "{+apiBaseUrl}",
+        "fields": [
+          {
+            "name": "apiRegion",
+            "label": "Account API region",
+            "required": true,
+            "choices": [
+              {
+                "value": "eu",
+                "label": "EU",
+                "values": {
+                  "apiBaseUrl": "https://eu.api.ovh.com/1.0",
+                  "endpoint": "ovh-eu",
+                  "consoleHost": "www.ovh.com",
+                  "authHost": "auth.eu.ovhcloud.com"
+                }
+              },
+              {
+                "value": "ca",
+                "label": "CA",
+                "values": {
+                  "apiBaseUrl": "https://ca.api.ovh.com/1.0",
+                  "endpoint": "ovh-ca",
+                  "consoleHost": "ca.ovh.com",
+                  "authHost": "auth.ca.ovhcloud.com"
+                }
+              },
+              {
+                "value": "us",
+                "label": "US",
+                "values": {
+                  "apiBaseUrl": "https://api.us.ovhcloud.com/1.0",
+                  "endpoint": "ovh-us",
+                  "consoleHost": "us.ovhcloud.com",
+                  "authHost": "auth.us.ovhcloud.com"
+                }
+              }
+            ],
+            "secret": false
+          }
+        ],
+        "scopes": {
+          "default": [
+            "GET /vps",
+            "GET /vps/*"
+          ],
+          "required": [
+            "GET /auth/details",
+            "GET /auth/currentCredential"
+          ],
+          "separator": "\n",
+          "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/api-right-delegation"
+        },
+        "outputs": {
+          "OVH_APPLICATION_KEY": "/applicationKey",
+          "OVH_APPLICATION_SECRET": "/applicationSecret",
+          "OVH_CONSUMER_KEY": "/consumerKey",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_API_REGION": "/apiRegion"
+        },
+        "hint": "Use the Application Key and Application Secret of an OVHcloud API application for this account region. Enter one HTTP method and API path per permission. The customer approves these permissions on OVHcloud. The consumer key is encrypted on the selected executor."
+      }
+    },
+    "pat": {
+      "name": "OVHcloud · Enter access token",
+      "kind": "token",
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/iam/configure-personal-access-token-pat",
+      "console": "https://{consoleHost}/manager/#/iam/identities/users",
+      "config": {
+        "fields": [
+          {
+            "name": "apiRegion",
+            "label": "Account API region",
+            "required": true,
+            "choices": [
+              {
+                "value": "eu",
+                "label": "EU",
+                "values": {
+                  "apiBaseUrl": "https://eu.api.ovh.com/1.0",
+                  "endpoint": "ovh-eu",
+                  "consoleHost": "www.ovh.com",
+                  "authHost": "auth.eu.ovhcloud.com"
+                }
+              },
+              {
+                "value": "ca",
+                "label": "CA",
+                "values": {
+                  "apiBaseUrl": "https://ca.api.ovh.com/1.0",
+                  "endpoint": "ovh-ca",
+                  "consoleHost": "ca.ovh.com",
+                  "authHost": "auth.ca.ovhcloud.com"
+                }
+              },
+              {
+                "value": "us",
+                "label": "US",
+                "values": {
+                  "apiBaseUrl": "https://api.us.ovhcloud.com/1.0",
+                  "endpoint": "ovh-us",
+                  "consoleHost": "us.ovhcloud.com",
+                  "authHost": "auth.us.ovhcloud.com"
+                }
+              }
+            ],
+            "secret": false
+          },
+          {
+            "name": "token",
+            "label": "Personal access token (PAT)",
+            "secret": true,
+            "note": "Issue this token for an IAM local user with the required permissions."
+          }
+        ],
+        "identity": {
+          "url": "{+apiBaseUrl}/auth/details",
+          "headers": {
+          "Authorization": "Bearer {token}"
+          },
+          "id": [
+            "/identities/0",
+            "/account"
+          ],
+          "name": [
+            "/description",
+            "/user",
+            "/account"
+          ]
+        },
+        "outputs": {
+          "OVH_ACCESS_TOKEN": "/token",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_API_REGION": "/apiRegion"
+        },
+        "hint": "Send OVH_ACCESS_TOKEN as Authorization: Bearer <token> to OVH_API_BASE_URL. IAM permissions belong to the associated local user. These permissions and token expiration have not been inspected."
+      }
     }
   }
 }

@@ -18,6 +18,7 @@ import { SealedContinuationStore } from './operation-continuations.js';
 import { DelegatedRun } from './custody.js';
 import { FunctionClient } from './function-client.js';
 import { PrivateProgram, reviewedProgram } from './operation-authorization.js';
+import { connectionMethod } from './connection-methods.js';
 
 export interface PrivateOperationInput {
   value?: string | Uint8Array;
@@ -82,7 +83,7 @@ export class ExecutionClient {
       let fields = visibleConnectionFields(definitions, material.fields ?? {});
       if (name === 'connection.connect' && input.appId) {
         const app = await this.custody.api.json('/api/resources/' + Id.parse(input.appId), {}, Resource);
-        if (app.kind !== 'app') throw new Error('Choose an OAuth application.');
+        if (app.kind !== 'app') throw new Error('Choose a connection application.');
         fields = { ...app.data.fields, ...fields };
       }
       const prepared = input.fields as Record<string, string> | undefined;
@@ -142,7 +143,7 @@ export class ExecutionClient {
     if (name === 'connection.connect') {
       if (plan.continuation?.kind === 'connection') return this.connections.progress(plan.continuation.id);
       const connection = ConnectService.parse(input), method = await this.method(connection.methodId);
-      if (method.kind === 'token') {
+      if (method.kind === 'token' && !connectionMethod(method).requiresEnvironment) {
         if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
         const previous = connection.connectionId ? await this.custody.read(connection.connectionId) : undefined;
         if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
@@ -187,7 +188,7 @@ export class ExecutionClient {
         name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
         connectionId: connection.connectionId,
         fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
-        scopes: material.scopes, aws: material.aws,
+        scopes: material.scopes ?? connection.scopes, aws: material.aws,
         environments: connection.environments, redirectUri: connection.redirectUri,
         execution: { id, index: plan.index } });
     }
