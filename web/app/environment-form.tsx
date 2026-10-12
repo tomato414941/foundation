@@ -8,17 +8,19 @@ import type { EnvironmentOptions, Payment, Usage } from '../../shared/contracts'
 import type { z } from 'zod';
 import { api } from './api';
 import { Notice, Panel, SaveBar } from './components';
-import { InputField, TextareaField } from './form-fields';
+import { InputField } from './form-fields';
 import { Button } from './components/ui/button';
+import { SSHKeyInput } from './ssh-key-input';
+import type { SSHKeyEntry } from './ssh-key-input';
 
 const computeWeights = { small: 1, medium: 2, large: 4 };
 
-function Setting({ title, summary, children }: { title: string; summary: string; children: ReactNode }) {
+function Setting({ title, summary, children }: { title: string; summary?: string; children: ReactNode }) {
   return <details className="group border-t border-border pt-1" onInvalidCapture={event => { event.currentTarget.open = true; }}>
     <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
       <span className="grid min-w-0 gap-1">
         <span className="text-sm font-medium">{title}</span>
-        <span className="text-xs text-muted-foreground">{summary}</span>
+        {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
       </span>
       <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
     </summary>
@@ -43,7 +45,7 @@ export async function environmentReservations(ownerId: string, signal: AbortSign
 
 export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canManageBilling, canManagePayment,
   ssh, available, back, busy }: {
-  owner: { id: string; name: string };
+  owner: { id: string };
   usage: z.infer<typeof Usage> | null;
   reservedSeconds: number;
   payment: z.infer<typeof Payment> | null;
@@ -59,7 +61,8 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
   const [image, setImage] = useState('');
   const [idle, setIdle] = useState('60');
   const [maximum, setMaximum] = useState('60');
-  const [keys, setKeys] = useState('');
+  const [keys, setKeys] = useState<SSHKeyEntry[]>([]);
+  const [readingKeys, setReadingKeys] = useState(false);
   const idleMinutes = Number(idle), maximumMinutes = Number(maximum);
   const validMinutes = (value: number) => Number.isInteger(value) && value >= 1 && value <= 1440;
   const invalidRange = !validMinutes(idleMinutes) || !validMinutes(maximumMinutes);
@@ -70,12 +73,12 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
   const insufficient = shortfall > 0;
   const paymentRequired = Boolean(payment?.required && !payment.active);
   const minutes = (seconds: number) => new Intl.NumberFormat(i18n.language).format(Math.floor(seconds / 60));
-  const keyCount = new Set(keys.split(/\r?\n/).map(value => value.trim()).filter(Boolean)).size;
+  const authorizedKeys = keys.map(key => key.value.trim()).filter(Boolean);
+  const keyCount = new Set(authorizedKeys).size;
   const billingPath = `/p/${owner.id}/settings/billing`;
   return <>
-    <p className="min-w-0 text-sm text-muted-foreground wrap-anywhere">{t('owner')} <span className="ml-2 font-medium text-foreground">{owner.name}</span></p>
     <Panel>
-      <InputField name="name" label={t('name')} maxLength={200} hint={t('environmentNameHelp')} />
+      <InputField name="name" label={t('name')} maxLength={200} />
       <fieldset className="grid min-w-0 gap-2">
         <legend className="mb-2 text-sm font-medium">{t('size')}</legend>
         <div className="grid grid-cols-3 gap-2">
@@ -112,15 +115,13 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
       {(invalidRange || idleTooLong) && <p role="alert" className="text-sm text-destructive">
         {t(invalidRange ? 'environmentLifetimeRange' : 'environmentIdleTooLong')}
       </p>}
-      {ssh && <Setting title={t('environmentSSHOptional')}
-        summary={t(keyCount ? 'environmentSSHKeyCount' : 'environmentSSHUnconfigured', { count: keyCount })}>
-        <TextareaField name="sshKeys" label={t('sshAuthorizedKeysOptional')} rows={3}
-          value={keys} onChange={event => setKeys(event.target.value)} hint={t('sshCreateHelp')}
-          spellCheck={false} autoCapitalize="off" autoCorrect="off" className="font-mono text-xs" />
+      {ssh && <Setting title={t('environmentSSH')}
+        summary={keyCount ? t('environmentSSHKeyCount', { count: keyCount }) : undefined}>
+        <SSHKeyInput value={keys} onChange={setKeys} reading={readingKeys} onReadingChange={setReadingKeys} />
       </Setting>}
     </Panel>
     <SaveBar back={back} label="create" busy={busy} fixedOnMobile
-      disabled={!available || paymentRequired || insufficient || invalidRange || idleTooLong}
+      disabled={!available || paymentRequired || insufficient || invalidRange || idleTooLong || readingKeys}
       summary={<div className="grid gap-2">
         <div aria-live="polite" className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
           <span className="font-medium">{t('environmentRequiredQuota', { minutes: required === null ? '—' : minutes(required) })}</span>
@@ -133,7 +134,7 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
           <Button asChild variant="ghost"><Link to={`/p/${payment.payer.id}/settings/billing`}>{t('addPayment')}</Link></Button> : undefined}>
           {t('paymentRequired')}
         </Notice>}
-        {canManageBilling && <Link to={billingPath} className="w-fit text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
+        {canManageBilling && <Link to={billingPath} className="inline-flex min-h-8 w-fit items-center text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground">
           {t('environmentQuotaSettings')}
         </Link>}
       </div>} />

@@ -1361,8 +1361,9 @@ class BrowserTests(unittest.TestCase):
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        page.get_by_text("SSH接続を設定（任意）", exact=True).click()
-        keys = page.get_by_role("textbox", name="SSH公開鍵（任意）", exact=True)
+        page.get_by_text("SSH接続", exact=True).click()
+        page.get_by_role("button", name="公開鍵を追加", exact=True).click()
+        keys = page.get_by_role("textbox", name="公開鍵 1", exact=True)
         expect(keys).to_be_visible()
         keys.fill("invalid key")
         page.get_by_role("button", name="作成", exact=True).click()
@@ -1396,6 +1397,45 @@ class BrowserTests(unittest.TestCase):
             print("Rendered SSH: " + editor.locator("xpath=ancestor::*[@data-slot='card']").inner_text(), flush=True)
             self.select(page, "言語", "English")
             expect(page.get_by_text("SSH host key fingerprint", exact=True)).to_be_visible()
+
+    def test_PCで公開鍵ファイルと入力から追加した鍵を確認して実行環境を作成する(self):
+        page, principal = self.passkey_account("SSH key account")
+        paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(paid.ok, paid.text())
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
+        page.screenshot(path=str(ARTIFACTS / "environment-create-desktop-ja.png"), full_page=True)
+        page.get_by_text("SSH接続", exact=True).click()
+        with tempfile.TemporaryDirectory() as directory:
+            paths, public_keys = [], []
+            for name in ["first", "second"]:
+                path = Path(directory) / name
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-C", name, "-N", "", "-f", str(path)], check=True)
+                paths.append(path.with_suffix(".pub"))
+                public_keys.append(paths[-1].read_text().strip())
+            with page.expect_file_chooser() as chooser:
+                page.get_by_role("button", name="ファイルから追加", exact=True).click()
+            chooser.value.set_files([str(path) for path in paths])
+            expect(page.get_by_role("textbox", name="公開鍵 1", exact=True)).to_have_value(public_keys[0])
+            expect(page.get_by_role("textbox", name="公開鍵 2", exact=True)).to_have_value(public_keys[1])
+            page.get_by_role("button", name="公開鍵 1を削除", exact=True).click()
+            expect(page.get_by_role("textbox", name="公開鍵 1", exact=True)).to_have_value(public_keys[1])
+            page.get_by_role("button", name="公開鍵を追加", exact=True).click()
+            page.get_by_role("textbox", name="公開鍵 2", exact=True).fill(public_keys[0])
+            expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
+            page.screenshot(path=str(ARTIFACTS / "environment-create-keys-desktop-ja.png"), full_page=True)
+            self.select(page, "言語", "English")
+            expect(page.get_by_role("textbox", name="Public key 1", exact=True)).to_have_value(public_keys[1])
+            expect(page.get_by_role("button", name="Remove public key 2", exact=True)).to_be_visible()
+            page.screenshot(path=str(ARTIFACTS / "environment-create-keys-desktop-en.png"), full_page=True)
+            page.get_by_role("button", name="Create", exact=True).click()
+            page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
+            environment_id = page.url.rsplit("/", 1)[1]
+            self.environments.append((page, environment_id))
+            expect(page.get_by_text("Running", exact=True)).to_be_visible(timeout=15000)
+            response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
+            self.assertTrue(response.ok, response.text())
+            self.assertEqual(response.json()["authorizedKeys"], [public_keys[1], public_keys[0]])
 
     def test_ファイルを保存して実行環境を起動して停止する(self):
         page, principal = self.passkey_account()
