@@ -30,6 +30,11 @@ export async function authorizeOperationContext(intent: ExecutionIntent, operati
     if (input.action === 'start' && (input.methodId !== expected.methodId || input.name !== expected.name ||
       input.appId !== (expected.appId ?? null) || await hash(input.method) !== expected.methodDigest))
       throw new Error('Use the reviewed connection method and application.');
+    if (input.action === 'start') {
+      const fields = z.record(z.string(), z.string()).parse(input.fields ?? {});
+      if (Object.entries(expected.fields ?? {}).some(([key, value]) => value && fields[key] !== value))
+        throw new Error('Use the reviewed service settings.');
+    }
     if (!['start', 'exchange', 'commit'].includes(String(input.action))) throw new Error('Continue the reviewed connection.');
     return;
   }

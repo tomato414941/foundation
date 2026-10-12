@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { ApprovalRequest, Resource, listOf } from '../shared/contracts.js';
+import type { JsonValue } from '../shared/contracts.js';
 import { DefinitionDescription, Execution } from '../shared/executions.js';
 import { ExecutionClient } from '../shared/execution-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
 import { Task } from '../shared/runtime-protocol.js';
-import { decode } from '../shared/encryption.js';
+import { decode, encode } from '../shared/encryption.js';
+import { canonical } from '../shared/authority.js';
+import { ContentTypes } from '../shared/custody.js';
+import { ConnectionMaterial, connectionLabels, connectionMetadata } from '../shared/connections.js';
 import { DomainError } from '../server/errors.js';
 import type { JsonApi } from '../shared/client.js';
 import { CustodyClient, SubmissionPending } from '../shared/client.js';
@@ -123,6 +127,17 @@ test('準備した接続設定を維持して不足する設定を補い、秘�
   assert.deepEqual(configured.waiting?.invocation.input.fields, { subdomain: 'workspace', email: 'owner@example.com' });
   await assert.rejects(handler.configure(execution.id, { fields: { subdomain: 'other' } }), { code: 'operation_changed' });
   await assert.rejects(handler.configure(execution.id, { fields: { token: 'private-token' } }), { code: 'encrypted_input_required' });
+  const altered = ConnectionMaterial.parse({ format: 2, methodId: 'zendesk:token', method: await f.method('zendesk:token'),
+    generation: crypto.randomUUID(), appId: null, appGeneration: null,
+    fields: { subdomain: 'other', email: 'owner@example.com', token: 'private-token' } });
+  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet);
+  await assert.rejects(f.client.save('Support account', encode(canonical(altered)), policy, {
+    metadata: await connectionMetadata(altered), labels: connectionLabels(altered),
+    commit: async write => {
+      const completed = await handler.complete(execution.id, 0, write as unknown as JsonValue);
+      return f.client.api.json('/api/resources/' + (completed.results[0] as { id: string }).id, {}, Resource);
+    },
+  }), { code: 'operation_changed' });
   const result = await handler.continue(execution.id, { fields: { token: 'private-token' } });
   if (!('kind' in result) || result.kind !== 'saved' || result.resource.kind !== 'connection') throw new Error('Expected a saved connection.');
   assert.deepEqual(result.resource.data.fields, { subdomain: 'workspace', email: 'owner@example.com' });
@@ -130,6 +145,30 @@ test('準備した接続設定を維持して不足する設定を補い、秘�
   assert.equal(saved.state, 'succeeded');
   const material = JSON.parse(decode(await f.client.reveal(result.resource.id)));
   assert.equal(material.fields.token, 'private-token');
+});
+
+test('実行先が署名した接続操作を承認済みのAPI区分と照合してから認証を送信する', async t => {
+  const f = await flowFixture(() => jsonResponse({ access_token: 'wrong-region-token', token_type: 'Bearer', expires_in: 3600 }));
+  t.after(f.close);
+  const handler = new ExecutionClient(f.client, f.connections), methodId = 'ovh:client_credentials';
+  const application = await f.saveApp(methodId, 'EU application', { apiRegion: 'eu' });
+  const execution = await handler.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+    methodId, appId: application.id, name: 'Prepared CA connection', environmentId: f.environment.manifest.id, fields: { apiRegion: 'ca' } } });
+  const plan = await handler.plan(execution.id), flowId = crypto.randomUUID();
+  const prepared = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'connect', input: {
+    action: 'start', flowId, name: 'Prepared CA connection', methodId, method: await f.method(methodId),
+    appId: application.id, fields: { apiRegion: 'eu' }, scopes: ['all'],
+  } }, { sourceIds: [application.id], operationContext: {
+    id: execution.id, index: plan.index, invocation: plan.invocation, continuationId: flowId,
+  } });
+  await f.client.api.json('/api/executions/' + execution.id + '/continuation', { method: 'PUT',
+    body: { index: plan.index, continuation: { kind: 'connection', id: flowId } } });
+  const task = await f.client.submitPrepared(prepared);
+  await f.executor.tick();
+  const failed = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
+  assert.equal(failed.state, 'failed');
+  assert.equal((await f.client.result(failed))?.error?.code, 'invalid_execution');
+  assert.equal(f.requests.length, 0);
 });
 
 test('承認したHTTP操作と署名した実行を結び付け、実行先が復号後に差し替えを拒否する', async t => {

@@ -238,6 +238,13 @@ export function builtinDefinitions(services: Services) {
     try { return { ...input, fields: publicConnectionFields(connectionMethod(method).fields, z.record(z.string(), z.string()).parse(input.fields)) }; }
     catch (error) { if (error instanceof ConnectionFieldError) fail(400, error.code, error.message); throw error; }
   };
+  const requireFields = async (who: Parameters<Catalog['method']>[0], input: { methodId: string; fields?: Record<string, string> },
+    metadata: Record<string, C.JsonValue>) => {
+    await reviewFields(who, { methodId: input.methodId, fields: metadata.fields ?? {} });
+    const fields = z.record(z.string(), z.string()).parse(metadata.fields ?? {});
+    if (Object.entries(input.fields ?? {}).some(([key, value]) => value && fields[key] !== value))
+      fail(409, 'operation_changed', 'Use the service settings approved by this operation.');
+  };
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
     proof: C.JsonValue, type: string, connection?: Queryable) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
@@ -255,12 +262,7 @@ export function builtinDefinitions(services: Services) {
       fail(409, 'operation_changed', 'Use the execution environments approved for this item.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
-    if ('methodId' in input) {
-      await reviewFields(who, { methodId: input.methodId, fields: write.content.metadata.fields ?? {} });
-      const fields = z.record(z.string(), z.string()).parse(write.content.metadata.fields ?? {});
-      if (Object.entries(input.fields ?? {}).some(([key, value]) => value && fields[key] !== value))
-        fail(409, 'operation_changed', 'Save the service settings approved for this application.');
-    }
+    if ('methodId' in input) await requireFields(who, input, write.content.metadata);
     return resources.view(who, await custody.put(who, write, connection));
   };
   definitions.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
@@ -364,6 +366,7 @@ export function builtinDefinitions(services: Services) {
             write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
             write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== 'token' || write.content.metadata.state !== 'ready')
             fail(409, 'operation_changed', 'Save the token connection approved by this execution.');
+          await requireFields(who, input, write.content.metadata);
           if (input.users) await approvedUsers(policy, input.users);
           else if (canonical(policy.grants) !== canonical(previous?.policy.grants ?? []))
             fail(409, 'operation_changed', 'Keep the approved connection permissions.');
@@ -381,6 +384,7 @@ export function builtinDefinitions(services: Services) {
           !content.policy.authorities.some(binding => canonical(binding) === canonical(task.intent.actor)) ||
           (input.connectionId && content.policy.id !== input.connectionId))
           fail(409, 'connection_required', 'Complete the connection prepared by this operation.');
+        await requireFields(who, input, content.metadata);
         const row = await resources.get(content.policy.id);
         if (input.name && row.name !== input.name) fail(409, 'operation_changed', 'Use the approved connection name.');
         return { kind: 'connected', id: content.policy.id, metadata: content.metadata };
