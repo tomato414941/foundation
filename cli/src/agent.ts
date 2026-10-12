@@ -41,16 +41,16 @@ export async function startAgent(client: Client, options: {
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
         throw new Error('Use the owner and identity originally registered for this executor.');
       // Keep runtime support and the machine's current AWS identity in the signed registration.
-      if (environment.manifest.functionVersion !== 2 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
+      if (environment.manifest.functionVersion !== 2 || environment.manifest.resultVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
         const { awsPrincipal: _previous, ...manifest } = environment.manifest;
-        environment = await signEnvironment({ ...manifest, functionVersion: 2, ...(awsPrincipal ? { awsPrincipal } : {}),
+        environment = await signEnvironment({ ...manifest, functionVersion: 2, resultVersion: 1, ...(awsPrincipal ? { awsPrincipal } : {}),
           revision: manifest.revision + 1 }, keys);
         await journal.write('environment_' + id, environment);
       }
     } else {
       environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
-        capabilities: Object.values(Operations), functionVersion: 2,
+        capabilities: Object.values(Operations), functionVersion: 2, resultVersion: 1,
         isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);

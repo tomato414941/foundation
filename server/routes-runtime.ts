@@ -7,6 +7,8 @@ import { iso } from './database.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
 import { SignedBinding } from '../shared/authority.js';
+import { ContentTypes } from '../shared/custody.js';
+import { SharedReceipt } from '../shared/runtime-protocol.js';
 
 export async function routesRuntime(app: ApiApp, context: Context) {
   const { bindings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
@@ -39,6 +41,19 @@ export async function routesRuntime(app: ApiApp, context: Context) {
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
+  app.get('/api/custody/:id', {
+    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
+  }, request => custody.read(actor(request), request.params.id));
+  app.put('/api/custody/:id', {
+    schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: P.ProtectedRead } },
+  }, async request => {
+    if (request.body.content.policy.id !== request.params.id)
+      fail(400, 'wrong_content', 'Update the selected protected content.');
+    if (request.body.content.policy.contentType === ContentTypes.executionResult)
+      return custody.putResult(actor(request), request.body);
+    await custody.put(actor(request), request.body);
+    return custody.read(actor(request), request.params.id);
+  });
   app.post('/api/executor/outputs', {
     schema: { body: P.ProtectedWrite.omit({ version: true }), response: { 201: z.object({ id: C.Id }) } },
   }, async (request, reply) => {
@@ -88,6 +103,9 @@ export async function routesRuntime(app: ApiApp, context: Context) {
   app.get('/api/runtime/runs/:id', {
     schema: { params: C.IdParams, response: { 200: P.Task } },
   }, request => delegation.get(actor(request), request.params.id));
+  app.put('/api/runtime/runs/:id/result', {
+    schema: { params: C.IdParams, body: z.object({ receipt: SharedReceipt }).strict(), response: { 200: P.Task } },
+  }, request => delegation.shareResult(actor(request), request.params.id, request.body.receipt));
   app.post('/api/runtime/runs/:id/renew', {
     schema: { params: C.IdParams, body: P.Lease, response: { 200: z.object({ active: z.boolean() }) } },
   }, request => delegation.renew(actor(request), request.params.id, request.body.lease));

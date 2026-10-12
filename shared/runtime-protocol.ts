@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { Command, FunctionDefinition, HttpRequest, Id, Json, JsonObject, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify } from './authority.js';
 import type { KeyMaterial } from './authority.js';
-import { Operation, Operations, Origin, PolicyApproval, RunIntent, runContext } from './custody.js';
-import type { ExecutionIntent } from './custody.js';
+import { ContentTypes, Operation, Operations, Origin, PolicyApproval, ProtectedContent, RunIntent, contentContext,
+  continuesPolicy, produceContent, runContext, verifyContent, verifyPolicyApproval } from './custody.js';
+import type { ApprovedPolicy, ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
@@ -13,6 +14,7 @@ export const EnvironmentManifest = z.object({
   driver: z.enum(['attached', 'managed']),
   capabilities: z.array(Operation).min(1).max(6),
   functionVersion: z.number().int().positive().optional(),
+  resultVersion: z.literal(1).optional(),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
   // The IAM role or user this executor runs as, when it has one: what an account owner's role must trust.
@@ -59,12 +61,42 @@ export const TaskResult = z.object({
   error: z.object({ code: z.string().max(100), message: z.string().max(1000) }).nullable(),
 }).strict();
 export type ExecutionResult = z.infer<typeof TaskResult>;
-export const ExecutionReceipt = z.object({
+const receiptFields = {
   id: Id, intentDigest: Fingerprint, executorId: Id,
   state: z.enum(['succeeded', 'failed', 'cancelled', 'uncertain']),
-  finishedAt: Time, sealed: Sealed, signature: Signature,
-}).strict();
+  finishedAt: Time,
+};
+export const LegacyReceipt = z.object({ ...receiptFields, sealed: Sealed, signature: Signature }).strict();
+export const SharedReceipt = z.object({ ...receiptFields, format: z.literal(2), accessDigest: Fingerprint,
+  proofDigest: Fingerprint,
+  approval: PolicyApproval, content: ProtectedContent, previousDigest: Fingerprint.optional(),
+  previous: LegacyReceipt.optional(), signature: Signature }).strict();
+export const ExecutionReceipt = z.union([LegacyReceipt, SharedReceipt]);
 export type SignedReceipt = z.infer<typeof ExecutionReceipt>;
+export type SharedResultReceipt = z.infer<typeof SharedReceipt>;
+const ResultPayload = z.object({ result: TaskResult, proof: Signature }).strict();
+
+export const receiptHeader = (receipt: SharedResultReceipt) => {
+  const { signature: _signature, content: _content, approval: _approval, previous: _previous, ...header } = receipt;
+  return header;
+};
+
+export async function makeSharedReceipt(intent: ExecutionIntent, state: SignedReceipt['state'], body: ExecutionResult,
+  keys: KeyMaterial, approval: ApprovedPolicy, previous?: z.infer<typeof LegacyReceipt>): Promise<SharedResultReceipt> {
+  await verifyPolicyApproval(approval);
+  const header = { format: 2 as const, id: intent.id, intentDigest: await hash(intent), executorId: intent.executor.id,
+    state, finishedAt: previous?.finishedAt ?? new Date().toISOString(), accessDigest: await hash(approval),
+    ...(previous ? { previousDigest: await hash(previous) } : {}) };
+  const proof = await sign({ ...header, resultDigest: await hash(body) }, keys.signing, 'execution-result');
+  const bytes = encode(canonical({ result: TaskResult.parse(body), proof }));
+  if (bytes.byteLength > 1_400_000) throw new ResultTooLarge();
+  const content = await produceContent(bytes, approval, intent.id, intent.executor, keys, { bytes: bytes.byteLength });
+  const signedHeader = { ...header, proofDigest: await hash(proof) };
+  const receipt = SharedReceipt.parse({ ...signedHeader, approval, content, ...(previous ? { previous } : {}),
+    signature: await sign(signedHeader, keys.signing, 'receipt') });
+  await verifyReceipt(receipt, intent);
+  return receipt;
+}
 
 export class ResultTooLarge extends Error {
   constructor() { super('The encoded execution result exceeds 1,400,000 bytes.'); }
@@ -75,6 +107,7 @@ export async function makeReceipt(
 ): Promise<SignedReceipt> {
   const body = TaskResult.parse(result);
   if ((state === 'succeeded') !== body.ok) throw new Error('The result must match its completion state.');
+  if (intent.resultApproval) return makeSharedReceipt(intent, state, body, keys, intent.resultApproval);
   const bytes = encode(canonical(body));
   if (bytes.byteLength > 1_400_000) throw new ResultTooLarge();
   const sealed = await seal(bytes, intent.resultRecipients.map(binding => ({
@@ -86,7 +119,32 @@ export async function makeReceipt(
 }
 
 export async function verifyReceipt(input: SignedReceipt, intent: ExecutionIntent) {
-  const receipt = ExecutionReceipt.parse(input), { signature, ...value } = receipt;
+  const receipt = ExecutionReceipt.parse(input);
+  if ('content' in receipt) {
+    await verify(receiptHeader(receipt), receipt.signature, intent.executor.signing, 'receipt');
+    const approval = await verifyPolicyApproval(receipt.approval), policy = approval.policy;
+    if (receipt.id !== intent.id || receipt.intentDigest !== await hash(intent) || receipt.executorId !== intent.executor.id ||
+      receipt.accessDigest !== await hash(approval) || approval.authorityId !== intent.actor.id ||
+      !policy.authorities.some(authority => canonical(authority) === canonical(intent.actor)) ||
+      policy.id !== intent.id || policy.origin !== intent.origin || policy.ownerId !== intent.ownerId ||
+      policy.contentType !== ContentTypes.executionResult || policy.grants.length ||
+      (intent.resultApproval && canonical(intent.resultApproval) !== canonical(approval)))
+      throw new Error('The result does not belong to the requested execution.');
+    if (!intent.resultApproval || receipt.previous) {
+      if (!receipt.previous || receipt.previousDigest !== await hash(receipt.previous))
+        throw new Error('Keep the original execution receipt when sharing a legacy result.');
+      await verifyReceipt(receipt.previous, intent);
+      if (receipt.state !== receipt.previous.state || receipt.finishedAt !== receipt.previous.finishedAt)
+        throw new Error('Keep the original execution outcome when sharing its result.');
+    } else if (receipt.previousDigest) throw new Error('Provide the original receipt for its signed digest.');
+    await verifyContent(receipt.content);
+    if (!continuesPolicy(policy, receipt.content) || receipt.content.policy.revision < policy.revision ||
+      receipt.content.policy.grants.length)
+      throw new Error('An existing authority must approve sharing this result.');
+    return receipt;
+  }
+  if (intent.resultApproval) throw new Error('Return the protected result approved by this execution.');
+  const { signature, ...value } = receipt;
   await verify(value, signature, intent.executor.signing, 'receipt');
   if (receipt.id !== intent.id || receipt.intentDigest !== await hash(intent) ||
     receipt.executorId !== intent.executor.id ||
@@ -101,6 +159,20 @@ export async function readReceipt(
   receipt: SignedReceipt, intent: ExecutionIntent, bindingId: string, keys: KeyMaterial,
 ) {
   await verifyReceipt(receipt, intent);
+  if ('content' in receipt) {
+    if (!receipt.content.policy.readers.some(reader => reader.id === bindingId))
+      throw new Error('This principal cannot decrypt the result.');
+    const bytes = await open(receipt.content.sealed, keys.encryption, bindingId,
+      await contentContext(receipt.content.policy, receipt.content.materialRevision));
+    const payload = ResultPayload.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+    if (await hash(payload.proof) !== receipt.proofDigest) throw new Error('The result proof does not belong to this receipt.');
+    const { proofDigest: _proofDigest, ...evidence } = receiptHeader(receipt);
+    await verify({ ...evidence, resultDigest: await hash(payload.result) }, payload.proof,
+      intent.executor.signing, 'execution-result');
+    if ((receipt.state === 'succeeded') !== payload.result.ok)
+      throw new Error('The result does not match its completion state.');
+    return payload.result;
+  }
   const bytes = await open(receipt.sealed, keys.encryption, bindingId, await runContext(intent, 'result'));
   const result = TaskResult.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
   if ((receipt.state === 'succeeded') !== result.ok)

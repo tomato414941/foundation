@@ -9,9 +9,9 @@ import {
   prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
-import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
+import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
-import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './runtime-protocol.js';
+import { RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
 
 export interface JsonApi {
@@ -71,7 +71,7 @@ export class CustodyClient {
     return items.map(item => item.binding);
   }
   async read(id: string) {
-    const item = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
+    const item = await this.api.json('/api/custody/' + Id.parse(id), {}, ProtectedRead);
     await this.observe(item.content, id);
     return item;
   }
@@ -96,6 +96,20 @@ export class CustodyClient {
   }
   async reveal(id: string) {
     return reveal((await this.read(id)).content, this.binding, this.keys.encryption);
+  }
+  async sharing(input: string | Array<z.infer<typeof KeySharingItem>>) {
+    const items = typeof input === 'string' ? (await this.api.json(input, {}, listOf(KeySharingItem))).items : input;
+    const updates: Record<string, { version: number; content: CustodyContent }> = {};
+    for (const item of items) {
+      const current = await this.read(item.id);
+      if (current.version !== item.version || canonical(current.content) !== canonical(item.content))
+        throw new ClientFailure('content_conflict', 'Review the current content before changing its readers.');
+      for (const recipient of item.policy.readers) await this.trusted(recipient);
+      updates[item.id] = { version: item.version,
+        content: await protect(await reveal(current.content, this.binding, this.keys.encryption), item.policy,
+          current.content.materialRevision + 1, this.binding, this.keys, current.content.metadata, current.content) };
+    }
+    return updates;
   }
   async policy(ownerId: string, contentType: ContentTypeId, environments: RegisteredEnvironment[] = [],
     options: { id?: string; previous?: CustodyPolicy; expiresAt?: string } = {}) {
@@ -210,6 +224,8 @@ export class CustodyClient {
     const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)
       : request ? request.bindings.flatMap(binding => binding.parts.flatMap(part => typeof part === 'string' ? [] : [part.id])) : [];
     const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
+    const resultPolicy = await this.policy(ownerId, ContentTypes.executionResult, [], { id });
+    resultPolicy.producers = [{ executor: environment.manifest.executor, runId: id, expiresAt, materialRevision: 1 }];
     const intent: ExecutionIntent = { format: 2, id, origin: this.origin, ownerId, actor: this.binding,
       environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
       operation: Operations[operation.kind], operationDigest: await hash(operation),
@@ -220,7 +236,9 @@ export class CustodyClient {
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),
         ...(content.policy.contentType === ContentTypes.tokenSet && typeof content.metadata.authorizationDigest === 'string'
           ? { authorizationDigest: content.metadata.authorizationDigest } : {}),
-      }))), resultRecipients: [this.binding], createdAt: new Date().toISOString(), expiresAt };
+      }))), resultRecipients: resultPolicy.readers,
+      ...(environment.manifest.resultVersion ? { resultApproval: await approvePolicy(resultPolicy, this.binding, this.keys) } : {}),
+      createdAt: new Date().toISOString(), expiresAt };
     await authorizeEnvironment(environment, intent);
     const credential = (content: CustodyContent) => content.policy.contentType === ContentTypes.clientCredential;
     for (const source of sources) await authorizeUse(source, credential(source) &&
@@ -256,11 +274,29 @@ export class CustodyClient {
     return this.submitPrepared(request);
   }
   async result(task: TaskView) {
-    if (canonical(task.intent.actor) !== canonical(this.binding) || task.intent.origin !== this.origin || task.intent.id !== task.id)
-      throw new Error('This execution belongs to another requester.');
-    const signed = await signedValue(task.requestSignature, this.binding.signing, 'run') as { intent: unknown };
+    if (task.intent.origin !== this.origin || task.intent.id !== task.id)
+      throw new Error('This execution belongs to another Foundation server.');
+    await this.trusted(task.intent.actor);
+    const signed = await signedValue(task.requestSignature, task.intent.actor.signing, 'run') as { intent: unknown };
     if (canonical(signed.intent) !== canonical(task.intent)) throw new Error('The result belongs to a different signed request.');
     await this.trusted(task.intent.executor);
+    const readers = task.receipt && 'content' in task.receipt ? task.receipt.content.policy.readers : task.intent.resultRecipients;
+    if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
+      throw new ClientFailure('not_recipient', 'This identity is not a reader of the execution result.');
+    if (task.receipt && 'content' in task.receipt) await this.observe(task.receipt.content, task.id);
     return task.receipt ? readReceipt(task.receipt, task.intent, this.binding.id, this.keys) : null;
+  }
+  async shareLegacyResult(task: TaskView) {
+    if (!task.receipt || 'content' in task.receipt) return task;
+    if (canonical(task.intent.actor) !== canonical(this.binding) || canonical(task.intent.executor) !== canonical(this.binding))
+      throw new ClientFailure('executor_required', 'The original executor and requester must attest this legacy result.');
+    const result = await this.result(task);
+    if (!result) throw new Error('Wait for this execution to finish before sharing its result.');
+    const policy = await this.policy(task.ownerId, ContentTypes.executionResult, [], { id: task.id });
+    policy.producers = [{ executor: this.binding, runId: task.id,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(), materialRevision: 1 }];
+    const receipt = await makeSharedReceipt(task.intent, task.receipt.state, result, this.keys,
+      await approvePolicy(policy, this.binding, this.keys), task.receipt);
+    return this.api.json('/api/runtime/runs/' + task.id + '/result', { method: 'PUT', body: { receipt } }, Task);
   }
 }

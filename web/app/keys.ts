@@ -11,11 +11,9 @@ import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
 import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure } from './api';
+import { stored } from './storage';
 import { listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
-import { protect } from '../../shared/custody';
-import type { CustodyContent } from '../../shared/custody';
-import { stored } from './storage';
 
 const unlocked = new Map<string, IdentityKeys>();
 type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
@@ -241,18 +239,7 @@ export async function mergeWithPasskey() {
 
 export async function rekeySharing(path: string) {
   const plan = await api(path, {}, listOf(KeySharingItem));
-  const updates: Record<string, { version: number; content: CustodyContent }> = {};
-  if (!plan.items.length) return updates;
+  if (!plan.items.length) return {};
   const { custodyClient } = await import('./custody');
-  const client = await custodyClient();
-  for (const item of plan.items) {
-    const current = await client.read(item.id);
-    if (current.version !== item.version || canonical(current.content) !== canonical(item.content))
-      throw new ApiFailure('changed');
-    for (const recipient of item.policy.readers) await client.trusted(recipient);
-    updates[item.id] = { version: item.version,
-      content: await protect(await client.reveal(item.id), item.policy, item.content.materialRevision + 1,
-        client.binding, client.keys, item.content.metadata, item.content) };
-  }
-  return updates;
+  return (await custodyClient()).sharing(plan.items);
 }

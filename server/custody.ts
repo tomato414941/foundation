@@ -5,7 +5,7 @@ import type { Resources, ResourceRow } from './resources.js';
 import type { Bindings } from './bindings.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
-import { ContentTypes, ProtectedContent, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
+import { ContentTypes, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
@@ -15,6 +15,9 @@ import { kindOf } from '../shared/protected.js';
 import { project } from './relations.js';
 import type { Relations } from './relations.js';
 import { fail } from './errors.js';
+import { SharedReceipt, verifyReceipt } from '../shared/runtime-protocol.js';
+import type { SharedResultReceipt } from '../shared/runtime-protocol.js';
+import type { SealedRun } from '../shared/custody.js';
 
 export interface ProtectedWrite {
   name: string;
@@ -38,7 +41,8 @@ export class Custody {
   metadata(content: CustodyContent) {
     const schema = content.policy.contentType === ContentTypes.tokenSet ? ConnectionMetadata
       : content.policy.contentType === ContentTypes.clientCredential
-        ? AppMetadata : z.object({ bytes: z.number().int().min(0).max(1_000_000) }).strict();
+        ? AppMetadata : z.object({ bytes: z.number().int().min(0)
+          .max(contentLimit(content.policy.contentType)) }).strict();
     if (!schema.safeParse(content.metadata).success)
       fail(400, 'invalid_metadata', 'Provide only the public metadata for this protected item.');
     return content.metadata;
@@ -72,8 +76,11 @@ export class Custody {
     const row = await this.resources.db.one<{ content: CustodyContent }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
-    if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers and execution environments.');
-    return ProtectedContent.parse(row.content);
+    if (row) return ProtectedContent.parse(row.content);
+    const result = await this.resources.db.one<{ content: CustodyContent }>(
+      "SELECT receipt->'content' AS content FROM execution_tasks WHERE id=$1 AND receipt ? 'content'", [id], connection);
+    if (!result) fail(409, 'custody_required', 'Encrypt this item for its readers and execution environments.');
+    return ProtectedContent.parse(result.content);
   }
 
   // Items this identity can seal again without anyone deciding anything: those still encrypted
@@ -100,7 +107,6 @@ export class Custody {
 
   async read(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
-    const row = await this.resources.get(id);
     const content = await this.get(id);
     const { binding } = await this.bindings.current(actor.id);
     if (!content.policy.readers.some(reader => canonical(reader) === canonical(binding)) &&
@@ -108,12 +114,59 @@ export class Custody {
         ('actor' in grant && canonical(grant.actor) === canonical(binding))) &&
         Date.parse(grant.expiresAt) > Date.now()))
       fail(403, 'forbidden', 'This identity is not a recipient of this item.');
+    if (content.policy.contentType === ContentTypes.executionResult) {
+      await this.resources.authorization.requirePrincipal(actor, content.policy.ownerId, 'read');
+      return { content, version: content.materialRevision };
+    }
+    const row = await this.resources.get(id);
     await this.resources.authorization.requireResource(actor, row, 'read');
     return { content, version: row.version };
   }
 
+  async putResult(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[]) {
+    const persist = async (connection: Queryable) => {
+      await this.resources.authorization.active(actor);
+      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      const row = await this.resources.db.one<{ owner_id: string; request: SealedRun; receipt: SharedResultReceipt }>(
+        "SELECT owner_id,request,receipt FROM execution_tasks WHERE id=$1 AND receipt ? 'content' FOR UPDATE",
+        [input.content.policy.id], connection);
+      if (!row) fail(404, 'not_found', 'This execution has no protected result.');
+      const previous = SharedReceipt.parse(row.receipt).content;
+      const content = await verifyContent(input.content), policy = content.policy;
+      this.metadata(content);
+      const { binding } = await this.bindings.current(actor.id, connection);
+      if (policy.origin !== this.origin ||
+        content.signerId !== binding.id || canonical(policyAuthority(content)) !== canonical(binding) ||
+        !previous.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
+        fail(403, 'forbidden', 'An existing authority must sign changes to the result readers.');
+      if (policy.ownerId !== row.owner_id) {
+        await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
+        if (actor.agreedBy !== policy.ownerId && actor.id !== policy.ownerId)
+          fail(403, 'handoff_required', 'The new owner must agree to receive the protected result.');
+        await this.resources.authorization.requirePrincipal({ id: actor.agreedBy ?? actor.id }, policy.ownerId, 'create', connection);
+      } else await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
+      if (input.version !== previous.materialRevision || content.materialRevision !== previous.materialRevision + 1 ||
+        policy.revision !== previous.policy.revision + (canonical(previous.policy) === canonical(policy) ? 0 : 1) ||
+        canonical(content.metadata) !== canonical(previous.metadata))
+        fail(409, 'changed', 'Review the current result before changing its readers.');
+      for (const reader of [...policy.readers, ...policy.authorities]) await this.bindings.requireCurrent(reader, connection);
+      for (const reader of requiredReaders ?? (await this.recipients(policy.ownerId, connection)).map(item => item.binding))
+        if (!policy.readers.some(next => canonical(next) === canonical(reader)))
+          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
+      const next = { ...row.receipt, content };
+      await verifyReceipt(next, row.request.intent);
+      await connection.query('UPDATE execution_tasks SET receipt=$2,owner_id=$3 WHERE id=$1', [policy.id, JSON.stringify(next), policy.ownerId]);
+      await this.resources.audit.record(policy.ownerId, actor.id, 'result.protect', policy.id,
+        { policyRevision: policy.revision, materialRevision: content.materialRevision }, connection);
+      return { content, version: content.materialRevision };
+    };
+    return transaction ? persist(transaction) : this.resources.db.transaction(persist);
+  }
+
   async put(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[]) {
     const content = await verifyContent(input.content), policy = content.policy;
+    if (policy.contentType === ContentTypes.executionResult)
+      fail(400, 'wrong_kind', 'Use the protected result endpoint for execution results.');
     this.metadata(content);
     if (input.data && canonical(input.data) !== canonical(content.metadata))
       fail(400, 'invalid_metadata', 'Sign the public metadata together with its encrypted content.');
@@ -127,6 +180,8 @@ export class Custody {
       await this.bindings.requireCurrent(keys);
     const persist = async (connection: Queryable) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
+        fail(409, 'id_in_use', 'Choose a protected content ID that is not used by an execution.');
       const current = await this.resources.db.one<ResourceRow>(
         'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection,
       );
@@ -197,6 +252,8 @@ export class Custody {
 
   async putProduced(actor: Actor, input: ProtectedWrite) {
     const content = await verifyContent(input.content), policy = content.policy;
+    if (policy.contentType === ContentTypes.executionResult)
+      fail(400, 'wrong_kind', 'Deliver protected results together with their execution receipts.');
     this.metadata(content);
     const { binding } = await this.bindings.current(actor.id);
     if (policy.origin !== this.origin || content.signerId !== binding.id || !content.creationRunId)
@@ -227,6 +284,8 @@ export class Custody {
       fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
+        fail(409, 'id_in_use', 'Choose a protected content ID that is not used by an execution.');
       const current = await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection);
       if (current) {
         const previous = await this.get(policy.id, connection);

@@ -142,6 +142,84 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
 
+    def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
+        owner, principal = self.passkey_account("Chancellor Rigel")
+        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(paid.ok, paid.text())
+        response = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "dev-us の AI"}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        agent = response.json()
+        environment_id = self.executor(owner, agent, "dev-us").rsplit("/", 1)[1]
+        owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
+        owner.get_by_role("textbox", name="名前", exact=True).fill("Execution agent")
+        owner.get_by_role("button", name="追加", exact=True).click()
+        token = owner.get_by_role("textbox", name="APIキー", exact=True).input_value()
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = directory
+            login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
+                capture_output=True, text=True, input=token, env=environment, timeout=30)
+            self.assertEqual(login.returncode, 0, login.stderr)
+            fingerprint = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", """
+                import { readFile } from 'node:fs/promises';
+                import { join } from 'node:path';
+                import { fingerprint } from './shared/authority.ts';
+                const data = JSON.parse(await readFile(join(process.env.XDG_CONFIG_HOME, 'foundation/identity.json'), 'utf8'));
+                console.log(await fingerprint(data.identities.find(item => item.principalId === data.current).binding));
+            """], capture_output=True, text=True, env=environment, timeout=30)
+            self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
+            self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
+            owner.goto(ORIGIN + "/account/trust")
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            executor = owner.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
+            for identity_id, value in [(principal["id"], owner_fingerprint), (executor["id"], executor["fingerprint"])]:
+                trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", identity_id, "--fingerprint", value],
+                    capture_output=True, text=True, env=environment, timeout=30)
+                self.assertEqual(trusted.returncode, 0, trusted.stderr)
+            executed = subprocess.run(["node", "cli/dist/cli.mjs", "run", "--environment", environment_id, "--wait", "--timeout", "20", "--",
+                "node", "-e", 'console.log("本人の鍵で読める実行結果です。");'],
+                capture_output=True, text=True, env=environment, timeout=30)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            execution_id = json.loads(executed.stdout)["id"]
+        owner.evaluate("""async id => {
+            const db = await new Promise((resolve, reject) => {
+                const request = indexedDB.open('foundation-keys', 2);
+                request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+            });
+            await new Promise((resolve, reject) => {
+                const transaction = db.transaction('keys', 'readwrite');
+                transaction.objectStore('keys').delete('v2:' + id);
+                transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
+            });
+            db.close();
+        }""", agent["id"])
+        path = ORIGIN + "/executions/" + execution_id
+        owner.goto(path)
+        owner.wait_for_load_state("networkidle")
+        expect(owner.get_by_role("heading", name="実行の詳細", exact=True)).to_be_visible()
+        expect(owner.locator("main pre")).to_have_text("本人の鍵で読める実行結果です。\n")
+        owner.screenshot(path=str(ARTIFACTS / "execution-owner-output-ja.png"), full_page=True)
+        print("Rendered execution for its owner: " + owner.locator("main").inner_text(), flush=True)
+        signed_out = owner.request.post(ORIGIN + "/api/auth/signout", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(signed_out.ok, signed_out.text())
+        owner.evaluate("""async () => {
+            const db = await new Promise(resolve => {
+                const request = indexedDB.open('foundation-keys', 2); request.onsuccess = () => resolve(request.result);
+            });
+            await new Promise(resolve => {
+                const transaction = db.transaction('keys', 'readwrite');
+                transaction.objectStore('keys').clear(); transaction.oncomplete = resolve;
+            });
+            db.close();
+        }""")
+        owner.goto(path)
+        owner.wait_for_url("**/signin?returnTo=**")
+        owner.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        owner.wait_for_url(path)
+        expect(owner.locator("main pre")).to_have_text("本人の鍵で読める実行結果です。\n")
+        owner.set_viewport_size({"width": 390, "height": 844})
+        owner.screenshot(path=str(ARTIFACTS / "execution-owner-output-after-signin-mobile-ja.png"), full_page=True)
+
     def test_完了した実行の処理と時刻を表示し鍵に応じて出力を案内する(self):
         page, principal = self.passkey_account("Execution initiator")
         environment_id = self.executor(page, principal, "dev-us").rsplit("/", 1)[1]
@@ -181,8 +259,9 @@ class BrowserTests(unittest.TestCase):
         def change_receipt(route):
             response = route.fetch()
             task = response.json()
-            ciphertext = task["receipt"]["sealed"]["ciphertext"]
-            task["receipt"]["sealed"]["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
+            sealed = task["receipt"]["content"]["sealed"] if "content" in task["receipt"] else task["receipt"]["sealed"]
+            ciphertext = sealed["ciphertext"]
+            sealed["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
             route.fulfill(response=response, json=task)
         page.route("**/api/runtime/runs/*", change_receipt)
         page.reload()
@@ -199,17 +278,17 @@ class BrowserTests(unittest.TestCase):
         expect(reader.locator("main").get_by_role("link", name="dev-us", exact=True)).to_be_visible()
         notice = reader.get_by_role("alert")
         expect(notice).to_have_count(1)
-        expect(notice).to_have_text("出力は暗号化されています。このブラウザーでは、実行を開始したプリンシパルの鍵を利用できないため表示できません。")
+        expect(notice).to_have_text("出力はこのアカウントに共有されていません。")
         reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-ja.png"), full_page=True)
         print("Rendered completed execution for viewer: " + reader.locator("main").inner_text(), flush=True)
         reader.reload()
         expect(reader.get_by_text("完了", exact=True)).to_be_visible()
-        expect(notice).to_contain_text("出力は暗号化されています。")
+        expect(notice).to_contain_text("出力はこのアカウントに共有されていません。")
         self.select(reader, "言語", "English")
         reader.set_viewport_size({"width": 390, "height": 844})
         expect(reader.get_by_role("heading", name="Execution details", exact=True)).to_be_visible()
         expect(reader.get_by_text("Completed", exact=True)).to_be_visible()
-        expect(notice).to_have_text("The output is encrypted. The initiating principal’s key is unavailable in this browser, so it cannot display the output.")
+        expect(notice).to_have_text("The output has not been shared with this account.")
         reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-mobile-en.png"), full_page=True)
         print("Rendered execution detail (English): " + reader.locator("main").inner_text(), flush=True)
 

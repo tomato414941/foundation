@@ -20,9 +20,11 @@ export const ContentTypes = {
   value: '03546b17-fa44-409f-b151-8da1a398b324',
   tokenSet: '7d4b64dd-4546-4acb-8e96-91f864bccea6',
   clientCredential: '714fc044-2cce-4f3f-a477-281ee64fe632',
+  executionResult: '71eacb19-c2e3-49cb-b7d3-f3f634f5c887',
 } as const;
-export const ContentType = z.enum([ContentTypes.value, ContentTypes.tokenSet, ContentTypes.clientCredential]);
+export const ContentType = z.enum([ContentTypes.value, ContentTypes.tokenSet, ContentTypes.clientCredential, ContentTypes.executionResult]);
 export type ContentTypeId = z.infer<typeof ContentType>;
+export const contentLimit = (type: ContentTypeId) => type === ContentTypes.executionResult ? 1_400_000 : 1_000_000;
 export const Operations = {
   http: 'bdf57b0a-bce9-4a1d-ad62-0ccd73578e7a',
   command: '85bb00b6-ca1e-478d-94ca-a217f0c73e49',
@@ -43,6 +45,7 @@ const permitted: Record<ContentTypeId, readonly OperationId[]> = {
   [ContentTypes.value]: [Operations.http, Operations.command, Operations.function],
   [ContentTypes.tokenSet]: [Operations.http, Operations.command, Operations.function, Operations.refresh, Operations.revoke],
   [ContentTypes.clientCredential]: [Operations.connect, Operations.refresh, Operations.revoke],
+  [ContentTypes.executionResult]: [],
 };
 export const permittedOperations = (type: ContentTypeId) => permitted[type];
 export const functionOperations = (type: ContentTypeId) => permittedOperations(type)
@@ -209,7 +212,8 @@ export async function protect(
   metadata?: Record<string, JsonValue>,
   previous?: CustodyContent,
 ): Promise<CustodyContent> {
-  if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
+  if (bytes.byteLength > contentLimit(input.contentType))
+    throw new Error('The content exceeds its storage limit.');
   const policy = await validatePolicy(input);
   const lineage = await nextLineage(previous, policy, signer, keys);
   if (!policy.authorities.some(binding => canonical(binding) === canonical(signer)) &&
@@ -243,7 +247,7 @@ export async function verifyContent(input: CustodyContent) {
     content.policy.producers.find(producer =>
       producer.executor.id === content.signerId && producer.runId === content.creationRunId &&
       producer.materialRevision === content.materialRevision &&
-      Date.parse(producer.expiresAt) > Date.parse(content.updatedAt),
+      (content.policy.contentType === ContentTypes.executionResult || Date.parse(producer.expiresAt) > Date.parse(content.updatedAt)),
     )?.executor ??
     (renewable(content.policy.contentType) ? content.policy.grants.find(grant =>
       grant.executor.id === content.signerId && grant.operations.includes(Operations.refresh) &&
@@ -311,10 +315,12 @@ export async function produceContent(
 ): Promise<CustodyContent> {
   const approval = await verifyPolicyApproval(input), { policy } = approval;
   const producer = policy.producers.find(producer => producer.runId === runId &&
-    canonical(producer.executor) === canonical(executor) && Date.parse(producer.expiresAt) > Date.now());
+    canonical(producer.executor) === canonical(executor) &&
+    (policy.contentType === ContentTypes.executionResult || Date.parse(producer.expiresAt) > Date.now()));
   if (!producer)
     throw new Error('Approve this execution before storing its output.');
-  if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
+  if (bytes.byteLength > contentLimit(policy.contentType))
+    throw new Error('The content exceeds its storage limit.');
   const sealed = await seal(bytes, policyRecipients(policy).map(binding => ({
     id: binding.id, publicKey: binding.encryption,
   })), await contentContext(policy, producer.materialRevision));
@@ -360,6 +366,7 @@ export const RunIntent = z.object({
   operationDigest: Fingerprint,
   sources: z.array(SourcePin).max(100),
   resultRecipients: z.array(KeyBinding).min(1).max(100),
+  resultApproval: PolicyApproval.optional(),
   createdAt: Time, expiresAt: Time,
 }).strict();
 export type ExecutionIntent = z.infer<typeof RunIntent>;
@@ -397,6 +404,16 @@ export async function verifyRun(input: SealedRun, now = Date.now()): Promise<Sea
   if (new Set(intent.sources.map(source => source.id)).size !== intent.sources.length ||
     new Set(intent.resultRecipients.map(binding => binding.id)).size !== intent.resultRecipients.length)
     throw new Error('Choose distinct inputs and result recipients.');
+  if (intent.resultApproval) {
+    const approval = await verifyPolicyApproval(intent.resultApproval), policy = approval.policy;
+    if (approval.authorityId !== intent.actor.id || policy.id !== intent.id || policy.origin !== intent.origin ||
+      policy.ownerId !== intent.ownerId || policy.contentType !== ContentTypes.executionResult || policy.revision !== 1 ||
+      policy.grants.length || !policy.authorities.some(authority => canonical(authority) === canonical(intent.actor)) ||
+      canonical(policy.readers) !== canonical(intent.resultRecipients) ||
+      policy.producers.length !== 1 || policy.producers[0]!.runId !== intent.id ||
+      canonical(policy.producers[0]!.executor) !== canonical(intent.executor) || policy.producers[0]!.materialRevision !== 1)
+      throw new Error('Approve this execution result for its readers and selected executor.');
+  }
   if (run.sealed.recipients.length !== 1 || run.sealed.recipients[0]!.header.kid !== intent.executor.id ||
     run.sealed.aad !== base64url(encode(await runContext(intent, 'input'))))
     throw new Error('Encrypt this operation for its selected executor.');

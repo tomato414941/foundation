@@ -59,6 +59,7 @@ Usage: foundation <command> [options]
   execution cancel ID                  Cancel a prepared operation
   execution run NAME --body JSON       Execute an operation (private material via --fields)
   execution continue ID [--fields JSON] Resume an operation awaiting private input
+  execution share-result ID            Share a legacy result using its existing permissions
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
@@ -469,6 +470,20 @@ async function main(argv: string[]) {
     else if (action === 'start') await output(await client.json('/api/executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, Execution), args);
     else if (action === 'respond') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, Execution), args);
     else if (action === 'cancel') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, Execution), args);
+    else if (action === 'share-result') {
+      const execution = await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, Execution);
+      const custody = privateClient(client).custody;
+      const shared = [];
+      for (const step of execution.steps) {
+        const reference = step.runs.at(-1);
+        if (reference?.kind !== 'run') continue;
+        const task = await client.json('/api/runtime/runs/' + reference.id, {}, Task);
+        const result = await custody.shareLegacyResult(task);
+        shared.push({ id: task.id, readers: result.receipt && 'content' in result.receipt
+          ? result.receipt.content.policy.readers.map(reader => reader.principalId) : [] });
+      }
+      await output({ id: execution.id, results: shared }, args);
+    }
     else if (action === 'run' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
       const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
@@ -485,7 +500,7 @@ async function main(argv: string[]) {
       const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
         : await operations.execute(invocation!, material);
       await output('flow' in result ? flowOutput(result) : result, args);
-    } else throw new Error('Choose execution list, start, respond, run, get, continue, or cancel.');
+    } else throw new Error('Choose execution list, start, respond, run, get, continue, share-result, or cancel.');
     return 0;
   }
   if (command === 'connect') {

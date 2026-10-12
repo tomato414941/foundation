@@ -17,7 +17,7 @@ import { Button } from './components/ui/button';
 import { DateText, Detail, ErrorNotice, JsonView, Notice } from './components';
 
 type Output = { state: 'available'; value: JsonValue; kind: RunKindName } |
-  { state: 'locked' } | { state: 'unrecorded' } | { state: 'unavailable'; error?: string } | { state: 'failed'; error: string };
+  { state: 'locked' } | { state: 'notShared' } | { state: 'unrecorded' } | { state: 'unavailable'; error?: string } | { state: 'failed'; error: string };
 export type StepDetails = {
   startedAt: string | null; finishedAt: string | null; environmentId: string | null;
   program: z.infer<typeof PrivateProgram>['operation'] | null;
@@ -46,15 +46,17 @@ export async function loadExecutionDetails(item: ExecutionView, canReadOutput: b
         return details;
       }
       if (!canReadOutput) { details.output = { state: 'locked' }; return details; }
-      const custody = await custodyClient(task.intent.actor.principalId);
-      if (canonical(custody.binding) !== canonical(task.intent.actor)) {
-        details.output = { state: 'locked' }; return details;
+      const custody = await custodyClient();
+      const readers = 'content' in task.receipt ? task.receipt.content.policy.readers : task.intent.resultRecipients;
+      if (!readers.some(reader => canonical(reader) === canonical(custody.binding))) {
+        details.output = { state: 'notShared' }; return details;
       }
       const result = await custody.result(task);
       details.output = result?.ok ? { state: 'available', value: result.result, kind: task.kind }
         : result?.error ? { state: 'failed', error: result.error.code } : { state: 'unrecorded' };
       const input = operation.input.operation;
-      if (input && typeof input === 'object' && !Array.isArray(input) && typeof input.programId === 'string') {
+      if (canonical(custody.binding) === canonical(task.intent.actor) &&
+        input && typeof input === 'object' && !Array.isArray(input) && typeof input.programId === 'string') {
         const program = await new SealedContinuationStore(custody).get(input.programId, PrivateProgram);
         if (program && await hash(reviewedProgram(program.operation)) === input.programDigest) details.program = program.operation;
       }
@@ -114,6 +116,7 @@ function OutputText({ text }: { text: string }) {
 export function ExecutionOutput({ output, invocation }: { output: Output; invocation: DefinitionCall }) {
   const { t } = useTranslation();
   if (output.state === 'locked') return <Notice>{t('executionOutputLocked')}</Notice>;
+  if (output.state === 'notShared') return <Notice>{t('executionOutputNotShared')}</Notice>;
   if (output.state === 'unrecorded') return <p className="text-muted-foreground">{t('executionNoRecordedOutput')}</p>;
   if (output.state === 'failed') return <ErrorNotice error={output.error} />;
   if (output.state === 'unavailable') return <Notice tone="warning">

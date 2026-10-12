@@ -5,7 +5,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import { validatorCompiler, serializerCompiler, jsonSchemaTransform } from '@fastify/type-provider-zod';
+import { validatorCompiler, serializerCompiler, jsonSchemaTransform, jsonSchemaTransformObject } from '@fastify/type-provider-zod';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
 
@@ -18,6 +18,8 @@ import { verifiedRelease } from './release.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
+import { AccessPolicy, PolicyApproval, ProtectedContent, RunIntent } from '../shared/custody.js';
+import { ExecutionReceipt, LegacyReceipt, SharedReceipt, Task } from '../shared/runtime-protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesRuntime } from './routes-runtime.js';
 import { routesProcesses } from './routes-processes.js';
@@ -29,6 +31,9 @@ import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
 import { web } from './web.js';
+
+for (const [id, schema] of Object.entries({ AccessPolicy, PolicyApproval, ProtectedContent, RunIntent,
+  ExecutionReceipt, LegacyReceipt, SharedReceipt, Task })) z.globalRegistry.add(schema, { id });
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -84,6 +89,7 @@ export async function buildApp(context: Context) {
       security: [{ bearer: [] }],
     },
     transform: jsonSchemaTransform,
+    transformObject: jsonSchemaTransformObject,
   });
   await app.register(swaggerUi, {
     routePrefix: '/api/docs',

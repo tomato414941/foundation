@@ -162,12 +162,12 @@ test('指定した関数の内容を照合し、任意のプログラムを動�
     grants: [{ ...policy.grants[0]!, callerProgram: false }] }, 1, owner.binding, owner.keys));
 });
 
-test('変数、接続情報、OAuthアプリに同じ宛先指定と暗号化を適用し、型を差し替えた内容を拒否する', async () => {
+test('変数、接続情報、OAuthアプリ、実行結果に同じ宛先指定と暗号化を適用し、型を差し替えた内容を拒否する', async () => {
   const { owner, policy } = await setup();
   for (const contentType of Object.values(ContentTypes)) {
     const value = contentType === ContentTypes.value ? 'value' : JSON.stringify({ accessToken: 'value', clientSecret: 'value' });
     const operations = permittedOperations(contentType).filter(operation => operation !== Operations.function);
-    const typed = { ...policy, contentType, grants: policy.grants.map(grant => ({ ...grant, operations })) };
+    const typed = { ...policy, contentType, grants: operations.length ? policy.grants.map(grant => ({ ...grant, operations })) : [] };
     const content = await protect(encode(value), typed, 1, owner.binding, owner.keys);
     assert.equal(decode(await reveal(content, owner.binding, owner.keys.encryption)), value);
     await assert.rejects(verifyContent({ ...content, policy: { ...content.policy,

@@ -50,6 +50,8 @@ export class Bindings {
         const inUse = await this.db.one(
           `SELECT 1 FROM resource_custody WHERE jsonb_path_exists(content,
             '$.policy.**.id ? (@ == $binding)', jsonb_build_object('binding',$1::text))
+           UNION ALL SELECT 1 FROM execution_tasks WHERE receipt ? 'content' AND jsonb_path_exists(receipt->'content',
+             '$.policy.**.id ? (@ == $binding)', jsonb_build_object('binding',$1::text))
            UNION ALL SELECT 1 FROM executor_environments WHERE registration->'manifest'->'executor'->>'id'=$1 LIMIT 1`,
           [previous.binding.id], connection,
         );

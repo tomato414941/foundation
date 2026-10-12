@@ -8,8 +8,8 @@ import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
 import { Operations, matchesPin, operationName, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
-import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
-import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
+import { Task, authorizeEnvironment, receiptHeader, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
+import type { RegisteredEnvironment, SharedResultReceipt, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { fail, required } from './errors.js';
 
 interface EnvironmentRow {
@@ -181,12 +181,21 @@ export class Delegation {
 
   async submit(actor: Actor, request: SealedRun) {
     const { run } = await this.validate(actor, request), { intent } = run;
+    if (intent.resultApproval) {
+      for (const recipient of await this.custody.recipients(intent.ownerId))
+        if (!intent.resultApproval.policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
+          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
+      for (const reader of intent.resultApproval.policy.readers) await this.bindings.requireCurrent(reader);
+    }
     const runActor: Actor = { id: actor.id,
       ...(actor.credentialId ? { credentialId: actor.credentialId } : {}),
       ...(actor.sessionId ? { sessionId: actor.sessionId } : {}),
     };
     return this.resources.db.transaction(async connection => {
+      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [intent.ownerId]);
+      if (await this.resources.db.one('SELECT 1 FROM resource_custody WHERE resource_id=$1', [intent.id], connection))
+        fail(409, 'id_in_use', 'Choose an execution ID that is not used by protected content.');
       const previous = await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1', [intent.id], connection);
       if (previous) {
         if (canonical(previous.request) !== canonical(run))
@@ -304,8 +313,14 @@ export class Delegation {
     if (row.request.intent.executor.principalId !== actor.id)
       fail(403, 'forbidden', 'Only the selected executor can complete this run.');
     await verifyReceipt(receipt, row.request.intent);
+    if ('content' in receipt) this.custody.metadata(receipt.content);
     if (row.receipt) {
-      if (canonical(row.receipt) !== canonical(receipt)) fail(409, 'run_settled', 'This run already has a final result.');
+      const same = 'content' in row.receipt && 'content' in receipt
+        ? canonical(receiptHeader(row.receipt)) === canonical(receiptHeader(receipt)) &&
+          canonical(row.receipt.approval) === canonical(receipt.approval)
+        : 'content' in row.receipt && row.receipt.previous
+          ? canonical(row.receipt.previous) === canonical(receipt) : canonical(row.receipt) === canonical(receipt);
+      if (!same) fail(409, 'run_settled', 'This run already has a final result.');
       await this.completed?.(this.view(row));
       return this.view(row);
     }
@@ -319,6 +334,29 @@ export class Delegation {
     if (!updated) fail(409, 'lease_lost', 'This run can no longer accept a result from that execution lease.');
     await this.completed?.(this.view(updated));
     return this.view(updated);
+  }
+
+  async shareResult(actor: Actor, id: string, receipt: SharedResultReceipt) {
+    await this.resources.authorization.active(actor);
+    return this.resources.db.transaction(async connection => {
+      const row = required(await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1 FOR UPDATE', [id], connection));
+      if (actor.id !== row.actor_id || !row.receipt || 'content' in row.receipt)
+        fail(403, 'forbidden', 'The original requester must share a completed legacy result.');
+      await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
+      if (receipt.id !== id || canonical(receipt.previous) !== canonical(row.receipt))
+        fail(409, 'changed', 'Preserve the original signed execution receipt.');
+      await verifyReceipt(receipt, row.request.intent);
+      this.custody.metadata(receipt.content);
+      for (const reader of [...receipt.content.policy.readers, ...receipt.content.policy.authorities])
+        await this.bindings.requireCurrent(reader, connection);
+      for (const recipient of await this.custody.recipients(row.owner_id, connection))
+        if (!receipt.content.policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
+          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
+      await connection.query('UPDATE execution_tasks SET receipt=$2 WHERE id=$1', [id, JSON.stringify(receipt)]);
+      await this.resources.audit.record(row.owner_id, actor.id, 'run.result.share', id,
+        { policyRevision: receipt.content.policy.revision }, connection);
+      return this.view({ ...row, receipt });
+    });
   }
 
   async cancel(actor: Actor, id: string) {
