@@ -342,6 +342,7 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable');
+  // Client credentials are entered with the connection itself, so only an application approved in a browser can be missing.
   const appMissing = data.kind === 'connection' && !!method && connectionMethod(method).requiresApp &&
     connectionMethod(method).browserAuthorization && matchingApps.length === 0;
   const spec = existing?.kind === 'function' ? FunctionDefinition.parse(existing.data) : undefined;

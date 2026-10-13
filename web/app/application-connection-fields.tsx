@@ -16,8 +16,10 @@ export function ApplicationConnectionFields({ purpose, method, existing, appMate
   }) {
   const { t } = useTranslation(), behavior = method ? connectionMethod(method) : undefined;
   const defaults = method?.kind === 'oauth' ? method.config.defaults : {};
-  // Client credentials are themselves the credential, with no one to approve them, so they can be entered with the
-  // connection, which registers them as its application. Other applications are registered beforehand.
+  // An authorization code application is registered on its own beforehand, because many people sign in and approve
+  // the same one. Client credentials, such as an OVHcloud service account, are themselves the credential: no one
+  // approves them and each connection has its own. Registering them as a separate step would only add a step, so they
+  // are entered with the connection, which registers them as its application.
   const direct = purpose === 'connection' && !!behavior?.requiresApp && !behavior.browserAuthorization;
   const [appId, setAppId] = useState(selectedAppId ?? (existing?.kind === 'connection' ? existing.data.appId ?? '' : apps[0]?.id ?? (direct ? 'new' : '')));
   const inline = direct && appId === 'new';
