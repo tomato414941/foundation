@@ -1,0 +1,63 @@
+{
+  "id": "vultr",
+  "name": "Vultr",
+  "api": "https://api.vultr.com/v2",
+  "docs": "https://www.vultr.com/api/",
+  "console": "https://console.vultr.com/",
+  "methods": {
+    "oauth": {
+      "name": "Vultr · Connect in browser",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "{+authorizationEndpoint}",
+        "tokenUrl": "https://api.vultr.com/v2/oidc/provider/{providerId}/token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "adapter": "vultr",
+        "fields": [
+          {
+            "name": "providerId",
+            "label": "OIDC provider ID",
+            "secret": false,
+            "note": "Enter the OIDC provider ID linked to your Vultr OAuth application."
+          },
+          {
+            "name": "authorizationEndpoint",
+            "label": "Authorization endpoint",
+            "secret": false,
+            "pattern": "^https://[a-z0-9.-]+\\.vultr\\.com/",
+            "note": "Copy authorization_endpoint from the provider's OpenID configuration. Use the Vultr authorization URL, not the token URL."
+          }
+        ],
+        "outputs": {
+          "VULTR_ACCESS_TOKEN": "/accessToken",
+          "VULTR_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "Register the Foundation callback URL on your Vultr OAuth application and attach the required permission policies. Draft applications can be authorized by allowlisted users; public applications require Vultr approval. Uses PKCE and renews access with rotating refresh tokens."
+      },
+      "docs": "https://docs.vultr.com/platform/iam/oauth/access-tokens/how-to-integrate-a-third-party-app-with-vultr-oauth",
+      "console": "https://console.vultr.com/"
+    },
+    "token": {
+      "name": "Vultr · Enter API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "note": "Use an API key with the permissions you need. For automation, you can use a service user's key. If API access is limited by IP, allow the machine that will call the API."
+          }
+        ],
+        "console": "https://console.vultr.com/settings/#settingsapi",
+        "outputs": {
+          "VULTR_API_KEY": "/token"
+        },
+        "hint": "Use VULTR_API_KEY with the Vultr CLI or as a Bearer token for the Vultr v2 API. Human and service-user API keys use this same authentication method."
+      },
+      "docs": "https://docs.vultr.com/platform/other/api",
+      "console": "https://console.vultr.com/settings/#settingsapi"
+    }
+  }
+}

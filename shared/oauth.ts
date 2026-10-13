@@ -61,15 +61,18 @@ export class OAuth {
       : oauth.ClientSecretPost(app.clientSecret);
   }
   private options(
-    format: OAuthSpec['tokenFormat'] = 'form',
+    spec?: OAuthSpec,
   ): oauth.HttpRequestOptions<'POST', URLSearchParams> {
+    const format = spec?.tokenFormat ?? 'form';
     return {
       [oauth.customFetch]: async (url, { body, headers, method, signal }) => {
+        const parameters = new URLSearchParams(body);
+        if (spec) oauthService(spec).tokenParameters?.(parameters);
         const response = await this.transport.send({
           url,
           method,
           headers: format === 'json' ? { ...headers, 'content-type': 'application/json' } : headers,
-          body: format === 'json' ? JSON.stringify(Object.fromEntries(body)) : body.toString(),
+          body: format === 'json' ? JSON.stringify(Object.fromEntries(parameters)) : parameters.toString(),
           signal,
         });
         return new Response(
@@ -218,7 +221,7 @@ export class OAuth {
           parameters,
           service.redirectUri?.(app, redirectUri) ?? redirectUri,
           spec.pkce ? verifier : oauth.nopkce,
-          { ...this.options(spec.tokenFormat), additionalParameters: spec.tokenParams },
+          { ...this.options(spec), additionalParameters: spec.tokenParams },
         );
       } catch (error) {
         if (
@@ -246,7 +249,7 @@ export class OAuth {
     const response = await oauth.clientCredentialsGrantRequest(
       server, client, this.authentication(app, spec.clientAuth),
       service.clientCredentialsParameters?.(parameters) ?? parameters,
-      this.options(spec.tokenFormat),
+      this.options(spec),
     );
     const data = await this.tokenResponse(spec, app, response);
     const received = { ...this.token(spec, data, scopes, previous, Boolean(previous)), requestedScopes: scopes };
@@ -269,7 +272,7 @@ export class OAuth {
         client,
         this.authentication(app, spec.clientAuth),
         previous.refreshToken,
-        { ...this.options(spec.tokenFormat), additionalParameters: spec.tokenParams },
+        { ...this.options(spec), additionalParameters: spec.tokenParams },
       );
       const data = await this.tokenResponse(spec, app, response, true);
       current = this.token(spec, data, previous.scopes, previous, true);

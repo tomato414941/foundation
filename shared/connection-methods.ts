@@ -47,7 +47,7 @@ export function requiresApp(method: MethodDescription) {
 // These endpoints currently reject browser token exchanges. Other endpoints are tried directly.
 const cliTokenHosts = new Set(['airtable.com', 'dash.cloudflare.com', 'api.ebay.com', 'accounts.secure.freee.co.jp',
   'github.com', 'id.heroku.com', 'api.hubapi.com', 'api.netlify.com', 'api.notion.com', 'api.render.com',
-  'login.salesforce.com', 'cloud.digitalocean.com', 'api.x.com', 'zoom.us']);
+  'login.salesforce.com', 'cloud.digitalocean.com', 'api.vultr.com', 'api.x.com', 'zoom.us']);
 export function browserExchange(method: MethodDescription): 'available' | 'unavailable' | 'unknown' {
   if (!connectionMethod(method).browserAuthorization || method.kind === 'ovh') return 'available';
   if (method.kind !== 'oauth') return 'available';

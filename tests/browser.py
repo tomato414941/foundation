@@ -699,6 +699,22 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="追加", exact=True).click()
         expect(page.get_by_text("Automation は Browser account の代理", exact=True)).to_be_visible()
 
+    def test_VultrとRunPodのAPIキー接続を画面から作成する(self):
+        page, principal = self.passkey_account("Compute account")
+        for service in ["Vultr", "RunPod"]:
+            with self.subTest(service=service):
+                page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
+                self.select(page, "サービス", service)
+                name = service + " API"
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                page.get_by_label("APIキー", exact=True).fill(service.lower() + "-browser-test-key")
+                page.screenshot(path=str(ARTIFACTS / (service.lower() + "-connection-input-ja.png")), full_page=True)
+                print("Rendered " + service + " connection: " + page.locator("main").inner_text(), flush=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
+                expect(page.get_by_text("接続済み", exact=True)).to_be_visible()
+                expect(page.get_by_text(service, exact=True)).to_be_visible()
+
     def test_HFの登録を依頼して所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
         import tempfile
         sender, _ = self.passkey_account("HF requester")
@@ -1366,14 +1382,21 @@ class BrowserTests(unittest.TestCase):
 
     def test_CLIが必要な方式を認可前に案内し暗号化した入力からCLIへ引き継ぐ(self):
         page, principal = self.passkey_account("CLI authorization owner")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=github:oauth")
-        expect(page.get_by_text("この方式の認可は、同じ端末のFoundation CLIで続けます。", exact=True)).to_be_visible()
-        expect(page.get_by_text("アクセストークンを入力する方式なら、ブラウザで保存できます。", exact=True)).to_be_visible()
-        page.get_by_label("クライアントID", exact=True).fill("github-client")
-        page.get_by_label("クライアントシークレット", exact=True).fill("github-client-secret")
-        page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "oauth-cli-registration-ja.png"), full_page=True)
+        for service in ["github", "vultr"]:
+            with self.subTest(service=service):
+                page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service={service}&method={service}:oauth")
+                expect(page.get_by_text("この方式の認可は、同じ端末のFoundation CLIで続けます。", exact=True)).to_be_visible()
+                expect(page.get_by_text("APIキーやアクセストークンを入力する方式は、ブラウザで保存できます。", exact=True)).to_be_visible()
+                page.get_by_label("クライアントID", exact=True).fill(service + "-client")
+                page.get_by_label("クライアントシークレット", exact=True).fill(service + "-client-secret")
+                if service == "vultr":
+                    page.get_by_label("OIDCプロバイダーID", exact=True).fill("vultr-test-provider")
+                    page.get_by_label("認可URL", exact=True).fill("https://console.vultr.com/oauth/authorize")
+                page.screenshot(path=str(ARTIFACTS / (service + "-oauth-input-ja.png")), full_page=True)
+                print("Rendered " + service + " OAuth: " + page.locator("main").inner_text(), flush=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
+                page.screenshot(path=str(ARTIFACTS / (service + "-oauth-cli-registration-ja.png")), full_page=True)
 
     def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
         owner, principal = self.passkey_account("OVH request owner")

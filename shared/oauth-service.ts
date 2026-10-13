@@ -11,6 +11,7 @@ export interface OAuthService {
   accessTokenField?: string;
   recognizedTokenTypes?: oauth.RecognizedTokenTypes;
   normalizeToken?(data: Record<string, unknown>): void;
+  tokenParameters?(parameters: URLSearchParams): void;
   clientCredentialsParameters?(parameters: Record<string, string>): Record<string, string>;
   revokeRequest?(context: ServiceContext & { url: string; current: OAuthToken }): OutboundRequest;
 }
@@ -49,6 +50,15 @@ const githubRevocation: OAuthService = {
     }, body: JSON.stringify({ access_token: current.accessToken }) };
   },
 };
+const vultr: OAuthService = {
+  tokenParameters(parameters) {
+    const redirect = parameters.get('redirect_uri');
+    if (redirect !== null) {
+      parameters.set('redirect_url', redirect);
+      parameters.delete('redirect_uri');
+    }
+  },
+};
 export function oauthService(spec: OAuthSpec, endpoint?: string): OAuthService {
   const url = endpoint ? new URL(endpoint) : undefined;
   return { recognizedTokenTypes: tokenTypes,
@@ -61,7 +71,7 @@ export function oauthService(spec: OAuthSpec, endpoint?: string): OAuthService {
     ...(url?.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/token' ? {
       normalizeToken(data: Record<string, unknown>) { if (data.refresh_token === null) delete data.refresh_token; },
     } : {}),
-    ...(spec.adapter === 'ebay' ? ebay : spec.adapter === 'openrouter' ? openrouter : {}),
+    ...(spec.adapter === 'ebay' ? ebay : spec.adapter === 'openrouter' ? openrouter : spec.adapter === 'vultr' ? vultr : {}),
     ...(spec.revoke?.style === 'github' ? githubRevocation : {}),
   };
 }

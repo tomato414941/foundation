@@ -1,0 +1,30 @@
+{
+  "id": "runpod",
+  "name": "RunPod",
+  "api": "https://rest.runpod.io/v1",
+  "docs": "https://docs.runpod.io/",
+  "console": "https://console.runpod.io/user/credentials",
+  "methods": {
+    "token": {
+      "name": "RunPod · Enter API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "note": "Create a key in Credentials → API Keys. Limit access to the APIs and endpoints you need. Managing resources requires write access. S3 storage uses a separate S3 API key."
+          }
+        ],
+        "console": "https://console.runpod.io/user/credentials",
+        "outputs": {
+          "RUNPOD_API_KEY": "/token"
+        },
+        "hint": "Use RUNPOD_API_KEY with runpodctl and the RunPod SDK, or as a Bearer token for the REST, GraphQL, and Serverless APIs. Access is limited by the key's permissions."
+      },
+      "docs": "https://docs.runpod.io/get-started/credentials",
+      "console": "https://console.runpod.io/user/credentials"
+    }
+  }
+}

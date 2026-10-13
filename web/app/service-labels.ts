@@ -40,6 +40,9 @@ export const serviceLabels: Record<string, string> = {
   'netlify.token.token.label': 'Personal access token',
   'notion.token.token.label': '内部インテグレーションのシークレット',
   'openrouter.token.token.label': 'APIキー',
+  'runpod.token.token.label': 'APIキー',
+  'runpod.token.token.note':
+    '「Credentials → API Keys」でキーを作成し、必要なAPIとエンドポイントへの権限を選んでください。リソースの変更には書き込み権限が必要です。S3ストレージには別のS3 APIキーを使います。',
   'sakura.token.token.label': 'APIキー',
   'sakura.token.token.note':
     'さくらのVPSのAPIキーを入力してください。さくらのクラウドのAPIキーとは異なります。',
@@ -49,6 +52,14 @@ export const serviceLabels: Record<string, string> = {
   'shopify.token.shop.placeholder': 'example（example.myshopify.com の場合）',
   'shopify.token.token.label': 'Admin APIのアクセストークン',
   'slack.token.token.label': 'Bot User OAuth Token',
+  'vultr.oauth.providerId.label': 'OIDCプロバイダーID',
+  'vultr.oauth.providerId.note': 'VultrのOAuthアプリに紐づくOIDCプロバイダーのIDを入力してください。',
+  'vultr.oauth.authorizationEndpoint.label': '認可URL',
+  'vultr.oauth.authorizationEndpoint.note':
+    'OIDCプロバイダーのOpenID設定にある認可URL（authorization_endpoint）を入力してください。',
+  'vultr.token.token.label': 'APIキー',
+  'vultr.token.token.note':
+    '必要な権限を持つAPIキーを入力してください。自動処理にはサービスユーザーのキーも使えます。APIの接続元IPを制限している場合は、APIを呼び出す端末のIPを許可してください。',
   'x.token.token.label': 'Bearer Token',
   'xserver.token.token.label': 'APIキー',
   'xserver.token.token.note': 'xs_で始まるAPIキーを入力してください。',
