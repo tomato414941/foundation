@@ -45,7 +45,22 @@ export function registrationMaterial(input: RegistrationInput, previous?: Connec
 }
 export const OvhAuthorization = z.object({ consumerKey: z.string().min(1).max(16384), validationUrl: z.url() });
 export async function authorizeRegistration(input: RegistrationInput, transport: Transport, state: string, verifier: string, redirectUri: string) {
-  if (input.method.kind === 'oauth') return { url: await new OAuth(transport).authorize(input.method.config, input.app!, state, verifier, redirectUri, input.scopes) };
+  if (input.method.kind === 'oauth') {
+    if (input.method.config.registrationUrl && !input.app!.clientId) {
+      if (input.method.config.application !== 'implicit' || input.method.config.clientAuth !== 'none')
+        throw new Error('Use dynamic registration only with an implicit public OAuth client.');
+      const response = await transport.send({ url: publicUrl(input.method.config.registrationUrl).href,
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+          client_name: 'Foundation', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code'], response_types: ['code'],
+        }) });
+      if (response.status >= 400) throw new Error('The service could not register this connection.');
+      const registered = z.object({ client_id: z.string().min(1).max(1000),
+        token_endpoint_auth_method: z.literal('none').optional() }).parse(responseJson(response));
+      input.app!.clientId = registered.client_id;
+    }
+    return { url: await new OAuth(transport).authorize(input.method.config, input.app!, state, verifier, redirectUri, input.scopes) };
+  }
   if (input.method.kind !== 'ovh' || input.method.config.authorization !== 'consumer_key')
     throw new Error('Choose a browser authorization method.');
   const redirect = new URL(redirectUri); redirect.searchParams.set('state', state);
@@ -69,5 +84,7 @@ export async function exchangeRegistration(input: RegistrationInput, transport: 
   if (input.method.kind === 'ovh') return ConnectionMaterial.parse({ ...base, fields: { ...base.fields, consumerKey: OvhAuthorization.parse(ovh).consumerKey } });
   if (input.method.kind !== 'oauth') throw new Error('Choose a browser authorization method.');
   const oauth = await new OAuth(transport).exchange(input.method.config, input.app!, { parameters: query, state }, verifier, redirectUri, input.scopes);
-  return ConnectionMaterial.parse({ ...base, oauth });
+  return ConnectionMaterial.parse({ ...base, oauth,
+    ...(input.method.config.registrationUrl && !input.appId ? { implicitApp: input.app } : {}),
+  });
 }

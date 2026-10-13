@@ -57,5 +57,22 @@
       "docs": "https://render.com/docs/api",
       "console": "https://dashboard.render.com/u/settings"
     }
-  }
+  },
+  "targets": [
+    {
+      "id": "api",
+      "name": "REST API",
+      "api": "https://api.render.com/v1",
+      "methods": [
+        "token"
+      ]
+    },
+    {
+      "id": "mcp",
+      "name": "MCP",
+      "methods": [
+        "oauth"
+      ]
+    }
+  ]
 }

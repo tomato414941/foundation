@@ -9,6 +9,8 @@ import { OvhConnectionFields, OvhConnectionHelp } from './ovh-connection-form';
 import { ServiceFields } from './connection-fields';
 import type { ConnectionFieldsProps } from './connection-fields';
 import { formText } from './api';
+import { Notice } from './components';
+import { useTranslation } from 'react-i18next';
 
 export interface ConnectionPreparationProps {
   method?: CatalogConnectionMethod;
@@ -17,12 +19,16 @@ export interface ConnectionPreparationProps {
 }
 interface ConnectionForm {
   Fields?: ComponentType<ConnectionFieldsProps>;
-  Help?: ComponentType<{ method?: CatalogConnectionMethod }>;
+  Help?: ComponentType<{ method?: CatalogConnectionMethod; connecting?: boolean }>;
   Preparation?: ComponentType<ConnectionPreparationProps & { active: boolean }>;
   settings?(form: FormData, previous?: ConnectionState): { scopes?: string[]; aws?: ReturnType<typeof awsConnectionSettings> };
   needsMaterial?(form: FormData): boolean;
 }
 const forms: Record<ConnectionFamily, ConnectionForm> = {
+  approval: { Help: () => {
+    const { t } = useTranslation();
+    return <Notice tone="info">{t('runpodApprovalHelp')}</Notice>;
+  } },
   oauth: { Fields: OAuthConnectionFields, Help: OAuthConnectionHelp,
     settings: form => form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {} },
   token: { Fields: props => props.purpose === 'connection' && props.method?.kind === 'token'

@@ -19,14 +19,16 @@
             "name": "providerId",
             "label": "OIDC provider ID",
             "secret": false,
-            "note": "Enter the OIDC provider ID linked to your Vultr OAuth application."
+            "note": "Enter the OIDC provider ID linked to your Vultr OAuth application.",
+            "visibility": "application"
           },
           {
             "name": "authorizationEndpoint",
             "label": "Authorization endpoint",
             "secret": false,
             "pattern": "^https://[a-z0-9.-]+\\.vultr\\.com/",
-            "note": "Copy authorization_endpoint from the provider's OpenID configuration. Use the Vultr authorization URL, not the token URL."
+            "note": "Copy authorization_endpoint from the provider's OpenID configuration. Use the Vultr authorization URL, not the token URL.",
+            "visibility": "application"
           }
         ],
         "outputs": {
@@ -58,6 +60,174 @@
       },
       "docs": "https://docs.vultr.com/platform/other/api",
       "console": "https://console.vultr.com/settings/#settingsapi"
+    },
+    "s3": {
+      "name": "Vultr · Enter S3 credentials",
+      "kind": "token",
+      "docs": "https://docs.vultr.com/products/storage/object-storage/management/manage-credentials",
+      "console": "https://console.vultr.com/",
+      "config": {
+        "fields": [
+          {
+            "name": "endpoint",
+            "label": "S3 endpoint URL",
+            "secret": false,
+            "pattern": "^https://[a-z0-9.-]+/?$",
+            "note": "Use the HTTPS URL for the hostname shown in the Object Storage subscription."
+          },
+          {
+            "name": "region",
+            "label": "Signing region",
+            "secret": false,
+            "note": "Use the signing region configured for your S3 client.",
+            "defaultValue": "us-east-1"
+          },
+          {
+            "name": "accessKeyId",
+            "label": "S3 access key",
+            "secret": true
+          },
+          {
+            "name": "secretAccessKey",
+            "label": "S3 secret key",
+            "secret": true
+          }
+        ],
+        "outputs": {
+          "AWS_ACCESS_KEY_ID": "/accessKeyId",
+          "AWS_SECRET_ACCESS_KEY": "/secretAccessKey",
+          "AWS_REGION": "/region",
+          "AWS_DEFAULT_REGION": "/region",
+          "AWS_ENDPOINT_URL_S3": "/endpoint",
+          "S3_ENDPOINT_URL": "/endpoint",
+          "AWS_SESSION_TOKEN": "/sessionToken"
+        },
+        "hint": "Use these credentials with S3-compatible clients. AWS_ENDPOINT_URL_S3 selects this storage endpoint; these are not AWS account credentials.",
+        "bindFields": true,
+        "constants": {
+          "sessionToken": ""
+        }
+      }
+    },
+    "role": {
+      "name": "Vultr · Assume IAM role",
+      "kind": "token",
+      "docs": "https://docs.vultr.com/platform/iam/roles/assumed-roles/how-to-assume-a-role",
+      "console": "https://console.vultr.com/",
+      "config": {
+        "resolver": "vultr-role",
+        "fields": [
+          {
+            "name": "authentication",
+            "label": "Authentication source",
+            "secret": false,
+            "defaultValue": "api_key",
+            "choices": [
+              {
+                "value": "api_key",
+                "label": "API key"
+              },
+              {
+                "value": "oidc",
+                "label": "OIDC identity"
+              },
+              {
+                "value": "instance",
+                "label": "Vultr instance identity"
+              }
+            ]
+          },
+          {
+            "name": "roleId",
+            "label": "IAM role ID",
+            "secret": false
+          },
+          {
+            "name": "userId",
+            "label": "User ID",
+            "secret": false,
+            "when": {
+              "field": "authentication",
+              "values": [
+                "api_key"
+              ]
+            }
+          },
+          {
+            "name": "issuerId",
+            "label": "OIDC issuer ID",
+            "secret": false,
+            "when": {
+              "field": "authentication",
+              "values": [
+                "oidc"
+              ]
+            }
+          },
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "when": {
+              "field": "authentication",
+              "values": [
+                "api_key"
+              ]
+            }
+          },
+          {
+            "name": "credential",
+            "label": "OIDC token",
+            "secret": true,
+            "required": false,
+            "when": {
+              "field": "authentication",
+              "values": [
+                "oidc"
+              ]
+            },
+            "note": "Leave blank to read a current OIDC token from VULTR_OIDC_TOKEN_FILE or VULTR_OIDC_TOKEN on the executor."
+          },
+          {
+            "name": "sessionName",
+            "label": "Session name",
+            "secret": false,
+            "defaultValue": "Foundation"
+          },
+          {
+            "name": "duration",
+            "label": "Session duration (seconds)",
+            "secret": false,
+            "defaultValue": "3600",
+            "pattern": "^[0-9]{1,9}$",
+            "note": "The role trust and maximum session duration are configured in Vultr."
+          }
+        ],
+        "outputs": {
+          "VULTR_ACCESS_TOKEN": "/accessToken",
+          "VULTR_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "Obtain and renew a temporary role session when this connection is used. Instance identity is available only inside a Vultr server. OIDC can use a token file that your identity provider renews."
+      }
     }
-  }
+  },
+  "targets": [
+    {
+      "id": "api",
+      "name": "Cloud API",
+      "api": "https://api.vultr.com/v2",
+      "methods": [
+        "oauth",
+        "token",
+        "role"
+      ]
+    },
+    {
+      "id": "storage",
+      "name": "Object Storage",
+      "methods": [
+        "s3"
+      ]
+    }
+  ]
 }

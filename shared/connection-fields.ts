@@ -7,10 +7,17 @@ export class ConnectionFieldError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
+export function activeConnectionField(field: ConnectionField, values: Record<string, string>) {
+  return !field.when || values[field.when.field] === undefined || field.when.values.includes(values[field.when.field]!);
+}
+
 export function connectionFields(definitions: ConnectionField[], input: Record<string, string>, defaults = {}) {
   const reject = (code: string, message: string): never => { throw new ConnectionFieldError(code, message); };
   const values: Record<string, string> = { ...defaults, ...input };
+  for (const field of definitions) if (values[field.name] === undefined && field.defaultValue !== undefined)
+    values[field.name] = field.defaultValue;
   for (const field of definitions) {
+    if (!activeConnectionField(field, values)) { delete values[field.name]; continue; }
     if (field.required !== false && !values[field.name]) reject('missing_field', 'Complete the required service fields.');
     if (values[field.name]?.includes('\0')) reject('invalid_field', 'Check the service fields.');
     if (field.choices && values[field.name] && !field.choices.some(choice => choice.value === values[field.name]))
@@ -46,7 +53,7 @@ export function publicConnectionFields(definitions: ConnectionField[], input: Re
     if (field.secret !== false && value !== '')
       throw new ConnectionFieldError('encrypted_input_required', 'Supply private material directly with your encryption keys.');
   }
-  return connectionFields(definitions.map(field => ({ ...field, required: false })), input);
+  return connectionFields(definitions.map(field => ({ ...field, required: false, defaultValue: undefined })), input);
 }
 
 export function visibleConnectionFields(definitions: ConnectionField[], input: Record<string, string>) {

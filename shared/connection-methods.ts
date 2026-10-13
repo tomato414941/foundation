@@ -25,6 +25,9 @@ export function connectionMethod(method: MethodDescription): ConnectionMethodBeh
     case 'token':
       return { family: 'token', application: 'none', requiresApp: false, browserAuthorization: false,
         fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
+    case 'approval':
+      return { family: 'approval', application: 'none', requiresApp: false, browserAuthorization: true,
+        fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
     case 'ovh': {
       const browser = method.config.authorization === 'consumer_key';
       return { family: 'ovh', application: browser ? 'required' : 'none', requiresApp: browser,
@@ -49,6 +52,7 @@ const cliTokenHosts = new Set(['airtable.com', 'dash.cloudflare.com', 'api.ebay.
   'github.com', 'id.heroku.com', 'api.hubapi.com', 'api.netlify.com', 'api.notion.com', 'api.render.com',
   'login.salesforce.com', 'cloud.digitalocean.com', 'api.vultr.com', 'api.x.com', 'zoom.us']);
 export function browserExchange(method: MethodDescription): 'available' | 'unavailable' | 'unknown' {
+  if (method.kind === 'approval') return 'unavailable';
   if (!connectionMethod(method).browserAuthorization || method.kind === 'ovh') return 'available';
   if (method.kind !== 'oauth') return 'available';
   try {

@@ -46,6 +46,7 @@ export class Catalog {
         if (typeof value !== 'string') methods.set(methodId, MethodDefinition.parse(value));
         references[key] = methodId;
       }
+      catalog.checkTargets(input);
       definitions.set(id, ServiceDefinition.parse({ ...input, methods: references }));
     }
     for (const service of definitions.values())
@@ -54,6 +55,16 @@ export class Catalog {
           throw new Error('A catalog service references an unknown connection method.');
     resources.connectionServices = (actor, methodId) => catalog.servicesForMethod(actor, methodId);
     return catalog;
+  }
+  private checkTargets(input: ServiceDefinitionInput) {
+    const ids = new Set<string>();
+    for (const target of input.targets ?? []) {
+      if (ids.has(target.id) || target.methods.some(key => !(key in input.methods)))
+        fail(400, 'invalid_target', 'Use unique connection targets and their declared methods.');
+      ids.add(target.id);
+    }
+    if (input.targets?.length && Object.keys(input.methods).some(key => !input.targets!.some(target => target.methods.includes(key))))
+      fail(400, 'invalid_target', 'Assign every connection method to a target.');
   }
   private async methodName(ownerId: string, name: string, connection: Queryable) {
     const prefix = name.slice(0, 180);
@@ -87,6 +98,7 @@ export class Catalog {
     input: ServiceDefinitionInput,
     connection: Queryable,
   ): Promise<ServiceDescription> {
+    this.checkTargets(input);
     const references: Record<string, string> = {};
     for (const [key, value] of Object.entries(input.methods)) {
       if (typeof value === 'string') {
@@ -131,10 +143,18 @@ export class Catalog {
     for (const method of methods) {
       const names = [...new Set(services.filter(([, service]) => Object.values(service.methods).includes(method.id)).map(([, service]) => service.name))];
       if (names.length === 1) method.defaultName = names[0]!;
+      const targets = services.flatMap(([, service]) => (service.targets ?? [])
+        .filter(target => target.methods.some(key => service.methods[key] === method.id))
+        .map(target => service.name + ' / ' + target.name));
+      if (targets.length === 1) method.defaultName = targets[0]!;
       if (method.registration.device !== 'cli') continue;
       const siblings = new Set(services.filter(([, service]) => Object.values(service.methods).includes(method.id))
-        .flatMap(([, service]) => Object.values(service.methods)));
-      method.registration.tokenAlternatives = methods.filter(candidate => siblings.has(candidate.id) && candidate.kind === 'token').map(candidate => candidate.id);
+        .flatMap(([, service]) => service.targets?.length
+          ? service.targets.filter(target => target.methods.some(key => service.methods[key] === method.id))
+            .flatMap(target => target.methods.map(key => service.methods[key]!))
+          : Object.values(service.methods)));
+      method.registration.tokenAlternatives = methods.filter(candidate => siblings.has(candidate.id) &&
+        candidate.kind === 'token' && !candidate.config.resolver).map(candidate => candidate.id);
     }
     return methods;
   }

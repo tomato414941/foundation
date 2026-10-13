@@ -3,6 +3,8 @@ import { connectionMethod } from '../../shared/connection-methods';
 
 interface ServicePreparation { instructions: string[]; scopes: boolean; docs?: boolean }
 const preparations: Array<{ authorization: 'application' | 'browser'; matches(method: CatalogConnectionMethod): boolean; preparation: ServicePreparation }> = [
+  { authorization: 'browser', matches: method => method.id === 'runpod:mcp-oauth',
+    preparation: { instructions: [], scopes: false } },
   { authorization: 'application', matches: method => method.id === 'shopify:client_credentials',
     preparation: { instructions: ['shopifyClientCredentialsHelp'], scopes: false } },
   { authorization: 'application', matches: method => method.id.startsWith('ovh:'),

@@ -9,6 +9,10 @@ const labels: Record<string, string> = {
   'Enter bot token': 'enterBotToken',
   'Enter integration secret': 'enterIntegrationSecret',
   'Enter credentials': 'enterCredentials',
+  'Enter S3 credentials': 'enterS3Credentials',
+  'Enter Robot credentials': 'enterRobotCredentials',
+  'Assume IAM role': 'assumeIamRole',
+  'Authorize through Flash': 'authorizeThroughFlash',
   'AWS authentication': 'awsAuthentication',
 };
 

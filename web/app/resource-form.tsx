@@ -289,8 +289,10 @@ export default function ResourceForm() {
   const back = existing
     ? resourcePath(existing)
     : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
-  const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).application !== 'none');
+  const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).requiresApp);
   const preferred = (methods: CatalogConnectionMethod[]) =>
+    methods.find(method => method.registration.device === 'browser' && connectionMethod(method).browserAuthorization &&
+      !connectionMethod(method).requiresApp) ??
     methods.find(method => method.registration.device === 'browser' && !connectionMethod(method).requiresApp) ??
     methods.find(method => method.registration.device === 'browser') ?? methods[0];
   const [serviceId, setServiceId] = useState(
@@ -303,13 +305,21 @@ export default function ResourceForm() {
         : (data.serviceId ?? (data.methodId ? '' : (data.catalog[0]?.id ?? ''))),
   );
   const service = data.catalog.find((item) => item.id === serviceId);
-  const offered = (entry: typeof service) =>
+  const initialMethod = existing && (existing.kind === 'connection' || existing.kind === 'app')
+    ? existing.data.methodId : data.methodId;
+  const [targetId, setTargetId] = useState(service?.targets?.find(target =>
+    target.methods.some(key => service.methods[key]?.id === initialMethod))?.id ?? service?.targets?.[0]?.id ?? '');
+  const targets = service?.targets?.filter(target => target.methods.some(key =>
+    eligibleMethods.some(method => method.id === service.methods[key]?.id))) ?? [];
+  const target = targets.find(item => item.id === targetId) ?? targets[0];
+  const offered = (entry: typeof service, selectedTarget?: string) =>
     entry
-      ? Object.values(entry.methods).flatMap((method) =>
+      ? Object.entries(entry.methods).filter(([key]) => !entry.targets?.length ||
+          (entry.targets.find(item => item.id === selectedTarget) ?? entry.targets[0])?.methods.includes(key)).flatMap(([, method]) =>
           eligibleMethods.filter((item) => item.id === method.id),
         )
       : eligibleMethods;
-  const methods = offered(service);
+  const methods = offered(service, target?.id);
   const [methodId, setMethodId] = useState(
     existing && (existing.kind === 'connection' || existing.kind === 'app')
       ? existing.data.methodId
@@ -332,6 +342,7 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable');
+  const appMissing = data.kind === 'connection' && !!method && connectionMethod(method).requiresApp && matchingApps.length === 0;
   const spec = existing?.kind === 'function' ? FunctionDefinition.parse(existing.data) : undefined;
   const [programKind, setProgramKind] = useState(spec?.program.kind ?? 'command');
   const unavailable =
@@ -448,7 +459,10 @@ export default function ResourceForm() {
                         const selectedId = value === 'none' ? '' : value;
                         setServiceId(selectedId);
                         const next = data.catalog.find((item) => item.id === selectedId);
-                        setMethodId(preferred(offered(next))?.id ?? '');
+                        const nextTarget = next?.targets?.find(target => target.methods.some(key =>
+                          eligibleMethods.some(method => method.id === next.methods[key]?.id)));
+                        setTargetId(nextTarget?.id ?? '');
+                        setMethodId(preferred(offered(next, nextTarget?.id))?.id ?? '');
                       }}
                     >
                       <SelectItem value="none">{t('allMethods')}</SelectItem>
@@ -464,8 +478,16 @@ export default function ResourceForm() {
                           </SelectItem>
                         ))}
                     </SelectField>
+                    {targets.length > 1 && <SelectField label={t('serviceTarget')}
+                      value={target?.id ?? ''} disabled={!!existing && data.kind !== 'connection'}
+                      onValueChange={value => {
+                        setTargetId(value);
+                        setMethodId(preferred(offered(service, value))?.id ?? '');
+                      }}>
+                      {targets.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+                    </SelectField>}
                     <SelectField
-                      key={serviceId}
+                      key={serviceId + ':' + (target?.id ?? '')}
                       name="methodId"
                       label={t('method')}
                       value={methodId}
@@ -498,7 +520,8 @@ export default function ResourceForm() {
                       </Notice>
                     )}
                     <ConnectionFields key={methodId} purpose={data.kind === 'app' ? 'app' : 'connection'}
-                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} reusableFields={data.connection?.reusableFields} />
+                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} reusableFields={data.connection?.reusableFields}
+                      appSetupUrl={method ? `/p/${principal.id}/apps/new?method=${encodeURIComponent(method.id)}&service=${encodeURIComponent(serviceId)}` : undefined} />
                   </Panel>
                 )}
                 {executorChoice}
@@ -568,7 +591,7 @@ export default function ResourceForm() {
                   />
                 )}
               </>
-            {data.kind !== 'environment' && !unavailable && !methodUnavailable && (
+            {data.kind !== 'environment' && !unavailable && !methodUnavailable && !appMissing && (
               <SaveBar
                 back={back}
                 label={

@@ -147,11 +147,15 @@ const Field = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/),
   label: z.string(),
   secret: z.boolean().optional(),
+  inputType: z.enum(['text', 'password']).optional(),
   required: z.boolean().optional(),
   placeholder: z.string().optional(),
   note: z.string().optional(),
   pattern: z.string().optional(),
   choices: z.array(FieldChoice).min(1).max(100).optional(),
+  defaultValue: z.string().max(1000).optional(),
+  when: z.object({ field: z.string(), values: z.array(z.string()).min(1) }).strict().optional(),
+  visibility: z.enum(['application', 'connection']).optional(),
 }).superRefine((field, context) => {
   const choices = field.choices ?? [];
   if (new Set(choices.map(choice => choice.value)).size !== choices.length)
@@ -173,6 +177,7 @@ export const OAuthDefinition = z.object({
   application: z.enum(['required', 'implicit']).default('required'),
   grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   issuer: z.url().optional(),
+  registrationUrl: z.url().optional(),
   authorizeUrl: UrlTemplate.optional(),
   tokenUrl: UrlTemplate,
   // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
@@ -212,6 +217,9 @@ export const OAuthDefinition = z.object({
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),
   outputs: OutputMap,
+  resolver: z.literal('vultr-role').optional(),
+  bindFields: z.boolean().optional(),
+  constants: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), z.string()).optional(),
   // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
   identity: z.object({
     url: UrlTemplate,
@@ -223,7 +231,7 @@ export const TokenDefinition = z.object({
   instructions: z.string().optional(),
   hint: z.string().optional(),
 });
-export const AuthKind = z.enum(['oauth', 'token', 'aws', 'ovh']);
+export const AuthKind = z.enum(['oauth', 'token', 'aws', 'ovh', 'approval']);
 export type AuthKindName = z.infer<typeof AuthKind>;
 export const AwsDefinition = z.object({ hint: z.string().optional() }).strict();
 export const OvhDefinition = z.object({
@@ -247,7 +255,12 @@ export const TokenMethod = z
   .strict();
 export const AwsMethod = z.object({ ...methodMetadata, kind: z.literal('aws'), config: AwsDefinition }).strict();
 export const OvhMethod = z.object({ ...methodMetadata, kind: z.literal('ovh'), config: OvhDefinition }).strict();
-export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod, OvhMethod]);
+export const ApprovalMethod = z.object({ ...methodMetadata, kind: z.literal('approval'), config: z.object({
+  adapter: z.literal('runpod-flash'), fields: z.array(Field).default([]),
+  scopes: Scopes.default({ default: [], separator: ' ' }), outputs: OutputMap,
+  hint: z.string().optional(),
+}).strict() }).strict();
+export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, AwsMethod, OvhMethod, ApprovalMethod]);
 export type MethodDescription = z.infer<typeof MethodDefinition>;
 const methodCatalogMetadata = {
   id: z.string().min(1),
@@ -263,6 +276,7 @@ export const CatalogMethod = z.discriminatedUnion('kind', [
   TokenMethod.extend(methodCatalogMetadata),
   AwsMethod.extend(methodCatalogMetadata),
   OvhMethod.extend(methodCatalogMetadata),
+  ApprovalMethod.extend(methodCatalogMetadata),
 ]);
 export type CatalogConnectionMethod = z.infer<typeof CatalogMethod>;
 export const MethodKey = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
@@ -276,6 +290,12 @@ export const ServiceMetadata = z
     api: z.url().optional(),
     docs: z.url().optional(),
     console: z.url().optional(),
+    targets: z.array(z.object({
+      id: MethodKey,
+      name: Name,
+      api: z.url().optional(),
+      methods: z.array(MethodKey).min(1),
+    }).strict()).max(32).optional(),
   })
   .strict();
 export const ServiceDefinition = ServiceMetadata.extend({

@@ -14,6 +14,7 @@ import type { Transport } from './http.js';
 import { connectionPolicy } from './connection-policy.js';
 import { OvhAuthorization, authorizeRegistration, exchangeRegistration, registrationApplication } from './connection-registration.js';
 import { browserExchange } from './connection-methods.js';
+import { RunPodApproval, startRunPodApproval, pollRunPodApproval } from './runpod-authorization.js';
 
 export const FlowRecord = z.object({
   id: Id, ownerId: Id, name: Name,
@@ -26,6 +27,7 @@ export const FlowRecord = z.object({
   url: z.url().nullable(), connectionId: Id.nullable(),
   authorizationState: z.string(), verifier: z.string(), redirectUri: z.url(),
   ovh: OvhAuthorization.optional(), material: ConnectionMaterial.optional(), proof: ProtectedWrite.optional(),
+  approval: RunPodApproval.optional(),
   error: z.string().optional(),
   exchangeStartedAt: z.number().optional(),
   exchangeDevice: z.enum(['browser', 'cli']),
@@ -43,6 +45,7 @@ export type FlowProgress = { kind: 'authorize'; flow: ConnectionFlowView; url: s
 const nonce = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
 
 export class ConnectionClient {
+  private approvalPolls = new Map<string, Promise<FlowProgress>>();
   constructor(readonly custody: CustodyClient, readonly store: FlowStore,
     readonly transport: Transport = new BrowserTransport(custody.origin), readonly device: 'browser' | 'cli' = 'browser') {}
   private async flow(id: string) {
@@ -66,7 +69,8 @@ export class ConnectionClient {
       throw new Error('Use the connection prepared by this operation.');
     for (const [key, value] of Object.entries(active.invocation.input.fields as Record<string, string> ?? {}))
       if (value && input.fields?.[key] !== value) throw new Error('Use the service settings prepared by this operation.');
-    if (input.method.kind !== 'oauth' && input.method.kind !== 'ovh') throw new Error('Choose a browser authorization method.');
+    if (!connectionMethod(input.method).browserAuthorization || input.method.kind === 'token' || input.method.kind === 'aws')
+      throw new Error('Choose a browser authorization method.');
     const scopes = selectScopes(input.method.config.scopes, input.scopes);
     if (active.invocation.input.scopes && canonical(scopes.slice().sort()) !==
       canonical(selectScopes(input.method.config.scopes, active.invocation.input.scopes as string[]).sort()))
@@ -102,11 +106,37 @@ export class ConnectionClient {
     return this.progress(id);
   }
   private view(flow: ConnectionFlow) { return FlowView.parse(flow); }
+  private async awaitingAuthorization(flow: ConnectionFlow) {
+    const active = await this.custody.api.json('/api/executions/' + flow.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+    if (active.index !== flow.execution.index || active.continuation?.id !== flow.id ||
+      active.invocation.input.methodDigest !== await hash(flow.registration.method))
+      throw new Error('Continue the connection that is awaiting authorization.');
+  }
+  private async pollApproval(flow: ConnectionFlow): Promise<FlowProgress> {
+    if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
+    await this.awaitingAuthorization(flow);
+    const token = await pollRunPodApproval(this.transport, RunPodApproval.parse(flow.approval));
+    if (!token) return { kind: 'authorize', flow: this.view(flow), url: flow.url! };
+    await this.awaitingAuthorization(flow);
+    flow.material = ConnectionMaterial.parse({ format: 2, methodId: flow.registration.methodId,
+      method: flow.registration.method, generation: crypto.randomUUID(), appId: null, appGeneration: null,
+      fields: { token } });
+    flow.step = 'commit'; await this.store.put(flow);
+    return this.accept(flow.id);
+  }
   private cli(flow: ConnectionFlow): FlowProgress {
     return { kind: 'cli', flow: this.view(flow), command: (flow.step === 'authorize' ? 'foundation connect wait ' : 'foundation execution continue ') + flow.execution.id };
   }
   private async authorize(flow: ConnectionFlow) {
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
+    if (flow.registration.method.kind === 'approval') {
+      const started = await startRunPodApproval(this.transport);
+      flow.approval = started.approval;
+      flow.expiresAt = Math.min(flow.expiresAt, started.approval.expiresAt);
+      flow.step = 'authorize'; flow.url = started.url;
+      await this.store.put(flow);
+      return { kind: 'authorize' as const, flow: this.view(flow), url: flow.url };
+    }
     if (flow.redirectUri === this.custody.origin + '/oauth/callback') await this.custody.api.json('/api/oauth/relays', { method: 'POST',
       body: { id: flow.id, executionId: flow.execution.id, index: flow.execution.index,
         stateDigest: await hash(flow.authorizationState), expiresAt: new Date(flow.expiresAt).toISOString() } }, OAuthRelay);
@@ -139,6 +169,15 @@ export class ConnectionClient {
     }
     if (flow.step === 'start') return this.authorize(flow);
     if (flow.exchangeDevice === 'cli' && this.device === 'browser') return this.cli(flow);
+    if (flow.registration.method.kind === 'approval') {
+      let pending = this.approvalPolls.get(id);
+      if (!pending) {
+        pending = this.pollApproval(flow);
+        this.approvalPolls.set(id, pending);
+      }
+      try { return await pending; }
+      finally { if (this.approvalPolls.get(id) === pending) this.approvalPolls.delete(id); }
+    }
     if (relay && flow.redirectUri === this.custody.origin + '/oauth/callback') {
       const response = await this.custody.api.json('/api/oauth/relays/' + id, {}, OAuthRelay);
       if (response.id !== id || response.executionId !== flow.execution.id || response.context !== relayContext(this.custody.origin, id))
@@ -153,10 +192,7 @@ export class ConnectionClient {
     if (flow.step !== 'authorize') return this.progress(id, false);
     if (flow.exchangeDevice === 'cli' && this.device === 'browser') return this.cli(flow);
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
-    const active = await this.custody.api.json('/api/executions/' + flow.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
-    if (active.index !== flow.execution.index || active.continuation?.id !== id ||
-      active.invocation.input.methodDigest !== await hash(flow.registration.method))
-      throw new Error('Continue the connection that is awaiting authorization.');
+    await this.awaitingAuthorization(flow);
     const query = new URLSearchParams(parameters);
     if (query.getAll('state').length !== 1 || query.get('state') !== flow.authorizationState)
       throw new Error('The authorization response does not match this connection.');

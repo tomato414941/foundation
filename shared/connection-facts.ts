@@ -25,7 +25,7 @@ export function oauthConnectionFacts(state: ConnectionState): ConnectionFactValu
     scopesStatus: requestedScopes ? 'requested' : state.oauth?.scopesStatus ?? 'unknown', authorization: {}, details: {} });
 }
 export function tokenConnectionFacts(state: ConnectionState): ConnectionFactValues {
-  if (state.method.kind !== 'token' || !state.fields) throw new Error('Use token connection material.');
+  if ((state.method.kind !== 'token' && state.method.kind !== 'approval') || !state.fields) throw new Error('Use input credential material.');
   if ('facts' in state && state.facts) return ConnectionFacts.parse(state.facts);
   return ConnectionFacts.parse({ accountId: null, accountName: state.method.name, accountVerified: false,
     scopes: [], scopesStatus: 'unknown', authorization: {}, details: {} });
@@ -52,5 +52,6 @@ export function awsConnectionFacts(state: ConnectionState): ConnectionFactValues
 }
 const projections: Record<AuthKindName, (state: ConnectionState) => ConnectionFactValues> = {
   oauth: oauthConnectionFacts, token: tokenConnectionFacts, aws: awsConnectionFacts, ovh: ovhConnectionFacts,
+  approval: tokenConnectionFacts,
 };
 export function connectionFacts(state: ConnectionState): ConnectionFactValues { return projections[state.method.kind](state); }

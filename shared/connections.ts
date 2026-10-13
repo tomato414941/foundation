@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
+import { ApprovalMethod, AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
 import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
@@ -31,14 +31,20 @@ const materialMetadata = {
 const unusedMaterial = z.never().optional();
 export const ConnectionMaterial = z.union([
   z.object({ ...materialMetadata, method: OAuthMethod, oauth: TokenMaterial.optional(), requestedScopes: z.array(z.string()).optional(),
+    implicitApp: AppMaterial.optional(),
     fields: Fields.optional(), aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: TokenMethod, fields: Fields,
     facts: ConnectionFacts.optional(), oauth: unusedMaterial, aws: unusedMaterial }).strict(),
+  z.object({ ...materialMetadata, method: ApprovalMethod, fields: Fields,
+    oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, ovh: OvhConnectionInfo.optional(), requestedScopes: z.array(z.string()).optional(),
     oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: AwsMethod, aws: AwsConnectionMaterial,
     oauth: unusedMaterial, fields: unusedMaterial }).strict(),
 ]).superRefine((value, ctx) => {
+  if ('implicitApp' in value && value.implicitApp &&
+    (value.method.kind !== 'oauth' || value.method.config.application !== 'implicit' || value.implicitApp.methodId !== value.methodId))
+    ctx.addIssue({ code: 'custom', message: 'Keep the registered client with its implicit OAuth connection.' });
   if (value.method.kind === 'oauth' && value.fields) {
     try { publicConnectionFields(value.method.config.fields, value.fields); }
     catch { ctx.addIssue({ code: 'custom', path: ['fields'], message: 'Keep only declared public settings in the connection.' }); }

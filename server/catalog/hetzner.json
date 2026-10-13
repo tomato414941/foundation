@@ -1,6 +1,6 @@
 {
   "id": "hetzner",
-  "name": "Hetzner Cloud",
+  "name": "Hetzner",
   "api": "https://api.hetzner.cloud/v1",
   "docs": "https://docs.hetzner.cloud/reference/cloud",
   "console": "https://console.hetzner.com/",
@@ -25,6 +25,105 @@
       },
       "docs": "https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/",
       "console": "https://console.hetzner.com/"
+    },
+    "robot-basic": {
+      "name": "Hetzner · Enter Robot credentials",
+      "kind": "token",
+      "docs": "https://robot.hetzner.com/doc/webservice/en.html",
+      "console": "https://robot.your-server.de/",
+      "config": {
+        "fields": [
+          {
+            "name": "username",
+            "label": "Web service username",
+            "secret": true,
+          "inputType": "text",
+            "note": "Create a separate web service user in Robot settings."
+          },
+          {
+            "name": "password",
+            "label": "Web service password",
+            "secret": true
+          }
+        ],
+        "outputs": {
+          "HETZNER_ROBOT_USERNAME": "/username",
+          "HETZNER_ROBOT_PASSWORD": "/password"
+        },
+        "hint": "Use HTTP Basic authentication at https://robot-ws.your-server.de. These are Robot web service credentials, not your Hetzner Console password."
+      }
+    },
+    "s3": {
+      "name": "Hetzner · Enter S3 credentials",
+      "kind": "token",
+      "docs": "https://docs.hetzner.com/storage/object-storage/getting-started/generating-s3-keys/",
+      "console": "https://console.hetzner.com/",
+      "config": {
+        "fields": [
+          {
+            "name": "endpoint",
+            "label": "S3 endpoint URL",
+            "secret": false,
+            "pattern": "^https://[a-z0-9.-]+/?$",
+            "note": "Use the Object Storage endpoint for your bucket location."
+          },
+          {
+            "name": "region",
+            "label": "Signing region",
+            "secret": false,
+            "note": "Use the bucket location, such as fsn1."
+          },
+          {
+            "name": "accessKeyId",
+            "label": "S3 access key",
+            "secret": true
+          },
+          {
+            "name": "secretAccessKey",
+            "label": "S3 secret key",
+            "secret": true
+          }
+        ],
+        "outputs": {
+          "AWS_ACCESS_KEY_ID": "/accessKeyId",
+          "AWS_SECRET_ACCESS_KEY": "/secretAccessKey",
+          "AWS_REGION": "/region",
+          "AWS_DEFAULT_REGION": "/region",
+          "AWS_ENDPOINT_URL_S3": "/endpoint",
+          "S3_ENDPOINT_URL": "/endpoint",
+          "AWS_SESSION_TOKEN": "/sessionToken"
+        },
+        "hint": "Use these credentials with S3-compatible clients. AWS_ENDPOINT_URL_S3 selects this storage endpoint; these are not AWS account credentials.",
+        "bindFields": true,
+        "constants": {
+          "sessionToken": ""
+        }
+      }
     }
-  }
+  },
+  "targets": [
+    {
+      "id": "cloud",
+      "name": "Cloud",
+      "api": "https://api.hetzner.cloud/v1",
+      "methods": [
+        "cloud-api-token"
+      ]
+    },
+    {
+      "id": "robot",
+      "name": "Robot",
+      "api": "https://robot-ws.your-server.de",
+      "methods": [
+        "robot-basic"
+      ]
+    },
+    {
+      "id": "storage",
+      "name": "Object Storage",
+      "methods": [
+        "s3"
+      ]
+    }
+  ]
 }

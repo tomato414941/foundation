@@ -103,6 +103,20 @@ class BrowserTests(unittest.TestCase):
     def select(self, page, label, option):
         page.get_by_role("combobox", name=label, exact=True).click()
         page.get_by_role("option", name=option, exact=True).click()
+
+    def application(self, page, principal, method_id, client_id, client_secret, fields=(), name="Connection application"):
+        page.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method={method_id}")
+        page.get_by_role("textbox", name="名前", exact=True).fill(name)
+        page.get_by_label("Application Key" if method_id.startswith("ovh:") else "クライアントID", exact=True).fill(client_id)
+        page.get_by_label("Application Secret" if method_id.startswith("ovh:") else "クライアントシークレット", exact=True).fill(client_secret)
+        for label, value, choice in fields:
+            if choice:
+                self.select(page, label, value)
+            else:
+                page.get_by_label(label, exact=True).fill(value)
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
+        return page.url
         expect(page.get_by_role("listbox")).to_be_hidden()
 
     def trust_fingerprint(self, page, principal_id, fingerprint):
@@ -737,6 +751,76 @@ class BrowserTests(unittest.TestCase):
                 expect(page.get_by_text("接続済み", exact=True)).to_be_visible()
                 expect(page.get_by_text(service, exact=True)).to_be_visible()
 
+    def test_クラウドの接続先を選んでS3とRobotの認証情報を保存する(self):
+        page, principal = self.passkey_account("Storage account")
+        for service, method, name in [
+            ("vultr", "s3", "Vultr storage"), ("runpod", "s3", "RunPod volume"),
+            ("hetzner", "s3", "Hetzner storage"), ("hetzner", "robot-basic", "Robot account"),
+        ]:
+            with self.subTest(method=service + ":" + method):
+                page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service={service}&method={service}:{method}")
+                expect(page.get_by_role("combobox", name="接続先", exact=True)).to_be_visible()
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                if method == "s3":
+                    page.get_by_label("S3の接続先URL", exact=True).fill("https://storage.example.com")
+                    page.get_by_label("署名に使うリージョン", exact=True).fill("us-east-1")
+                    page.get_by_label("S3アクセスキー", exact=True).fill("test-storage-access")
+                    page.get_by_label("S3シークレットキー", exact=True).fill("test-storage-secret")
+                else:
+                    page.get_by_label("Webサービス用ユーザー名", exact=True).fill("test-robot-user")
+                    page.get_by_label("Webサービス用パスワード", exact=True).fill("test-robot-password")
+                print("Rendered storage connection: " + page.locator("main").inner_text(), flush=True)
+                page.screenshot(path=str(ARTIFACTS / (service + "-" + method + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], service + ":" + method)
+
+    def test_Vultrのロールで認証元に合わせた入力を選んで保存する(self):
+        page, principal = self.passkey_account("Role account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service=vultr&method=vultr:role")
+        self.select(page, "認証元", "OIDC認証")
+        page.get_by_label("IAMロールID", exact=True).fill("role-test-id")
+        page.get_by_label("OIDC発行者ID", exact=True).fill("issuer-test-id")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Vultr role")
+        print("Rendered role connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "vultr-role-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "Vultr role")
+        self.assertEqual(saved["data"]["fields"]["authentication"], "oidc")
+
+    def test_RunPodのMCPでアプリを自動登録してブラウザ認証を完了する(self):
+        page, principal = self.passkey_account("MCP account")
+        registrations = []
+        def register(route):
+            if route.request.method == "OPTIONS":
+                route.fulfill(status=204, headers={"access-control-allow-origin": ORIGIN,
+                              "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
+                return
+            registrations.append(json.loads(route.request.post_data))
+            route.fulfill(json={"client_id": "browser-mcp-client", "token_endpoint_auth_method": "none"},
+                          headers={"access-control-allow-origin": ORIGIN})
+        def exchange(route):
+            if route.request.method == "OPTIONS":
+                route.fulfill(status=204, headers={"access-control-allow-origin": ORIGIN,
+                              "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
+                return
+            route.fulfill(json={"access_token": "browser-mcp-token", "token_type": "Bearer", "expires_in": 3600},
+                          headers={"access-control-allow-origin": ORIGIN})
+        page.context.route("https://mcp.getrunpod.io/register", register)
+        page.context.route("https://mcp.getrunpod.io/token", exchange)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service=runpod&method=runpod:mcp-oauth")
+        page.get_by_role("textbox", name="名前", exact=True).fill("RunPod MCP")
+        print("Rendered MCP connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "runpod-mcp-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        link = page.get_by_role("link", name="サービスで認可する", exact=True)
+        expect(link).to_be_visible()
+        state = parse_qs(urlparse(link.get_attribute("href")).query)["state"][0]
+        page.goto(ORIGIN + "/oauth/callback?state=" + state + "&code=mcp-browser-code")
+        saved = self.saved_connection(page, "RunPod MCP")
+        self.assertEqual(saved["data"]["methodId"], "runpod:mcp-oauth")
+        self.assertEqual(len(registrations), 1)
+
     def test_HFの登録を依頼して所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
         import tempfile
         sender, _ = self.passkey_account("HF requester")
@@ -1362,10 +1446,9 @@ class BrowserTests(unittest.TestCase):
             route.fulfill(json={"access_token": "browser-google-token", "refresh_token": "browser-google-refresh", "token_type": "Bearer", "expires_in": 3600},
                           headers={"access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
         page.context.route("https://oauth2.googleapis.com/token", exchange)
+        self.application(page, principal, "google:oauth", "browser-google-client", "browser-google-secret")
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=google:oauth")
         page.get_by_role("textbox", name="名前", exact=True).fill("Google account")
-        page.get_by_label("クライアントID", exact=True).fill("browser-google-client")
-        page.get_by_label("クライアントシークレット", exact=True).fill("browser-google-secret")
         page.get_by_role("button", name="接続する", exact=True).click()
         link = page.get_by_role("link", name="サービスで認可する", exact=True)
         expect(link).to_be_visible()
@@ -1388,11 +1471,10 @@ class BrowserTests(unittest.TestCase):
             route.fulfill(json={"state": "pendingValidation", "consumerKey": "browser-consumer-key", "validationUrl": "https://auth.ca.ovhcloud.com/api/auth?credentialToken=browser"},
                           headers={"access-control-allow-origin": ORIGIN})
         page.context.route("https://ca.api.ovh.com/1.0/auth/credential", issue)
+        self.application(page, principal, "ovh:consumer_key", "browser-application", "browser-secret",
+                         [("アカウントのAPI接続先", "CA", True)])
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=ovh:consumer_key")
-        self.select(page, "アカウントのAPI接続先", "CA")
         page.get_by_role("textbox", name="名前", exact=True).fill("OVH browser account")
-        page.get_by_label("Application Key", exact=True).fill("browser-application")
-        page.get_by_label("Application Secret", exact=True).fill("browser-secret")
         page.get_by_label("OVHcloudのAPI権限", exact=True).fill("GET /vps\nPOST /vps/*")
         page.get_by_role("button", name="接続する", exact=True).click()
         expect(page.get_by_role("link", name="サービスで認可する", exact=True)).to_be_visible()
@@ -1406,14 +1488,13 @@ class BrowserTests(unittest.TestCase):
         page, principal = self.passkey_account("CLI authorization owner")
         for service in ["github", "vultr"]:
             with self.subTest(service=service):
+                fields = [("OIDCプロバイダーID", "vultr-test-provider", False),
+                          ("認可URL", "https://console.vultr.com/oauth/authorize", False)] if service == "vultr" else []
+                self.application(page, principal, service + ":oauth", service + "-client", service + "-client-secret", fields,
+                                 name=service + " application")
                 page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service={service}&method={service}:oauth")
                 expect(page.get_by_text("この方式の認可は、同じ端末のFoundation CLIで続けます。", exact=True)).to_be_visible()
                 expect(page.get_by_text("APIキーやアクセストークンを入力する方式は、ブラウザで保存できます。", exact=True)).to_be_visible()
-                page.get_by_label("クライアントID", exact=True).fill(service + "-client")
-                page.get_by_label("クライアントシークレット", exact=True).fill(service + "-client-secret")
-                if service == "vultr":
-                    page.get_by_label("OIDCプロバイダーID", exact=True).fill("vultr-test-provider")
-                    page.get_by_label("認可URL", exact=True).fill("https://console.vultr.com/oauth/authorize")
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-input-ja.png")), full_page=True)
                 print("Rendered " + service + " OAuth: " + page.locator("main").inner_text(), flush=True)
                 page.get_by_role("button", name="接続する", exact=True).click()

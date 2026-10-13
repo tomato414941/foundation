@@ -20,7 +20,7 @@ export function ConnectionMethodHelp({ method, connecting = true }: { method?: C
   const { t } = useTranslation();
   const Help = method ? connectionForm(method).Help : undefined;
   return <>
-    {Help && <Help method={method} />}
+    {Help && <Help method={method} connecting={connecting} />}
     {connecting && method?.registration.device === 'cli' && <Notice tone="info">
       <p>{t('connectionCliHelp')}</p>
       {method.registration.tokenAlternatives.length > 0 && <p className="mt-2">{t('connectionTokenAlternative')}</p>}

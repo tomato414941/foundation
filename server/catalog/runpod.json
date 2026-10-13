@@ -1,7 +1,7 @@
 {
   "id": "runpod",
   "name": "RunPod",
-  "api": "https://rest.runpod.io/v1",
+  "api": "https://api.runpod.io/v2",
   "docs": "https://docs.runpod.io/",
   "console": "https://console.runpod.io/user/credentials",
   "methods": {
@@ -21,10 +21,136 @@
         "outputs": {
           "RUNPOD_API_KEY": "/token"
         },
-        "hint": "Use RUNPOD_API_KEY with runpodctl and the RunPod SDK, or as a Bearer token for the REST, GraphQL, and Serverless APIs. Access is limited by the key's permissions."
+        "hint": "Use RUNPOD_API_KEY with RunPod tools or as a Bearer token for the REST API at https://api.runpod.io/v2 and the Serverless APIs. Access is limited by the key permissions."
       },
       "docs": "https://docs.runpod.io/get-started/credentials",
       "console": "https://console.runpod.io/user/credentials"
+    },
+    "s3": {
+      "name": "RunPod · Enter S3 credentials",
+      "kind": "token",
+      "docs": "https://docs.runpod.io/storage/s3-api",
+      "console": "https://console.runpod.io/user/credentials",
+      "config": {
+        "fields": [
+          {
+            "name": "endpoint",
+            "label": "S3 endpoint URL",
+            "secret": false,
+            "pattern": "^https://[a-z0-9.-]+/?$",
+            "note": "Use the S3 endpoint for the datacenter containing your network volume."
+          },
+          {
+            "name": "region",
+            "label": "Signing region",
+            "secret": false,
+            "note": "Use the network volume datacenter ID, such as EU-CZ-1."
+          },
+          {
+            "name": "accessKeyId",
+            "label": "S3 access key",
+            "secret": true
+          },
+          {
+            "name": "secretAccessKey",
+            "label": "S3 secret key",
+            "secret": true
+          }
+        ],
+        "outputs": {
+          "AWS_ACCESS_KEY_ID": "/accessKeyId",
+          "AWS_SECRET_ACCESS_KEY": "/secretAccessKey",
+          "AWS_REGION": "/region",
+          "AWS_DEFAULT_REGION": "/region",
+          "AWS_ENDPOINT_URL_S3": "/endpoint",
+          "S3_ENDPOINT_URL": "/endpoint",
+          "AWS_SESSION_TOKEN": "/sessionToken"
+        },
+        "hint": "Use these credentials with S3-compatible clients. AWS_ENDPOINT_URL_S3 selects this storage endpoint; these are not AWS account credentials.",
+        "bindFields": true,
+        "constants": {
+          "sessionToken": ""
+        }
+      }
+    },
+    "mcp-oauth": {
+      "name": "RunPod · Connect in browser",
+      "kind": "oauth",
+      "docs": "https://docs.runpod.io/get-started/mcp-servers",
+      "config": {
+        "application": "implicit",
+        "issuer": "https://mcp.getrunpod.io",
+        "registrationUrl": "https://mcp.getrunpod.io/register",
+        "authorizeUrl": "https://mcp.getrunpod.io/authorize",
+        "tokenUrl": "https://mcp.getrunpod.io/token",
+        "clientAuth": "none",
+        "pkce": true,
+        "authorizeParams": {
+          "resource": "https://mcp.getrunpod.io/"
+        },
+        "tokenParams": {
+          "resource": "https://mcp.getrunpod.io/"
+        },
+        "defaults": {
+          "mcpUrl": "https://mcp.getrunpod.io/"
+        },
+        "outputs": {
+          "RUNPOD_MCP_ACCESS_TOKEN": "/accessToken",
+          "RUNPOD_MCP_TOKEN_EXPIRES_AT": "/expiresAt",
+          "RUNPOD_MCP_URL": "/mcpUrl"
+        },
+        "scopes": {
+          "default": []
+        },
+        "hint": "Authorize the hosted RunPod MCP server in your browser. This token is for MCP access, not direct REST API calls."
+      }
+    },
+    "flash-approval": {
+      "name": "RunPod · Authorize through Flash",
+      "kind": "approval",
+      "docs": "https://github.com/runpod/flash/blob/main/src/runpod_flash/cli/docs/flash-login.md",
+      "config": {
+        "adapter": "runpod-flash",
+        "outputs": {
+          "RUNPOD_API_KEY": "/token"
+        },
+        "hint": "Use the official RunPod Flash approval flow to obtain an API key. This is browser approval followed by polling, not OAuth authorization-code exchange.",
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "required": false
+          }
+        ]
+      }
     }
-  }
+  },
+  "targets": [
+    {
+      "id": "api",
+      "name": "Cloud API",
+      "api": "https://api.runpod.io/v2",
+      "methods": [
+        "token",
+        "flash-approval"
+      ]
+    },
+    {
+      "id": "mcp",
+      "name": "MCP",
+      "api": "https://mcp.getrunpod.io/",
+      "methods": [
+        "mcp-oauth",
+        "token"
+      ]
+    },
+    {
+      "id": "storage",
+      "name": "Network Volumes (S3)",
+      "methods": [
+        "s3"
+      ]
+    }
+  ]
 }

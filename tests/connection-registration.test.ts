@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
+import { activeConnectionField } from '../shared/connection-fields.js';
 import { CustodyClient } from '../shared/client.js';
 import { ExecutionClient } from '../shared/execution-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
@@ -26,7 +27,13 @@ test('サービスへアクセスできない端末でも入力式の認証情�
   const custody = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys, new JournalTrust(new MemoryJournal()));
   const client = browser(f, custody), catalog = await custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod));
   for (const method of catalog.items.filter(method => method.registration.kind === 'input')) await t.test(method.id, async () => {
-    const fields = Object.fromEntries((method.kind === 'aws' ? [] : method.config.fields).map(field => [field.name, field.choices?.[0]?.value ?? (field.name === 'domain' && method.id.startsWith('atlassian:') ? 'example.atlassian.net' : field.name === 'domain' && method.id.startsWith('kintone:') ? 'example.cybozu.com' : valueFor(field.name))]));
+    const definitions = method.kind === 'aws' ? [] : method.config.fields;
+    const entered = Object.fromEntries(definitions.map(field => [field.name, field.choices?.[0]?.value ?? field.defaultValue ??
+      (field.name === 'endpoint' ? 'https://storage.example.com' : field.name === 'region' ? 'us-east-1' :
+        field.name === 'domain' && method.id.startsWith('atlassian:') ? 'example.atlassian.net' :
+        field.name === 'domain' && method.id.startsWith('kintone:') ? 'example.cybozu.com' : valueFor(field.name))]));
+    const fields = Object.fromEntries(definitions.filter(field => activeConnectionField(field, entered))
+      .map(field => [field.name, entered[field.name]!]));
     const saved = await client.execute({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
       methodId: method.id, name: method.id, ...(method.registration.kind === 'input' && method.kind === 'oauth' ? { clientId: 'application-id' } : {}) } },
       { fields, clientSecret: 'private-application-secret', ...(method.kind === 'aws' ? { aws: {
@@ -39,7 +46,8 @@ test('サービスへアクセスできない端末でも入力式の認証情�
     else if (method.kind === 'oauth') {
       const application = AppMaterial.parse(JSON.parse(decode(await custody.reveal(material.appId!))));
       assert.equal(application.clientId, 'application-id'); assert.equal(application.clientSecret, 'private-application-secret');
-    } else for (const field of method.config.fields) assert.equal(material.fields![field.name], fields[field.name]);
+    } else for (const field of definitions.filter(field => activeConnectionField(field, fields)))
+      assert.equal(material.fields![field.name], fields[field.name]);
     const completed = await custody.api.json('/api/executions/' + saved.executionId, {}, Execution);
     assert.equal(completed.state, 'succeeded');
     const encrypted = await custody.read(saved.resource.id);

@@ -48,7 +48,7 @@ export class Connections implements ExecutionExtension {
   ) { this.providers = connectionProviders(transport, aws); }
 
   private provider(method: MethodDescription): ConnectionProvider {
-    return this.providers[connectionMethod(method).family];
+    return this.providers(method);
   }
   private metadata(material: ConnectionState) {
     return connectionMetadata(material, this.provider(material.method).facts(material));
@@ -76,7 +76,7 @@ export class Connections implements ExecutionExtension {
   }
   private async connectionApp(state: ConnectionState, intent: ExecutionIntent, sources: CustodyContent[]) {
     if (connectionMethod(state.method).application === 'none') return null;
-    if (!requiresApp(state.method)) return AppMaterial.parse({ format: 1, methodId: state.methodId,
+    if (!requiresApp(state.method)) return 'implicitApp' in state && state.implicitApp ? state.implicitApp : AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
     const operation = intent.operation === Operations.revoke ? Operations.revoke : Operations.refresh;
     const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);

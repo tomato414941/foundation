@@ -7,13 +7,12 @@ import { ApplicationConnectionFields } from './application-connection-fields';
 import type { ConnectionFieldsProps } from './connection-fields';
 import { servicePreparation } from './service-preparations';
 
-export function OAuthConnectionHelp({ method }: { method?: CatalogConnectionMethod }) {
+export function OAuthConnectionHelp({ method, connecting = true }: { method?: CatalogConnectionMethod; connecting?: boolean }) {
   const { t } = useTranslation();
   if (method?.kind !== 'oauth') return null;
   const direct = !connectionMethod(method).browserAuthorization, setup = servicePreparation(method);
   return <>
-    <p className="text-sm text-muted-foreground">OAuth 2.0 / {direct ? 'Client Credentials' : 'Authorization Code'}</p>
-    {(direct || setup.instructions.length > 0) && <Notice tone="info">
+    {(direct || !connecting && setup.instructions.length > 0) && <Notice tone="info">
       {direct && <p>{t('clientCredentialsHelp')}</p>}
       {setup.instructions.map(instruction => <p key={instruction} className="mt-2">{t(instruction)}</p>)}
       {setup.docs && method.docs && <ExternalLink href={method.docs}>{t('docs')}</ExternalLink>}
