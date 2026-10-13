@@ -142,7 +142,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
-        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
         path = page.url
         self.environments.append((page, path.rsplit('/', 1)[1]))
         fingerprint = page.request.get(ORIGIN + "/__test/executor/" + path.rsplit("/", 1)[1] + "/fingerprint").json()
@@ -1008,7 +1008,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
         environment_id = page.url.rsplit("/", 1)[1]
         self.environments.append((page, environment_id))
-        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
         response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
         self.assertTrue(response.ok, response.text())
         environment = response.json()
@@ -1040,7 +1040,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
         environment_id = page.url.rsplit("/", 1)[1]
         self.environments.append((page, environment_id))
-        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
         response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
         self.assertTrue(response.ok, response.text())
         environment = response.json()
@@ -1083,7 +1083,7 @@ class BrowserTests(unittest.TestCase):
             page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
             environment_id = page.url.rsplit("/", 1)[1]
             self.environments.append((page, environment_id))
-            expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+            expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
             expect(page.locator("code").filter(has_text=".ssh.foundation.test")).to_be_visible()
             expect(page.get_by_text("SSHホスト鍵の指紋", exact=True)).to_be_visible(timeout=20000)
             editor = page.get_by_role("textbox", name="SSH公開鍵", exact=True)
@@ -1136,7 +1136,7 @@ class BrowserTests(unittest.TestCase):
             page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
             environment_id = page.url.rsplit("/", 1)[1]
             self.environments.append((page, environment_id))
-            expect(page.get_by_text("Running", exact=True)).to_be_visible(timeout=15000)
+            expect(page.get_by_text("Connected", exact=True)).to_be_visible(timeout=15000)
             response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
             self.assertTrue(response.ok, response.text())
             self.assertEqual(response.json()["authorizedKeys"], [public_keys[1], public_keys[0]])
@@ -1161,6 +1161,45 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="停止", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
+
+    def test_実行環境の通信断と再接続と停止を一覧と詳細へ自動反映する(self):
+        page, principal = self.passkey_account("Environment connection owner")
+        path = self.executor(page, principal, "Connection monitor")
+        environment_id = path.rsplit("/", 1)[1]
+
+        def connected(value):
+            response = page.request.post(ORIGIN + "/__test/executor/" + environment_id + "/connectivity",
+                                         data={"connected": value})
+            self.assertTrue(response.ok, response.text())
+
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments")
+        row = page.locator("tbody tr").filter(has=page.get_by_role("link", name="Connection monitor", exact=True))
+        badge = row.locator('[data-slot="badge"]:visible')
+        expect(badge).to_have_text("接続中")
+        connected(False)
+        expect(badge).to_have_text("応答なし", timeout=20000)
+        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-list-ja.png"), full_page=True)
+        connected(True)
+        expect(badge).to_have_text("接続中", timeout=20000)
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.goto(path)
+        expect(page.get_by_text("接続中", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "environment-connected-detail-ja.png"), full_page=True)
+        connected(False)
+        expect(page.get_by_text("応答なし", exact=True)).to_be_visible(timeout=20000)
+        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-detail-ja.png"), full_page=True)
+        self.select(page, "言語", "English")
+        expect(page.get_by_text("Not responding", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-detail-en.png"), full_page=True)
+        connected(True)
+        expect(page.get_by_text("Connected", exact=True)).to_be_visible(timeout=20000)
+        page.get_by_role("button", name="Stop", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="Stop", exact=True).click()
+        expect(page.get_by_text("Stopped", exact=True)).to_be_visible(timeout=15000)
+        resource = page.request.get(ORIGIN + "/api/resources/" + environment_id).json()
+        self.assertFalse(resource["data"]["connected"])
+        self.assertEqual(resource["data"]["state"], "stopped")
 
     def test_スマホで一覧と詳細を行き来し削除中の表示を再読込後も確認して削除を完了する(self):
         owner, principal = self.passkey_account("Mobile deletion owner")
@@ -1235,7 +1274,7 @@ class BrowserTests(unittest.TestCase):
         environment_id = path.rsplit("/", 1)[1]
         self.environments.append((page, environment_id))
         expect(page.get_by_role("heading", name=re.compile(r"^実行環境 [a-f0-9]{8}$"))).to_be_visible()
-        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
         name = page.get_by_role("heading", level=1).inner_text()
         page.get_by_role("link", name="共有", exact=True).click()
         page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(other["id"])

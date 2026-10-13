@@ -27,7 +27,7 @@ import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
 import { executionClient } from '../custody';
-import { availableEnvironments, EnvironmentChoice } from '../environments';
+import { availableEnvironments, EnvironmentChoice, environmentState } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
 import { sshSettings } from '../ssh';
@@ -92,9 +92,7 @@ export default function ResourceDetail() {
   const [revoke, setRevoke] = useState(true);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   const environment = item.kind === 'environment' ? item : null;
-  const environmentState = environment?.data.deletion
-    ? environment.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting'
-    : environment?.data.state;
+  const status = environment ? environmentState(environment) : null;
   usePolling(
     item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
     item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
@@ -115,8 +113,7 @@ export default function ResourceDetail() {
       back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t(item.kind === 'environment' ? 'backToEnvironments' : 'backToList') }}
       actions={
         <>
-          {environmentState && <State value={environmentState}
-            label={environmentState === 'running' ? t('state.environmentRunning') : undefined} />}
+          {status && <State value={status} />}
           {environment && !environment.data.deletion && ['starting', 'running'].includes(environment.data.state) && can('delete') && (
             <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
               <input type="hidden" name="intent" value="stop" />

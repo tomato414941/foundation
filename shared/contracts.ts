@@ -477,6 +477,7 @@ export const EnvironmentResource = z.object({
     ssh: SSHConnection.optional(),
     awsPrincipal: z.string().optional(),
     state: EnvironmentState,
+    connected: z.boolean(),
     deletion: EnvironmentDeletion.optional(),
     startedAt: Time.nullable(),
     stoppedAt: Time.nullable(),

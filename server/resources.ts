@@ -16,6 +16,8 @@ import type {
   SealedContent,
 } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
+import { environmentConnected } from './environment-status.js';
+import type { EnvironmentHeartbeat } from './environment-status.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -119,7 +121,10 @@ export class Resources {
               ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
                 ...(permissions.includes('read') ? { environmentId: row.data.environmentId, program: row.data.program } : {}) }
               : row.kind === 'environment'
-                ? EnvironmentResource.shape.data.strip().parse(row.data)
+                ? EnvironmentResource.shape.data.strip().parse({ ...row.data,
+                    connected: row.data.state === 'running' && environmentConnected(await this.db.one<EnvironmentHeartbeat>(
+                      'SELECT heartbeat_at,stopped_at FROM executor_environments WHERE resource_id=$1', [row.id])),
+                  })
                 : row.data;
     return Resource.parse({
       id: row.id,

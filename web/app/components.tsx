@@ -143,9 +143,9 @@ export function State({ value, label }: { value: string; label?: string }) {
       variant="outline"
       className={cn(
         'gap-1.5 font-normal',
-        ['ready', 'succeeded', 'accepted', 'approved', 'running'].includes(value) &&
+        ['ready', 'succeeded', 'accepted', 'approved', 'running', 'connected'].includes(value) &&
           'border-emerald-500/20 bg-emerald-500/5 text-emerald-300',
-        ['failed', 'deleteFailed', 'reconnect', 'reconnect_required'].includes(value) &&
+        ['failed', 'deleteFailed', 'reconnect', 'reconnect_required', 'unresponsive'].includes(value) &&
           'border-amber-500/20 bg-amber-500/5 text-amber-300',
       )}
     >

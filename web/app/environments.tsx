@@ -7,6 +7,12 @@ import { CheckboxField, SelectField } from './form-fields';
 import { SelectItem } from './components/ui/select';
 import { Notice, Panel } from './components';
 
+export function environmentState(item: Extract<ResourceView, { kind: 'environment' }>) {
+  const { deletion, state, connected } = item.data;
+  if (deletion) return deletion.state === 'failed' ? 'deleteFailed' : 'deleting';
+  return state === 'running' ? connected ? 'connected' : 'unresponsive' : state;
+}
+
 export async function availableEnvironments(owner: string) {
   const [owned, shared] = await Promise.all([
     api('/principals/' + owner + '/resources?kind=environment&limit=200', {}, listOf(Resource)).catch(error => {

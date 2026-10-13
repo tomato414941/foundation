@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
+import { environmentConnected } from './environment-status.js';
 import type { Resources } from './resources.js';
 import type { Delegation } from './delegation.js';
 import { iso } from './database.js';
@@ -49,11 +50,8 @@ export class Processes {
     if (environment.stopped_at) fail(409, 'environment_stopped', 'Choose a running execution environment.');
     if (!resource.data.processes || !environment.registration.manifest.capabilities.includes(Operations.command))
       fail(409, 'commands_unavailable', 'This environment has not enabled process execution.');
-    if (!environment.heartbeat_at || Date.now() - environment.heartbeat_at.getTime() > 90_000)
-      if (!await this.resources.db.one(
-        "SELECT 1 FROM execution_tasks WHERE environment_id=$1 AND state='running' AND lease_until>now() LIMIT 1",
-        [environmentId], connection))
-        fail(503, 'environment_unavailable', 'The execution environment is not responding.');
+    if (!environmentConnected(environment))
+      fail(503, 'environment_unavailable', 'The execution environment is not responding.');
     return { resource, environment };
   }
   async create(actor: Actor, environmentId: string, input: ProcessRequest & { id?: string }) {

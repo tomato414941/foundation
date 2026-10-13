@@ -282,7 +282,7 @@ export class Delegation {
 
   async renew(actor: Actor, id: string, lease: string) {
     const row = required(await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1', [id]));
-    await this.requireExecutor(actor, row.environment_id);
+    await this.heartbeat(actor, row.environment_id);
     const updated = await this.resources.db.one(
       `UPDATE execution_tasks SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2
        AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease],

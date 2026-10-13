@@ -25,6 +25,7 @@ import { ovhSignature } from '../runtime/ovh.js';
 const agents = new Map<string, Executor>();
 const functionAgents = new Map<string, FunctionExecutor>();
 const running = new Map<string, Promise<void>>();
+const disconnected = new Set<string>();
 const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
 const awsRequests = new Map<string, AwsConnectionRequest[]>();
 const oauthRequests = new Map<string, Array<{ clientId: string | null; clientSecret: string | null; scope: string | null }>>();
@@ -131,7 +132,7 @@ class BrowserRunner extends MemoryRunner {
     functionAgents.set(id, new FunctionExecutor(agents.get(id)!, new FunctionBroker(client), journal));
     return machine;
   }
-  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); await super.stop(id); }
+  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); disconnected.delete(id); await super.stop(id); }
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
@@ -192,6 +193,19 @@ app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async re
   const agent = agents.get(request.params.id);
   return agent ? { id: agent.binding.principalId, fingerprint: await fingerprint(agent.binding) } : null;
 });
+app.post<{ Params: { id: string }; Body: { connected: boolean } }>('/__test/executor/:id/connectivity', async request => {
+  const { id } = request.params, agent = agents.get(id);
+  if (!agent) throw new Error('Choose an existing execution environment.');
+  if (request.body.connected) {
+    await context.delegation.heartbeat({ id: agent.binding.principalId }, id);
+    disconnected.delete(id);
+  } else {
+    disconnected.add(id);
+    await running.get(id);
+    await context.db.pool.query("UPDATE executor_environments SET heartbeat_at=now()-interval '2 minutes' WHERE resource_id=$1", [id]);
+  }
+  return { ok: true };
+});
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,
 }));
@@ -212,7 +226,7 @@ try {
 }
 worker.start();
 const executorTimer = setInterval(() => {
-  for (const [id, agent] of agents) if (!running.has(id)) {
+  for (const [id, agent] of agents) if (!running.has(id) && !disconnected.has(id)) {
     const task = agent.tick().then(() => functionAgents.get(id)?.tick()).then(async () => {
       const ssh = sshAgents.get(id);
       if (ssh) {

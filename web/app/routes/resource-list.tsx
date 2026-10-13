@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource-list';
 import { Resource, listOf } from '../../../shared/contracts';
 import { api } from '../api';
-import { ErrorNotice, Page, Paging, usePolling } from '../components';
+import { ErrorNotice, Page, Paging } from '../components';
 import { ResourceTable } from '../resource-table';
 import { resourceKind } from '../navigation';
 import { useWorkspace } from './workspace';
@@ -34,12 +34,6 @@ export default function ResourceList() {
       : section === 'environments'
         ? session.features.environments
         : true;
-  usePolling(
-    data.items.some(
-      (item) => item.kind === 'environment' && (item.data.deletion
-        ? item.data.deletion.state === 'pending' : ['starting', 'stopping'].includes(item.data.state)),
-    ),
-  );
   return (
     <Page
       title={t(section)}

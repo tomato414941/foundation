@@ -2,10 +2,11 @@ import { Link } from 'react-router';
 import { Code2, File, KeyRound, Link2, Plug, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ResourceView } from '../../shared/contracts';
-import { Bytes, DateText, Empty, State } from './components';
+import { Bytes, DateText, Empty, State, usePolling } from './components';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { resourcePath, sectionFor } from './navigation';
 import { connectionMethodName } from './connection-method-labels';
+import { environmentState } from './environments';
 
 export function ResourceTable({
   items,
@@ -21,6 +22,10 @@ export function ResourceTable({
   ownerNames?: Record<string, string>;
 }) {
   const { t } = useTranslation();
+  const changing = items.some(item => item.kind === 'environment' && (item.data.deletion
+    ? item.data.deletion.state === 'pending' : ['starting', 'stopping'].includes(item.data.state)));
+  usePolling(changing || items.some(item => item.kind === 'environment' && !item.data.deletion && item.data.state === 'running'),
+    changing ? 2500 : 15000);
   if (!items.length) return <Empty search={search} />;
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
@@ -38,11 +43,10 @@ export function ResourceTable({
         </TableHeader>
         <TableBody>
           {items.map((item) => {
-            const state = item.kind === 'environment' && item.data.deletion
-              ? item.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting'
+            const state = item.kind === 'environment'
+              ? environmentState(item)
               : 'state' in item.data ? item.data.state : null;
-            const stateBadge = state && <State value={state}
-              label={item.kind === 'environment' && state === 'running' ? t('state.environmentRunning') : undefined} />;
+            const stateBadge = state && <State value={state} />;
             const Icon =
               item.kind === 'connection'
                 ? Link2
