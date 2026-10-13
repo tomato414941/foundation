@@ -94,7 +94,8 @@ try {
   const arguments_ = { count: 0, enabled: false };
   const publicFunctions = new FunctionClient(caller.client);
   const interface_ = await publicFunctions.get(fn.id);
-  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'parameters', 'result']);
+  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'inputAccess', 'parameters', 'result']);
+  assert.deepEqual(interface_.data.inputAccess, { expiresAt: null });
   mcp = new McpClient({ name: 'Foundation release verification', version: '1.0.0' });
   await mcp.connect(new StreamableHTTPClientTransport(new URL('/api/mcp', config.origin), {
     requestInit: { headers: { authorization: 'Bearer ' + caller.client.identity.token } },
