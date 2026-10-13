@@ -417,7 +417,10 @@ test('待機中の呼び出しを中止し、実行中の処理も中止して�
     if ((await f.context.invocations.get(f.owner.actor, active.id)).startedAt) break;
     await delay(5);
   }
-  assert.equal((await f.functions.cancel(active.id)).state, 'uncertain');
+  assert.ok((await f.context.invocations.get(f.owner.actor, active.id)).startedAt);
+  const cancellation = await f.functions.cancel(active.id);
+  // The worker may deliver its signed cancellation before the cancel response is read.
+  assert.ok(['uncertain', 'cancelled'].includes(cancellation.state));
   await running;
   assert.equal((await f.functions.result(active.id)).state, 'cancelled');
 });
