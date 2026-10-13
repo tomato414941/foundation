@@ -342,7 +342,8 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable');
-  const appMissing = data.kind === 'connection' && !!method && connectionMethod(method).requiresApp && matchingApps.length === 0;
+  const appMissing = data.kind === 'connection' && !!method && connectionMethod(method).requiresApp &&
+    connectionMethod(method).browserAuthorization && matchingApps.length === 0;
   const spec = existing?.kind === 'function' ? FunctionDefinition.parse(existing.data) : undefined;
   const [programKind, setProgramKind] = useState(spec?.program.kind ?? 'command');
   const unavailable =

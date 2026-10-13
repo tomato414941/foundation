@@ -16,7 +16,11 @@ export function ApplicationConnectionFields({ purpose, method, existing, appMate
   }) {
   const { t } = useTranslation(), behavior = method ? connectionMethod(method) : undefined;
   const defaults = method?.kind === 'oauth' ? method.config.defaults : {};
-  const [appId, setAppId] = useState(selectedAppId ?? (existing?.kind === 'connection' ? existing.data.appId ?? '' : apps[0]?.id ?? ''));
+  // Client credentials are themselves the credential, with no one to approve them, so they can be entered with the
+  // connection, which registers them as its application. Other applications are registered beforehand.
+  const direct = purpose === 'connection' && !!behavior?.requiresApp && !behavior.browserAuthorization;
+  const [appId, setAppId] = useState(selectedAppId ?? (existing?.kind === 'connection' ? existing.data.appId ?? '' : apps[0]?.id ?? (direct ? 'new' : '')));
+  const inline = direct && appId === 'new';
   const selected = apps.find(item => item.id === appId);
   const applicationFields = selected?.kind === 'app' ? selected.data.fields : {};
   return <>
@@ -27,27 +31,28 @@ export function ApplicationConnectionFields({ purpose, method, existing, appMate
         if (app?.kind === 'app') onFieldsChange?.(app.data.fields);
       }} disabled={!!selectedAppId}>
         {apps.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+        {direct && <SelectItem value="new">{t('newApplication')}</SelectItem>}
       </SelectField>}
-      {behavior?.requiresApp && !apps.length && <Notice tone="info">
+      {behavior?.requiresApp && !apps.length && !direct && <Notice tone="info">
         <p>{t('appRequired')}</p>
         {appSetupUrl && <Link className="mt-2 inline-block underline underline-offset-4" to={appSetupUrl}>{t('prepareConnectionApp')}</Link>}
       </Notice>}
       {children}
     </>}
-    {purpose === 'app' && <>
+    {(purpose === 'app' || inline) && <>
       <InputField name="clientId" required label={t(identifierLabel)}
         defaultValue={clientId ?? (existing?.kind === 'app' ? existing.data.clientId : '')} readOnly={!!clientId} />
-      <InputField name="clientSecret" type="password" autoComplete="new-password" required={!existing && secretRequired}
+      <InputField name="clientSecret" type="password" autoComplete="new-password" required={(inline || !existing) && secretRequired}
         label={t(secretLabel)} hint={existing ? t('unchangedSecret') : undefined} />
       {callback && <InputField label={t('callbackUrl')}
         value={typeof window !== 'undefined' ? window.location.origin + '/oauth/callback' : ''} readOnly />}
       {method && <ServiceFields method={method} fields={behavior!.fields} defaults={defaults} existing={existing}
         appMaterial={appMaterial} preparedFields={preparedFields} fieldValues={fieldValues} onFieldsChange={onFieldsChange} />}
     </>}
-    {purpose === 'connection' && method && <ServiceFields method={method}
+    {purpose === 'connection' && !inline && method && <ServiceFields method={method}
       fields={behavior!.fields.filter(field => field.secret === false && field.visibility !== 'application')} defaults={defaults} existing={existing} appMaterial={null}
       preparedFields={{ ...applicationFields, ...preparedFields }} fieldValues={fieldValues} onFieldsChange={onFieldsChange} />}
-    {purpose === 'connection' && behavior?.fields.filter(field => field.secret === false && field.visibility === 'application')
+    {purpose === 'connection' && !inline && behavior?.fields.filter(field => field.secret === false && field.visibility === 'application')
       .map(field => <input key={field.name} type="hidden" name={'field.' + field.name}
         value={preparedFields?.[field.name] ?? applicationFields[field.name] ?? ''} />)}
   </>;

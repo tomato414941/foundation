@@ -1392,16 +1392,12 @@ class BrowserTests(unittest.TestCase):
                 if request.url.startswith(ORIGIN + "/api/") and request.method in ("POST", "PUT", "PATCH") else None)
         for method_id, name, values in cases:
             with self.subTest(method=method_id):
-                if method_id == "ovh:client_credentials":
-                    self.application(page, principal, method_id, values["クライアントID"], values["クライアントシークレット"],
-                                     fields=[("アカウントのAPI接続先", "CA", True)], name="OVH client app")
                 page.goto(root + "/services/new?method=" + method_id)
                 page.get_by_role("textbox", name="名前", exact=True).fill(name)
-                if method_id.startswith("ovh:") and method_id != "ovh:client_credentials":
+                if method_id.startswith("ovh:"):
                     self.select(page, "アカウントのAPI接続先", "CA")
-                if method_id != "ovh:client_credentials":
-                    for label, value in values.items():
-                        page.get_by_label(label, exact=True).fill(value)
+                for label, value in values.items():
+                    page.get_by_label(label, exact=True).fill(value)
                 page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-registration-ja.png")), full_page=True)
                 page.get_by_role("button", name="接続する", exact=True).click()
                 saved = self.saved_connection(page, name)
@@ -1504,6 +1500,24 @@ class BrowserTests(unittest.TestCase):
                 page.get_by_role("button", name="接続する", exact=True).click()
                 expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-cli-registration-ja.png")), full_page=True)
+
+    def test_OVHのサービスアカウントの接続を依頼すると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
+        owner, principal = self.passkey_account("OVH service account owner")
+        sender, requester = self.passkey_account("OVH service account requester")
+        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
+            "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Requested OVH service account"
+        }}]}, headers={"origin": ORIGIN})
+        self.assertTrue(asked.ok, asked.text())
+        request = asked.json()
+        owner.goto(ORIGIN + "/requests/" + request["id"])
+        owner.get_by_label("クライアントID", exact=True).fill("request-client")
+        owner.get_by_label("クライアントシークレット", exact=True).fill("request-client-secret")
+        owner.get_by_role("button", name="承認", exact=True).click()
+        expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+        completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+        self.assertEqual(completed["state"], "succeeded")
+        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        self.assertEqual((saved["data"]["methodId"], saved["data"]["fields"]), ("ovh:client_credentials", {"apiRegion": "ca"}))
 
     def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
         owner, principal = self.passkey_account("OVH request owner")
