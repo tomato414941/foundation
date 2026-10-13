@@ -133,7 +133,8 @@ export async function ensureRelease({ repository, sha, version, token, fetcher =
   return release.html_url;
 }
 
-export async function waitForPublication(version, { fetcher = fetch, sleep = delay, attempts = 20 } = {}) {
+// npm can take many minutes to show a version it accepted, so this waits up to half an hour.
+export async function waitForPublication(version, { fetcher = fetch, sleep = delay, attempts = 120 } = {}) {
   parts(version);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt++) {
