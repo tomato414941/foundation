@@ -103,12 +103,13 @@ class BrowserTests(unittest.TestCase):
     def select(self, page, label, option):
         page.get_by_role("combobox", name=label, exact=True).click()
         page.get_by_role("option", name=option, exact=True).click()
+        expect(page.get_by_role("listbox")).to_be_hidden()
 
     def application(self, page, principal, method_id, client_id, client_secret, fields=(), name="Connection application"):
         page.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method={method_id}")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
-        page.get_by_label("Application Key" if method_id.startswith("ovh:") else "クライアントID", exact=True).fill(client_id)
-        page.get_by_label("Application Secret" if method_id.startswith("ovh:") else "クライアントシークレット", exact=True).fill(client_secret)
+        page.get_by_label("Application Key" if method_id == "ovh:consumer_key" else "クライアントID", exact=True).fill(client_id)
+        page.get_by_label("Application Secret" if method_id == "ovh:consumer_key" else "クライアントシークレット", exact=True).fill(client_secret)
         for label, value, choice in fields:
             if choice:
                 self.select(page, label, value)
@@ -117,7 +118,6 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
         return page.url
-        expect(page.get_by_role("listbox")).to_be_hidden()
 
     def trust_fingerprint(self, page, principal_id, fingerprint):
         previous = page.url
@@ -1392,12 +1392,16 @@ class BrowserTests(unittest.TestCase):
                 if request.url.startswith(ORIGIN + "/api/") and request.method in ("POST", "PUT", "PATCH") else None)
         for method_id, name, values in cases:
             with self.subTest(method=method_id):
+                if method_id == "ovh:client_credentials":
+                    self.application(page, principal, method_id, values["クライアントID"], values["クライアントシークレット"],
+                                     fields=[("アカウントのAPI接続先", "CA", True)], name="OVH client app")
                 page.goto(root + "/services/new?method=" + method_id)
                 page.get_by_role("textbox", name="名前", exact=True).fill(name)
-                if method_id.startswith("ovh:"):
+                if method_id.startswith("ovh:") and method_id != "ovh:client_credentials":
                     self.select(page, "アカウントのAPI接続先", "CA")
-                for label, value in values.items():
-                    page.get_by_label(label, exact=True).fill(value)
+                if method_id != "ovh:client_credentials":
+                    for label, value in values.items():
+                        page.get_by_label(label, exact=True).fill(value)
                 page.screenshot(path=str(ARTIFACTS / (method_id.replace(":", "-") + "-registration-ja.png")), full_page=True)
                 page.get_by_role("button", name="接続する", exact=True).click()
                 saved = self.saved_connection(page, name)
