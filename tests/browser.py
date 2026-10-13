@@ -155,7 +155,7 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout) if result.stdout.startswith("{") else result.stdout
             agent = cli("init", "--name", "Linked AI", "--origin", ORIGIN)
-            url = cli("join", "--to", principal["id"])["url"]
+            url = cli("request-access", "--to", principal["id"])["url"]
             self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
             owner.goto(url.replace(agent["fingerprint"], "sha256:" + "0" * 64))
             owner.get_by_role("button", name="承認", exact=True).click()

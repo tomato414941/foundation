@@ -50,7 +50,7 @@ Usage: foundation <command> [options]
   login --key TOKEN [--origin URL]      Sign in with a key issued in a browser
   init --name NAME [--origin URL]       Register this machine as a new principal
   status                               Show this machine and its accessible principals
-  join [--to ID] [--wait]               Ask a person to take on this machine
+  request-access [--to ID] [--wait]     Ask a person to make this machine their agent
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   definition list                      List processing definitions and their inputs
   execution start --body JSON          Prepare operations and return their continuation URL
@@ -670,7 +670,7 @@ async function main(argv: string[]) {
     await output(result, args);
     return result.state === 'succeeded' ? 0 : 1;
   }
-  if (command === 'join' || command === 'request') {
+  if (command === 'request-access' || command === 'request') {
     if (command === 'request' && args.positionals[0] === 'wait') {
       const id = Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.'));
       const result = await waitFor(
@@ -682,7 +682,7 @@ async function main(argv: string[]) {
       return result.state === 'accepted' ? 0 : 1;
     }
     const input =
-      command === 'join'
+      command === 'request-access'
         ? {
             to: args.values.to,
             message: args.values.message ?? hostname(),

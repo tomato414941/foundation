@@ -213,7 +213,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   const owner = await c.person('Human owner');
   const initialized = await c.run(['init', '--name', 'Joining machine', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
-  const joined = await c.run(['join']);
+  const joined = await c.run(['request-access']);
   assert.equal(joined.code, 0, joined.stderr);
   const request = JSON.parse(joined.stdout);
   assert.match(request.code, /^[A-Z0-9]{8}$/);
@@ -497,7 +497,7 @@ test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリ�
   const initialized = await c.run(['init', '--name', 'Linked machine', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const { principal, fingerprint: value } = JSON.parse(initialized.stdout);
-  const joined = await c.run(['join', '--to', owner.actor.id]);
+  const joined = await c.run(['request-access', '--to', owner.actor.id]);
   assert.equal(joined.code, 0, joined.stderr);
   const request = JSON.parse(joined.stdout);
   assert.equal(request.url, c.origin + '/requests/' + request.id + '#fingerprint=' + value);
