@@ -144,6 +144,32 @@ class BrowserTests(unittest.TestCase):
         page.get_by_text("実行環境での利用を許可する（任意）", exact=True).click()
         page.get_by_role("checkbox", name=name, exact=True).check()
 
+    def test_AIが出した指紋付きのリンクで承認するとAIの公開鍵を検証して代理にし持ち主の変数を開かせる(self):
+        owner, principal = self.passkey_account("Linked owner")
+        variable_id = self.variable(owner, principal, "Linked variable", "linked-variable-value").rstrip("/").rsplit("/", 1)[1]
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = directory
+            def cli(*arguments):
+                result = subprocess.run(["node", "cli/dist/cli.mjs", *arguments], capture_output=True, text=True, env=environment, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout) if result.stdout.startswith("{") else result.stdout
+            agent = cli("init", "--name", "Linked AI", "--origin", ORIGIN)
+            url = cli("join", "--to", principal["id"])["url"]
+            self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
+            owner.goto(url.replace(agent["fingerprint"], "sha256:" + "0" * 64))
+            owner.get_by_role("button", name="承認", exact=True).click()
+            expect(owner.get_by_text("公開鍵の指紋が一致しません。相手に現在の指紋を確認してください。", exact=True)).to_be_visible()
+            owner.goto(ORIGIN + "/account/trust?principal=" + agent["principal"]["id"] + "#fingerprint=" + agent["fingerprint"])
+            expect(owner.get_by_role("textbox", name="公開鍵の指紋", exact=True)).to_have_value(agent["fingerprint"])
+            owner.goto(url)
+            owner.get_by_role("button", name="承認", exact=True).click()
+            expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
+            owner.goto(ORIGIN + "/account/trust")
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            cli("trust", principal["id"], "--fingerprint", owner_fingerprint)
+            self.assertEqual(cli("read", variable_id), "linked-variable-value")
+
     def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
         owner, principal = self.passkey_account("Chancellor Rigel")
         paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})

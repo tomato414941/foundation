@@ -210,6 +210,11 @@ function seconds(value: string | undefined, fallback: number, max = 86400) {
     throw new Error('Choose a time limit between 1 and ' + max + ' seconds.');
   return number;
 }
+// A link that also carries this identity's public key fingerprint after '#', which browsers never send to the server,
+// so whoever opens it can verify this identity's public key without typing anything.
+async function linked(url: string, identity: Client['identity']) {
+  return identity.binding ? url + (url.includes('#') ? '&' : '#') + 'fingerprint=' + await fingerprint(identity.binding) : url;
+}
 async function output(value: unknown, args: Arguments) {
   const body = JSON.stringify(value, null, 2) + '\n';
   if (args.values.output) await secureWrite(args.values.output, body, !!args.values.force);
@@ -427,7 +432,8 @@ async function main(argv: string[]) {
   if (command === 'mcp') return startMcp(client);
   if (command === 'status') {
     const { wrappedKey: _wrappedKey, ...status } = current;
-    await output(status, args);
+    await output({ ...status, ...(client.identity.binding ? { fingerprint: await fingerprint(client.identity.binding),
+      verificationUrl: await linked(new URL('/account/trust?principal=' + current.principal.id, client.identity.origin).href, client.identity) } : {}) }, args);
     return 0;
   }
   if (command === 'trust') {
@@ -693,7 +699,7 @@ async function main(argv: string[]) {
       { method: 'POST', body: RequestInput.parse(input) },
       ApprovalRequest,
     );
-    await output(request, args);
+    await output({ ...request, url: await linked(request.url, client.identity) }, args);
     if (args.values.wait) {
       const result = await waitFor(
         () => client.json('/api/requests/' + request.id, {}, ApprovalRequest),

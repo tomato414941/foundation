@@ -8,7 +8,7 @@ import { Execution } from '../../shared/executions';
 import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, session } from './api';
-import { connectionClient, executionClient } from './custody';
+import { connectionClient, custodyClient, executionClient } from './custody';
 import { rekeySharing } from './keys';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
@@ -78,6 +78,10 @@ async function readItem(id: string, requestMode: boolean, signal?: AbortSignal) 
 export async function clientLoader({ params, request }: PageArgs) {
   const requestMode = new URL(request.url).pathname.startsWith('/requests/');
   const fragment = new URLSearchParams(window.location.hash.slice(1)), token = fragment.get('token');
+  // The requester's public key fingerprint comes in the link's fragment, which never reaches the server. It is kept for
+  // this tab until the request is approved, so that signing in on the way keeps it.
+  const linked = fragment.get('fingerprint');
+  if (linked) sessionStorage.setItem('foundation.fingerprint.request.' + params.id, linked);
   if (token) {
     await api(`/requests/${params.id}/redeem`, { method: 'POST', body: { token } });
     history.replaceState(null, '', window.location.pathname);
@@ -138,6 +142,9 @@ export async function clientAction({ params, request }: PageArgs) {
     const data = current ? await loadExecutionForm(current.invocation) : null;
     const prepared = data ? executionSubmission(data, form) : null;
     if (intent === 'approve') {
+      // Approving with the fingerprint the requester linked first verifies its public key on this device.
+      const linked = sessionStorage.getItem('foundation.fingerprint.request.' + params.id);
+      if (linked) await (await custodyClient()).trustIdentity(item.from.id, linked);
       const values = item.operations.map((operation, index) => Object.fromEntries(operation.inputs.filter(input => !input.secret).map((input, inputIndex) => {
         const key = `input.${index}.${inputIndex}`;
         return [input.pointer, String(form.has(key) ? form.get(key) : index === current?.index && prepared
@@ -148,6 +155,7 @@ export async function clientAction({ params, request }: PageArgs) {
         ? configuration(current.invocation, prepared.input, item.operations[current.index]!.configure) : {}), ...sealed[index] }));
       await api(path + (requestMode ? '/approve' : '/respond'), { method: 'POST',
         body: { values, configuration: choices, code: formText(form, 'code') || undefined } });
+      sessionStorage.removeItem('foundation.fingerprint.request.' + params.id);
       item = await readItem(params.id!, requestMode);
     } else if (prepared && current) await (await executionClient()).configure(item.id, configuration(current.invocation, prepared.input, item.operations[current.index]!.configure));
     if (item.waiting && prepared) await (await executionClient()).continue(item.id, prepared.material);

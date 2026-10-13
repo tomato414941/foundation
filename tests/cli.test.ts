@@ -489,3 +489,22 @@ test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと�
   assert.equal(history.code, 0, history.stderr);
   assert.ok(JSON.parse(history.stdout).items.some((item: { id: string }) => item.id === execution.id));
 });
+
+test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリンクに、この端末の公開鍵の指紋を付ける', async t => {
+  const c = await cliFixture();
+  t.after(c.close);
+  const owner = await c.person('Linked owner');
+  const initialized = await c.run(['init', '--name', 'Linked machine', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const { principal, fingerprint: value } = JSON.parse(initialized.stdout);
+  const joined = await c.run(['join', '--to', owner.actor.id]);
+  assert.equal(joined.code, 0, joined.stderr);
+  const request = JSON.parse(joined.stdout);
+  assert.equal(request.url, c.origin + '/requests/' + request.id + '#fingerprint=' + value);
+  const status = await c.run(['status']);
+  assert.equal(status.code, 0, status.stderr);
+  assert.deepEqual(
+    (({ fingerprint, verificationUrl }) => ({ fingerprint, verificationUrl }))(JSON.parse(status.stdout)),
+    { fingerprint: value, verificationUrl: c.origin + '/account/trust?principal=' + principal.id + '#fingerprint=' + value },
+  );
+});

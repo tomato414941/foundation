@@ -8,15 +8,21 @@ import { InputField } from '../form-fields';
 import { Copy, Detail, ErrorNotice, Notice, Page, Panel, SaveBar } from '../components';
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  const recipient = new URL(request.url).searchParams.get('principal') ?? '';
+  // A fingerprint the other party linked comes in the fragment, which never reaches the server. It is kept for this tab
+  // until the public key is verified, so that signing in on the way keeps it.
+  const linked = new URLSearchParams(window.location.hash.slice(1)).get('fingerprint');
+  if (recipient && linked) sessionStorage.setItem('foundation.fingerprint.principal.' + recipient, linked);
   await signedIn(request);
   const client = await custodyClient();
-  return { id: client.binding.principalId, fingerprint: await fingerprint(client.binding),
-    recipient: new URL(request.url).searchParams.get('principal') ?? '' };
+  return { id: client.binding.principalId, fingerprint: await fingerprint(client.binding), recipient,
+    recipientFingerprint: recipient ? sessionStorage.getItem('foundation.fingerprint.principal.' + recipient) ?? '' : '' };
 }
 export async function clientAction({ request }: Route.ClientActionArgs) {
   return actionResult(async () => {
-    const form = await request.formData(), client = await custodyClient();
-    await client.trustIdentity(formText(form, 'principalId'), formText(form, 'fingerprint'));
+    const form = await request.formData(), client = await custodyClient(), principalId = formText(form, 'principalId');
+    await client.trustIdentity(principalId, formText(form, 'fingerprint'));
+    sessionStorage.removeItem('foundation.fingerprint.principal.' + principalId);
     return { ok: true };
   });
 }
@@ -38,7 +44,8 @@ export default function Trust() {
     <Form method="post"><div className="flex flex-col gap-6">
       <p className="text-sm leading-relaxed text-muted-foreground">{t('trustIdentityHelp')}</p>
       <InputField name="principalId" label={t('recipient')} required defaultValue={data.recipient} />
-      <InputField name="fingerprint" label={t('fingerprint')} required autoComplete="off" minLength={71} maxLength={71} />
+      <InputField name="fingerprint" label={t('fingerprint')} required autoComplete="off" minLength={71} maxLength={71}
+        defaultValue={data.recipientFingerprint} />
       <SaveBar back="/account" label="trustIdentity" />
     </div></Form>
   </Page>;
