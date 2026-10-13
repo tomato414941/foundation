@@ -4,11 +4,11 @@ import { hash, sign } from '../shared/authority.js';
 import { Invocation, ClaimedInvocation, InvocationCompletion, verifyFunction } from '../shared/function-api.js';
 import type { Completion } from '../shared/function-api.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
-import { ContentTypes, Operations } from '../shared/custody.js';
+import { ContentTypes, Operations, grantActive, grantExpiration } from '../shared/custody.js';
 import { FunctionOperation } from '../shared/runtime-protocol.js';
 import { authorizeEnvironment } from '../shared/runtime-protocol.js';
 import type { Journal } from './journal.js';
-import { DeliveryPending, Executor } from './executor.js';
+import { DeliveryPending, Executor, executionUncertain } from './executor.js';
 import { DomainError } from '../server/errors.js';
 
 export class FunctionBroker {
@@ -92,7 +92,8 @@ export class FunctionExecutor {
     try {
       await verifyFunction(publication, this.executor.binding);
       if (publication.functionId !== request.functionId || publication.definition.environmentId !== this.executor.environment.manifest.id ||
-        await hash(publication.definition) !== request.definitionDigest || Date.parse(request.expiresAt) <= Date.now())
+        await hash(publication.definition) !== request.definitionDigest || Date.parse(request.expiresAt) <= Date.now() ||
+        !grantActive(publication.definition.inputAccess) || grantExpiration(publication.definition.inputAccess) < Date.parse(request.expiresAt))
         throw new Error('Run the current approved function in its configured environment.');
       const checkpointKey = 'function_' + publication.functionId;
       const checkpoint = await this.journal.read<{ revision: number; digest: string }>(checkpointKey);
@@ -128,11 +129,12 @@ export class FunctionExecutor {
       if (error instanceof DeliveryPending) throw error;
       const dispatched = record.phase === 'dispatched';
       const state = runningSignal.aborted && cancellationRequested ? 'cancelled'
-        : dispatched && (runningSignal.aborted || !(error instanceof DomainError)) ? 'uncertain' : 'failed';
-      await this.complete(record, state, null, !runningSignal.aborted && error instanceof DomainError ? { code: error.code, message: error.message }
-        : { code: state === 'uncertain' ? 'execution_uncertain' : state === 'cancelled' ? 'invocation_cancelled' : 'invalid_function',
-          message: state === 'uncertain' ? 'Check the result before invoking this function again.'
-            : state === 'cancelled' ? 'The function was cancelled.' : 'The executor could not authorize this function.' });
+        : dispatched && (runningSignal.aborted || executionUncertain(error)) ? 'uncertain' : 'failed';
+      await this.complete(record, state, null, state === 'uncertain'
+        ? { code: 'execution_uncertain', message: 'The outcome could not be confirmed. Check the destination before invoking this function again.' }
+        : !runningSignal.aborted && error instanceof DomainError ? { code: error.code, message: error.message }
+        : { code: state === 'cancelled' ? 'invocation_cancelled' : 'invalid_function',
+          message: state === 'cancelled' ? 'The function was cancelled.' : 'The executor could not authorize this function.' });
     } finally { clearInterval(heartbeat); }
     try { await this.deliver(record); } catch { throw new DeliveryPending(); }
     return true;

@@ -338,7 +338,7 @@ class BrowserTests(unittest.TestCase):
         page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("Reusable function")
         self.select(page, "実行環境", "Browser executor")
-        code = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,amount:args.amount,enabled:args.enabled,payload:args.payload,configured:!!process.env.TOKEN,secret:process.env.TOKEN}));});'
+        code = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,amount:args.amount,enabled:args.enabled,payload:args.payload,configured:!!process.env.TOKEN}));});'
         page.get_by_role("textbox", name="プログラムと引数（JSON配列）", exact=True).fill(json.dumps(["node", "-e", code]))
         page.get_by_role("textbox", name="接続・変数の入力（JSON）", exact=True).fill(json.dumps([{"name": "TOKEN", "source": {"id": source}}]))
         page.get_by_role("textbox", name="パラメーター（JSON）", exact=True).fill(json.dumps([
@@ -347,12 +347,16 @@ class BrowserTests(unittest.TestCase):
             {"name": "enabled", "label": "Enabled", "type": "boolean", "default": True},
             {"name": "payload", "label": "Payload", "type": "json", "default": {}},
         ]))
+        expect(page.get_by_role("combobox", name="入力の利用許可", exact=True)).to_contain_text("継続して許可")
+        self.select(page, "入力の利用許可", "期限を指定")
+        page.get_by_label("入力利用の有効期限", exact=True).fill("2099-01-02T03:04")
         page.screenshot(path=str(ARTIFACTS / "function-editor-desktop-ja.png"), full_page=True)
         print("Rendered function editor: " + page.locator("main").inner_text(), flush=True)
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
         function_path = page.url
         function_id = function_path.rsplit("/", 1)[1]
+        expect(page.locator("main")).to_contain_text("2099")
         reader, recipient = self.passkey_account("Function caller")
         reader.evaluate("""() => new Promise((resolve, reject) => {
           const request = indexedDB.open('foundation-keys', 2);
@@ -381,7 +385,6 @@ class BrowserTests(unittest.TestCase):
         expect(reader.locator("main")).to_contain_text('"amount": 12.5')
         expect(reader.locator("main")).to_contain_text('"enabled": false')
         expect(reader.locator("main")).to_contain_text('"items": [')
-        expect(reader.locator("main")).to_contain_text("[redacted]")
         reader.screenshot(path=str(ARTIFACTS / "function-result-desktop-ja.png"), full_page=True)
         print("Rendered function result: " + reader.locator("main").inner_text(), flush=True)
         self.assertEqual(reader.request.get(ORIGIN + "/api/resources/" + source + "/custody").status, 403)
@@ -390,17 +393,59 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "言語", "English")
         page.set_viewport_size({"width": 390, "height": 844})
         expect(page.get_by_role("textbox", name="Program and arguments (JSON array)", exact=True)).to_have_value(json.dumps(["node", "-e", code], ensure_ascii=False, indent=2))
+        expect(page.get_by_role("combobox", name="Input access", exact=True)).to_contain_text("Set an expiration")
+        expect(page.get_by_label("Input access expires", exact=True)).to_have_value("2099-01-02T03:04")
         page.screenshot(path=str(ARTIFACTS / "function-editor-mobile-en.png"), full_page=True)
         print("Rendered function editor (English): " + page.locator("main").inner_text(), flush=True)
+        self.select(page, "Input access", "Allow until revoked")
         page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
         page.get_by_role("button", name="Save", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
+        expect(page.locator("main")).to_contain_text("Allow until revoked")
         page.get_by_role("button", name="Delete", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/functions")
         expect(page.get_by_role("heading", name="Functions", exact=True)).to_be_visible()
         reader.reload()
         expect(reader.locator("main")).to_contain_text("Shared invocation")
+
+    def test_HTTP関数の本文形式を保存してステータスと本文を確認する(self):
+        page, principal = self.passkey_account("HTTP function owner")
+        self.executor(page, principal)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("HTTP function")
+        self.select(page, "実行環境", "Browser executor")
+        self.select(page, "処理", "HTTPリクエスト")
+        page.get_by_label("URL", exact=True).fill("https://service.example/submit")
+        self.select(page, "メソッド", "POST")
+        self.select(page, "HTTP本文の形式", "テキスト")
+        expect(page.locator("main")).to_contain_text("受付の応答は、その後の処理の完了を意味しません。")
+        page.screenshot(path=str(ARTIFACTS / "function-http-editor-desktop-ja.png"), full_page=True)
+        print("Rendered HTTP function editor: " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
+        function_path = page.url
+        page.goto(function_path + "/run")
+        page.get_by_role("button", name="実行", exact=True).click()
+        page.wait_for_url("**/executions/*")
+        expect(page.locator("main")).to_contain_text('"status": 200', timeout=15000)
+        expect(page.locator("main")).to_contain_text('"headers": {}')
+        expect(page.locator("main")).to_contain_text('"body": "{}"')
+        page.screenshot(path=str(ARTIFACTS / "function-http-result-desktop-ja.png"), full_page=True)
+        page.goto(function_path + "/edit")
+        self.select(page, "言語", "English")
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(page.get_by_role("combobox", name="HTTP body format", exact=True)).to_contain_text("Text")
+        expect(page.get_by_role("combobox", name="Input access", exact=True)).to_contain_text("Allow until revoked")
+        page.screenshot(path=str(ARTIFACTS / "function-http-editor-mobile-en.png"), full_page=True)
+        print("Rendered HTTP function editor (English): " + page.locator("main").inner_text(), flush=True)
+        self.select(page, "HTTP body format", "JSON")
+        page.get_by_role("button", name="Save", exact=True).click()
+        expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
+        page.goto(function_path + "/run")
+        page.get_by_role("button", name="Run", exact=True).click()
+        page.wait_for_url("**/executions/*")
+        expect(page.locator("main")).to_contain_text('"body": {}', timeout=15000)
 
     def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()

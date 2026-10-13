@@ -6,7 +6,7 @@ import type { Resources, ResourceRow } from './resources.js';
 import type { Bindings } from './bindings.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
-import { ContentTypes, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
+import { ContentTypes, grantActive, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
@@ -34,7 +34,7 @@ function sharedWith(policy: CustodyPolicy, signer: BoundKeys, now = Date.now()) 
   return {
     readers: others(policy.readers), authorities: others(policy.authorities),
     observers: [...new Set(policy.observers ?? [])].filter(id => id !== signer.principalId).sort(),
-    grants: policy.grants.filter(grant => Date.parse(grant.expiresAt) > now && !('actor' in grant && grant.actor.id === signer.id))
+    grants: policy.grants.filter(grant => grantActive(grant, now) && !('actor' in grant && grant.actor.id === signer.id))
       .map(grant => canonical(grant)).sort(),
   };
 }
@@ -107,7 +107,7 @@ export class Custody {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
     type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[];
-      grants: Array<{ executor: BoundKeys; actor?: BoundKeys; expiresAt: string }> };
+      grants: Array<{ executor: BoundKeys; actor?: BoundKeys; expiresAt: string | null }> };
     const rows = await this.resources.db.all<Row>(
       `SELECT c.resource_id AS id, r.kind, r.owner_id, c.content->'policy'->'readers' AS readers,
          c.content->'policy'->'grants' AS grants
@@ -131,7 +131,7 @@ export class Custody {
     };
     const items: Array<{ id: string; reason: 'grantExpired' | 'recipients'; remove: string[] }> = [];
     for (const row of rows) {
-      const grants = row.grants ?? [], expired = grants.some(grant => Date.parse(grant.expiresAt) <= Date.now());
+      const grants = row.grants ?? [], expired = grants.some(grant => !grantActive(grant));
       if (!owners.has(row.owner_id)) {
         if (expired) items.push({ id: row.id, reason: 'grantExpired', remove: [] });
         continue;
@@ -169,7 +169,7 @@ export class Custody {
     await this.resources.authorization.active(actor);
     const content = await this.get(id);
     const { binding } = await this.bindings.current(actor.id);
-    const granted = content.policy.grants.filter(grant => Date.parse(grant.expiresAt) > Date.now());
+    const granted = content.policy.grants.filter(grant => grantActive(grant));
     const sealed = content.policy.readers.some(reader => canonical(reader) === canonical(binding));
     const executes = granted.some(grant => canonical(grant.executor) === canonical(binding));
     const requests = granted.some(grant => 'actor' in grant && canonical(grant.actor) === canonical(binding));

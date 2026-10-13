@@ -362,13 +362,15 @@ export const Command = z
   .strict();
 export const FunctionProgram = z.discriminatedUnion('kind', [
   Command.omit({ stdin: true }).extend({ kind: z.literal('command') }).strict(),
-  z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
+  z.object({ kind: z.literal('http'), request: HttpRequest,
+    responseFormat: z.enum(['text', 'json']).default('json') }).strict(),
 ]);
 export const FunctionDefinition = z
   .object({
     description: z.string().max(2000).default(''),
     environmentId: Id,
     program: FunctionProgram,
+    inputAccess: z.object({ expiresAt: Time.nullable().default(null) }).strict().default({ expiresAt: null }),
     parameters: z
       .array(
         z.object({

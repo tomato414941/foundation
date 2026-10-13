@@ -262,6 +262,8 @@ export default function ResourceDetail() {
       {item.kind === 'function' && (item.data.description || can('execute')) && (
         <Panel>
           {item.data.description && <p className="leading-relaxed">{item.data.description}</p>}
+          <Detail label={t('functionInputAccess')}>{item.data.inputAccess.expiresAt
+            ? <DateText value={item.data.inputAccess.expiresAt} /> : t('functionInputContinuous')}</Detail>
           {can('execute') && (
             <Button variant="default" asChild>
               <Link to="run">{t('execute')}</Link>

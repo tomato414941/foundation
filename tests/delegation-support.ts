@@ -5,7 +5,7 @@ import { Delegation } from '../server/delegation.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import type { ExecutionIntent } from '../shared/custody.js';
-import { signEnvironment } from '../shared/runtime-protocol.js';
+import { FUNCTION_RUNTIME_VERSION, signEnvironment } from '../shared/runtime-protocol.js';
 import { encode } from '../shared/encryption.js';
 import type { Journal } from '../runtime/journal.js';
 import type { ExecutionBroker } from '../runtime/executor.js';
@@ -35,7 +35,7 @@ export async function delegatedFixture() {
   const environment = await signEnvironment({
     format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     name: 'Own server', executor: executor.binding, operatorId: executor.actor.id,
-    driver: 'attached', capabilities: Object.values(Operations), functionVersion: 2,
+    driver: 'attached', capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION,
     isolation: 'process', revision: 1,
   }, executor.keys);
   await delegation.register(executor.actor, environment);

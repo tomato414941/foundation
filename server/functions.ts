@@ -1,3 +1,4 @@
+import { FUNCTION_RUNTIME_VERSION } from '../shared/runtime-protocol.js';
 import type { Actor } from './authorization.js';
 import type { Resources } from './resources.js';
 import type { Custody } from './custody.js';
@@ -8,7 +9,7 @@ import type { FunctionSpec, HttpRequestInput, JsonValue, SourceReference } from 
 import { FunctionSave } from '../shared/executions.js';
 import { FunctionWrite, verifyFunction } from '../shared/function-api.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, Operations, functionOperations } from '../shared/custody.js';
+import { ContentTypes, Operations, functionOperations, grantActive } from '../shared/custody.js';
 import { pointerParts, setPointer } from '../shared/values.js';
 import { fail } from './errors.js';
 import { functionProgram, functionSources } from '../shared/functions.js';
@@ -44,14 +45,16 @@ export class Functions {
   }
   async validateFunction(actor: Actor, definition: FunctionSpec, delegation: Delegation) {
     const spec = FunctionDefinition.parse(definition), names = new Set<string>();
+    if (spec.inputAccess.expiresAt !== null && Date.parse(spec.inputAccess.expiresAt) <= Date.now())
+      fail(400, 'invalid_input', 'Choose a future expiration for this function’s input access.');
     for (const parameter of spec.parameters) {
       if (names.has(parameter.name)) fail(400, 'duplicate_parameter', 'Use unique parameter names.');
       names.add(parameter.name);
     }
     const environment = await delegation.environment(spec.environmentId);
     await this.resources.authorization.requireResource(actor, await this.resources.get(spec.environmentId), 'execute');
-    if (environment.registration.manifest.functionVersion !== 2)
-      fail(409, 'function_runtime_required', 'Update this environment to Foundation CLI 6 or create a new environment.');
+    if (environment.registration.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
+      fail(409, 'function_runtime_required', 'Update this execution environment to the current Foundation CLI or create a new environment.');
     if (environment.stopped_at || !environment.registration.manifest.capabilities.includes(Operations.function) ||
       !environment.registration.manifest.capabilities.includes(Operations[spec.program.kind]))
       fail(400, 'unsupported_environment', 'Choose an active environment that can execute this function.');
@@ -125,7 +128,7 @@ export class Functions {
       const operations = functionOperations(source.policy.contentType);
       const granted = content.policy.grants.some(grant => 'function' in grant && canonical(grant.function) === canonical(reference) &&
         canonical(grant.executor) === canonical(executor) && operations.every(operation => grant.operations.includes(operation)) &&
-        Date.parse(grant.expiresAt) > Date.now());
+        grantActive(grant) && grant.expiresAt === spec.inputAccess.expiresAt);
       if ((current.has(source.policy.id) ? !granted : content.policy.grants.some(grant => 'function' in grant && grant.function.id === proof.functionId)) ||
         canonical(content.metadata) !== canonical(source.metadata))
         fail(400, 'function_not_approved', 'Approve this exact function and execution environment for every input.');
@@ -147,11 +150,16 @@ export class Functions {
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
     await this.resources.authorization.requireResource(actor, row, 'execute');
     const { publication: storedPublication, ...storedDefinition } = row.data;
-    const definition = FunctionDefinition.parse(storedDefinition), environment = await delegation.environment(definition.environmentId);
-    if (environment.registration.manifest.functionVersion !== 2)
-      fail(409, 'function_runtime_required', 'Update the execution environment to Foundation CLI 6.');
+    const definition = FunctionDefinition.parse(storedDefinition);
+    if (definition.inputAccess.expiresAt !== null && Date.parse(definition.inputAccess.expiresAt) <= Date.now())
+      fail(409, 'function_not_approved', 'The owner must approve this function’s inputs again.');
+    const environment = await delegation.environment(definition.environmentId);
+    if (environment.registration.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
+      fail(409, 'function_runtime_required', 'Update this execution environment to the current Foundation CLI.');
     if (!storedPublication) fail(409, 'function_not_published', 'Save this function to approve its current definition.');
-    const publication = await verifyFunction(storedPublication as unknown as z.infer<typeof FunctionWrite>['publication']);
+    let publication: z.infer<typeof FunctionWrite>['publication'];
+    try { publication = await verifyFunction(storedPublication as unknown as z.infer<typeof FunctionWrite>['publication']); }
+    catch { fail(409, 'function_not_published', 'Save this function to approve its current definition.'); }
     if (canonical(publication.definition) !== canonical(definition) || publication.functionId !== row.id ||
       publication.ownerId !== row.owner_id || canonical(publication.executor) !== canonical(environment.registration.manifest.executor))
       fail(409, 'function_changed', 'Save this function to approve its current definition.');
@@ -161,7 +169,7 @@ export class Functions {
     for (const source of sources)
       if (!source.policy.grants.some(grant => 'function' in grant && canonical(grant.function) === canonical(reference) &&
         canonical(grant.executor) === canonical(environment.registration.manifest.executor) &&
-        functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)) && Date.parse(grant.expiresAt) > Date.now()))
+        functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)) && grantActive(grant)))
         fail(409, 'function_not_approved', 'The owner must approve this function’s inputs again.');
     return { row, definition, publication, registration: environment.registration, sources };
   }

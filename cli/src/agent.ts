@@ -5,7 +5,7 @@ import { privateClient } from './custody.js';
 import type { Client } from './client.js';
 import { canonical, fingerprint } from '../../shared/authority.js';
 import { Id } from '../../shared/contracts.js';
-import { signEnvironment, verifyEnvironment } from '../../shared/runtime-protocol.js';
+import { FUNCTION_RUNTIME_VERSION, signEnvironment, verifyEnvironment } from '../../shared/runtime-protocol.js';
 import type { RegisteredEnvironment } from '../../shared/runtime-protocol.js';
 import { FileJournal } from '../../runtime/journal.js';
 import { Connections } from '../../runtime/connections.js';
@@ -41,16 +41,16 @@ export async function startAgent(client: Client, options: {
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
         throw new Error('Use the owner and identity originally registered for this executor.');
       // Keep runtime support and the machine's current AWS identity in the signed registration.
-      if (environment.manifest.functionVersion !== 2 || environment.manifest.resultVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
+      if (environment.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION || environment.manifest.resultVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
         const { awsPrincipal: _previous, ...manifest } = environment.manifest;
-        environment = await signEnvironment({ ...manifest, functionVersion: 2, resultVersion: 1, ...(awsPrincipal ? { awsPrincipal } : {}),
+        environment = await signEnvironment({ ...manifest, functionVersion: FUNCTION_RUNTIME_VERSION, resultVersion: 1, ...(awsPrincipal ? { awsPrincipal } : {}),
           revision: manifest.revision + 1 }, keys);
         await journal.write('environment_' + id, environment);
       }
     } else {
       environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
-        capabilities: Object.values(Operations), functionVersion: 2, resultVersion: 1,
+        capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, resultVersion: 1,
         isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);

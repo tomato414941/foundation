@@ -12,11 +12,12 @@ import { InvocationCompletion } from '../shared/function-api.js';
 import { DeliveryPending } from '../runtime/executor.js';
 import { JournalTrust } from '../runtime/trust.js';
 import { canonical, hash, sign } from '../shared/authority.js';
-import { ContentTypes, protect, reveal } from '../shared/custody.js';
+import { ContentTypes, Operations, authorizeUse, protect, reveal } from '../shared/custody.js';
+import { DomainError } from '../server/errors.js';
 import { decode, encode } from '../shared/encryption.js';
 import { functionArguments, functionProgram } from '../shared/functions.js';
 
-const script = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,configured:!!process.env.TOKEN,secret:process.env.TOKEN}));});';
+const script = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,configured:!!process.env.TOKEN}));});';
 const definition = (environmentId: string, sourceId?: string, command = script) => FunctionDefinition.parse({
   environmentId, program: { kind: 'command', command: ['node', '-e', command],
     inputs: sourceId ? [{ name: 'TOKEN', source: { id: sourceId } }] : [], timeoutSeconds: 5 },
@@ -69,7 +70,7 @@ test('呼び出し権限だけを持つ利用者がAPIトークンで関数を�
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const functions = new FunctionClient(f.api(f.stranger.token));
   const view = await functions.get(fn.id);
-  assert.deepEqual(view.data, { description: '', parameters: fn.data.parameters, result: 'json' });
+  assert.deepEqual(view.data, { description: '', parameters: fn.data.parameters, result: 'json', inputAccess: { expiresAt: null } });
   assert.deepEqual(view.permissions, ['execute']);
   const { client } = await caller(f);
   await assert.rejects(client.read(f.resource.id));
@@ -80,7 +81,7 @@ test('呼び出し権限だけを持つ利用者がAPIトークンで関数を�
   await f.functionExecutor.tick();
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  assert.deepEqual(result.results[0], { message: text, configured: true, secret: '[redacted]' });
+  assert.deepEqual(result.results[0], { message: text, configured: true });
   await assert.rejects(reveal(await f.context.custody.get(f.resource.id), f.stranger.binding, f.stranger.keys.encryption));
   await assert.rejects(client.submit(f.stranger.actor.id, f.environment.manifest.id, {
     kind: 'command', command: ['node', '-e', 'console.log(process.env.TOKEN)'],
@@ -126,7 +127,7 @@ test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型�
   const args = { count: 0, enabled: false, payload: [1, { name: 'item' }, null] };
   const invocation = await f.functions.invoke(fn.id, args);
   await f.functionExecutor.tick();
-  assert.deepEqual((await f.functions.result(invocation.id)).results[0], { ...args, caption: 'Count 0', constructor: null });
+  assert.deepEqual((await f.functions.result(invocation.id)).results[0], { status: 200, headers: { 'content-type': 'application/json' }, body: { ...args, caption: 'Count 0', constructor: null } });
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('count'), '0');
 });
 
@@ -176,7 +177,7 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
     parameters: [{ name: 'query', label: 'Query' }], result: 'json' }));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const { client, functions } = await caller(f);
-  const invocation = await functions.invoke(fn.id, { query: 'hello world' }, { save: { '/count': 'Count' } });
+  const invocation = await functions.invoke(fn.id, { query: 'hello world' }, { save: { '/body/count': 'Count' } });
   await f.functionExecutor.tick();
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
@@ -184,6 +185,108 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
   assert.equal(decode(await client.reveal(output.saved.Count!)), '7');
   assert.equal(f.requests[0]!.headers!.authorization, 'Bearer confidential-value');
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('query'), 'hello world');
+});
+
+test('HTTP送信の応答が失われた場合は結果不明を返し、同じ呼び出しIDで状態を確認する', async t => {
+  const f = await flowFixture(() => { throw new DomainError(502, 'service_unavailable', 'Response lost'); }); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const id = crypto.randomUUID(), call = await f.functions.invoke(fn.id, {}, { id });
+  await f.functionExecutor.tick();
+  const result = await f.functions.result(call.id);
+  assert.equal(result.state, 'uncertain');
+  assert.equal(result.error?.code, 'execution_uncertain');
+  assert.equal((await f.functions.invoke(fn.id, {}, { id })).state, 'uncertain');
+  assert.equal(await f.functionExecutor.tick(), false);
+  assert.equal(f.requests.length, 1);
+});
+
+test('HTTP関数の成功応答をステータス・ヘッダー・本文として返し、受付済みの応答を確認する', async t => {
+  const f = await flowFixture(() => ({ status: 202, headers: { 'content-type': 'application/json', 'x-request-id': 'accepted' }, body: encode('{"queued":true}') })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
+  const result = await f.functions.result(call.id);
+  assert.equal(result.state, 'succeeded');
+  assert.deepEqual(result.results[0], { status: 202, headers: { 'content-type': 'application/json', 'x-request-id': 'accepted' }, body: { queued: true } });
+});
+
+test('HTTP関数の転送やエラー応答を失敗として返し、応答のステータスを知らせる', async t => {
+  let status = 302;
+  const f = await flowFixture(() => ({ status, headers: {}, body: encode('response') })); t.after(f.close);
+  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', responseFormat: 'text', request: { url: 'https://service.example/action', method: 'POST' } } }));
+  for (status of [302, 401, 500]) {
+    const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
+    const result = await f.functions.result(call.id);
+    assert.equal(result.state, 'failed'); assert.equal(result.error?.code, 'service_response');
+    assert.equal(result.error?.message, 'The service returned HTTP ' + status + '.');
+  }
+  assert.equal(f.requests.length, 3);
+});
+
+test('HTTPのテキスト本文と本文のない成功応答を指定した形式で返す', async t => {
+  let status = 200;
+  const f = await flowFixture(() => ({ status, headers: {}, body: encode(status === 200 ? 'plain text' : '') })); t.after(f.close);
+  const text = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', responseFormat: 'text', request: { url: 'https://service.example/action' } } }));
+  let call = await f.functions.invoke(text.id); await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(call.id)).results[0], { status: 200, headers: {}, body: 'plain text' });
+  status = 204;
+  const empty = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+    program: { kind: 'http', request: { url: 'https://service.example/action' } } }));
+  call = await f.functions.invoke(empty.id); await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(call.id)).results[0], { status: 204, headers: {}, body: null });
+});
+
+test('関数のJSON結果の数値・真偽値・文字列をその型のまま返す', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
+  const input = await f.client.save('Limit', encode('1'), policy);
+  const fn = await save(f, definition(f.environment.manifest.id, input.id,
+    'console.log(JSON.stringify({count:Number(process.env.TOKEN),ok:true,label:"item1"}))'));
+  const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
+  const result = await f.functions.result(call.id);
+  assert.equal(result.state, 'succeeded');
+  assert.deepEqual(result.results[0], { count: 1, ok: true, label: 'item1' });
+});
+
+test('関数の非公開の出力を元の値のまま暗号化して保存し、保存先を返す', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id,
+    'console.log(JSON.stringify({credential:process.env.TOKEN}))'));
+  const call = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Private credential' } });
+  await f.functionExecutor.tick();
+  const result = await f.functions.result(call.id), output = result.results[0] as { saved: Record<string, string> };
+  assert.equal(result.state, 'succeeded');
+  assert.deepEqual(result.results[0], { saved: { 'Private credential': output.saved['Private credential'] } });
+  assert.equal(decode(await f.client.reveal(output.saved['Private credential']!)), 'confidential-value');
+});
+
+test('継続許可された関数の入力を30日後も使い、所有者が撤回した許可を確認する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  const previous = await f.client.read(f.resource.id), content = previous.content;
+  const intent = { ...f.intent, operation: Operations.function, functionId: fn.id, functionDigest: await hash(fn.data),
+    sources: [{ id: content.policy.id, policyDigest: await hash(content.policy), materialRevision: content.materialRevision }] };
+  await authorizeUse(content, intent, { now: Date.now() + 35 * 86_400_000 });
+  await f.client.save(f.resource.name, await f.client.reveal(f.resource.id), { ...content.policy,
+    revision: content.policy.revision + 1, grants: content.policy.grants.filter(grant => !('function' in grant && grant.function.id === fn.id)) }, { previous });
+  await assert.rejects(f.functions.invoke(fn.id), { code: 'function_not_approved' });
+});
+
+test('関数の入力に指定した利用期限を適用し、期限切れの呼び出しを止める', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const expiresAt = new Date(Date.now() + 40 * 86_400_000).toISOString();
+  const spec = definition(f.environment.manifest.id, f.resource.id); spec.inputAccess.expiresAt = expiresAt;
+  const fn = await save(f, spec), content = (await f.client.read(f.resource.id)).content;
+  const grant = content.policy.grants.find(grant => 'function' in grant && grant.function.id === fn.id);
+  assert.equal(grant?.expiresAt, expiresAt);
+  const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
+  assert.equal((await f.functions.result(call.id)).state, 'succeeded');
+  t.mock.method(Date, 'now', () => Date.parse(expiresAt) + 1);
+  await assert.rejects(f.functions.invoke(fn.id), { code: 'function_not_approved' });
+  t.mock.restoreAll();
 });
 
 test('関数で生成した秘密を暗号化して保存し、呼び出す人へ保存先のIDを返す', async t => {
@@ -447,7 +550,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
     content: await protect(encode(canonical(material)), connectionPolicy, 1, f.owner.binding, f.owner.keys, await connectionMetadata(material)),
     labels: { methodName: 'Function OAuth', account: 'Account' } });
   const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id, result: 'json',
-    program: { kind: 'command', command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN,secret:process.env.TOKEN}))'],
+    program: { kind: 'command', command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN}))'],
       inputs: [{ name: 'TOKEN', source: { id: connectionId, output: 'ACCESS_TOKEN' } }], timeoutSeconds: 5 } }));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const { client, functions } = await caller(f);
@@ -455,7 +558,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   await f.functionExecutor.tick();
   const result = await functions.result(task.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  assert.deepEqual(result!.results[0], { configured: true, secret: '[redacted]' });
+  assert.deepEqual(result!.results[0], { configured: true });
   const renewed = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connectionId))));
   assert.equal(renewed.oauth?.accessToken, 'renewed-token');
   await assert.rejects(client.read(app.id));

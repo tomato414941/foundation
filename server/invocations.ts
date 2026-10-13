@@ -12,7 +12,7 @@ import type { JsonValue } from '../shared/contracts.js';
 import { Invocation, InvocationInput, InvocationRequest } from '../shared/function-api.js';
 import type { Completion, InvocationView, Publication } from '../shared/function-api.js';
 import { functionArguments } from '../shared/functions.js';
-import { ContentTypes, functionOperations, verifyPolicyApproval } from '../shared/custody.js';
+import { ContentTypes, functionOperations, grantExpiration, verifyPolicyApproval } from '../shared/custody.js';
 import { pointerParts } from '../shared/values.js';
 
 interface InvocationRow {
@@ -77,11 +77,11 @@ export class Invocations {
           fail(400, 'invalid_output_authorization', 'Approve each encrypted output for this invocation.');
       }
       const definitionDigest = await hash(current.definition);
-      const expiresAt = new Date(Math.min(Date.now() + 3_600_000, ...current.sources.map(source =>
+      const expiresAt = new Date(Math.min(Date.now() + 3_600_000, grantExpiration(current.definition.inputAccess), ...current.sources.map(source =>
         Math.max(...source.policy.grants.filter(grant => 'function' in grant && grant.function.id === functionId &&
           grant.function.digest === definitionDigest && canonical(grant.executor) === canonical(current.publication.executor) &&
           functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)))
-          .map(grant => Date.parse(grant.expiresAt)))))).toISOString();
+          .map(grant => grantExpiration(grant)))))).toISOString();
       const request = InvocationRequest.parse({ id, functionId, functionVersion: current.row.version,
         ownerId, actorId: actor.id, actor: binding?.binding ?? null, arguments: arguments_, outputs: input.outputs,
         definitionDigest, createdAt: new Date().toISOString(), expiresAt });

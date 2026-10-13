@@ -27,6 +27,7 @@ export function functionProgram(spec: FunctionSpec, args: Record<string, JsonVal
     const { kind, ...command } = spec.program;
     return { kind, ...Command.parse({ ...command, stdin: JSON.stringify(values) }) };
   }
+  if (spec.result !== 'json') throw new Error('HTTP functions return a JSON response containing status, headers, and body.');
   const request = spec.program.request;
   const text = (value: JsonValue) => typeof value === 'string' ? value : JSON.stringify(value);
   const substitute = (value: JsonValue, structured = false): JsonValue => {
@@ -54,7 +55,7 @@ export function functionProgram(spec: FunctionSpec, args: Record<string, JsonVal
   });
   const fixed = new URL(request.url.replace(/\{[^}]+\}/g, 'placeholder'));
   if (new URL(url).origin !== fixed.origin) throw new Error('The function must have a fixed destination host.');
-  return { kind: 'http' as const, request: filled };
+  return { kind: 'http' as const, request: filled, responseFormat: spec.program.responseFormat };
 }
 
 export function functionSources(spec: FunctionSpec): SourceReference[] {

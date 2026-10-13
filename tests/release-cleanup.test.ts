@@ -6,7 +6,7 @@ import { MemoryJournal } from './delegation-support.js';
 import { CustodyClient } from '../shared/client.js';
 import { FunctionClient } from '../shared/function-client.js';
 import { Operations } from '../shared/custody.js';
-import { signEnvironment } from '../shared/runtime-protocol.js';
+import { FUNCTION_RUNTIME_VERSION, signEnvironment } from '../shared/runtime-protocol.js';
 import { JournalTrust } from '../runtime/trust.js';
 
 test('本番確認用の関数履歴とプリンシパルを片付け、利用者の関数履歴を保つ', async t => {
@@ -19,7 +19,7 @@ test('本番確認用の関数履歴とプリンシパルを片付け、利用�
   await f.relations.draw(owner.actor, { subjectId: executor.actor.id, relation: 'agent', objectId: owner.actor.id });
   const environment = await signEnvironment({ format: 3, id: crypto.randomUUID(), origin: f.config.origin,
     ownerId: owner.actor.id, name: 'Disposable environment', executor: executor.binding, operatorId: executor.actor.id,
-    driver: 'attached', capabilities: Object.values(Operations), functionVersion: 2, isolation: 'process', revision: 1 }, executor.keys);
+    driver: 'attached', capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, isolation: 'process', revision: 1 }, executor.keys);
   await f.context.delegation.register(executor.actor, environment);
   const trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(executor.binding);

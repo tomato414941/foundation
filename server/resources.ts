@@ -118,7 +118,7 @@ export class Resources {
                 services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [],
               }
             : row.kind === 'function'
-              ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
+              ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result, inputAccess: row.data.inputAccess,
                 ...(permissions.includes('read') ? { environmentId: row.data.environmentId, program: row.data.program } : {}) }
               : row.kind === 'environment'
                 ? EnvironmentResource.shape.data.strip().parse({ ...row.data,

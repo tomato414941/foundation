@@ -6,7 +6,7 @@ import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
   AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
-  prepareRun, protect, reveal, verifyContent,
+  prepareRun, protect, reveal, verifyContent, grantActive, grantExpiration,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun, UseGrant } from './custody.js';
 import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection } from './protocol.js';
@@ -127,7 +127,7 @@ export class CustodyClient {
       throw new Error('Include your own identity as a reader before creating this item.');
     const expiresAt = options.expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
     const grants = options.previous ? options.previous.grants.filter(grant =>
-      (!('actor' in grant) || grant.actor.id !== this.binding.id) && Date.parse(grant.expiresAt) > Date.now()) : [];
+      (!('actor' in grant) || grant.actor.id !== this.binding.id) && grantActive(grant)) : [];
     for (const environment of environments) {
       await this.trusted(environment.manifest.executor);
       grants.push({ actor: this.binding, executor: environment.manifest.executor,
@@ -177,7 +177,7 @@ export class CustodyClient {
     // A principal that has replaced its keys is sealed for with its current keys only.
     const kept = (binding: BoundKeys) => !removed.has(binding.principalId) &&
       !current.some(next => next.principalId === binding.principalId && next.id !== binding.id);
-    const grants = policy.grants.filter(grant => Date.parse(grant.expiresAt) > now && kept(grant.executor) &&
+    const grants = policy.grants.filter(grant => grantActive(grant, now) && kept(grant.executor) &&
       (!('actor' in grant) || kept(grant.actor)));
     const readers = policy.readers.filter(kept), authorities = policy.authorities.filter(kept);
     const added = current.filter(binding => !readers.some(reader => reader.id === binding.id));
@@ -261,7 +261,7 @@ export class CustodyClient {
       const destination = credential ? undefined : request ? new URL(request.url).origin : undefined;
       const permitted = source.policy.grants.some(grant => 'actor' in grant &&
         canonical(grant.actor) === canonical(this.binding) && canonical(grant.executor) === canonical(environment.manifest.executor) &&
-        grant.operations.includes(use) && Date.parse(grant.expiresAt) >= Date.parse(expiresAt) &&
+        grant.operations.includes(use) && grantExpiration(grant) >= Date.parse(expiresAt) &&
         (!destination || !grant.origins.length || grant.origins.includes(destination)) &&
         (credential || grant.callerProgram));
       if (permitted || !source.policy.authorities.some(authority => canonical(authority) === canonical(this.binding))) continue;
@@ -274,8 +274,8 @@ export class CustodyClient {
       const scope = (value: UseGrant) => canonical({ ...value, expiresAt: null });
       const same = previous.content.policy.grants.filter(item => scope(item) === scope(grant));
       const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1, grants: [
-        ...previous.content.policy.grants.filter(item => Date.parse(item.expiresAt) > Date.now() && scope(item) !== scope(grant)),
-        { ...grant, expiresAt: new Date(Math.max(Date.parse(expiresAt), ...same.map(item => Date.parse(item.expiresAt)))).toISOString() }] });
+        ...previous.content.policy.grants.filter(item => grantActive(item) && scope(item) !== scope(grant)),
+        { ...grant, expiresAt: new Date(Math.max(Date.parse(expiresAt), ...same.map(item => grantExpiration(item)))).toISOString() }] });
       await this.save(resource.name, await reveal(previous.content, this.binding, this.keys.encryption), policy,
         { previous, metadata: previous.content.metadata });
       sources[index] = (await this.read(source.policy.id)).content;

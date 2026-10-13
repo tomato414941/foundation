@@ -65,10 +65,16 @@ export const FunctionGrant = z.object({
   function: FunctionReference,
   executor: KeyBinding,
   operations: z.array(Operation).min(1).max(6),
-  expiresAt: Time,
+  expiresAt: Time.nullable(),
 }).strict();
 export const ExecutionGrant = z.union([PrincipalGrant, FunctionGrant]);
 export type UseGrant = z.infer<typeof ExecutionGrant>;
+export function grantActive(grant: Pick<UseGrant, 'expiresAt'>, now = Date.now()) {
+  return grant.expiresAt === null || Date.parse(grant.expiresAt) > now;
+}
+export function grantExpiration(grant: Pick<UseGrant, 'expiresAt'>) {
+  return grant.expiresAt === null ? Infinity : Date.parse(grant.expiresAt);
+}
 export const AccessPolicy = z.object({
   format: z.literal(2),
   origin: Origin,
@@ -251,7 +257,7 @@ export async function verifyContent(input: CustodyContent) {
     )?.executor ??
     (renewable(content.policy.contentType) ? content.policy.grants.find(grant =>
       grant.executor.id === content.signerId && grant.operations.includes(Operations.refresh) &&
-      Date.parse(grant.expiresAt) > Date.parse(content.updatedAt),
+      grantActive(grant, Date.parse(content.updatedAt)),
     )?.executor : undefined);
   if (!signer || Date.parse(content.updatedAt) > Date.now() + 30_000)
     throw new Error('The signer cannot replace this content.');
@@ -272,7 +278,7 @@ export async function renewContent(
   if (!renewable(content.policy.contentType) || !(content.policy.authorities.some(authority =>
     canonical(authority) === canonical(executor)) || content.policy.grants.some(grant =>
     canonical(grant.executor) === canonical(executor) && grant.operations.includes(Operations.refresh) &&
-    Date.parse(grant.expiresAt) > Date.now(),
+    grantActive(grant),
   ))) throw new Error('This executor cannot renew this connection.');
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
   const materialRevision = content.materialRevision + 1;
@@ -447,8 +453,8 @@ export async function authorizeUse(
       : grant.function.id === intent.functionId && grant.function.digest === intent.functionDigest) &&
     canonical(grant.executor) === canonical(intent.executor) &&
     grant.operations.includes(intent.operation) &&
-    Date.parse(grant.expiresAt) > (options.now ?? Date.now()) &&
-    Date.parse(grant.expiresAt) >= Date.parse(intent.expiresAt),
+    grantActive(grant, options.now) &&
+    grantExpiration(grant) >= Date.parse(intent.expiresAt),
   );
   const granted = matching.some(grant => {
     if ('function' in grant) return intent.operation === Operations.function || intent.operation === Operations.refresh;

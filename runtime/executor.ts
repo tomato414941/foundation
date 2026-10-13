@@ -42,6 +42,9 @@ function fits(content: CustodyContent, source: SourceReference) {
 export class DeliveryPending extends Error {
   constructor() { super('A completed result is waiting for delivery. Restart or leave this executor running to reconcile it.'); }
 }
+export function executionUncertain(error: unknown) {
+  return !(error instanceof DomainError) || ['service_unavailable', 'connection_uncertain', 'lease_lost'].includes(error.code);
+}
 interface RunRecord {
   digest: string;
   lease: string;
@@ -144,8 +147,7 @@ export class Executor {
       if (error instanceof DeliveryPending) throw error;
       if (error instanceof ResultTooLarge) error = new DomainError(413, 'result_too_large',
         'The operation completed, but its result is too large to return. Check the destination before starting it again.');
-      const uncertain = dispatched && (runningSignal.aborted || !(error instanceof DomainError) ||
-        ['service_unavailable', 'connection_uncertain', 'lease_lost'].includes(error.code));
+      const uncertain = dispatched && (runningSignal.aborted || executionUncertain(error));
       receipt = await makeReceipt(intent, uncertain ? 'uncertain' : 'failed', {
         ok: false, result: null,
         error: error instanceof DomainError
@@ -256,7 +258,7 @@ export class Executor {
         if (result.timedOut) throw new DomainError(408, 'function_timeout', 'The function exceeded its time limit.');
         if (result.truncated) throw new DomainError(413, 'function_output_limit', 'The function output exceeded its size limit.');
         if (result.exitCode !== 0) throw new DomainError(422, 'function_failed', redact(result.stderr, values.sensitive).slice(0, 1000) || 'The function did not finish successfully.');
-        return this.functionResult(operation, intent, redact(result.stdout, values.sensitive));
+        return this.functionResult(operation, intent, result.stdout);
       }
       return { ...result, stdout: redact(result.stdout, values.sensitive), stderr: redact(result.stderr, values.sensitive) };
     }
@@ -279,8 +281,15 @@ export class Executor {
     const response = await this.transport.send({ url: spec.url, method: spec.method, headers: spec.headers,
       ...(body === undefined ? {} : { body }), signal });
     if (operation.kind === 'function') {
-      if (response.status >= 400) throw new DomainError(502, 'service_response', 'The service returned an unsuccessful response.');
-      return this.functionResult(operation, intent, redact(utf8(response.body), sensitive));
+      if (response.status < 200 || response.status >= 300)
+        throw new DomainError(502, 'service_response', 'The service returned HTTP ' + response.status + '.');
+      const format = operation.definition.program.kind === 'http' ? operation.definition.program.responseFormat : 'json';
+      let body: JsonValue = utf8(response.body);
+      if (format === 'json') {
+        try { body = response.body.length === 0 && ([204, 205].includes(response.status) || spec.method === 'HEAD') ? null : Json.parse(JSON.parse(body)); }
+        catch { throw new DomainError(422, 'invalid_function_result', 'The HTTP response body must contain valid JSON.'); }
+      }
+      return this.functionResult(operation, intent, JSON.stringify({ status: response.status, headers: response.headers, body }));
     }
     const save = operation.kind === 'http' ? operation.save : {};
     if (Object.keys(save).length) {

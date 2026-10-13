@@ -2,7 +2,7 @@ import type { Actor } from './authorization.js';
 import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, Operations, verifyContent } from '../shared/custody.js';
+import { ContentTypes, Operations, grantActive, verifyContent } from '../shared/custody.js';
 import type { CustodyContent } from '../shared/custody.js';
 import { fail, required } from './errors.js';
 
@@ -27,7 +27,7 @@ export class ConnectionOperations {
     if (content.policy.contentType !== ContentTypes.tokenSet || !(content.policy.authorities.some(authority =>
       canonical(authority) === canonical(binding)) || content.policy.grants.some(grant =>
       canonical(grant.executor) === canonical(binding) && (!refresh || grant.operations.includes(Operations.refresh)) &&
-      Date.parse(grant.expiresAt) > Date.now())))
+      grantActive(grant))))
       fail(403, 'forbidden', 'This executor cannot renew the connection.');
     return content;
   }

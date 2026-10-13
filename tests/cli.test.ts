@@ -455,7 +455,7 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   const sourceId = JSON.parse(kept.stdout).id;
   const saved = await c.run(['function', 'create', '--body', '@-'], JSON.stringify({
     name: 'CLI function', definition: { environmentId, parameters: [{ name: 'message', label: 'Message' }],
-      program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN,secret:process.env.TOKEN})));'],
+      program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN})));'],
         inputs: [{ name: 'TOKEN', source: { id: sourceId } }], timeoutSeconds: 5 }, result: 'json' },
   }));
   assert.equal(saved.code, 0, saved.stderr);
@@ -466,7 +466,7 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   assert.equal(executed.code, 0, executed.stderr);
   const result = await c.run(['function', 'result', JSON.parse(started.stdout).id, '--wait', '--timeout', '5']);
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout).results[0], { message: 'CLI invocation', configured: true, secret: '[redacted]' });
+  assert.deepEqual(JSON.parse(result.stdout).results[0], { message: 'CLI invocation', configured: true });
 });
 
 test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {

@@ -1,3 +1,4 @@
+import { FUNCTION_RUNTIME_VERSION } from './runtime-protocol.js';
 import { z } from 'zod';
 import { FunctionDefinition, FunctionResource, Id, JsonObject, listOf } from './contracts.js';
 import type { FunctionSpec, JsonValue } from './contracts.js';
@@ -22,9 +23,13 @@ export class FunctionClient {
   async prepare(input: { ownerId: string; name: string; definition: FunctionSpec; resourceId?: string; version?: number }) {
     if (!this.custody) throw new Error('Use your encryption keys to approve a function definition.');
     const client = this.custody, definition = FunctionDefinition.parse(input.definition);
+    if (definition.program.kind === 'http' && definition.result !== 'json')
+      throw new Error('HTTP functions return a JSON response containing status, headers, and body.');
+    if (definition.inputAccess.expiresAt !== null && Date.parse(definition.inputAccess.expiresAt) <= Date.now())
+      throw new Error('Choose a future expiration for this function’s input access.');
     const environment = await client.environment(definition.environmentId);
-    if (environment.manifest.functionVersion !== 2)
-      throw new Error('Update the execution environment to Foundation CLI 6.');
+    if (environment.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
+      throw new Error('Update this execution environment to the current Foundation CLI.');
     const functionId = input.resourceId ?? crypto.randomUUID();
     const sources = await client.sourceContents(functionSources(definition).map(source => source.id));
     const current = new Set(sources.map(source => source.policy.id));
@@ -43,7 +48,7 @@ export class FunctionClient {
       const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1,
         grants: [...previous.content.policy.grants.filter(grant => !('function' in grant) || grant.function.id !== functionId),
           ...(current.has(source.policy.id) ? [{ function: reference, executor: environment.manifest.executor,
-            operations: functionOperations(source.policy.contentType), expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }] : [])] });
+            operations: functionOperations(source.policy.contentType), expiresAt: definition.inputAccess.expiresAt }] : [])] });
       contents[source.policy.id] = { version: previous.version, content: await protect(
         await reveal(previous.content, client.binding, client.keys.encryption), policy,
         previous.content.materialRevision + 1, client.binding, client.keys, previous.content.metadata, previous.content) };

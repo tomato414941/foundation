@@ -352,7 +352,7 @@ test('共通の操作から関数を公開して実行し、関数の終了後�
   assert.equal((await f.context.principals.get(f.owner.actor.id)).name, 'Background completion');
   const completed = await f.client.api.json('/api/executions/' + execution.id, {}, Execution);
   assert.equal(completed.state, 'succeeded');
-  assert.deepEqual(completed.results[0], { message: 'function result' });
+  assert.deepEqual(completed.results[0], { status: 200, headers: { 'content-type': 'application/json' }, body: { message: 'function result' } });
   assert.equal(f.requests.filter(request => request.url === 'https://api.example.com/function').length, 1);
   const cancelled = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'function.invoke', input: { functionId: publication.resource.id, arguments: {} } },

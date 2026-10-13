@@ -25,6 +25,7 @@ import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
 import { connectionSubmission } from './execution-form';
+import { FunctionAccessFields, inputAccessFromForm } from './function-access';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -216,7 +217,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         program: formText(form, 'programKind') === 'command' ? {
           kind: 'command', command: jsonField(form, 'command', []),
           inputs: jsonField(form, 'inputs', []), timeoutSeconds: Number(formText(form, 'timeoutSeconds')),
-        } : { kind: 'http', request: {
+        } : { kind: 'http', responseFormat: formText(form, 'responseFormat'), request: {
           url: formText(form, 'url'),
           method: formText(form, 'httpMethod'),
           headers: jsonField(form, 'headers', {}),
@@ -224,7 +225,8 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           bindings: jsonField(form, 'bindings', []),
         } },
         parameters: jsonField(form, 'parameters', []),
-        result: formText(form, 'result'),
+        result: formText(form, 'programKind') === 'http' ? 'json' : formText(form, 'result'),
+        inputAccess: inputAccessFromForm(form),
       };
       const saved = await (await functionClient(true)).save({
         ownerId: owner, name, definition: FunctionDefinition.parse(definition),
@@ -545,12 +547,18 @@ export default function ResourceForm() {
                       rows={2}
                     />
                     <EnvironmentChoice items={data.environments} selected={spec ? [spec.environmentId] : []} />
+                    <FunctionAccessFields access={spec?.inputAccess} />
                     <SelectField name="programKind" label={t('functionProgram')} value={programKind} onValueChange={value => setProgramKind(value as 'command' | 'http')}>
                       <SelectItem value="command">{t('command')}</SelectItem>
                       <SelectItem value="http">{t('http')}</SelectItem>
                     </SelectField>
                     {programKind === 'http' ? <Panel title={t('http')}>
                       <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined} />
+                      <SelectField name="responseFormat" label={t('functionResponseFormat')} defaultValue={spec?.program.kind === 'http' ? spec.program.responseFormat : 'json'}>
+                        <SelectItem value="json">JSON</SelectItem>
+                        <SelectItem value="text">{t('functionText')}</SelectItem>
+                      </SelectField>
+                      <p className="text-sm text-muted-foreground">{t('functionHttpResultHelp')}</p>
                     </Panel> : <Panel title={t('command')}>
                       <JsonField name="command" label={t('functionCommand')} value={spec?.program.kind === 'command' ? spec.program.command : ['node', '-e', 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.stringify(JSON.parse(input))));']} />
                       <p className="text-sm text-muted-foreground">{t('functionArgumentsHelp')}</p>
@@ -562,10 +570,11 @@ export default function ResourceForm() {
                       label={t('parameters')}
                       value={spec?.parameters ?? []}
                     />
-                    <SelectField name="result" label={t('functionResult')} defaultValue={spec?.result ?? 'json'}>
+                    {programKind === 'command' && <SelectField name="result" label={t('functionResult')} defaultValue={spec?.result ?? 'json'}>
                       <SelectItem value="json">JSON</SelectItem>
                       <SelectItem value="text">{t('functionText')}</SelectItem>
-                    </SelectField>
+                    </SelectField>}
+                    <p className="text-sm text-muted-foreground">{t('functionResultDisclosure')}</p>
                   </>
                 )}
                 {(data.kind === 'service' || data.kind === 'method') && (

@@ -7,6 +7,8 @@ import { ContentTypes, Operation, Operations, Origin, PolicyApproval, ProtectedC
 import type { ApprovedPolicy, ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
+export const FUNCTION_RUNTIME_VERSION = 3;
+
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
 export const EnvironmentManifest = z.object({
   format: z.literal(3), id: Id, origin: Origin, ownerId: Id,
@@ -51,7 +53,7 @@ export async function authorizeEnvironment(environment: RegisteredEnvironment, i
   if (intent.environmentId !== manifest.id || intent.origin !== manifest.origin ||
     intent.environmentDigest !== await hash(manifest) ||
     canonical(intent.executor) !== canonical(manifest.executor) ||
-    !manifest.capabilities.includes(intent.operation) || (intent.operation === Operations.function && manifest.functionVersion !== 2))
+    !manifest.capabilities.includes(intent.operation) || (intent.operation === Operations.function && manifest.functionVersion !== FUNCTION_RUNTIME_VERSION))
     throw new Error('This environment does not authorize the requested execution.');
 }
 
