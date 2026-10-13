@@ -182,7 +182,7 @@ export class Delegation {
   async submit(actor: Actor, request: SealedRun) {
     const { run } = await this.validate(actor, request), { intent } = run;
     if (intent.resultApproval) {
-      for (const recipient of await this.custody.recipients(intent.ownerId))
+      for (const recipient of await this.custody.required(intent.ownerId))
         if (!intent.resultApproval.policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       for (const reader of intent.resultApproval.policy.readers) await this.bindings.requireCurrent(reader);
@@ -349,7 +349,7 @@ export class Delegation {
       this.custody.metadata(receipt.content);
       for (const reader of [...receipt.content.policy.readers, ...receipt.content.policy.authorities])
         await this.bindings.requireCurrent(reader, connection);
-      for (const recipient of await this.custody.recipients(row.owner_id, connection))
+      for (const recipient of await this.custody.required(row.owner_id, connection))
         if (!receipt.content.policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       await connection.query('UPDATE execution_tasks SET receipt=$2 WHERE id=$1', [id, JSON.stringify(receipt)]);

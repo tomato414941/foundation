@@ -178,11 +178,16 @@ export class Resources {
   }
   // Whoever acts as the owner or is its agent, with a key to seal for: those who use what it holds open it.
   async recipients(ownerId: string, connection: Queryable = this.db.pool) {
+    return this.keyed(await this.authorization.holders(principal(ownerId), 'use', connection), connection);
+  }
+  // Whoever acts as the owner, with a key to seal for: what it holds is never sealed without them.
+  // Its agents are sealed for by devices that have verified their keys, so they are not required.
+  async required(ownerId: string, connection: Queryable = this.db.pool) {
+    return this.keyed(await this.authorization.holders(principal(ownerId), 'stands', connection), connection);
+  }
+  private async keyed(ids: string[], connection: Queryable) {
     const rows = await this.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
-      'SELECT id,name,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL',
-      [await this.authorization.holders(principal(ownerId), 'use', connection)],
-      connection,
-    );
+      'SELECT id,name,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL', [ids], connection);
     return rows.map((row) => ({ id: row.id, name: row.name, publicKey: row.public_key }));
   }
   async rename(actor: Actor, row: ResourceRow, name: string) {

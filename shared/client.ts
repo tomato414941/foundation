@@ -68,7 +68,15 @@ export class CustodyClient {
     const { items } = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-recipients', {}, listOf(BoundRecipient));
     if (!items.length) throw new Error('Set up an encryption key for the owner before saving private content.');
     for (const { name: _name, ...item } of items) { await verifyBinding(item); await this.trusted(item.binding); }
-    return items.map(item => item.binding);
+    // Agents are sealed for once this device has verified their keys; until then they are left out.
+    const agents = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-agents', {}, listOf(BoundRecipient));
+    const verified: BoundKeys[] = [];
+    for (const { name: _name, ...item } of agents.items) {
+      await verifyBinding(item);
+      try { verified.push(await this.trusted(item.binding)); }
+      catch (error) { if (!(error instanceof ClientFailure && error.code === 'identity_untrusted')) throw error; }
+    }
+    return [...items.map(item => item.binding), ...verified];
   }
   async read(id: string) {
     const item = await this.api.json('/api/custody/' + Id.parse(id), {}, ProtectedRead);

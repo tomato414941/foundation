@@ -125,7 +125,17 @@ export class Custody {
   }
 
   async recipients(ownerId: string, connection: Queryable = this.resources.db.pool) {
-    const principals = await this.resources.recipients(ownerId, connection);
+    return this.bound(await this.resources.recipients(ownerId, connection), connection);
+  }
+  async required(ownerId: string, connection: Queryable = this.resources.db.pool) {
+    return this.bound(await this.resources.required(ownerId, connection), connection);
+  }
+  // Agents of the owner who are not among those who must open what it holds.
+  async agents(ownerId: string, connection: Queryable = this.resources.db.pool) {
+    const required = new Set((await this.resources.required(ownerId, connection)).map(principal => principal.id));
+    return this.bound((await this.resources.recipients(ownerId, connection)).filter(principal => !required.has(principal.id)), connection);
+  }
+  private bound(principals: Array<{ id: string; name: string }>, connection: Queryable) {
     return Promise.all(principals.map(async principal => ({
       name: principal.name, ...(await this.bindings.current(principal.id, connection)),
     })));
@@ -176,7 +186,7 @@ export class Custody {
         canonical(content.metadata) !== canonical(previous.metadata))
         fail(409, 'changed', 'Review the current result before changing its readers.');
       for (const reader of [...policy.readers, ...policy.authorities]) await this.bindings.requireCurrent(reader, connection);
-      for (const reader of requiredReaders ?? (await this.recipients(policy.ownerId, connection)).map(item => item.binding))
+      for (const reader of requiredReaders ?? (await this.required(policy.ownerId, connection)).map(item => item.binding))
         if (!policy.readers.some(next => canonical(next) === canonical(reader)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       const next = { ...row.receipt, content };
@@ -248,7 +258,7 @@ export class Custody {
         if (policy.revision !== 1 || content.materialRevision !== 1)
           fail(400, 'invalid_revision', 'Begin encrypted custody at revision one.');
       }
-      const required = requiredReaders ?? (await this.recipients(policy.ownerId, connection)).map(item => item.binding);
+      const required = requiredReaders ?? (await this.required(policy.ownerId, connection)).map(item => item.binding);
       for (const recipient of required) {
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
@@ -342,7 +352,7 @@ export class Custody {
         if (!(await this.resources.authorization.canCreate({ id: authority.principalId }, policy.ownerId, kindOf(policy.contentType), connection)))
           fail(403, 'forbidden', 'The execution requester cannot create this output.');
       }
-      for (const recipient of await this.recipients(policy.ownerId, connection))
+      for (const recipient of await this.required(policy.ownerId, connection))
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),

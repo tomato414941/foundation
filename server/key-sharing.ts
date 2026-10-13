@@ -30,19 +30,23 @@ export class KeySharing {
     const items = [];
     for (const row of rows) {
       const content = await this.custody.get(row.id, connection);
-      const oldReaders = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
-      const next = await resources.db.all<{ id: string }>(
+      const before = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
+      const keyed = async (permission: string) => new Set((await resources.db.all<{ id: string }>(
         'SELECT id FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL ORDER BY id',
-        [await resources.authorization.holders(principal(row.owner_id), 'use', connection, change)], connection);
-      const readers: BoundKeys[] = await Promise.all(next.map(async item => (await bindings.current(item.id, connection)).binding));
-      if (!readers.length) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
-      const removed = (binding: BoundKeys) => oldReaders.has(binding.principalId) && !readers.some(next => next.id === binding.id);
+        [await resources.authorization.holders(principal(row.owner_id), permission, connection, change)], connection)).map(item => item.id));
+      const after = await keyed('use'), required = await keyed('stands');
+      if (!after.size) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
+      // The line seals each item for whoever acts as the owner and whoever it newly lets use it, leaving other agents as they are.
+      const readers: BoundKeys[] = await Promise.all([...after].filter(id => required.has(id) || !before.has(id))
+        .map(async id => (await bindings.current(id, connection)).binding));
+      const removed = (binding: BoundKeys) => before.has(binding.principalId) && (!after.has(binding.principalId) ||
+        readers.some(next => next.principalId === binding.principalId && next.id !== binding.id));
       const unique = (values: BoundKeys[]) => [...new Map(values.map(item => [item.id, item])).values()];
       const policy = { ...content.policy, revision: content.policy.revision + 1,
         readers: unique([...content.policy.readers.filter(binding => !removed(binding)), ...readers]),
         authorities: unique([...content.policy.authorities.filter(binding => !removed(binding)), ...readers]),
         grants: content.policy.grants.filter(grant => (!('actor' in grant) || !removed(grant.actor)) && !removed(grant.executor)), producers: [],
-        ...(content.policy.observers ? { observers: content.policy.observers.filter(id => !oldReaders.has(id) || readers.some(item => item.principalId === id)) } : {}),
+        ...(content.policy.observers ? { observers: content.policy.observers.filter(id => !before.has(id) || after.has(id)) } : {}),
       };
       if (canonical({ ...policy, revision: content.policy.revision }) === canonical(content.policy)) continue;
       if (content.policy.contentType === ContentTypes.executionResult) {

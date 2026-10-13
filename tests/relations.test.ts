@@ -124,7 +124,7 @@ test('代理の線を引くと持ち主の項目を代理向けにも暗号化�
   assert.equal(decode(await reveal(kept.content, owner.binding, owner.keys.encryption)), 'agent value');
 });
 
-test('代理がいる持ち主の項目は代理向けにも暗号化して作り、代理は作るときに他の相手とは共有できない', async (t) => {
+test('持ち主の項目は持ち主向けに必ず暗号化し、代理向けは加えても加えなくても作れ、代理は作るときに他の相手とは共有できない', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
@@ -136,8 +136,9 @@ test('代理がいる持ち主の項目は代理向けにも暗号化して作�
   assert.equal(created.owner_id, owner.actor.id);
   await assert.rejects(f.custody.put(ai.actor, { name: 'Shared value', content: await sealed([owner.binding, ai.binding, friend.binding], ai) }),
     { code: 'forbidden' });
-  await assert.rejects(f.custody.put(owner.actor, { name: 'Owner only', content: await sealed([owner.binding], owner) }),
+  await assert.rejects(f.custody.put(ai.actor, { name: 'Agent only', content: await sealed([ai.binding], ai) }),
     { code: 'missing_recipient' });
+  await f.custody.put(owner.actor, { name: 'Owner only', content: await sealed([owner.binding], owner) });
   await f.custody.put(owner.actor, { name: 'Owner value', content: await sealed([owner.binding, ai.binding, friend.binding], owner) });
 });
 

@@ -52,19 +52,24 @@ test('値を保存し直すとき、ほかの人が受けた許可のうち期�
   assert.equal(next.revision, previous.revision + 1);
 });
 
-test('鍵より先に引かれていた代理の線は、持ち主の端末が代理の鍵を確かめると、持ち主の項目を代理向けにも封じ直す', async (t) => {
+test('持ち主の端末は鍵を確かめた代理にだけ持ち主の項目を封じ直し、確かめていない代理がいても項目を作れる', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const ai = await f.person('Agent');
+  const ai = await f.person('Agent'), other = await f.person('Other');
   const saved = await f.client.save('Token', encode('owner value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
-  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [ai.actor.id, f.owner.actor.id]);
+  for (const agent of [ai, other])
+    await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [agent.actor.id, f.owner.actor.id]);
 
   const items = [saved.id, f.resource.id].sort();
   assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, reason: 'recipients' })));
-  assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: items });
+  assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: [] });
+  await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
   await f.client.trust.rememberBinding(ai.binding);
   assert.deepEqual(await f.client.reprotectPending(), { done: items, failed: [] });
-  assert.deepEqual(await f.client.pendingProtection(), []);
   const shared = await f.custody.read(ai.actor, saved.id);
   assert.equal(decode(await reveal(shared.content, ai.binding, ai.keys.encryption)), 'owner value');
+  await assert.rejects(f.custody.read(other.actor, saved.id), { code: 'forbidden' });
+  const later = await f.client.save('Later', encode('later value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
+  assert.deepEqual((await f.custody.get(later.id)).policy.readers.map(reader => reader.principalId).sort(),
+    [f.owner.actor.id, f.executor.binding.principalId, ai.actor.id].sort());
 });
