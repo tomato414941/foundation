@@ -1,6 +1,6 @@
 import { tokenConnectionFacts } from '../shared/connection-facts.js';
 import type { ConnectionState } from '../shared/connections.js';
-import { atPointer, textValue } from '../shared/values.js';
+import { credentialOutput } from '../shared/values.js';
 import { connectionValues } from '../shared/connection-fields.js';
 import type { ConnectionProvider } from './connection-provider.js';
 
@@ -14,7 +14,7 @@ export class TokenConnection implements ConnectionProvider {
   async outputs(value: ConnectionState) {
     const spec = specification(value);
     const fields = connectionValues(spec.fields, value.fields!, 'constants' in spec ? spec.constants ?? {} : {});
-    return Object.fromEntries(Object.entries(specification(value).outputs)
-      .map(([key, pointer]) => [key, textValue(atPointer(fields, pointer))]));
+    return Object.fromEntries(Object.entries(spec.outputs)
+      .map(([key, output]) => [key, credentialOutput(fields, output)]));
   }
 }

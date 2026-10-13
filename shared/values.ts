@@ -37,6 +37,10 @@ export function textValue(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   throw new Error('The selected value is not text.');
 }
+export function credentialOutput(value: unknown, output: string | (string | { pointer: string })[]): string {
+  return typeof output === 'string' ? textValue(atPointer(value, output)) : output
+    .map(part => typeof part === 'string' ? part : textValue(atPointer(value, part.pointer))).join('');
+}
 export function redact(text: string, values: string[]): string {
   const variants = new Set<string>();
   for (const value of values)

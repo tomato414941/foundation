@@ -1,0 +1,93 @@
+{
+  "id": "modal",
+  "name": "Modal",
+  "docs": "https://modal.com/docs/",
+  "console": "https://modal.com/settings/tokens",
+  "methods": {
+    "token": {
+      "name": "Modal · Enter API token",
+      "kind": "token",
+      "docs": "https://modal.com/docs/cli/latest/token",
+      "console": "https://modal.com/settings/tokens",
+      "config": {
+        "fields": [
+          {
+            "name": "tokenId",
+            "label": "Token ID",
+            "secret": true,
+            "inputType": "text",
+            "pattern": "^\\S+$",
+            "note": "Use an API token from Modal Settings → API Tokens. Personal and service user tokens use the same connection method."
+          },
+          {
+            "name": "tokenSecret",
+            "label": "Token Secret",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Use a token with access to the Modal workspace and environments you need."
+          }
+        ],
+        "outputs": {
+          "MODAL_TOKEN_ID": "/tokenId",
+          "MODAL_TOKEN_SECRET": "/tokenSecret"
+        },
+        "hint": "Use MODAL_TOKEN_ID and MODAL_TOKEN_SECRET with the Modal CLI or SDK to manage deployments and invoke Functions. Create personal tokens in Settings or with modal token new. Service user tokens use the same variables."
+      }
+    },
+    "proxy-token": {
+      "name": "Modal · Enter proxy token",
+      "kind": "token",
+      "docs": "https://modal.com/docs/guide/webhook-proxy-auth",
+      "console": "https://modal.com/settings/proxy-auth-tokens",
+      "config": {
+        "fields": [
+          {
+            "name": "proxyTokenId",
+            "label": "Proxy Token ID",
+            "secret": true,
+            "inputType": "text",
+            "pattern": "^\\S+$",
+            "note": "Use a Proxy Token from Modal Settings → Proxy Tokens."
+          },
+          {
+            "name": "proxyTokenSecret",
+            "label": "Proxy Token Secret",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Use the secret paired with this Proxy Token ID."
+          }
+        ],
+        "outputs": {
+          "MODAL_PROXY_TOKEN_ID": "/proxyTokenId",
+          "MODAL_PROXY_TOKEN_SECRET": "/proxyTokenSecret",
+          "MODAL_PROXY_TOKEN": [
+            {
+              "pointer": "/proxyTokenId"
+            },
+            ".",
+            {
+              "pointer": "/proxyTokenSecret"
+            }
+          ]
+        },
+        "hint": "Authenticate HTTP requests to Modal Endpoints, Servers and protected Web Functions with MODAL_PROXY_TOKEN as a Bearer token, or with Modal-Key and Modal-Secret headers using the separate outputs."
+      }
+    }
+  },
+  "targets": [
+    {
+      "id": "sdk",
+      "name": "SDK / CLI",
+      "methods": [
+        "token"
+      ]
+    },
+    {
+      "id": "http",
+      "name": "HTTP API",
+      "methods": [
+        "proxy-token"
+      ]
+    }
+  ]
+}

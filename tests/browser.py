@@ -751,6 +751,32 @@ class BrowserTests(unittest.TestCase):
                 expect(page.get_by_text("接続済み", exact=True)).to_be_visible()
                 expect(page.get_by_text(service, exact=True)).to_be_visible()
 
+    def test_Modalの接続先を選んでAPIトークンとProxyTokenを保存し更新する(self):
+        page, principal = self.passkey_account("Modal account")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        for target, method, name, fields in [
+            ("SDK / CLI", "token", "Modal SDK", [("Token ID", "ak-test"), ("Token Secret", "as-test-secret")]),
+            ("HTTP API", "proxy-token", "Modal HTTP", [("Proxy Token ID", "wk-test"), ("Proxy Token Secret", "ws-test-secret")]),
+        ]:
+            with self.subTest(target=target):
+                page.goto(root + "/services/new?service=modal")
+                self.select(page, "接続先", target)
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                for label, value in fields:
+                    page.get_by_label(label, exact=True).fill(value)
+                print("Rendered Modal connection: " + page.locator("main").inner_text(), flush=True)
+                page.screenshot(path=str(ARTIFACTS / ("modal-" + method + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], "modal:" + method)
+                self.assertEqual(saved["data"]["services"], [{"id": "modal", "name": "Modal"}])
+                path = page.url
+                page.get_by_role("link", name="再接続", exact=True).click()
+                page.get_by_label(fields[1][0], exact=True).fill("updated-modal-secret")
+                page.get_by_role("button", name="接続する", exact=True).click()
+                self.saved_connection(page, name)
+                self.assertEqual(page.url, path)
+
     def test_クラウドの接続先を選んでS3とRobotの認証情報を保存する(self):
         page, principal = self.passkey_account("Storage account")
         for service, method, name in [

@@ -162,6 +162,10 @@ const Field = z.object({
     context.addIssue({ code: 'custom', path: ['choices'], message: 'Use a unique value for each choice.' });
 });
 const OutputMap = z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string());
+const CredentialOutputMap = z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.union([
+  z.string(),
+  z.array(z.union([z.string().max(8192), z.object({ pointer: z.string().max(1000) }).strict()])).min(1).max(32),
+]));
 const Scopes = z.object({
   values: z
     .array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() }))
@@ -216,7 +220,7 @@ export const OAuthDefinition = z.object({
 });
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),
-  outputs: OutputMap,
+  outputs: CredentialOutputMap,
   resolver: z.literal('vultr-role').optional(),
   bindFields: z.boolean().optional(),
   constants: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), z.string()).optional(),

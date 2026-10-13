@@ -1,4 +1,12 @@
 export const serviceLabels: Record<string, string> = {
+  'modal.token.tokenId.label': 'Token ID',
+  'modal.token.tokenId.note': 'Modalの「Settings → API Tokens」で取得したIDを入力してください。個人用とサービスユーザー用のどちらも利用できます。',
+  'modal.token.tokenSecret.label': 'Token Secret',
+  'modal.token.tokenSecret.note': '利用するModalワークスペースとEnvironmentへのアクセス権を持つトークンを使用してください。',
+  'modal.token.proxyTokenId.label': 'Proxy Token ID',
+  'modal.token.proxyTokenId.note': 'Modalの「Settings → Proxy Tokens」で取得したIDを入力してください。',
+  'modal.token.proxyTokenSecret.label': 'Proxy Token Secret',
+  'modal.token.proxyTokenSecret.note': 'このProxy Token IDと対になるSecretを入力してください。',
   "vultr.token.authentication.api_key.label": "APIキー",
   "vultr.token.authentication.oidc.label": "OIDC認証",
   "vultr.token.authentication.instance.label": "Vultrサーバーの認証",

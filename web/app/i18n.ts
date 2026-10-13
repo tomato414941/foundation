@@ -295,6 +295,7 @@ const words: Record<string, [string, string]> = {
   enterBotToken: ['Botトークンを入力', 'Enter bot token'],
   enterIntegrationSecret: ['インテグレーションのシークレットを入力', 'Enter integration secret'],
   enterCredentials: ['認証情報を入力', 'Enter credentials'],
+  enterProxyToken: ['Proxy Tokenを入力', 'Enter proxy token'],
   enterS3Credentials: ['S3の認証情報を入力', 'Enter S3 credentials'],
   enterRobotCredentials: ['Robotの認証情報を入力', 'Enter Robot credentials'],
   assumeIamRole: ['IAMロールで接続', 'Assume IAM role'],

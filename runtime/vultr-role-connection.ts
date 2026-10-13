@@ -5,7 +5,7 @@ import { tokenConnectionFacts } from '../shared/connection-facts.js';
 import { connectionValues } from '../shared/connection-fields.js';
 import { responseJson } from '../shared/http.js';
 import type { Transport } from '../shared/http.js';
-import { atPointer, textValue } from '../shared/values.js';
+import { credentialOutput } from '../shared/values.js';
 import { fail } from '../shared/errors.js';
 import { hash } from '../shared/authority.js';
 import type { ConnectionProvider } from './connection-provider.js';
@@ -90,6 +90,6 @@ export class VultrRoleConnection implements ConnectionProvider {
       } finally { if (this.pending.get(key) === pending) this.pending.delete(key); }
     }
     return Object.fromEntries(Object.entries(spec.outputs)
-      .map(([key, pointer]) => [key, textValue(atPointer(session, pointer))]));
+      .map(([key, output]) => [key, credentialOutput(session, output)]));
   }
 }
