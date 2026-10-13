@@ -10,8 +10,8 @@ import { ContentTypes } from '../shared/custody.js';
 import { fail } from './errors.js';
 
 export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
-// The lines that change who opens what a principal holds: whom it belongs to, its members, and the agents given its keys.
-export type KeyRelation = 'owner' | 'member' | 'keyholder';
+// The lines that change who opens what a principal holds: whom it belongs to, its members, and its agents.
+export type KeyRelation = 'owner' | 'member' | 'agent';
 
 export class KeySharing {
   constructor(readonly custody: Custody) {}
@@ -33,7 +33,7 @@ export class KeySharing {
       const oldReaders = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
       const next = await resources.db.all<{ id: string }>(
         'SELECT id FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL ORDER BY id',
-        [await resources.authorization.holders(principal(row.owner_id), 'open', connection, change)], connection);
+        [await resources.authorization.holders(principal(row.owner_id), 'use', connection, change)], connection);
       const readers: BoundKeys[] = await Promise.all(next.map(async item => (await bindings.current(item.id, connection)).binding));
       if (!readers.length) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
       const removed = (binding: BoundKeys) => oldReaders.has(binding.principalId) && !readers.some(next => next.id === binding.id);

@@ -654,7 +654,7 @@ class BrowserTests(unittest.TestCase):
         successor.get_by_role("button", name="内容を表示", exact=True).click()
         expect(successor.get_by_role("textbox", name="値", exact=True)).to_have_value("team-variable-value")
 
-    def test_鍵も渡した代理が持ち主の変数を開き鍵を外すと代理のまま開けなくなる(self):
+    def test_代理の線を引くと代理が持ち主の変数を開き線を外すと開けなくなる(self):
         owner, principal = self.passkey_account("Key owner")
         agent, delegate = self.passkey_account("Key agent")
         self.trust(owner, agent, delegate)
@@ -663,20 +663,16 @@ class BrowserTests(unittest.TestCase):
         owner.goto(f"{ORIGIN}/p/{principal['id']}/principals")
         owner.get_by_role("textbox", name="相手のプリンシパルID").fill(delegate["id"])
         owner.get_by_role("button", name="追加", exact=True).click()
-        expect(owner.get_by_text("Key agent は Key owner の代理", exact=True)).to_be_visible()
-        owner.get_by_role("textbox", name="相手のプリンシパルID").fill(delegate["id"])
-        self.select(owner, "関係", "代理（鍵あり）")
-        owner.get_by_role("button", name="追加", exact=True).click()
-        line = owner.get_by_role("listitem").filter(has_text="Key agent は Key owner の代理（鍵あり）")
+        line = owner.get_by_role("listitem").filter(has_text="Key agent は Key owner の代理")
         expect(line).to_be_visible()
         print("Rendered principals: " + owner.locator("main").inner_text(), flush=True)
         agent.goto(variable_path)
         agent.get_by_role("button", name="内容を表示", exact=True).click()
         expect(agent.get_by_role("textbox", name="値", exact=True)).to_have_value("agent-variable-value")
         line.get_by_role("button", name="権限を解除", exact=True).click()
-        expect(owner.get_by_text("Key agent は Key owner の代理（鍵あり）", exact=True)).to_be_hidden()
+        expect(owner.get_by_text("Key agent は Key owner の代理", exact=True)).to_be_hidden()
         agent.goto(variable_path)
-        expect(agent.get_by_role("heading", name="Agent variable", exact=True)).to_be_visible()
+        expect(agent.get_by_text("この操作を行う権限がありません。", exact=True)).to_be_visible()
         expect(agent.get_by_role("button", name="内容を表示", exact=True)).to_be_hidden()
 
     def test_サービス接続とプリンシパルを作成して委任する(self):

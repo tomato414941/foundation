@@ -158,7 +158,7 @@ export class Relations {
         if (cycle) fail(409, 'relation_cycle', 'This payment relationship would create a cycle.');
         await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='payer'", [line.objectId]);
       }
-      if (line.relation === 'member' || line.relation === 'keyholder')
+      if (line.relation === 'member' || line.relation === 'agent')
         await this.principals.keySharing.apply(actor, line.objectId, line.subjectId, line.relation, contents, connection);
       await connection.query(
         `INSERT INTO relations(subject_id,relation,${'kind' in object ? 'resource_id' : 'principal_id'}) VALUES($1,$2,$3)
@@ -180,7 +180,7 @@ export class Relations {
       await this.authorization.require(actor, object, 'share');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (line.relation === 'member' || line.relation === 'keyholder')
+      if (line.relation === 'member' || line.relation === 'agent')
         await this.principals.keySharing.apply(actor, line.objectId, line.subjectId, line.relation, contents, connection, true);
       await connection.query(
         `DELETE FROM relations WHERE subject_id=$1 AND relation=$2 AND ${'kind' in object ? 'resource_id' : 'principal_id'}=$3`,

@@ -41,7 +41,7 @@ export async function delegatedFixture() {
   await delegation.register(executor.actor, environment);
   const policy = AccessPolicy.parse({
     format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding],
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, executor.binding], readers: [owner.binding, executor.binding],
     grants: [{ actor: owner.binding, executor: executor.binding,
       operations: [Operations.http, Operations.command], callerProgram: true,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString() }],
@@ -56,7 +56,7 @@ export async function delegatedFixture() {
     environmentDigest: await hash(environment.manifest),
     operation: Operations.http, functionDigest: null, operationDigest: await hash(operation),
     sources: [{ id: policy.id, materialRevision: 1, policyDigest: await hash(policy) }],
-    resultRecipients: [owner.binding], createdAt: new Date().toISOString(),
+    resultRecipients: [owner.binding, executor.binding], createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 600_000).toISOString(),
   };
   const request = await prepareRun(intent, operation, owner.keys);

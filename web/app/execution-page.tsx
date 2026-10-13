@@ -9,6 +9,7 @@ import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, session } from './api';
 import { connectionClient, executionClient } from './custody';
+import { rekeySharing } from './keys';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
 import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
@@ -46,6 +47,19 @@ function configuration(invocation: DefinitionCall, input: DefinitionCall['input'
     (invocation.input[key] == null || invocation.input[key] === '' ||
       typeof input[key] === 'object' && !Array.isArray(input[key]) && JSON.stringify(invocation.input[key]) !== JSON.stringify(input[key])))
     .map(key => [key, input[key]!])) as Record<string, JsonValue>;
+}
+// Approving a line that changes who opens what a principal holds seals those items again here, with this browser's keys.
+async function sealedLines(item: PageExecution, approver: string) {
+  const sealed: Array<Record<string, JsonValue>> = [];
+  for (const operation of item.operations) {
+    const input = substitute(operation.input, approver, item.from.id) as Record<string, JsonValue>;
+    const contents = !item.proposal && ['relation.draw', 'relation.erase'].includes(operation.name) && ['agent', 'member'].includes(String(input.relation))
+      ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId: String(input.subjectId), objectId: String(input.objectId),
+        relation: String(input.relation), remove: String(operation.name === 'relation.erase') }))
+      : {};
+    sealed.push(Object.keys(contents).length ? { contents: contents as JsonValue } : {});
+  }
+  return sealed;
 }
 type PageArgs = { params: { id?: string }; request: Request };
 async function readItem(id: string, requestMode: boolean, signal?: AbortSignal) {
@@ -129,8 +143,9 @@ export async function clientAction({ params, request }: PageArgs) {
         return [input.pointer, String(form.has(key) ? form.get(key) : index === current?.index && prepared
           ? atPointer(prepared.input, input.pointer) ?? '' : '')];
       })));
-      const choices = item.operations.map((_operation, index) => index === current?.index && prepared
-        ? configuration(current.invocation, prepared.input, item.operations[current.index]!.configure) : {});
+      const sealed = await sealedLines(item, account.principal!.id);
+      const choices = item.operations.map((_operation, index) => ({ ...(index === current?.index && prepared
+        ? configuration(current.invocation, prepared.input, item.operations[current.index]!.configure) : {}), ...sealed[index] }));
       await api(path + (requestMode ? '/approve' : '/respond'), { method: 'POST',
         body: { values, configuration: choices, code: formText(form, 'code') || undefined } });
       item = await readItem(params.id!, requestMode);

@@ -90,7 +90,7 @@ test('鍵で守られた項目の役割は署名した方針から書かれ、�
     { code: 'rekey_required' });
 });
 
-test('鍵も渡した代理に持ち主の項目を暗号化し、代理は開いて書き換えられるが共有先は変えられず、線を外すと開けなくなる', async (t) => {
+test('代理の線を引くと持ち主の項目を代理向けにも暗号化し、代理は開いて書き換えられるが共有先は変えられず、線を外すと開けなくなる', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
@@ -98,12 +98,11 @@ test('鍵も渡した代理に持ち主の項目を暗号化し、代理は開�
   const initial = await protect(encode('owner value'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }), 1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Token', content: initial });
-  await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id });
-  assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'reveal'), false);
-  const line = { subjectId: ai.actor.id, relation: 'keyholder', objectId: owner.actor.id };
+  const line = { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id };
   await assert.rejects(f.relations.draw(owner.actor, line), { code: 'rekey_required' });
+  assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'use'), false);
   const rekey = async (remove = false) => {
-    const plan = await f.principals.keySharing.plan(owner.actor, owner.actor.id, ai.actor.id, 'keyholder', f.db.pool, remove);
+    const plan = await f.principals.keySharing.plan(owner.actor, owner.actor.id, ai.actor.id, 'agent', f.db.pool, remove);
     return Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, { version: item.version,
       content: await protect(await reveal(item.content, owner.binding, owner.keys.encryption), item.policy,
         item.content.materialRevision + 1, owner.binding, owner.keys, item.content.metadata, item.content) }])));
@@ -125,7 +124,7 @@ test('鍵も渡した代理に持ち主の項目を暗号化し、代理は開�
   assert.equal(decode(await reveal(kept.content, owner.binding, owner.keys.encryption)), 'agent value');
 });
 
-test('代理は持ち主の物として鍵で守る項目を作れるが、作るときに他の相手とは共有できない', async (t) => {
+test('代理がいる持ち主の項目は代理向けにも暗号化して作り、代理は作るときに他の相手とは共有できない', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
@@ -137,7 +136,9 @@ test('代理は持ち主の物として鍵で守る項目を作れるが、作�
   assert.equal(created.owner_id, owner.actor.id);
   await assert.rejects(f.custody.put(ai.actor, { name: 'Shared value', content: await sealed([owner.binding, ai.binding, friend.binding], ai) }),
     { code: 'forbidden' });
-  await f.custody.put(owner.actor, { name: 'Owner value', content: await sealed([owner.binding, friend.binding], owner) });
+  await assert.rejects(f.custody.put(owner.actor, { name: 'Owner only', content: await sealed([owner.binding], owner) }),
+    { code: 'missing_recipient' });
+  await f.custody.put(owner.actor, { name: 'Owner value', content: await sealed([owner.binding, ai.binding, friend.binding], owner) });
 });
 
 test('線を「主体は対象の関係」として、対象からも主体からも一覧する', async (t) => {

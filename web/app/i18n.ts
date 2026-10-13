@@ -433,13 +433,12 @@ const words: Record<string, [string, string]> = {
   arguments: ['引数', 'Arguments'],
   relation: ['関係', 'Relationship'],
   agent: ['代理', 'Agent'],
-  keyholder: ['代理（鍵あり）', 'Agent with keys'],
   member: ['メンバー', 'Member'],
   payer: ['支払元', 'Payer'],
   subject: ['相手のプリンシパルID', 'Other principal ID'],
   relationHelp: [
-    '代理はサービスや変数を使って操作します。鍵も渡した代理は、変数・接続・アプリの中身も開けます。メンバーは管理に参加します。',
-    'Agents use connections and variables. Agents with keys can also open variables, connections, and apps. Members participate in management.',
+    '代理は、このプリンシパルの変数・接続・アプリを開いて使い、代わりに操作します。メンバーは管理に参加します。',
+    'Agents open and use this principal’s variables, connections, and apps to act on its behalf. Members participate in management.',
   ],
   paymentHelp: [
     '支払元のプリンシパルが、このプリンシパルの利用料金を支払います。支払元の承認が必要なときは、承認の依頼を送ります。',

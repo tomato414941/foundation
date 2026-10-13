@@ -159,23 +159,28 @@ export class CustodyClient {
   async pendingProtection() {
     return (await this.api.json('/api/principals/' + this.binding.principalId + '/reprotection', {}, listOf(Reprotection))).items;
   }
-  // Seals the item again without its expired grants, unless an execution may still write to it.
-  async reprotect(id: string) {
+  // Seals the item again without its expired grants and, when asked, for whoever now uses what its owner holds,
+  // unless an execution may still write to it.
+  async reprotect(id: string, reason: z.infer<typeof Reprotection>['reason'] = 'grantExpired') {
     const previous = await this.read(id);
     const { policy } = previous.content, now = Date.now();
     const grants = policy.grants.filter(grant => Date.parse(grant.expiresAt) > now);
-    if (grants.length === policy.grants.length || policy.producers.some(producer => Date.parse(producer.expiresAt) > now))
+    const added = reason === 'recipients'
+      ? (await this.recipients(policy.ownerId)).filter(binding => !policy.readers.some(reader => reader.id === binding.id)) : [];
+    if ((grants.length === policy.grants.length && !added.length) || policy.producers.some(producer => Date.parse(producer.expiresAt) > now))
       return null;
     const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
     const bytes = await reveal(previous.content, this.binding, this.keys.encryption);
-    return this.save(resource.name, bytes, { ...policy, revision: policy.revision + 1, grants, producers: [] },
-      { metadata: previous.content.metadata, previous });
+    return this.save(resource.name, bytes, { ...policy, revision: policy.revision + 1, grants, producers: [],
+      readers: [...policy.readers, ...added],
+      authorities: [...policy.authorities, ...added.filter(binding => !policy.authorities.some(authority => authority.id === binding.id))] },
+    { metadata: previous.content.metadata, previous });
   }
   async reprotectPending() {
     const done: string[] = [], failed: string[] = [];
     for (const item of await this.pendingProtection()) {
       try {
-        if (await this.reprotect(item.id)) done.push(item.id);
+        if (await this.reprotect(item.id, item.reason)) done.push(item.id);
       } catch {
         failed.push(item.id);
       }

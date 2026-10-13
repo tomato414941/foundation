@@ -176,11 +176,11 @@ export class Resources {
       next: null,
     };
   }
-  // Whoever acts as the owner or holds its keys, with a key to seal for: those who open what it holds.
+  // Whoever acts as the owner or is its agent, with a key to seal for: those who use what it holds open it.
   async recipients(ownerId: string, connection: Queryable = this.db.pool) {
     const rows = await this.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
       'SELECT id,name,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL',
-      [await this.authorization.holders(principal(ownerId), 'open', connection)],
+      [await this.authorization.holders(principal(ownerId), 'use', connection)],
       connection,
     );
     return rows.map((row) => ({ id: row.id, name: row.name, publicKey: row.public_key }));

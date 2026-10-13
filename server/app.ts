@@ -428,7 +428,7 @@ export async function buildApp(context: Context) {
     '/api/relations/recipients',
     {
       schema: {
-        querystring: z.object({ subjectId: C.Id, objectId: C.Id, relation: z.enum(['member', 'keyholder']).default('member'),
+        querystring: z.object({ subjectId: C.Id, objectId: C.Id, relation: z.enum(['member', 'agent']).default('member'),
           remove: z.enum(['true', 'false']).default('false') }),
         response: { 200: C.listOf(P.KeySharingItem) },
       },

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { delegatedFixture as setup } from './delegation-support.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { openRun, prepareRun, protect, reveal } from '../shared/custody.js';
+import { AccessPolicy, Operations, openRun, prepareRun, protect, reveal } from '../shared/custody.js';
 import { makeReceipt, readReceipt } from '../shared/runtime-protocol.js';
 import { decode, encode } from '../shared/encryption.js';
 
@@ -27,10 +27,16 @@ test('所有者と指定した実行先へ暗号化データを配り、権限�
     assert.equal(decode(await reveal(read.content, f.owner.binding, f.owner.keys.encryption)), 'confidential-value');
     assert.deepEqual((await f.custody.read(f.executor.actor, f.policy.id)).content, read.content);
     await assert.rejects(f.custody.read(f.stranger.actor, f.policy.id), { code: 'forbidden' });
-    const policy = { ...f.policy, revision: 2, grants: [] };
-    const next = await protect(encode('new-value'), policy, 2, f.owner.binding, f.owner.keys);
-    await f.custody.put(f.owner.actor, { name: 'Credential', content: next, data: { bytes: 9 }, version: f.resource.version });
-    await assert.rejects(f.custody.read(f.executor.actor, f.policy.id), { code: 'forbidden' });
+    const granted = AccessPolicy.parse({ ...f.policy, revision: 2, grants: [...f.policy.grants, { actor: f.owner.binding,
+      executor: f.stranger.binding, operations: [Operations.http], callerProgram: true,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString() }] });
+    const next = await protect(encode('new-value'), granted, 2, f.owner.binding, f.owner.keys);
+    const saved = await f.custody.put(f.owner.actor, { name: 'Credential', content: next, data: { bytes: 9 }, version: f.resource.version });
+    assert.deepEqual((await f.custody.read(f.stranger.actor, f.policy.id)).content, next);
+    const revoked = AccessPolicy.parse({ ...granted, revision: 3, grants: f.policy.grants });
+    await f.custody.put(f.owner.actor, { name: 'Credential', content: await protect(encode('newer-value'), revoked, 3, f.owner.binding,
+      f.owner.keys), data: { bytes: 11 }, version: saved.version });
+    await assert.rejects(f.custody.read(f.stranger.actor, f.policy.id), { code: 'forbidden' });
     await assert.rejects(f.custody.put(f.owner.actor, { name: 'Credential', content: next,
       data: { bytes: 9 }, version: f.resource.version }), { code: 'changed' });
   } finally { await f.close(); }

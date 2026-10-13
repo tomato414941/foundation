@@ -72,13 +72,15 @@ export function builtinDefinitions(services: Services) {
     (who, input) => principals.rename(who, input.id, input.name));
   bind({ name: 'principal.rename', method: 'PATCH', path: '/api/principals/:id', schema: { params: C.IdParams,
     body: renamePrincipal.omit({ id: true }), response: { 200: C.Principal } }, input: withId });
+  // A line that changes who opens what a principal holds carries those items sealed again, which whoever approves the
+  // line supplies with its keys.
   const line = C.RelationInput.extend({ contents: P.KeyUpdates.optional() });
   definitions.define('relation.draw', line, input => lineTitle(input, false), async (who, { contents, ...input }) => {
     await relations.draw(who, input, contents); return ok();
-  });
+  }, { configure: ['contents'] });
   definitions.define('relation.erase', line, input => lineTitle(input, true), async (who, { contents, ...input }) => {
     await relations.erase(who, input, contents); return ok();
-  });
+  }, { configure: ['contents'] });
   for (const [name, method] of [['relation.draw', 'POST'], ['relation.erase', 'DELETE']] as const)
     bind({ name, method, path: '/api/relations', bodyLimit: 32 * 1024 * 1024, schema: { body: line,
       response: { 200: C.Ok, 202: Execution } }, input: (_params, body) => body });

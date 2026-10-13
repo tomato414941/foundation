@@ -12,9 +12,9 @@ import { rekeySharing } from '../keys';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
-const relationships = ['agent', 'keyholder', 'member', 'payer'];
+const relationships = ['agent', 'member', 'payer'];
 // Lines that change who opens what the principal holds: its items are sealed again in this browser before the line changes.
-const sealing = ['keyholder', 'member'];
+const sealing = ['agent', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
   const page = (side: 'object' | 'subject', after: string | null) =>

@@ -267,7 +267,7 @@ async function signInWithKey(base: string, imported: string) {
       (error instanceof Error ? error.message : String(error)) + '\n');
     return { done: [], failed: [] };
   });
-  if (done.length) process.stderr.write('Sealed ' + done.length + ' item(s) again without their expired grants.\n');
+  if (done.length) process.stderr.write('Sealed ' + done.length + ' item(s) again for their current readers and grants.\n');
   if (failed.length) process.stderr.write(failed.length + ' item(s) could not be sealed again yet; signing in again retries them.\n');
   print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
     fingerprint: await fingerprint(binding) });

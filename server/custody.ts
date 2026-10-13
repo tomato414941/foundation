@@ -98,18 +98,30 @@ export class Custody {
   }
 
   // Items this identity can seal again without anyone deciding anything: those still encrypted
-  // for executors whose grants have expired. The server cannot do it, because only the item's
-  // readers can open it.
+  // for executors whose grants have expired, and, where it acts as the owner, those not yet sealed for
+  // everyone who uses what the owner holds, as for an agent whose line came before its keys. The server
+  // cannot do it, because only the item's readers can open it.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
-    const rows = await this.resources.db.all<{ id: string }>(
-      `SELECT c.resource_id AS id FROM resource_custody c
+    const rows = await this.resources.db.all<{ id: string; owner_id: string; readers: BoundKeys[]; expired: boolean }>(
+      `SELECT c.resource_id AS id, r.owner_id, c.content->'policy'->'readers' AS readers,
+         EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'grants') g
+           WHERE (g->>'expiresAt')::timestamptz <= now()) AS expired
+       FROM resource_custody c JOIN resources r ON r.id=c.resource_id
        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
-         AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'grants') g
-           WHERE (g->>'expiresAt')::timestamptz <= now())
        ORDER BY c.resource_id`, [binding.id]);
-    return rows.map(row => ({ id: row.id, reason: 'grantExpired' as const }));
+    const owners = new Set(await this.resources.authorization.find(principalId, 'principal', 'stands'));
+    const recipients = new Map<string, string[]>();
+    const items: Array<{ id: string; reason: 'grantExpired' | 'recipients' }> = [];
+    for (const row of rows) {
+      if (owners.has(row.owner_id) && !recipients.has(row.owner_id))
+        recipients.set(row.owner_id, (await this.recipients(row.owner_id)).map(recipient => recipient.binding.id));
+      if (recipients.get(row.owner_id)?.some(id => !row.readers.some(reader => reader.id === id)))
+        items.push({ id: row.id, reason: 'recipients' });
+      else if (row.expired) items.push({ id: row.id, reason: 'grantExpired' });
+    }
+    return items;
   }
 
   async recipients(ownerId: string, connection: Queryable = this.resources.db.pool) {

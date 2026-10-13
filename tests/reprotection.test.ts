@@ -22,7 +22,7 @@ test('期限の切れた許可が残る項目を待ち行列に示し、所有�
   assert.deepEqual(content.policy.grants, []);
   assert.equal(content.policy.revision, 2);
   assert.equal(content.materialRevision, 2);
-  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid), [f.owner.binding.id]);
+  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid).sort(), [f.owner.binding.id, f.executor.binding.id].sort());
   assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'kept after expiry');
   assert.deepEqual((await f.resources.get(expired.id)).data.executors, []);
   assert.equal((await f.client.read(current.id)).content.policy.grants.length, 1);
@@ -50,4 +50,21 @@ test('値を保存し直すとき、ほかの人が受けた許可のうち期�
   const next = await f.client.policy(f.owner.actor.id, ContentTypes.value, [], { previous });
   assert.deepEqual(next.grants, [previous.grants[1]]);
   assert.equal(next.revision, previous.revision + 1);
+});
+
+test('鍵より先に引かれていた代理の線は、持ち主の端末が代理の鍵を確かめると、持ち主の項目を代理向けにも封じ直す', async (t) => {
+  const f = await flowFixture();
+  t.after(f.close);
+  const ai = await f.person('Agent');
+  const saved = await f.client.save('Token', encode('owner value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
+  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [ai.actor.id, f.owner.actor.id]);
+
+  const items = [saved.id, f.resource.id].sort();
+  assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, reason: 'recipients' })));
+  assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: items });
+  await f.client.trust.rememberBinding(ai.binding);
+  assert.deepEqual(await f.client.reprotectPending(), { done: items, failed: [] });
+  assert.deepEqual(await f.client.pendingProtection(), []);
+  const shared = await f.custody.read(ai.actor, saved.id);
+  assert.equal(decode(await reveal(shared.content, ai.binding, ai.keys.encryption)), 'owner value');
 });
