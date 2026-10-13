@@ -17,7 +17,9 @@ export const PublishBinding = SignedBinding.extend({ previousSignature: Signatur
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),
   version: z.number().int().positive().optional() }).strict();
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
-export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', 'recipients']) }).strict();
+// An item to seal again, why, and the principals no longer to seal it for.
+export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', 'recipients']),
+  remove: z.array(Id).max(1000).default([]) }).strict();
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();

@@ -167,30 +167,48 @@ export class CustodyClient {
   async pendingProtection() {
     return (await this.api.json('/api/principals/' + this.binding.principalId + '/reprotection', {}, listOf(Reprotection))).items;
   }
-  // Seals the item again without its expired grants and, when asked, for whoever now uses what its owner holds,
-  // unless an execution may still write to it.
-  async reprotect(id: string, reason: z.infer<typeof Reprotection>['reason'] = 'grantExpired') {
+  // Seals the item again without its expired grants and without the principals that may no longer open or use it,
+  // and, when asked, for whoever now uses what its owner holds and whose keys this device has verified, unless an
+  // execution may still write to it. An execution result is written once it exists, so nothing waits on it.
+  async reprotect(id: string, reason: z.infer<typeof Reprotection>['reason'] = 'grantExpired', remove: string[] = []) {
     const previous = await this.read(id);
-    const { policy } = previous.content, now = Date.now();
-    const grants = policy.grants.filter(grant => Date.parse(grant.expiresAt) > now);
-    const added = reason === 'recipients'
-      ? (await this.recipients(policy.ownerId)).filter(binding => !policy.readers.some(reader => reader.id === binding.id)) : [];
-    if ((grants.length === policy.grants.length && !added.length) || policy.producers.some(producer => Date.parse(producer.expiresAt) > now))
-      return null;
-    const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
+    const { policy } = previous.content, now = Date.now(), removed = new Set(remove);
+    const current = reason === 'recipients' ? await this.recipients(policy.ownerId) : [];
+    // A principal that has replaced its keys is sealed for with its current keys only.
+    const kept = (binding: BoundKeys) => !removed.has(binding.principalId) &&
+      !current.some(next => next.principalId === binding.principalId && next.id !== binding.id);
+    const grants = policy.grants.filter(grant => Date.parse(grant.expiresAt) > now && kept(grant.executor) &&
+      (!('actor' in grant) || kept(grant.actor)));
+    const readers = policy.readers.filter(kept), authorities = policy.authorities.filter(kept);
+    const added = current.filter(binding => !readers.some(reader => reader.id === binding.id));
+    const next = { ...policy, revision: policy.revision + 1, grants, producers: [],
+      readers: [...readers, ...added],
+      authorities: [...authorities, ...added.filter(binding => !authorities.some(authority => authority.id === binding.id))],
+      ...(policy.observers ? { observers: policy.observers.filter(principal => !removed.has(principal)) } : {}) };
+    const writing = policy.contentType !== ContentTypes.executionResult &&
+      policy.producers.some(producer => Date.parse(producer.expiresAt) > now);
+    if (canonical({ ...next, revision: policy.revision }) === canonical(policy) || writing) return null;
     const bytes = await reveal(previous.content, this.binding, this.keys.encryption);
-    return this.save(resource.name, bytes, { ...policy, revision: policy.revision + 1, grants, producers: [],
-      readers: [...policy.readers, ...added],
-      authorities: [...policy.authorities, ...added.filter(binding => !policy.authorities.some(authority => authority.id === binding.id))] },
-    { metadata: previous.content.metadata, previous });
+    if (policy.contentType === ContentTypes.executionResult) {
+      const content = await protect(bytes, next, previous.content.materialRevision + 1, this.binding, this.keys,
+        previous.content.metadata, previous.content);
+      await this.api.json('/api/custody/' + id, { method: 'PUT',
+        body: { name: 'Execution result', content, version: previous.version } }, ProtectedRead);
+      await this.trust.rememberContent(content);
+      return id;
+    }
+    const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
+    return this.save(resource.name, bytes, next, { metadata: previous.content.metadata, previous });
   }
+  // Seals each listed item again on its own: one that cannot change now is left, with the reason, for another time.
   async reprotectPending() {
-    const done: string[] = [], failed: string[] = [];
+    const done: string[] = [], failed: Array<{ id: string; code: string }> = [];
     for (const item of await this.pendingProtection()) {
       try {
-        if (await this.reprotect(item.id, item.reason)) done.push(item.id);
-      } catch {
-        failed.push(item.id);
+        if (await this.reprotect(item.id, item.reason, item.remove)) done.push(item.id);
+      } catch (error) {
+        failed.push({ id: item.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          ? error.code : 'failure' });
       }
     }
     return { done, failed };

@@ -11,7 +11,6 @@ import { z } from 'zod';
 
 import type { Context } from './context.js';
 import type { Actor } from './authorization.js';
-import { principal } from './authorization.js';
 import type { SigninResult } from './authentication.js';
 import { fail, failure } from './errors.js';
 import { token } from './vault.js';
@@ -425,30 +424,6 @@ export async function buildApp(context: Context) {
     (request) => relations.list(actor(request), request.query),
   );
   app.get(
-    '/api/relations/recipients',
-    {
-      schema: {
-        querystring: z.object({ subjectId: C.Id, objectId: C.Id, relation: z.enum(['member', 'agent']).default('member'),
-          remove: z.enum(['true', 'false']).default('false') }),
-        response: { 200: C.listOf(P.KeySharingItem) },
-      },
-    },
-    async (request) => {
-      // A subject may take itself off a line, as it may erase the line; anything else is the sharer's.
-      if (request.query.remove !== 'true' || !(await authorization.can(actor(request), principal(request.query.subjectId), 'stands')))
-        await authorization.requirePrincipal(actor(request), request.query.objectId, 'share');
-      await principals.get(request.query.subjectId);
-      return principals.keySharing.plan(
-        actor(request),
-        request.query.objectId,
-        request.query.subjectId,
-        request.query.relation,
-        undefined,
-        request.query.remove === 'true',
-      );
-    },
-  );
-  app.get(
     '/api/principals/:id/transfer-recipients',
     {
       schema: {
@@ -460,7 +435,7 @@ export async function buildApp(context: Context) {
     async (request) => {
       await authorization.requirePrincipal(actor(request), request.params.id, 'transfer');
       await principals.get(request.query.to);
-      return principals.keySharing.plan(actor(request), request.params.id, request.query.to, 'owner');
+      return principals.keySharing.plan(actor(request), request.params.id, request.query.to);
     },
   );
   app.get(

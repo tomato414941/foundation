@@ -45,7 +45,7 @@ test('所有するAIが開始した実行結果を、所有者が自分の鍵で
   assert.equal(JSON.stringify(stored).includes('owned-agent-result'), false);
 });
 
-test('メンバーへの共有と解除を、秘密変数と実行結果へ一緒に適用する', async t => {
+test('メンバーの追加と解除を、所有者の端末が秘密変数と実行結果へ一緒に封じ直して反映する', async t => {
   const f = await setup(); t.after(f.close);
   await f.client.trust.rememberBinding(f.stranger.binding);
   const secret = await f.client.save('Shared secret', encode('protected-team-value'),
@@ -57,20 +57,22 @@ test('メンバーへの共有と解除を、秘密変数と実行結果へ一�
   assert.ok(original.receipt && 'content' in original.receipt);
   const header = receiptHeader(original.receipt), signature = original.receipt.signature;
   const line = { subjectId: f.stranger.actor.id, relation: 'member' as const, objectId: f.owner.actor.id };
-  const query = new URLSearchParams({ subjectId: line.subjectId, objectId: line.objectId });
-  const contents = await f.client.sharing('/api/relations/recipients?' + query);
-  assert.ok(contents[secret.id] && contents[task.id]);
-  await f.client.api.json('/api/relations', { method: 'POST', body: { ...line, contents } });
+  await f.client.api.json('/api/relations', { method: 'POST', body: line });
+  const added = await f.client.reprotectPending();
+  assert.ok(added.done.includes(secret.id) && added.done.includes(task.id), JSON.stringify(added));
   const shared = await f.viewer.api.json('/api/runtime/runs/' + task.id, {}, Task);
   assert.equal((await f.viewer.result(shared))?.result?.stdout, 'protected-team-result\n');
   assert.equal(decode(await f.viewer.reveal(secret.id)), 'protected-team-value');
   assert.ok(shared.receipt && 'content' in shared.receipt);
   assert.deepEqual(receiptHeader(shared.receipt), header);
   assert.equal(shared.receipt.signature, signature);
-  const updates = await f.client.sharing('/api/relations/recipients?' + query + '&remove=true');
-  await f.client.api.json('/api/relations', { method: 'DELETE', body: { ...line, contents: updates } });
+  await f.client.api.json('/api/relations', { method: 'DELETE', body: line });
   await assert.rejects(f.viewer.read(task.id), { code: 'forbidden' });
   await assert.rejects(f.viewer.read(secret.id), { code: 'forbidden' });
+  const removed = await f.client.reprotectPending();
+  assert.ok(removed.done.includes(secret.id) && removed.done.includes(task.id), JSON.stringify(removed));
+  for (const id of [secret.id, task.id])
+    assert.equal((await f.client.read(id)).content.policy.readers.some(reader => reader.principalId === f.stranger.actor.id), false);
   const current = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
   assert.equal((await f.client.result(current))?.result?.stdout, 'protected-team-result\n');
   await f.context.delegation.finish(f.executorIdentity.actor, 'already-delivered', original.receipt);

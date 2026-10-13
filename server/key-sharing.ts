@@ -10,18 +10,17 @@ import { ContentTypes } from '../shared/custody.js';
 import { fail } from './errors.js';
 
 export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
-// The lines that change who opens what a principal holds: whom it belongs to, its members, and its agents.
-export type KeyRelation = 'owner' | 'member' | 'agent';
 
+// Passing a principal to a new owner seals what it holds, and what is held below it, for whoever then acts as it, all at
+// once with the transfer. Lines to members and agents take effect at once instead, and their devices seal the items
+// again one by one afterwards.
 export class KeySharing {
   constructor(readonly custody: Custody) {}
-  async plan(actor: Actor, target: string, subject: string, relation: KeyRelation,
-    connection: Queryable = this.custody.resources.db.pool, remove = false) {
+  async plan(actor: Actor, target: string, owner: string, connection: Queryable = this.custody.resources.db.pool) {
     const { resources, bindings } = this.custody;
     const descendants = await resources.authorization.find(target, 'principal', 'stands', connection);
-    // Whoever would open what an owner holds once the line is drawn or erased: the readers its items are sealed for.
-    const change: Change = relation === 'owner' ? { owners: { [target]: subject } }
-      : { [remove ? 'remove' : 'add']: [{ subjectId: subject, relation, objectId: target }] };
+    // Whoever would open what the principal holds once it has its new owner: the readers its items are sealed for.
+    const change: Change = { owners: { [target]: owner } };
     const rows = await resources.db.all<Pick<ResourceRow, 'id' | 'owner_id' | 'name' | 'version'>>(
       `SELECT id,owner_id,name,version FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[])
        UNION ALL SELECT id,owner_id,'Execution result' AS name,(receipt#>>'{content,materialRevision}')::int AS version
@@ -64,9 +63,8 @@ export class KeySharing {
     }
     return { items, next: null };
   }
-  async apply(actor: Actor, target: string, subject: string, relation: KeyRelation,
-    updates: KeyUpdates, connection: Queryable, remove = false) {
-    const plan = await this.plan(actor, target, subject, relation, connection, remove);
+  async apply(actor: Actor, target: string, owner: string, updates: KeyUpdates, connection: Queryable) {
+    const plan = await this.plan(actor, target, owner, connection);
     for (const item of plan.items) {
       const update = updates[item.id];
       if (!update) fail(409, 'rekey_required', 'Re-encrypt protected items for their new owners and members.');

@@ -1,19 +1,21 @@
 import { Button } from '../components/ui/button';
 import { SelectItem } from '../components/ui/select';
 import { InputField, SelectField } from '../form-fields';
-import { Form, Link, redirect, useActionData, useLoaderData, useSearchParams } from 'react-router';
+import { Form, Link, redirect, useActionData, useLoaderData, useRouteLoaderData, useSearchParams } from 'react-router';
+import type { clientLoader as rootLoader } from '../root';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principals';
 import { Principal, Relation, listOf } from '../../../shared/contracts';
-import { Changed, actionResult, api, formText } from '../api';
+import { Changed, actionResult, api, formText, session } from '../api';
 import { Copy, ErrorNotice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
-import { rekeySharing } from '../keys';
+import { resealNow } from '../keys';
+import { ResealingNotice } from '../resealing-notice';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
 const relationships = ['agent', 'member', 'payer'];
-// Lines that change who opens what the principal holds: its items are sealed again in this browser before the line changes.
+// Lines that change who opens what the principal holds: once a line changes, this browser seals its items again.
 const sealing = ['agent', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
@@ -41,16 +43,10 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       relation = formText(form, 'relation'),
       objectId = formText(form, 'objectId') || params.owner;
     const remove = formText(form, 'intent') === 'remove';
-    const contents =
-      sealing.includes(relation)
-        ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, objectId, relation, remove: String(remove) }))
-        : undefined;
-    const changed = await api(
-      '/relations',
-      { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId, ...(contents ? { contents } : {}) } },
-      Changed,
-    );
+    const changed = await api('/relations', { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId } }, Changed);
     if ('id' in changed) return redirect('/executions/' + changed.id);
+    const signedIn = (await session()).principal;
+    if (sealing.includes(relation) && signedIn) await resealNow(signedIn.id);
     return { ok: true };
   });
 }
@@ -58,7 +54,7 @@ export default function Principals() {
   const { t } = useTranslation();
   const data = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
-  const { principal } = useWorkspace();
+  const { principal } = useWorkspace(), signedIn = useRouteLoaderData<typeof rootLoader>('root')?.principal;
   const [search] = useSearchParams();
   const line = (subject: string, relation: string, object: string) =>
     t('line', { subject, relation: t(relation), object });
@@ -96,6 +92,7 @@ export default function Principals() {
       }
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      <ResealingNotice principalId={signedIn?.id} />
       <Panel title={t('connectedPrincipals')}>
         <ul className="divide-y divide-border">
           {principal.owner &&

@@ -642,7 +642,7 @@ class BrowserTests(unittest.TestCase):
             """], capture_output=True, text=True, env=environment)
             self.assertEqual(stored.returncode, 0, stored.stderr)
         pending = lambda: page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
-        self.assertEqual(pending(), [{"id": variable_id, "reason": "grantExpired"}])
+        self.assertEqual(pending(), [{"id": variable_id, "reason": "grantExpired", "remove": []}])
         page.goto(f"{ORIGIN}/p/{principal['id']}/variables")
         for _ in range(50):
             if not pending():

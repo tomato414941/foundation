@@ -18,18 +18,19 @@ test('メンバー追加と所有者変更で配下の変数を再暗号化し�
     1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Project variable', content: initial });
   const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
-  await assert.rejects(f.relations.draw(owner.actor, joining), { code: 'rekey_required' });
-  const updates = async (subject: string, relation: 'member' | 'owner') => {
-    const plan = await f.principals.keySharing.plan(owner.actor, project.id, subject, relation);
-    return Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, {
-      version: item.version, content: await protect(bytes, item.policy, item.content.materialRevision + 1,
-        owner.binding, owner.keys, item.content.metadata, item.content),
-    }])));
-  };
-  await f.relations.draw(owner.actor, joining, await updates(member.actor.id, 'member'));
+  await f.relations.draw(owner.actor, joining);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, reason: 'recipients', remove: [] }]);
+  const before = await f.custody.read(owner.actor, id);
+  const readers = [owner.binding, member.binding];
+  await f.custody.put(owner.actor, { name: 'Project variable', version: before.version, content: await protect(bytes,
+    { ...before.content.policy, revision: 2, readers, authorities: readers }, 2, owner.binding, owner.keys, undefined, before.content) });
   const shared = (await f.custody.read(member.actor, id)).content;
   assert.equal(decode(await reveal(shared, member.binding, member.keys.encryption)), decode(bytes));
-  const transferred = await updates(next.actor.id, 'owner');
+  const plan = await f.principals.keySharing.plan(owner.actor, project.id, next.actor.id);
+  const transferred = Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, {
+    version: item.version, content: await protect(bytes, item.policy, item.content.materialRevision + 1,
+      owner.binding, owner.keys, item.content.metadata, item.content),
+  }])));
   await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed variable');
   const agreed = { ...owner.actor, agreedBy: next.actor.id };
   await assert.rejects(f.relations.transfer(agreed, project.id, next.actor.id, transferred), { code: 'changed' });
@@ -77,7 +78,7 @@ test('機械が自分の鍵で登録し、自分のプリンシパルとして�
   assert.equal(await f.authentication.authenticate(session.token), null);
 });
 
-test('メンバーを外すと宛先と編集権限を更新し、残る所有者が変数を使い続ける', async t => {
+test('メンバーを外すとまだ封じてある変数も渡さなくなり、所有者が封じ直して使い続ける', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
@@ -87,13 +88,15 @@ test('メンバーを外すと宛先と編集権限を更新し、残る所有�
     ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding], grants: [] });
   const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Credential', content });
-  const plan = await f.principals.keySharing.plan(owner.actor, project.id, member.actor.id, 'member', f.db.pool, true);
-  const update = plan.items[0]!;
-  await f.relations.erase(owner.actor, membership, { [row.id]: { version: row.version,
-    content: await protect(bytes, update.policy, 2, owner.binding, owner.keys, content.metadata, content) } });
+  await f.relations.erase(owner.actor, membership);
+  await assert.rejects(f.custody.read(member.actor, row.id), { code: 'forbidden' });
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id: row.id, reason: 'recipients', remove: [member.actor.id] }]);
+  await f.custody.put(owner.actor, { name: 'Credential', version: row.version, content: await protect(bytes,
+    { ...policy, revision: 2, readers: [owner.binding], authorities: [owner.binding] }, 2, owner.binding, owner.keys, content.metadata, content) });
   const current = (await f.custody.read(owner.actor, row.id)).content;
   assert.equal(decode(await reveal(current, owner.binding, owner.keys.encryption)), 'private value');
-  await assert.rejects(f.custody.read(member.actor, row.id), { code: 'forbidden' });
+  assert.deepEqual(current.policy.readers.map(reader => reader.principalId), [owner.actor.id]);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), []);
 });
 
 test('公開鍵で暗号化した値を宛先の秘密鍵で開く', async (t) => {

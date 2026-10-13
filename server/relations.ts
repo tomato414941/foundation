@@ -9,7 +9,7 @@ import type { Billing } from './billing.js';
 import type { KeyUpdates } from './key-sharing.js';
 import { Relation, RelationInput } from '../shared/contracts.js';
 import type { z } from 'zod';
-import { isProtected } from '../shared/protected.js';
+import { ProtectedKinds, isProtected } from '../shared/protected.js';
 import { fail } from './errors.js';
 
 export type Line = z.infer<typeof RelationInput>;
@@ -52,7 +52,9 @@ const cursor = (row: LineRow) =>
 // that gives something by a change agrees to it: what a line passes on is given by one who holds all of it, since
 // nothing gives more than it has, and what a payer or a new owner takes on is taken on by its side. A change made on
 // one side waits on the other as a request. A subject may always erase a line to itself. On what a key protects, the
-// lines are the signed policy's and change only with it.
+// lines are the signed policy's and change only with it. A line to a member or an agent takes effect at once: the
+// owner's devices seal its items again one by one afterwards, so an item that cannot change now holds nothing back,
+// and meanwhile the server gives an item only to those who may still open it.
 export class Relations {
   constructor(
     readonly db: Database,
@@ -130,7 +132,7 @@ export class Relations {
       fail(403, 'forbidden', 'You do not have permission to perform this action.');
     throw new AgreementNeeded(ask, proposed);
   }
-  async draw(actor: Actor, line: Line, contents: KeyUpdates = {}) {
+  async draw(actor: Actor, line: Line) {
     if (line.subjectId === line.objectId) fail(400, 'invalid_relation', 'Choose a different principal.');
     await this.principals.get(line.subjectId);
     const object = await this.target(line.objectId);
@@ -158,8 +160,6 @@ export class Relations {
         if (cycle) fail(409, 'relation_cycle', 'This payment relationship would create a cycle.');
         await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='payer'", [line.objectId]);
       }
-      if (line.relation === 'member' || line.relation === 'agent')
-        await this.principals.keySharing.apply(actor, line.objectId, line.subjectId, line.relation, contents, connection);
       await connection.query(
         `INSERT INTO relations(subject_id,relation,${'kind' in object ? 'resource_id' : 'principal_id'}) VALUES($1,$2,$3)
         ON CONFLICT DO NOTHING`,
@@ -169,7 +169,7 @@ export class Relations {
         { subjectId: line.subjectId, relation: line.relation, ...agreed(actor) }, connection);
     });
   }
-  async erase(actor: Actor, line: Line, contents: KeyUpdates = {}) {
+  async erase(actor: Actor, line: Line) {
     const object = await this.target(line.objectId);
     this.drawable(object, line.relation);
     // Either side stops a payment, by whoever manages its billing there.
@@ -180,12 +180,22 @@ export class Relations {
       await this.authorization.require(actor, object, 'share');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (line.relation === 'member' || line.relation === 'agent')
-        await this.principals.keySharing.apply(actor, line.objectId, line.subjectId, line.relation, contents, connection, true);
+      const owners = !('kind' in object) && (line.relation === 'member' || line.relation === 'agent')
+        ? await this.authorization.find(line.objectId, 'principal', 'stands', connection) : [];
+      const users = async (id: string) => new Set(await this.authorization.holders(principal(id), 'use', connection));
+      const before = await Promise.all(owners.map(users));
       await connection.query(
         `DELETE FROM relations WHERE subject_id=$1 AND relation=$2 AND ${'kind' in object ? 'resource_id' : 'principal_id'}=$3`,
         [line.subjectId, line.relation, line.objectId],
       );
+      // Whoever no longer uses what a principal holds no longer opens it, even where an item is still sealed for it: the
+      // roles its items record for it go with the line, until the owner's devices seal them again without it.
+      for (const [index, id] of owners.entries()) {
+        const after = await users(id), lost = [...before[index]!].filter(subject => !after.has(subject));
+        if (lost.length) await connection.query(
+          'DELETE FROM relations WHERE subject_id=ANY($1::uuid[]) AND resource_id IN (SELECT id FROM resources WHERE owner_id=$2 AND kind=ANY($3::text[]))',
+          [lost, id, [...ProtectedKinds]]);
+      }
       await this.audit.record(this.ledger(object), actor.id, 'relation.remove', line.objectId,
         { subjectId: line.subjectId, relation: line.relation }, connection);
     });
@@ -220,7 +230,7 @@ export class Relations {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.authorization.holds(id, principal(to), 'stands', connection))
         fail(409, 'relation_cycle', 'This transfer would create an ownership cycle.');
-      await this.principals.keySharing.apply(actor, id, to, 'owner', contents, connection);
+      await this.principals.keySharing.apply(actor, id, to, contents, connection);
       await connection.query('UPDATE principals SET owner_id=$2 WHERE id=$1', [id, to]);
       await this.audit.record(id, actor.id, 'principal.transfer', to, agreed(actor), connection);
     });

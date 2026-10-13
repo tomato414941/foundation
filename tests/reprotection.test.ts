@@ -14,7 +14,7 @@ test('期限の切れた許可が残る項目を待ち行列に示し、所有�
   const expired = await save('Expired token', 'kept after expiry', minutes(-1));
   const current = await save('Current token', 'still granted', minutes(60));
 
-  assert.deepEqual(await f.client.pendingProtection(), [{ id: expired.id, reason: 'grantExpired' }]);
+  assert.deepEqual(await f.client.pendingProtection(), [{ id: expired.id, reason: 'grantExpired', remove: [] }]);
   assert.deepEqual(await f.client.reprotectPending(), { done: [expired.id], failed: [] });
   assert.deepEqual(await f.client.pendingProtection(), []);
 
@@ -36,7 +36,7 @@ test('実行結果の書き込みを待つ項目は、その書き込みの期�
   const saved = await f.client.save('Run output', encode('before the run'), policy);
 
   assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: [] });
-  assert.deepEqual(await f.client.pendingProtection(), [{ id: saved.id, reason: 'grantExpired' }]);
+  assert.deepEqual(await f.client.pendingProtection(), [{ id: saved.id, reason: 'grantExpired', remove: [] }]);
   assert.equal((await f.client.read(saved.id)).content.policy.revision, 1);
 });
 
@@ -61,7 +61,7 @@ test('持ち主の端末は鍵を確かめた代理にだけ持ち主の項目�
     await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [agent.actor.id, f.owner.actor.id]);
 
   const items = [saved.id, f.resource.id].sort();
-  assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, reason: 'recipients' })));
+  assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, reason: 'recipients', remove: [] })));
   assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: [] });
   await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
   await f.client.trust.rememberBinding(ai.binding);
@@ -72,4 +72,42 @@ test('持ち主の端末は鍵を確かめた代理にだけ持ち主の項目�
   const later = await f.client.save('Later', encode('later value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
   assert.deepEqual((await f.custody.get(later.id)).policy.readers.map(reader => reader.principalId).sort(),
     [f.owner.actor.id, f.executor.binding.principalId, ai.actor.id].sort());
+});
+
+test('代理の線を外すと、まだ封じてある項目も代理に渡さなくなり、持ち主の端末が代理抜きで封じ直す', async (t) => {
+  const f = await flowFixture();
+  t.after(f.close);
+  const ai = await f.person('Agent');
+  await f.client.trust.rememberBinding(ai.binding);
+  const saved = await f.client.save('Token', encode('owner value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
+  const line = { subjectId: ai.actor.id, relation: 'agent', objectId: f.owner.actor.id };
+  await f.client.api.json('/api/relations', { method: 'POST', body: line });
+  await f.client.reprotectPending();
+  assert.equal(decode(await reveal((await f.custody.read(ai.actor, saved.id)).content, ai.binding, ai.keys.encryption)), 'owner value');
+
+  await f.client.api.json('/api/relations', { method: 'DELETE', body: line });
+  await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
+  assert.deepEqual((await f.client.pendingProtection()).find(item => item.id === saved.id), { id: saved.id, reason: 'recipients', remove: [ai.actor.id] });
+  assert.deepEqual((await f.client.reprotectPending()).failed, []);
+  const { content } = await f.client.read(saved.id);
+  assert.equal(content.policy.readers.some(reader => reader.principalId === ai.actor.id), false);
+  assert.equal(content.policy.authorities.some(authority => authority.principalId === ai.actor.id), false);
+  assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'owner value');
+  assert.deepEqual(await f.client.pendingProtection(), []);
+});
+
+test('トークン更新中の項目があっても代理の線を引け、持ち主の端末はほかの項目を封じ直してその項目を理由とともに残す', async (t) => {
+  const f = await flowFixture();
+  t.after(f.close);
+  const ai = await f.person('Agent');
+  await f.client.trust.rememberBinding(ai.binding);
+  const busy = await f.client.save('Busy token', encode('busy value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
+  await f.db.pool.query("INSERT INTO connection_operations(id,resource_id,executor_id,expected_revision,state) VALUES($1,$2,$3,1,'in_flight')",
+    [crypto.randomUUID(), busy.id, f.owner.actor.id]);
+  await f.client.api.json('/api/relations', { method: 'POST', body: { subjectId: ai.actor.id, relation: 'agent', objectId: f.owner.actor.id } });
+
+  assert.deepEqual(await f.client.reprotectPending(), { done: [f.resource.id], failed: [{ id: busy.id, code: 'connection_busy' }] });
+  assert.equal(decode(await reveal((await f.custody.read(ai.actor, f.resource.id)).content, ai.binding, ai.keys.encryption)).length > 0, true);
+  await assert.rejects(f.custody.read(ai.actor, busy.id), { code: 'forbidden' });
+  assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [busy.id]);
 });

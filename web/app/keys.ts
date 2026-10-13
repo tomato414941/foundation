@@ -12,7 +12,8 @@ import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publi
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure } from './api';
 import { stored } from './storage';
-import { listOf } from '../../shared/contracts';
+import { useSyncExternalStore } from 'react';
+import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
 
 const unlocked = new Map<string, IdentityKeys>();
@@ -62,21 +63,38 @@ async function keep(id: string, keys: IdentityKeys) {
   unlocked.set(id, keys);
   reprotectInBackground(id);
 }
+// The items this browser last could not seal again for a principal, by name, and why.
+export type Resealing = { failed: Array<{ id: string; name: string | null; code: string }> };
+const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
+async function reseal(id: string) {
+  if (!(await getIdentity(id))) return null;
+  const { custodyClient } = await import('./custody');
+  const { failed } = await (await custodyClient(id)).reprotectPending();
+  const outcome = { failed: await Promise.all(failed.map(async item => ({ ...item,
+    name: await api('/resources/' + item.id, {}, Resource).then(resource => resource.name, () => null) }))) };
+  resealing.set(id, outcome);
+  for (const notify of watching) notify();
+  return outcome;
+}
 // Whenever this browser holds a principal's keys, it seals again the items the server lists as
-// needing it. Each principal is handled once per page load.
+// needing it. Each principal is handled once per page load, so an item left now is tried again next time.
 const reprotecting = new Set<string>();
 export function reprotectInBackground(id: string) {
   if (reprotecting.has(id)) return;
   reprotecting.add(id);
-  void (async () => {
-    if (!(await getIdentity(id))) { reprotecting.delete(id); return; }
-    const { custodyClient } = await import('./custody');
-    const { failed } = await (await custodyClient(id)).reprotectPending();
-    if (failed.length) throw new Error('Not sealed again: ' + failed.join(', '));
-  })().catch((error: unknown) => {
+  void reseal(id).then(outcome => { if (!outcome) reprotecting.delete(id); }, (error: unknown) => {
     reprotecting.delete(id);
-    console.warn('Some items could not be sealed again for their current recipients.', error);
+    console.warn('The items to seal again could not be checked.', error);
   });
+}
+// Seals the items again at once, as after a line changes who may open them.
+export async function resealNow(id: string) {
+  reprotecting.add(id);
+  return reseal(id);
+}
+export function useResealing(id: string | undefined) {
+  return useSyncExternalStore(notify => { watching.add(notify); return () => watching.delete(notify); },
+    () => (id ? resealing.get(id) ?? null : null), () => null);
 }
 export async function clearKeys() {
   unlocked.clear();

@@ -432,6 +432,11 @@ const words: Record<string, [string, string]> = {
   command: ['コマンド', 'Command'],
   execute: ['実行', 'Run'],
   result: ['実行結果', 'Result'],
+  resealingPending: [
+    '次の項目には、開ける相手の変更をまだ反映できていません。原因が解消すると、次に Foundation を開いたときにもう一度試します。',
+    'The change in who may open these items has not reached them yet. Once the cause is resolved, Foundation tries again the next time you open it.',
+  ],
+  resealingItem: ['{{name}}：{{reason}}', '{{name}}: {{reason}}'],
   http: ['HTTPリクエスト', 'HTTP request'],
   url: ['URL', 'URL'],
   httpMethod: ['メソッド', 'Method'],
@@ -928,6 +933,14 @@ errors.push([
   ['rekey_required'],
   '共有先が変わりました。再読み込みして、もう一度お試しください。',
   'Recipients changed. Reload the page and try again.',
+], [
+  ['connection_busy'],
+  'この接続はトークンの更新が終わっていないため、今は変更できません。',
+  'This connection cannot change now, because its token update has not finished.',
+], [
+  ['connection_uncertain'],
+  'この接続はトークンの更新結果を確認できていません。サービスに再接続してください。',
+  'The result of this connection\'s token update is unknown. Reconnect the service.',
 ]);
 for (const [codes, ja, en] of errors) for (const code of codes) words['errors.' + code] = [ja, en];
 const resources = Object.fromEntries(
