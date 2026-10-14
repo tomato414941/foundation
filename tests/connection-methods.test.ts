@@ -10,6 +10,22 @@ const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
   MethodDefinition.parse({ name, kind: 'token',
     config: { fields: [{ name: field, label: field, secret: true }], outputs: { [output]: '/' + field } } });
 
+test('作成権限を持つプリンシパルだけが所有者のサービス定義を作成する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const body = { kind: 'service', name: 'Authorized service', definition: {
+    name: 'Authorized service', methods: { bearer: 'http:bearer' },
+  } };
+  const path = '/api/principals/' + f.owner.actor.id + '/resources';
+  await assert.rejects(f.api(f.stranger.token).json(path, { method: 'POST', body }), { code: 'forbidden' });
+  await f.relations.draw(f.owner.actor, {
+    subjectId: f.stranger.actor.id, relation: 'creator', objectId: f.owner.actor.id,
+  });
+  const saved = await f.api(f.stranger.token).json(path, { method: 'POST', body }, Resource);
+  assert.equal(saved.ownerId, f.owner.actor.id);
+  assert.equal(saved.kind, 'service');
+  assert.equal((await f.context.catalog.list(f.owner.actor)).find(item => item.id === saved.id)?.name, body.name);
+});
+
 test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実行でトークンを再取得する', async t => {
   for (const [apiRegion, tokenUrl, apiBaseUrl] of [
     ['eu', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],

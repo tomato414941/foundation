@@ -200,6 +200,8 @@ export class Catalog {
   }
   async createService(actor: Actor, ownerId: string, name: string, value: ServiceDefinitionInput) {
     return this.resources.db.transaction(async (connection) => {
+      if (!(await this.resources.authorization.canCreate(actor, ownerId, 'service', connection)))
+        fail(403, 'forbidden', 'You cannot create service definitions for this principal.');
       await connection.query('SELECT pg_advisory_xact_lock(736023747)');
       const data = await this.prepareDefinition(actor, ownerId, value, connection);
       return this.resources.insert(
