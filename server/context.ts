@@ -162,12 +162,13 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     invocations,
   };
   if (options.migrate) {
-    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }] = await Promise.all([
-      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'),
+    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }] = await Promise.all([
+      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'), import('./migrations/migrate-runs.js'),
     ]);
     await migrateExecutions(db, vault);
     await migrateRequests(db);
     await migrateHistory(context);
+    await migrateRuns(db, vault);
     await db.assertReady();
   }
   return context;

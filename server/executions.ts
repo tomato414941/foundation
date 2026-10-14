@@ -39,6 +39,7 @@ interface Snapshot {
   continuation: OperationWaiting['continuation'];
   preparations?: Array<{ index: number; digest: string }>;
   runtime?: { kind: 'run' | 'function'; id: string };
+  archive?: { format: string; record: JsonValue };
 }
 interface ExecutionRow {
   id: string; actor_id: string; creator_id: string; owner_id: string | null; responder_id: string | null; message: string;
@@ -115,9 +116,9 @@ export class Executions {
         return { index, name: operation.name, state: index < snapshot.index ? 'succeeded' : index === snapshot.index ? row.state : 'waiting', runs };
       }),
       approval: row.wait === 'approval' ? { requestId: deliveries.at(-1)?.id ?? null, proposal } : null,
-      canContinue: canRespond && ['waiting', 'running', 'failed'].includes(row.state),
+      canContinue: !snapshot.archive && canRespond && ['waiting', 'running', 'failed'].includes(row.state),
       error,
-      canCancel: !!actor && !actor.requestId && !['succeeded', 'cancelled'].includes(row.state) && [row.creator_id, row.actor_id].includes(actor.id),
+      canCancel: !snapshot.archive && !!actor && !actor.requestId && !['succeeded', 'cancelled'].includes(row.state) && [row.creator_id, row.actor_id].includes(actor.id),
       url: this.origin + '/executions/' + row.id,
       operations: snapshot.operations.map(operation => ({ ...operation, title: this.definitions.describe(operation),
         execution: this.definitions.get(operation.name).execution, configure: [...this.definitions.get(operation.name).configure],
@@ -143,7 +144,8 @@ export class Executions {
   }
   private async expire(row: ExecutionRow) {
     if (row.expires_at.getTime() > Date.now() || !['waiting', 'running', 'failed'].includes(row.state)) return row;
-    if (row.state === 'failed' && (await this.read(row)).runtime) return row;
+    const snapshot = await this.read(row);
+    if (snapshot.archive || row.state === 'failed' && snapshot.runtime) return row;
     await this.db.transaction(async connection => {
       await this.revoke(row.id, connection);
       await connection.query("UPDATE executions SET response='expired' WHERE id=$1", [row.id]);
@@ -445,6 +447,8 @@ export class Executions {
     }, 15_000);
     renewal.unref();
     try {
+      if ((await this.read(await this.row(id))).archive)
+        fail(409, 'execution_closed', 'This execution has finished. Start a new execution to run another operation.');
       return await action();
     } finally {
       clearInterval(renewal);

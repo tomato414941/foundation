@@ -366,12 +366,3 @@ DO $$ BEGIN
       ADD COLUMN operation_index integer NOT NULL, ADD COLUMN binding_id uuid NOT NULL;
   END IF;
 END $$;
-
-DO $$ BEGIN
-  IF to_regclass('runs') IS NOT NULL THEN
-    IF EXISTS(SELECT 1 FROM runs) THEN
-      RAISE EXCEPTION 'Migrate historical runs before removing their storage';
-    END IF;
-    DROP TABLE runs;
-  END IF;
-END $$;
