@@ -1,6 +1,5 @@
 [Unit]
 Description=Foundation execution environment
-Requires=docker.service
 After=network-online.target docker.service
 Wants=network-online.target
 ConditionPathExists=/etc/foundation/environment.env

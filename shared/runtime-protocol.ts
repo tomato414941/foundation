@@ -21,6 +21,7 @@ export const EnvironmentManifest = z.object({
   resultVersion: z.literal(1).optional(),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
+  functionImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
   // The IAM role or user this executor runs as, when it has one: what an account owner's role must trust.
   awsPrincipal: AwsPrincipal.optional(),
   revision: z.number().int().positive(),
@@ -44,8 +45,6 @@ export async function verifyEnvironment(input: RegisteredEnvironment) {
     throw new Error('Choose distinct execution capabilities.');
   if (manifest.capabilities.includes(Operations.command) && manifest.isolation === 'container' && !manifest.commandImage)
     throw new Error('Choose the container image used for commands.');
-  if (manifest.driver === 'managed' && manifest.capabilities.includes(Operations.command) && manifest.isolation !== 'container')
-    throw new Error('Managed commands require container isolation.');
   await verify(manifest, environment.signature, manifest.executor.signing, 'environment');
   return environment;
 }

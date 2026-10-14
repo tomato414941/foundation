@@ -249,7 +249,6 @@ export default function ResourceDetail() {
           {!item.data.deletion && item.data.stopReason && item.data.stopReason !== 'manual' &&
             <Notice tone="info">{t('environmentStop.' + item.data.stopReason)}</Notice>}
           {item.data.driver !== 'attached' && <Panel title={t('settings')}>
-            <Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
             <Detail label={t('size')}>{t(item.data.size)}</Detail>
             <Detail label={t('environmentLifetime')}>{[
               item.data.lifetime.maxSeconds === null ? '' : t('environmentMaximumSummary', { minutes: item.data.lifetime.maxSeconds / 60 }),

@@ -38,7 +38,6 @@ export function EnvironmentForm({ owner, usage, payment, canManageBilling, canMa
 }) {
   const { t, i18n } = useTranslation();
   const [size, setSize] = useState<EnvironmentOptions['size']>('small');
-  const [image, setImage] = useState('');
   const [idle, setIdle] = useState('60');
   const [maximum, setMaximum] = useState('60');
   const [idleEnabled, setIdleEnabled] = useState(false);
@@ -75,12 +74,6 @@ export function EnvironmentForm({ owner, usage, payment, canManageBilling, canMa
           })}
         </div>
       </fieldset>
-      <Setting title={t('environmentCommandImage')} summary={t(image.trim() ? 'environmentCustomImage' : 'defaultImage')}>
-        <InputField name="image" label={t('image')} placeholder={t('defaultImage')}
-          value={image} onChange={event => setImage(event.target.value.trim())} maxLength={300}
-          pattern={'[a-zA-Z0-9.\\/:_\\-]+@sha256:[a-f0-9]{64}'}
-          hint={t('environmentImageHelp')} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
-      </Setting>
       <Setting title={t('environmentLifetime')} inline summary={[
         maximumEnabled ? t('environmentMaximumSummary', { minutes: maximum }) : '',
         idleEnabled ? t('environmentIdleSummary', { minutes: idle }) : '',

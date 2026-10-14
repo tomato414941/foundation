@@ -22,7 +22,7 @@ systemctl mask ssh.service ssh.socket
 passwd -d root
 rm -f /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/ubuntu/.ssh/authorized_keys
 systemctl enable --now docker.service
-docker pull "$FOUNDATION_IMAGE_COMMAND"
+docker pull "$FOUNDATION_IMAGE_FUNCTION"
 foundation --version
 systemctl daemon-reload
 systemctl enable foundation-environment.service

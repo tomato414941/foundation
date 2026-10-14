@@ -18,10 +18,10 @@ import { provisionNetwork } from './network.js';
 const execute = promisify(execFile);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const region = process.env.AWS_REGION ?? 'ap-northeast-1';
-const commandImage = process.env.ENVIRONMENT_COMMAND_IMAGE ?? '';
+const functionImage = process.env.ENVIRONMENT_FUNCTION_IMAGE ?? '';
 const bucket = process.env.FOUNDATION_BUCKET ?? '';
-if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(commandImage) || !bucket)
-  throw new Error('Set ENVIRONMENT_COMMAND_IMAGE to a pinned image and FOUNDATION_BUCKET to a private artifact bucket.');
+if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(functionImage) || !bucket)
+  throw new Error('Set ENVIRONMENT_FUNCTION_IMAGE to a pinned image and FOUNDATION_BUCKET to a private artifact bucket.');
 const client = new EC2Client({ region }), objects = new S3Client({ region });
 const network = await provisionNetwork(client, process.env.EC2_ENVIRONMENT_ZONE ?? region + 'a');
 const base = process.env.EC2_BASE_AMI ?? (await execute('aws', ['ssm', 'get-parameter', '--region', region, '--name',
@@ -69,7 +69,7 @@ try {
   const data = '#!/bin/bash\nset -euo pipefail\numask 077\nmkdir -p /opt/foundation-image\n' +
     'curl --fail --silent --show-error --location ' + quote(url) + ' -o /tmp/foundation-image.tar\n' +
     'tar -xf /tmp/foundation-image.tar -C /opt/foundation-image\n' +
-    'FOUNDATION_IMAGE_COMMAND=' + quote(commandImage) + ' bash /opt/foundation-image/install.sh\n';
+    'FOUNDATION_IMAGE_FUNCTION=' + quote(functionImage) + ' bash /opt/foundation-image/install.sh\n';
   machine = (await client.send(new RunInstancesCommand({ ImageId: base, ClientToken: id, MinCount: 1, MaxCount: 1, InstanceType: 't3.small',
     NetworkInterfaces: [{ DeviceIndex: 0, SubnetId: subnetId, Groups: [group], AssociatePublicIpAddress: true, DeleteOnTermination: true }],
     MetadataOptions: { HttpTokens: 'required', HttpPutResponseHopLimit: 1 },
@@ -96,7 +96,7 @@ try {
     return state === 'available';
   });
   success = true;
-  for (const [name, value] of Object.entries({ ...network, EC2_ENVIRONMENT_AMI: image, ENVIRONMENT_COMMAND_IMAGE: commandImage }))
+  for (const [name, value] of Object.entries({ ...network, EC2_ENVIRONMENT_AMI: image, ENVIRONMENT_FUNCTION_IMAGE: functionImage }))
     process.stdout.write(name + '=' + value + '\n');
 } catch (error) { failure = error; }
 finally {

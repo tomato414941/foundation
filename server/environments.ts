@@ -35,9 +35,9 @@ export class Environments {
     if (!this.runner.enabled) fail(503, 'environments_unavailable', 'Environments are not configured.');
     if (!(await this.resources.authorization.canCreate(actor, ownerId, 'environment')))
       fail(403, 'forbidden', 'You cannot open environments for this principal.');
-    const image = options.image ?? this.config.ENVIRONMENT_COMMAND_IMAGE;
-    if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(image))
-      fail(400, 'image_required', 'Choose a command image pinned to its SHA-256 digest.');
+    const functionImage = this.config.ENVIRONMENT_FUNCTION_IMAGE;
+    if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(functionImage))
+      fail(503, 'environments_unavailable', 'The function runtime is not configured.');
     if (options.ssh?.authorizedKeys.length && !this.sshEnabled)
       fail(503, 'ssh_unavailable', 'SSH is not configured for managed environments.');
     return this.resources.db.transaction(async connection => {
@@ -57,10 +57,10 @@ export class Environments {
       }
       const executor = await this.resources.principals.create(label, null, undefined, connection);
       const bootstrap = EnvironmentBootstrap.parse({ id, executorId: executor.id, ownerId, name: label,
-        origin: this.config.origin, bootstrap: token(), commandImage: image, ...(ssh ? { ssh: { port: ssh.port } } : {}) });
+        origin: this.config.origin, bootstrap: token(), functionImage, ...(ssh ? { ssh: { port: ssh.port } } : {}) });
       const row = await this.resources.insert(ownerId, 'environment', label, {
-        ...settings, ...(ssh ? { ssh } : {}), image, driver: 'managed', executorId: executor.id, operatorId: executor.id,
-        capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], isolation: 'container',
+        ...settings, ...(ssh ? { ssh } : {}), driver: 'managed', executorId: executor.id, operatorId: executor.id,
+        capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], isolation: 'process',
         state: 'starting', startedAt: null, stoppedAt: null, stopReason: null, lastActiveAt: new Date().toISOString(), error: null,
       }, { id }, connection);
       await connection.query(
@@ -280,7 +280,7 @@ export class Environments {
         } else {
           const bootstrap = EnvironmentBootstrap.parse(await this.vault.decrypt(
             required(job.bootstrap_ciphertext), 'executor-bootstrap:' + row.id));
-          await this.runner.start(row.id, EnvironmentInput.parse({ image: row.data.image, size: row.data.size, lifetime: row.data.lifetime }),
+          await this.runner.start(row.id, EnvironmentInput.parse({ size: row.data.size, lifetime: row.data.lifetime }),
             { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url') }, created, required(job.network_slot));
         }
       } else if (row.data.state === 'stopping') {

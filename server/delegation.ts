@@ -79,7 +79,8 @@ export class Delegation {
       );
       if (reserved && (reserved.owner_id !== manifest.ownerId || reserved.data.executorId !== actor.id ||
         !['starting', 'running'].includes(String(reserved.data.state)) || manifest.driver !== 'managed' ||
-        manifest.isolation !== 'container' || manifest.commandImage !== reserved.data.image))
+        manifest.isolation !== 'process' || manifest.commandImage ||
+        manifest.capabilities.includes(Operations.function) && !manifest.functionImage))
         fail(403, 'forbidden', 'Use the identity and isolation reserved for this environment.');
       if (old) {
         if (old.executor_id !== actor.id || old.registration.manifest.ownerId !== manifest.ownerId)
@@ -97,7 +98,7 @@ export class Delegation {
       }
       const now = new Date().toISOString();
       const previous = old || reserved ? await this.resources.get(manifest.id, connection) : null;
-      const { awsPrincipal: _awsPrincipal, ...metadata } = previous?.data ?? {};
+      const { awsPrincipal: _awsPrincipal, image: _image, ...metadata } = previous?.data ?? {};
       const data = {
         ...metadata,
         driver: manifest.driver, executorId: actor.id, operatorId: manifest.operatorId,

@@ -114,7 +114,7 @@ jobs:
       AWS_DEFAULT_REGION: ap-northeast-1
       FOUNDATION_BUCKET: foundation-objects-052438773980
       EC2_ENVIRONMENT_ZONE: ap-northeast-1a
-      ENVIRONMENT_COMMAND_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+      ENVIRONMENT_FUNCTION_IMAGE: public.ecr.aws/docker/library/node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

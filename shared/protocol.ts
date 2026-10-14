@@ -11,7 +11,7 @@ export const EnvironmentEnrollment = z.object({ bootstrap: z.string().regex(/^[A
 export const EnvironmentBootstrap = z.object({ id: Id, executorId: Id, ownerId: Id, name: Name,
   origin: z.url(), bootstrap: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   ssh: z.object({ port: z.number().int().min(1).max(65535) }).strict().optional(),
-  commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/) }).strict();
+  functionImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/) }).strict();
 export const PublishBinding = SignedBinding.extend({ previousSignature: Signature.optional() }).strict();
 // Labels are what people read about an item. They are stored as given and carry no authority.
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),

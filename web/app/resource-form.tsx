@@ -203,7 +203,6 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     } else if (kind === 'environment') {
       if (!name) delete body.name;
       body.options = {
-        image: formText(form, 'image') || undefined,
         size: formText(form, 'size'),
         lifetime: {
           idleSeconds: formText(form, 'idle') ? Number(formText(form, 'idle')) * 60 : null,

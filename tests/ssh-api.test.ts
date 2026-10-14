@@ -43,7 +43,7 @@ async function register(s: Awaited<ReturnType<typeof setup>>) {
   await s.c.delegation.register(actor, await signEnvironment({ format: 3, id: s.row.id,
     origin: s.f.config.origin, ownerId: s.owner.actor.id, name: bootstrap.name, executor: binding,
     operatorId: actor.id, driver: 'managed', capabilities: [Operations.command],
-    isolation: 'container', commandImage: bootstrap.commandImage, revision: 1 }, keys));
+    isolation: 'process', functionImage: bootstrap.functionImage, revision: 1 }, keys));
   return { actor, headers: { authorization: 'Bearer ' + token }, hostKey: publicKey() };
 }
 

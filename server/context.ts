@@ -56,6 +56,9 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     if (tables?.jobs && tables.resources && await db.one(
       "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND to_jsonb(j)->>'provider' IS DISTINCT FROM 'ec2' LIMIT 1"))
       throw new Error('Migrate existing managed environment disks and provider records before starting the EC2 deployment.');
+    if (tables?.jobs && tables.resources && await db.one(
+      "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND (r.data ? 'image' OR r.data->>'isolation'='container') LIMIT 1"))
+      throw new Error('Upgrade existing managed environments to VM command execution before starting this deployment.');
   }
   await db.initialize();
   const vault = await Vault.initialize(db, config),

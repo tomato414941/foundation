@@ -435,7 +435,6 @@ export const Lifetime = z
   .strict();
 export const EnvironmentInput = z
   .object({
-    image: z.string().min(1).max(300).optional(),
     size: z.enum(['small', 'medium', 'large']).default('small'),
     lifetime: Lifetime.default({ idleSeconds: null, maxSeconds: null }),
     ssh: SSHSettings.optional(),

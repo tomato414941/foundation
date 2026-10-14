@@ -34,7 +34,7 @@ def runtime_digest():
     for name in ["cli/dist/cli.mjs", "deploy/environment/install.sh", "deploy/environment/ssh-session.sh",
                  "deploy/environment/foundation-environment.service"]:
         data.update(name.encode() + b"\0" + Path(name).read_bytes() + b"\0")
-    data.update(os.environ["ENVIRONMENT_COMMAND_IMAGE"].encode())
+    data.update(os.environ["ENVIRONMENT_FUNCTION_IMAGE"].encode())
     return data.hexdigest()
 
 
@@ -88,7 +88,7 @@ def main():
         for line in process.stdout:
             line = line.rstrip()
             print(line, flush=True)
-            if line.startswith("EC2_ENVIRONMENT_") or line.startswith("ENVIRONMENT_COMMAND_IMAGE="):
+            if line.startswith("EC2_ENVIRONMENT_") or line.startswith("ENVIRONMENT_FUNCTION_IMAGE="):
                 name, value = line.split("=", 1)
                 environment[name] = value
         if process.wait():

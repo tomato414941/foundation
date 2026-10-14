@@ -1,13 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { lstat } from 'node:fs/promises';
 import { EnvironmentBootstrap } from '../../shared/protocol.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../../shared/authority.js';
 import { ApiError, Client } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity } from './config.js';
 import { startAgent } from './agent.js';
-import { childEnvironment } from '../../runtime/command.js';
 
 export async function managedAgent() {
   const value = process.env.FOUNDATION_EXECUTOR_BOOTSTRAP;
@@ -32,12 +29,8 @@ export async function managedAgent() {
     return client.session();
   });
   if (!current.principal) throw new Error('The executor credential is no longer active.');
-  const docker = promisify(execFile), environment = childEnvironment();
-  try { await docker('docker', ['image', 'inspect', input.commandImage], { env: environment }); }
-  catch { await docker('docker', ['pull', input.commandImage], { env: environment, timeout: 300_000, maxBuffer: 2_000_000 }); }
   return startAgent(client, { id: input.id, ownerId: input.ownerId, name: input.name,
-    isolation: 'container',
-    image: input.commandImage, managed: true, ssh: input.ssh });
+    isolation: 'process', functionImage: input.functionImage, managed: true, ssh: input.ssh });
 }
 
 export async function enrollManaged(input: ReturnType<typeof EnvironmentBootstrap.parse>, client: Client) {

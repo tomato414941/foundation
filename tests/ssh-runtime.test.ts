@@ -56,14 +56,24 @@ test('通常のSSHとSFTPで作業ファイルを扱い、鍵の変更と再起�
   const written = await ssh(first, "printf 'shared workspace' > result.txt; pwd; cat result.txt");
   assert.equal(written.stdout, workspace + '\nshared workspace');
   assert.equal(await readFile(join(workspace, 'result.txt'), 'utf8'), 'shared workspace');
-  const commands = new CommandProcess({ isolation: 'container', workspace,
-    image: process.env.TEST_COMMAND_IMAGE ?? 'node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8' });
+  const commands = new CommandProcess({ isolation: 'process', cwd: workspace });
   const result = await commands.execute({ command: ['node', '-e',
     "const fs=require('fs');process.stdout.write(fs.readFileSync('result.txt'));fs.writeFileSync('api.txt','from the command API')"],
-    workingDirectory: '/workspace', timeoutSeconds: 20, environment: {}, files: {} }, new AbortController().signal);
+    timeoutSeconds: 20, environment: {}, files: {} }, new AbortController().signal);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.stdout, 'shared workspace');
   assert.equal((await ssh(first, 'cat api.txt')).stdout, 'from the command API');
+  const executable = join(directory, 'installed-program');
+  const installed = await commands.execute({ command: ['node', '-e',
+    'require("fs").writeFileSync(process.argv[1],"#!/bin/sh\\nprintf installed-via-api",{mode:0o700})', executable],
+    timeoutSeconds: 20, environment: {}, files: {} }, new AbortController().signal);
+  assert.equal(installed.exitCode, 0, installed.stderr);
+  assert.equal((await ssh(first, executable)).stdout, 'installed-via-api');
+  await ssh(first, "printf '#!/bin/sh\\nprintf updated-via-ssh' > " + executable);
+  const updated = await commands.execute({ command: [executable], timeoutSeconds: 20, environment: {}, files: {} },
+    new AbortController().signal);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.equal(updated.stdout, 'updated-via-ssh');
   const terminal = await ssh(first, "test -t 0 && printf 'terminal works'", ['-tt']);
   assert.equal(terminal.stdout, 'terminal works');
   const upload = join(directory, 'upload.txt'), downloaded = join(directory, 'download.txt'), batch = join(directory, 'sftp.batch');

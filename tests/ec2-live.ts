@@ -21,7 +21,7 @@ let interrupted = false;
 const stop = () => { interrupted = true; };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
 const f = await fixture({ ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => Boolean(entry[1]) &&
-  (entry[0].startsWith('EC2_ENVIRONMENT_') || entry[0] === 'AWS_REGION' || entry[0] === 'ENVIRONMENT_COMMAND_IMAGE'))),
+  (entry[0].startsWith('EC2_ENVIRONMENT_') || entry[0] === 'AWS_REGION' || entry[0] === 'ENVIRONMENT_FUNCTION_IMAGE'))),
   FOUNDATION_ORIGIN: origin, FOUNDATION_BILLING_MODE: 'included', FOUNDATION_INCLUDED_ENVIRONMENTS: '10' });
 const runner = new EC2Runner(f.config), c = await createContext(f.config, { db: f.db, runner }), app = await buildApp(c);
 const rows: ResourceRow[] = [], failures: unknown[] = [];

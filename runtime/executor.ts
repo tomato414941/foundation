@@ -68,6 +68,7 @@ export class Executor {
     readonly transport: Transport,
     readonly commands: CommandExecutor,
     readonly extension?: ExecutionExtension,
+    readonly functionCommands: CommandExecutor = commands,
   ) {}
   get binding(): BoundKeys { return this.environment.manifest.executor; }
 
@@ -267,7 +268,8 @@ export class Executor {
     };
     if (program.kind === 'command') {
       const values = await processInputs(program.inputs, resolve);
-      const result = await this.commands.execute({ command: program.command, timeoutSeconds: program.timeoutSeconds,
+      const commands = operation.kind === 'function' ? this.functionCommands : this.commands;
+      const result = await commands.execute({ command: program.command, timeoutSeconds: program.timeoutSeconds,
         ...(program.stdin === undefined ? {} : { stdin: program.stdin }),
         environment: values.environment, files: values.files,
         ...(operation.kind === 'function' ? { workspace: 'temporary' as const } : {}) }, signal);

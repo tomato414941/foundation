@@ -52,7 +52,7 @@ class DeploymentTests(unittest.TestCase):
             "environment": {"EC2_ENVIRONMENT_AMI": "ami-123", "EC2_ENVIRONMENT_VPC": "vpc-123",
                 "EC2_ENVIRONMENT_ACL": "acl-123", "EC2_ENVIRONMENT_DEFAULT_ACL": "acl-456",
                 "EC2_ENVIRONMENT_ROUTE_TABLE": "rtb-123", "EC2_ENVIRONMENT_ZONE": "ap-northeast-1a",
-                "ENVIRONMENT_COMMAND_IMAGE": "docker.io/library/node@sha256:" + "d" * 64},
+                "ENVIRONMENT_FUNCTION_IMAGE": "docker.io/library/node@sha256:" + "d" * 64},
         }
 
     def tearDown(self):

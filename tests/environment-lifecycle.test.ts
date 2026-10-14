@@ -30,8 +30,8 @@ async function setup(t: TestContext) {
     const actor = (await c.authentication.authenticate(token))!;
     const registration = await signEnvironment({ format: 3, id: row.id, origin: f.config.origin,
       ownerId: owner.actor.id, name: row.name, executor: binding, operatorId: actor.id,
-      driver: 'managed', capabilities: [Operations.command], isolation: 'container',
-      commandImage: bootstrap.commandImage, revision: 1 }, keys);
+      driver: 'managed', capabilities: [Operations.command], isolation: 'process',
+      functionImage: bootstrap.functionImage, revision: 1 }, keys);
     await c.delegation.register(actor, registration);
     return { row, token, actor, registration, enrollment };
   }

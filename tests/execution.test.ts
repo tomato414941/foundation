@@ -57,7 +57,7 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
   const registration = await signEnvironment({ format: 3, id: row.id, origin: f.config.origin,
     ownerId: owner.actor.id, name: input.name, executor: binding, operatorId: actor.id,
     driver: 'managed', capabilities: [Operations.http, Operations.command, Operations.connect],
-    isolation: 'container', commandImage: input.commandImage, revision: 1 }, keys);
+    isolation: 'process', functionImage: input.functionImage, revision: 1 }, keys);
   await c.delegation.register(actor, registration);
   assert.equal((await c.resources.get(row.id)).data.state, 'running');
   assert.equal((await c.delegation.environment(row.id)).registration.signature, registration.signature);

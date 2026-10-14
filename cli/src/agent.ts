@@ -21,12 +21,14 @@ import { SSHWorkerState } from '../../shared/ssh.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; isolation: 'process' | 'container';
-  image?: string; managed?: boolean; once?: boolean;
+  image?: string; functionImage?: string; managed?: boolean; once?: boolean;
   ssh?: { port: number };
 }) {
   const { directory, keys, binding, broker, transport } = privateClient(client);
   const id = Id.parse(options.id ?? crypto.randomUUID()), path = join(directory, 'executors', id);
   await mkdir(path, { recursive: true, mode: 0o700 });
+  const workspace = join(path, 'workspace');
+  await mkdir(workspace, { recursive: true, mode: 0o700 });
   const release = await journalLock(join(path, 'process.lock'));
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -36,16 +38,22 @@ export async function startAgent(client: Client, options: {
     const journal = new FileJournal(path, client.identity.origin, binding, keys);
     let environment = await journal.read<RegisteredEnvironment>('environment_' + id);
     const awsPrincipal = await detectAwsPrincipal();
+    const settings = environment && !options.managed ? { isolation: environment.manifest.isolation,
+      image: environment.manifest.commandImage, functionImage: environment.manifest.functionImage } : options;
+    const execution = { isolation: settings.isolation, ...(settings.image ? { commandImage: settings.image } : {}),
+      ...(settings.functionImage ? { functionImage: settings.functionImage } : {}) };
     if (environment) {
       await verifyEnvironment(environment);
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
         throw new Error('Use the owner and identity originally registered for this executor.');
       // Keep runtime support and the machine's current AWS identity in the signed registration.
       if (environment.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION || environment.manifest.httpVersion !== HTTP_RUNTIME_VERSION ||
-        environment.manifest.resultVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
-        const { awsPrincipal: _previous, ...manifest } = environment.manifest;
+        environment.manifest.resultVersion !== 1 || (environment.manifest.awsPrincipal ?? null) !== awsPrincipal ||
+        environment.manifest.isolation !== execution.isolation || environment.manifest.commandImage !== execution.commandImage ||
+        environment.manifest.functionImage !== execution.functionImage) {
+        const { awsPrincipal: _previous, commandImage: _commandImage, functionImage: _functionImage, ...manifest } = environment.manifest;
         environment = await signEnvironment({ ...manifest, functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION,
-          resultVersion: 1, ...(awsPrincipal ? { awsPrincipal } : {}),
+          resultVersion: 1, ...execution, ...(awsPrincipal ? { awsPrincipal } : {}),
           revision: manifest.revision + 1 }, keys);
         await journal.write('environment_' + id, environment);
       }
@@ -53,7 +61,7 @@ export async function startAgent(client: Client, options: {
       environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
         capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, resultVersion: 1,
-        isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
+        ...execution,
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);
     }
@@ -63,21 +71,22 @@ export async function startAgent(client: Client, options: {
       ...(environment.manifest.awsPrincipal ? { awsPrincipal: environment.manifest.awsPrincipal } : {}),
       ...(environment.manifest.isolation === 'process' ? { notice: 'Only allow trusted code on this host.' } : {}) }) + '\n');
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);
-    const executor = new Executor(environment, keys, broker, journal, transport,
-      new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage }), connections);
+    const workingDirectory = environment.manifest.isolation === 'container' || options.managed && options.ssh
+      ? '/workspace' : options.managed ? workspace : process.cwd();
+    const commands = new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage,
+      workspace, ...(options.managed ? { cwd: workspace } : {}) });
+    const functionCommands = environment.manifest.functionImage
+      ? new CommandProcess({ isolation: 'container', image: environment.manifest.functionImage }) : commands;
+    const executor = new Executor(environment, keys, broker, journal, transport, commands, connections, functionCommands);
     const functions = new FunctionExecutor(executor, new FunctionBroker(client), journal);
-    const workingDirectory = environment.manifest.isolation === 'container' ? '/workspace' : process.cwd();
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
     if (options.managed && options.ssh) {
-      ssh = new SSHServer({ directory: join(path, 'ssh'), workspace: join(path, 'workspace'),
+      ssh = new SSHServer({ directory: join(path, 'ssh'), workspace,
         workspaceLink: '/workspace', port: options.ssh.port },
       input => client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST', body: input }, SSHWorkerState));
       await ssh.start();
     }
-    const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, new CommandProcess({
-      isolation: environment.manifest.isolation, image: environment.manifest.commandImage,
-      workspace: join(path, 'workspace'),
-    }));
+    const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, commands);
     do {
       ssh?.ensureRunning();
       const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await functions.reconcile(), ...await processes.reconcile()];
