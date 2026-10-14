@@ -302,6 +302,7 @@ const words: Record<string, [string, string]> = {
   connectInBrowser: ['ブラウザで接続', 'Connect in browser'],
   connectWithApp: ['アプリ認証で接続', 'Connect with app credentials'],
   enterApiKey: ['APIキーを入力', 'Enter API key'],
+  enterAdminApiKey: ['Admin APIキーを入力', 'Enter Admin API key'],
   enterAccessToken: ['アクセストークンを入力', 'Enter access token'],
   enterApiToken: ['APIトークンを入力', 'Enter API token'],
   enterBotToken: ['Botトークンを入力', 'Enter bot token'],

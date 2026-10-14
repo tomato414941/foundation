@@ -807,6 +807,41 @@ class BrowserTests(unittest.TestCase):
                 expect(page.get_by_text("接続済み", exact=True)).to_be_visible()
                 expect(page.get_by_text(service, exact=True)).to_be_visible()
 
+    def test_OpenAIのAPIキーと管理キーを選んで複数の接続を作成し更新する(self):
+        page, principal = self.passkey_account("OpenAI account")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        saved_ids = []
+        for method, choice, name, fields in [
+            ("api_key", "APIキーを入力", "OpenAI development", [("APIキー", "sk-test-development"), ("プロジェクトID（任意）", "proj_development")]),
+            ("api_key", "APIキーを入力", "OpenAI production", [("APIキー", "sk-test-production"), ("プロジェクトID（任意）", "proj_production")]),
+            ("admin_key", "Admin APIキーを入力", "OpenAI administration", [("Admin APIキー", "sk-admin-test"), ("組織ID（任意）", "org-test")]),
+        ]:
+            with self.subTest(name=name):
+                page.goto(root + "/services/new?service=openai")
+                self.select(page, "接続方法", choice)
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                for label, value in fields:
+                    page.get_by_label(label, exact=True).fill(value)
+                page.wait_for_load_state("networkidle")
+                print("Rendered OpenAI connection: " + page.locator("main").inner_text(), flush=True)
+                page.screenshot(path=str(ARTIFACTS / ("openai-" + method + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], "openai:" + method)
+                self.assertEqual(saved["data"]["services"], [{"id": "openai", "name": "OpenAI"}])
+                saved_ids.append(saved["id"])
+        self.assertEqual(len(set(saved_ids)), 3)
+        page.goto(root + "/services/" + saved_ids[0])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("APIキー", exact=True).fill("sk-test-updated-development")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        updated = self.saved_connection(page, "OpenAI development")
+        self.assertEqual(updated["id"], saved_ids[0])
+        self.assertEqual(updated["data"]["fields"]["projectId"], "proj_development")
+        page.goto(root + "/services")
+        for name in ["OpenAI development", "OpenAI production", "OpenAI administration"]:
+            expect(page.get_by_role("link", name=name, exact=True)).to_be_visible()
+
     def test_Modalの接続先を選んでAPIトークンとProxyTokenを保存し更新する(self):
         page, principal = self.passkey_account("Modal account")
         root = f"{ORIGIN}/p/{principal['id']}"

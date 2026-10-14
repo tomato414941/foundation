@@ -1,4 +1,12 @@
 export const serviceLabels: Record<string, string> = {
+  'openai.token.token.label': 'APIキー',
+  'openai.token.token.note': 'モデルの呼び出しに使用するAPIキーを入力してください。ChatGPTの月額契約とは別にAPI利用料金がかかります。',
+  'openai.token.adminKey.label': 'Admin APIキー',
+  'openai.token.adminKey.note': '組織のプロジェクト・ユーザー・キーなどを管理するAdmin APIキーを入力してください。モデルの呼び出しには使用できません。',
+  'openai.token.projectId.label': 'プロジェクトID（任意）',
+  'openai.token.projectId.note': '必要な場合に、APIキーでアクセスできるプロジェクトを指定してください。',
+  'openai.token.organizationId.label': '組織ID（任意）',
+  'openai.token.organizationId.note': '必要な場合に、利用する組織を指定してください。',
   'modal.token.tokenId.label': 'Token ID',
   'modal.token.tokenId.note': 'Modalの「Settings → API Tokens」で取得したIDを入力してください。個人用とサービスユーザー用のどちらも利用できます。',
   'modal.token.tokenSecret.label': 'Token Secret',

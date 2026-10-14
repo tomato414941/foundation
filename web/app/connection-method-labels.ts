@@ -4,6 +4,7 @@ const labels: Record<string, string> = {
   'Connect in browser': 'connectInBrowser',
   'Connect with app credentials': 'connectWithApp',
   'Enter API key': 'enterApiKey',
+  'Enter Admin API key': 'enterAdminApiKey',
   'Enter access token': 'enterAccessToken',
   'Enter API token': 'enterApiToken',
   'Enter proxy token': 'enterProxyToken',

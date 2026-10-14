@@ -1,0 +1,81 @@
+{
+  "id": "openai",
+  "name": "OpenAI",
+  "api": "https://api.openai.com/v1",
+  "docs": "https://developers.openai.com/api/reference/overview",
+  "console": "https://platform.openai.com/api-keys",
+  "methods": {
+    "api_key": {
+      "name": "OpenAI · Enter API key",
+      "kind": "token",
+      "docs": "https://developers.openai.com/api/reference/overview#authentication",
+      "console": "https://platform.openai.com/api-keys",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Enter an API key for model requests. API usage is billed separately from a ChatGPT subscription."
+          },
+          {
+            "name": "projectId",
+            "label": "Project ID (optional)",
+            "secret": false,
+            "required": false,
+            "defaultValue": "",
+            "placeholder": "proj_…",
+            "note": "Specify the project when needed. Use a project this API key can access."
+          },
+          {
+            "name": "organizationId",
+            "label": "Organization ID (optional)",
+            "secret": false,
+            "required": false,
+            "defaultValue": "",
+            "placeholder": "org-…",
+            "note": "Specify the organization when needed."
+          }
+        ],
+        "outputs": {
+          "OPENAI_API_KEY": "/token",
+          "OPENAI_PROJECT_ID": "/projectId",
+          "OPENAI_ORG_ID": "/organizationId"
+        },
+        "hint": "Use OPENAI_API_KEY with the OpenAI SDK or as a Bearer token. When specified, send OPENAI_PROJECT_ID and OPENAI_ORG_ID as the OpenAI-Project and OpenAI-Organization headers."
+      }
+    },
+    "admin_key": {
+      "name": "OpenAI · Enter Admin API key",
+      "kind": "token",
+      "docs": "https://developers.openai.com/api/reference/administration/overview",
+      "console": "https://platform.openai.com/settings/organization/admin-keys",
+      "config": {
+        "fields": [
+          {
+            "name": "adminKey",
+            "label": "Admin API key",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Enter an Admin API key to manage organization resources such as projects, users, and keys. Admin API keys cannot be used for model requests."
+          },
+          {
+            "name": "organizationId",
+            "label": "Organization ID (optional)",
+            "secret": false,
+            "required": false,
+            "defaultValue": "",
+            "placeholder": "org-…",
+            "note": "Specify the organization when needed."
+          }
+        ],
+        "outputs": {
+          "OPENAI_ADMIN_KEY": "/adminKey",
+          "OPENAI_ORG_ID": "/organizationId"
+        },
+        "hint": "Use OPENAI_ADMIN_KEY as a Bearer token for the OpenAI Administration API."
+      }
+    }
+  }
+}
