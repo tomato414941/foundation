@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fixture } from './support.js';
@@ -15,7 +15,7 @@ import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, protect } from '../shared/custody.js';
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
-async function cliFixture(environmentOverrides: Record<string, string> = {}) {
+async function cliFixture(environmentOverrides: Record<string, string> = {}, bundleDirectory = resolve('cli/dist')) {
   const reserved = createServer();
   await new Promise<void>(resolve => reserved.listen(0, '127.0.0.1', resolve));
   const port = (reserved.address() as { port: number }).port;
@@ -37,7 +37,7 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}) {
     delete environment[key];
   async function run(args: string[], input?: string) {
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult, reject) => {
-      const child = spawn(process.execPath, [resolve('cli/dist/cli.mjs'), ...args], {
+      const child = spawn(process.execPath, [resolve(bundleDirectory, 'cli.mjs'), ...args], {
         env: environment,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -56,7 +56,7 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}) {
   }
   // Start a command and resolve as soon as its stderr matches, keeping the finished promise.
   function start(args: string[], until: RegExp) {
-    const child = spawn(process.execPath, [resolve('cli/dist/cli.mjs'), ...args], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [resolve(bundleDirectory, 'cli.mjs'), ...args], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     const finished = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult) =>
@@ -81,6 +81,28 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}) {
   }
   return { f, context, app, origin, directory, run, start, close, person };
 }
+
+test('配置場所に依存せずCLIから実行環境を登録してコマンドを処理する', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-relocated-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await cp(resolve('cli/dist'), directory, { recursive: true });
+  const c = await cliFixture({}, directory); t.after(c.close);
+  const initialized = await c.run(['init', '--name', 'Relocated executor', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const environmentId = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
+    JSON.stringify({ command: ['node', '-e', "process.stdout.write('relocated bundle')"] })]);
+  assert.equal(started.code, 0, started.stderr);
+  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(executed.code, 0, executed.stderr);
+  const inspected = await c.run(['api', 'GET', '/api/processes/' + JSON.parse(started.stdout).id]);
+  assert.equal(inspected.code, 0, inspected.stderr);
+  const process = JSON.parse(inspected.stdout);
+  assert.equal(process.state, 'succeeded');
+  assert.equal(process.result.stdout, 'relocated bundle');
+});
 
 test('CLIはIAM情報の取得が拒否されても実行先を登録しコマンドを処理する', async t => {
   const actions: string[] = [];
