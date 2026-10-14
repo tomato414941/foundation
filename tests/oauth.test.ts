@@ -346,15 +346,6 @@ test('eBayのRuNameで認可し、独自のトークン種別で更新する', a
   const provider = new Provider((request) => {
     checkBasic(request);
     const form = new URLSearchParams(String(request.body));
-    if (request.url.endsWith('/introspect'))
-      return response({
-        active: true,
-        client_id: app.clientId,
-        sub: 'seller-1',
-        username: 'Seller',
-        scope: 'read write',
-        exp: Math.floor(Date.now() / 1000) + 3600,
-      });
     if (++exchanges === 1) assert.equal(form.get('redirect_uri'), ebayApp.fields.ruName);
     else assert.equal(form.get('refresh_token'), 'ebay-refresh');
     return response({
