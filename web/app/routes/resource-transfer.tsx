@@ -9,6 +9,7 @@ import { verifyBinding } from '../../../shared/authority';
 import { isProtected } from '../../../shared/protected';
 import { Changed, actionResult, api, formText } from '../api';
 import { custodyClient } from '../custody';
+import { requireKeys } from '../keys';
 import { ErrorNotice, Page, SaveBar } from '../components';
 import { resourcePath } from '../navigation';
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
@@ -20,6 +21,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     const to = formText(form, 'to');
     const resource = await api('/resources/' + params.id, {}, Resource);
     if (isProtected(resource.kind)) {
+      await requireKeys();
       const client = await custodyClient(), previous = await client.read(resource.id);
       const recipients = await api(
         `/resources/${resource.id}/transfer-recipients?to=${encodeURIComponent(to)}`,

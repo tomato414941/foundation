@@ -13,7 +13,7 @@ import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
-import { decryptVariable } from './keys';
+import { decryptVariable, requireKeys } from './keys';
 import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { EnvironmentForm } from './environment-form';
@@ -161,6 +161,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const existing = params.id ? await api((kind === 'function' ? '/functions/' : '/resources/') + params.id, {}, Resource) : null;
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
+      await requireKeys();
       const client = await executionClient();
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
@@ -190,6 +191,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     }
     let body: Record<string, unknown> = { kind, name };
     if (kind === 'variable' || kind === 'app') {
+      await requireKeys();
       const client = await executionClient();
       const file = form.get('file');
       const value = file instanceof File && file.name ? new Uint8Array(await file.arrayBuffer()) : String(form.get('value') ?? '');
@@ -223,6 +225,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         result: formText(form, 'programKind') === 'http' ? 'json' : formText(form, 'result'),
         inputAccess: inputAccessFromForm(form),
       };
+      await requireKeys();
       const saved = await (await functionClient(true)).save({
         ownerId: owner, name, definition: FunctionDefinition.parse(definition),
         ...(existing ? { resourceId: existing.id, version } : {}),

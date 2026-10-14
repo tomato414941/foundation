@@ -8,7 +8,7 @@ import type { Route } from './+types/resource';
 import { Resource, EnvironmentDeletion } from '../../../shared/contracts';
 import { decode } from '../../../shared/encryption';
 import { api, ApiFailure, actionResult, formText } from '../api';
-import { authenticate, decryptVariable } from '../keys';
+import { decryptVariable, requireKeys } from '../keys';
 import {
   Bytes,
   Confirm,
@@ -61,6 +61,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       return { ok: true };
     }
     if (formText(form, 'intent') === 'disconnect') {
+      await requireKeys();
       const result = await (await executionClient()).execute({ name: 'connection.revoke',
         input: { ownerId: params.owner, environmentId: formText(form, 'environmentId'), connectionId: params.id } });
       if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('execution_required');
@@ -99,14 +100,8 @@ export default function ResourceDetail() {
     item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
   );
   const reveal = async () => {
-    try {
-      return await decryptVariable(item.id, session.principal!.id);
-    } catch (error) {
-      if (!(error instanceof ApiFailure) || error.code !== 'key_locked') throw error;
-      const result = await authenticate(session.principal!.id);
-      if (!result.encrypted) throw new Error('key unavailable');
-      return decryptVariable(item.id, session.principal!.id);
-    }
+    await requireKeys(session.principal!.id);
+    return decryptVariable(item.id, session.principal!.id);
   };
   return (
     <Page

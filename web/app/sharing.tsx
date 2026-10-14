@@ -8,6 +8,7 @@ import { Action, Principal, Relation, Resource, RoleOf, listOf } from '../../sha
 import type { ActionName } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText } from './api';
 import { custodyClient } from './custody';
+import { requireKeys } from './keys';
 import { hash } from '../../shared/authority';
 import { Operations, permittedOperations } from '../../shared/custody';
 import { isProtected } from '../../shared/protected';
@@ -52,6 +53,7 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
     if (params.id) {
       const resource = await api('/resources/' + params.id, {}, Resource);
       if (isProtected(resource.kind)) {
+        await requireKeys();
         const client = await custodyClient(), previous = await client.read(resource.id);
         const policy = { ...previous.content.policy, revision: previous.content.policy.revision + 1, producers: [],
           readers: previous.content.policy.readers.filter(reader => reader.principalId !== id),

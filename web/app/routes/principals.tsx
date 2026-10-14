@@ -6,10 +6,10 @@ import type { clientLoader as rootLoader } from '../root';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principals';
 import { Principal, Relation, listOf } from '../../../shared/contracts';
-import { Changed, actionResult, api, formText, session } from '../api';
-import { Copy, ErrorNotice, Page, Paging, Panel } from '../components';
+import { Changed, actionResult, api, errorCode, formText, session } from '../api';
+import { Copy, ErrorNotice, Notice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
-import { resealNow } from '../keys';
+import { requireKeys, resealNow } from '../keys';
 import { ResealingNotice } from '../resealing-notice';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
@@ -46,7 +46,12 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     const changed = await api('/relations', { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId } }, Changed);
     if ('id' in changed) return redirect('/executions/' + changed.id);
     const signedIn = (await session()).principal;
-    if (sealing.includes(relation) && signedIn) await resealNow(signedIn.id);
+    if (!sealing.includes(relation) || !signedIn) return { ok: true };
+    // The line is changed. Sealing its items again needs the private key, which a passkey may first have to open.
+    // Items left unsealed are sealed the next time Foundation opens where the private key is held.
+    try { await requireKeys(signedIn.id); }
+    catch (error) { return { ok: true, unsealed: errorCode(error) }; }
+    await resealNow(signedIn.id);
     return { ok: true };
   });
 }
@@ -92,6 +97,10 @@ export default function Principals() {
       }
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      {result && 'unsealed' in result && <Notice tone="warning">
+        <p>{t('resealingSkipped')}</p>
+        <p>{t('errors.' + result.unsealed, { defaultValue: t('failure') })}</p>
+      </Notice>}
       <ResealingNotice principalId={signedIn?.id} />
       <Panel title={t('connectedPrincipals')}>
         <ul className="divide-y divide-border">

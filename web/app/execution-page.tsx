@@ -9,14 +9,14 @@ import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, session } from './api';
 import { connectionClient, custodyClient, executionClient } from './custody';
-import { authenticate, getIdentity, resealNow } from './keys';
+import { getIdentity, requireKeys, resealNow } from './keys';
 import { ResealingNotice } from './resealing-notice';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
 import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
-import { Copy, DateText, Detail, ErrorNotice, ExternalLink, JsonView, Notice, Page, Panel, ProposalText, State, usePolling, useTask } from './components';
+import { Copy, DateText, Detail, ErrorNotice, ExternalLink, JsonView, Notice, Page, Panel, ProposalText, State, usePolling } from './components';
 
 function substitute(value: JsonValue, approver: string, requester: string): JsonValue {
   if (value === '$approver') return approver;
@@ -59,18 +59,17 @@ function lineSubject(item: PageExecution, approverId: string) {
   const subject = operation ? substitute(operation.input.subjectId ?? null, approverId, item.from.id) : null;
   return typeof subject === 'string' && subject !== approverId ? subject : null;
 }
-// Approving such a line has this browser seal for the subject at once. That needs the approver's keys here, and the
-// subject's public key verified before, or by the fingerprint in the link the subject gave.
-async function approvalNeeds(item: PageExecution, approverId: string, id: string) {
+// Approving such a line has this browser seal for the subject at once, so the subject's public key is verified before,
+// or by the fingerprint in the link the subject gave. While it is not, this names the subject. It reads what the
+// approver verified, which needs the approver's private key in this browser.
+async function unverifiedSubject(item: PageExecution, approverId: string, id: string) {
   const subject = lineSubject(item, approverId);
   if (!subject) return null;
-  if (!(await getIdentity(approverId))) return { need: 'unlock' as const, name: '' };
   if (subject === item.from.id && sessionStorage.getItem('foundation.fingerprint.request.' + id)) return null;
   try { if (await (await custodyClient()).verifiedIdentity(subject)) return null; }
   catch (error) { if (error instanceof ApiFailure && error.code === 'key_binding_required') return null; throw error; }
-  const name = subject === item.from.id ? item.from.name
+  return subject === item.from.id ? item.from.name
     : await api<{ name: string }>('/identities/' + subject).then(identity => identity.name, () => subject);
-  return { need: 'verification' as const, name };
 }
 type PageArgs = { params: { id?: string }; request: Request };
 async function readItem(id: string, requestMode: boolean, signal?: AbortSignal) {
@@ -127,9 +126,10 @@ export async function clientLoader({ params, request }: PageArgs) {
     item.code = sessionStorage.getItem('foundation.request.' + (item.delivery?.id ?? item.id)) ?? undefined;
   else sessionStorage.removeItem('foundation.request.' + (item.delivery?.id ?? item.id));
   const details = await loadExecutionDetails(item, !!account.principal && !account.requestId, request.signal);
-  const approval = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
-    ['waiting', 'running'].includes(item.state) ? await approvalNeeds(item, account.principal.id, params.id!) : null;
-  return { item, account, current, inputForm, progress, operationError, requestMode, details, approval };
+  const unverified = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
+    ['waiting', 'running'].includes(item.state) && await getIdentity(account.principal.id)
+    ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
+  return { item, account, current, inputForm, progress, operationError, requestMode, details, unverified };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -146,20 +146,18 @@ export async function clientAction({ params, request }: PageArgs) {
       await api('/executions/' + item.id + '/resume', { method: 'POST', body: {} }, Execution);
       return readItem(params.id!, requestMode);
     }
-    if (intent === 'acceptConnection') {
-      if (item.waiting?.continuation?.kind !== 'connection') throw new Error('Continue the pending connection.');
-      await (await connectionClient()).accept(item.waiting.continuation.id);
-      return readItem(params.id!, requestMode);
-    }
-    const account = await session(), current = inputOperation(item, account.principal!.id);
+    const account = await session(), approverId = account.principal!.id, current = inputOperation(item, approverId);
+    // Approving with the fingerprint the requester linked first verifies its public key, for each of the approver's devices.
+    const linked = intent === 'approve' ? sessionStorage.getItem('foundation.fingerprint.request.' + params.id) : null;
+    // Entering input, verifying a public key, and sealing items again for a changed line all use the private key, so a
+    // passkey opens it first when this browser does not hold it, before anything is answered.
+    if (current || linked || intent === 'approve' && resealing(item)) await requireKeys(approverId);
     const data = current ? await loadExecutionForm(current.invocation) : null;
     const prepared = data ? executionSubmission(data, form) : null;
     let resealed = 0;
     if (intent === 'approve') {
-      // Approving with the fingerprint the requester linked first verifies its public key, for each of the approver's devices.
-      const linked = sessionStorage.getItem('foundation.fingerprint.request.' + params.id);
-      const needs = linked || account.requestId ? null : await approvalNeeds(item, account.principal!.id, params.id!);
-      if (needs) throw new ApiFailure(needs.need === 'unlock' ? 'key_locked' : 'identity_untrusted');
+      if (!linked && !account.requestId && await unverifiedSubject(item, approverId, params.id!))
+        throw new ApiFailure('identity_untrusted');
       if (linked) await (await custodyClient()).trustIdentity(item.from.id, linked);
       const values = item.operations.map((operation, index) => Object.fromEntries(operation.inputs.filter(input => !input.secret).map((input, inputIndex) => {
         const key = `input.${index}.${inputIndex}`;
@@ -171,7 +169,7 @@ export async function clientAction({ params, request }: PageArgs) {
       await api(path + (requestMode ? '/approve' : '/respond'), { method: 'POST',
         body: { values, configuration: choices, code: formText(form, 'code') || undefined } });
       sessionStorage.removeItem('foundation.fingerprint.request.' + params.id);
-      if (resealing(item)) resealed = (await resealNow(account.principal!.id))?.done ?? 0;
+      if (resealing(item)) resealed = (await resealNow(approverId))?.done ?? 0;
       item = await readItem(params.id!, requestMode);
     } else if (prepared && current) await (await executionClient()).configure(item.id, configuration(current.invocation, prepared.input, item.operations[current.index]!.configure));
     if (item.waiting && prepared) await (await executionClient()).continue(item.id, prepared.material);
@@ -179,11 +177,11 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, details, approval } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, details, unverified } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
-  const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator(), task = useTask();
+  const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
   const needsKeys = !!current && !!account.requestId;
   const showSteps = pending || item.operations.length > 1;
   const completedResults = item.steps.filter(step => {
@@ -197,7 +195,7 @@ export default function ExecutionPage() {
   }, [account.requestId, root?.requestId, revalidator]);
   usePolling(pending, progress?.kind === 'pending' || progress?.kind === 'authorize' ? 2000 : 5000);
   return <Page title={t(requestMode ? 'requests' : 'executionDetail')} narrow>
-    <ErrorNotice error={task.error ?? (result && 'error' in result && typeof result.error === 'string' ? result.error : operationError)} />
+    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     {result && 'resealed' in result && result.resealed > 0 && <Notice tone="success">{t('resealed', { count: result.resealed })}</Notice>}
     <ResealingNotice principalId={account.principal?.id} />
     <Panel>
@@ -237,14 +235,9 @@ export default function ExecutionPage() {
         {needsKeys && <Notice tone="info" action={<Button asChild><Link to={'/signin?returnTo=' + encodeURIComponent((requestMode ? '/requests/' : '/executions/') + (item.delivery?.id ?? item.id))}>{t('signin')}</Link></Button>}>
           {t('signinForPrivateInput')}
         </Notice>}
-        {approval?.need === 'unlock' && <Notice tone="info" action={<Button type="button" variant="outline" loading={task.busy}
-          onClick={() => task.run(async () => {
-            if (!(await authenticate(account.principal!.id)).encrypted) throw new ApiFailure('key_unavailable');
-            await revalidator.revalidate();
-          })}>{t('unlock')}</Button>}>{t('approvalKeyLocked')}</Notice>}
-        {approval?.need === 'verification' && <Notice tone="warning">{t('approvalUnverified', { name: approval.name })}</Notice>}
+        {unverified && <Notice tone="warning">{t('approvalUnverified', { name: unverified })}</Notice>}
         {pending && item.canRespond && !needsKeys && !item.waiting?.continuation && (awaitingApproval || current) && <div className="flex flex-wrap items-center gap-4">
-          <Button type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!approval)}>
+          <Button type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!unverified)}>
             {t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           </Button>
           {canDecline && <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('decline')}</Button>}

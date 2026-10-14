@@ -9,6 +9,7 @@ import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { httpConnections, httpRequestFromForm, RequestFields } from './http-request';
 import { resourcePath } from './navigation';
 import { executionClient, functionClient } from './custody';
+import { requireKeys } from './keys';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 async function runResource(params: LoaderFunctionArgs['params']) {
   if (!params.id) return null;
@@ -44,6 +45,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
         } else if (text || parameter.required) args[parameter.name] = text;
       }
       const save = jsonField<Record<string, string>>(form, 'save', {});
+      if (Object.keys(save).length) await requireKeys();
       const result = await (await functionClient(Object.keys(save).length > 0)).invoke(resource.id, args, { save });
       return redirect('/executions/' + result.id);
     } else
@@ -51,6 +53,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
         kind: 'http',
         request: httpRequestFromForm(form) as unknown as JsonValue,
       };
+    await requireKeys();
     const client = await executionClient();
     let ownerId = params.owner!;
     try {

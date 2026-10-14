@@ -10,7 +10,7 @@ import type { PrincipalView, PublicEncryptionKey } from '../../shared/contracts'
 import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
 import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
-import { api, ApiFailure } from './api';
+import { api, ApiFailure, session } from './api';
 import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
@@ -66,7 +66,15 @@ async function keep(id: string, keys: IdentityKeys) {
 // How many items this browser last sealed again for a principal, and those it could not, by name, and why.
 export type Resealing = { done: number; failed: Array<{ id: string; name: string | null; code: string }> };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
-async function reseal(id: string) {
+// One pass at a time for each principal: a pass asked for while another runs starts after it, so that the two never
+// seal the same item at once. An operation that opens the private key starts one in the background and then its own.
+const passes = new Map<string, Promise<Resealing | null>>();
+function reseal(id: string) {
+  const pass = (passes.get(id) ?? Promise.resolve(null)).catch(() => null).then(() => sealPending(id));
+  passes.set(id, pass);
+  return pass;
+}
+async function sealPending(id: string) {
   if (!(await getIdentity(id))) return null;
   const { custodyClient } = await import('./custody');
   const { done, failed } = await (await custodyClient(id)).reprotectPending();
@@ -110,63 +118,82 @@ function verificationCredential(credential: AuthenticationResponseJSON | Registr
   const { prf: _prf, ...extensions } = credential.clientExtensionResults as Record<string, unknown>;
   return { ...credential, clientExtensionResults: extensions };
 }
+// For a principal, the server offers only the passkeys that hold its private key, or the one passkey named.
 async function assertion(principalId?: string, credentialId?: string) {
   const data = await api<{ challengeId: string; options: PublicKeyCredentialRequestOptionsJSON }>(
     '/auth/passkeys/options',
-    { method: 'POST', body: { intent: 'authenticate', ...(principalId ? { principalId } : {}) } },
+    { method: 'POST', body: { intent: 'authenticate', ...(principalId ? { principalId } : {}), ...(credentialId ? { credentialId } : {}) } },
   );
   const options = {
     ...data.options,
     extensions: { ...data.options.extensions, prf: { eval: { first: seed } } },
-    ...(credentialId ? { allowCredentials: [{ id: credentialId, type: 'public-key' as const }] } : {}),
   };
   const credential = await startAuthentication({ optionsJSON: options });
   return { challengeId: data.challengeId, credential, secret: prf(credential) };
 }
+// Signs in with a passkey and keeps the private key it opens. The reason says why it opened none: this passkey or
+// browser cannot give the secret that opens it, or the private key is not wrapped for this passkey.
 export async function authenticate(principalId?: string, credentialId?: string, wrapping?: IdentityKeys) {
   const proof = await assertion(principalId, credentialId);
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
     body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
   });
-  if (proof.secret) {
-    if (result.wrappedKey) {
-      const unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
-        throw new ApiFailure('key_unavailable');
+  let reason: string | null = null;
+  if (!proof.secret) reason = 'key_unsupported';
+  else if (result.wrappedKey) {
+    const unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
+      throw new ApiFailure('key_unavailable');
+    });
+    const keys = PrivateKeys.safeParse(unwrapped);
+    if (!keys.success) throw new ApiFailure('key_unavailable');
+    if (!matchesPublicKey(keys.data, result.publicKey)) throw new ApiFailure('encryption_key_changed');
+    await keep(result.principalId, keys.data);
+  } else if (!result.publicKey || wrapping) {
+    if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
+      throw new ApiFailure('encryption_key_changed');
+    const keys = wrapping ?? await newIdentityKeys();
+    const publicKey = publicPart(keys.encryption);
+    const wrappedKey = await wrap(keys, proof.secret, result.principalId);
+    if (!result.publicKey)
+      await api(`/principals/${result.principalId}/encryption-key`, {
+        method: 'PUT',
+        body: { publicKey, wraps: { [result.credentialId]: wrappedKey } },
       });
-      const keys = PrivateKeys.safeParse(unwrapped);
-      if (!keys.success) throw new ApiFailure('key_unreadable');
-      if (!matchesPublicKey(keys.data, result.publicKey)) throw new ApiFailure('encryption_key_changed');
-      await keep(result.principalId, keys.data);
-    } else if (!result.publicKey || wrapping) {
-      if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
-        throw new ApiFailure('encryption_key_changed');
-      const keys = wrapping ?? await newIdentityKeys();
-      const publicKey = publicPart(keys.encryption);
-      const wrappedKey = await wrap(keys, proof.secret, result.principalId);
-      if (!result.publicKey)
-        await api(`/principals/${result.principalId}/encryption-key`, {
-          method: 'PUT',
-          body: { publicKey, wraps: { [result.credentialId]: wrappedKey } },
-        });
-      else
-        await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
-          method: 'PUT',
-          body: { wrappedKey, publicKey: result.publicKey },
-        });
-      await keep(result.principalId, keys);
-    }
-  }
-  return { ...result, encrypted: !!(await getKey(result.principalId)) };
+    else
+      await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
+        method: 'PUT',
+        body: { wrappedKey, publicKey: result.publicKey },
+      });
+    await keep(result.principalId, keys);
+  } else reason = 'wrapped_key_required';
+  return { ...result, encrypted: !!(await getKey(result.principalId)), reason };
+}
+// Opens the principal's private key with one of its passkeys that holds it, for this browser to keep, or says why
+// it could not.
+export async function openKeys(id: string) {
+  const { reason } = await authenticate(id);
+  if (reason) throw new ApiFailure(reason);
+}
+// An operation the user started calls this before it uses the private key, so that one of the principal's passkeys
+// opens it when this browser does not hold it. Opening a page or work in the background never asks for a passkey.
+export async function requireKeys(id?: string) {
+  const principalId = id ?? (await session()).principal?.id;
+  if (!principalId) throw new ApiFailure('unauthenticated');
+  if (!(await getIdentity(principalId))) await openKeys(principalId);
+}
+// The private keys themselves, to wrap them for another passkey or an API key. They stay readable only in the page
+// where a passkey opened them, so a passkey that holds them is asked for otherwise.
+async function privateKeys(principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
+  const kept = unlocked.get(principal.id);
+  if (kept && matchesPublicKey(kept, principal.publicKey)) return kept;
+  await openKeys(principal.id);
+  const keys = unlocked.get(principal.id);
+  if (!keys || !matchesPublicKey(keys, principal.publicKey)) throw new ApiFailure('encryption_key_changed');
+  return keys;
 }
 export async function registerPasskey(name: string, principal?: Pick<PrincipalView, 'id' | 'publicKey'>) {
-  let existing = principal ? unlocked.get(principal.id) : undefined;
-  if (existing && !matchesPublicKey(existing, principal!.publicKey)) existing = undefined;
-  if (principal?.publicKey && !existing) {
-    await authenticate(principal.id);
-    existing = unlocked.get(principal.id);
-    if (!existing) throw new ApiFailure('key_unavailable');
-  }
+  const existing = principal?.publicKey ? await privateKeys(principal) : undefined;
   const data = await api<{
     challengeId: string;
     principalId: string;
@@ -195,27 +222,20 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   });
   if (keys) await keep(result.principalId, keys);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
-    return authenticate(result.principalId, credential.id, existing);
+    return authenticate(result.principalId, result.credentialId, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
-// Wrap this browser's unlocked keys for another of the principal's passkeys, by authenticating with it.
-export async function handKey(principalId: string, credentialId: string) {
-  const existing = unlocked.get(principalId);
-  if (!existing) throw new ApiFailure('key_unavailable');
-  return authenticate(principalId, credentialId, existing);
+// Wraps the principal's private key for another of its passkeys, by authenticating with that passkey.
+export async function handKey(principal: Pick<PrincipalView, 'id' | 'publicKey'>, credentialId: string) {
+  const { reason } = await authenticate(principal.id, credentialId, await privateKeys(principal));
+  if (reason) throw new ApiFailure(reason);
 }
 export async function issueKey(
   principal: Pick<PrincipalView, 'id' | 'publicKey'>,
   name: string,
   expiresAt: string | null,
 ) {
-  let existing = unlocked.get(principal.id);
-  if (existing && !matchesPublicKey(existing, principal.publicKey)) existing = undefined;
-  if (principal.publicKey && !existing) {
-    await authenticate(principal.id);
-    existing = unlocked.get(principal.id);
-    if (!existing) throw new ApiFailure('key_unavailable');
-  }
+  const existing = principal.publicKey ? await privateKeys(principal) : undefined;
   const issued = await api<{ credential: { id: string }; token: string }>(
     `/principals/${principal.id}/credentials`,
     { method: 'POST', body: { name, expiresAt } },
@@ -258,6 +278,7 @@ export async function mergeWithPasskey() {
 export async function rekeySharing(path: string) {
   const plan = await api(path, {}, listOf(KeySharingItem));
   if (!plan.items.length) return {};
+  await requireKeys();
   const { custodyClient } = await import('./custody');
   return (await custodyClient()).sharing(plan.items);
 }

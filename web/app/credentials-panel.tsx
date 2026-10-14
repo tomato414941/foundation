@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Confirm, DateText, ErrorNotice, Notice, Panel, useTask } from './components';
-import { authenticate, getKey, handKey } from './keys';
+import { getKey, handKey, openKeys } from './keys';
 import type { PrincipalView } from '../../shared/contracts';
 import type { z } from 'zod';
 import type { Credential } from '../../shared/contracts';
@@ -45,8 +45,8 @@ export function CredentialsPanel({
               loading={task.busy}
               onClick={() =>
                 task.run(async () => {
-                  const auth = await authenticate(principal.id);
-                  setUnlocked(auth.encrypted);
+                  await openKeys(principal.id);
+                  setUnlocked(true);
                   await revalidator.revalidate();
                 })
               }
@@ -92,7 +92,7 @@ export function CredentialsPanel({
                   loading={task.busy}
                   onClick={() =>
                     task.run(async () => {
-                      await handKey(principal.id, item.id);
+                      await handKey(principal, item.id);
                       await revalidator.revalidate();
                     })
                   }

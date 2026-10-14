@@ -369,9 +369,11 @@ export class Authentication {
   }
   async passkeyOptions(
     browser: string,
-    input: { intent: 'register' | 'authenticate'; name?: string; principalId?: string; returnTo?: string },
+    input: { intent: 'register' | 'authenticate'; name?: string; principalId?: string; credentialId?: string; returnTo?: string },
     actor?: Actor,
   ) {
+    if (input.credentialId && (input.intent !== 'authenticate' || !input.principalId))
+      fail(400, 'invalid_input', 'Name the principal whose passkey authenticates.');
     const id = randomUUID(),
       browserHash = digest(browser),
       returnTo = this.returnTo(input.returnTo);
@@ -410,16 +412,11 @@ export class Authentication {
       );
       return { challengeId: id, principalId, options };
     }
-    const credentials = input.principalId
-      ? await this.db.all<CredentialRow>(
-          "SELECT * FROM credentials WHERE principal_id=$1 AND kind='passkey'",
-          [input.principalId],
-        )
-      : [];
+    const credentials = input.principalId ? await this.answering(input.principalId, input.credentialId) : null;
     const options = await generateAuthenticationOptions({
       rpID: this.rpId,
       userVerification: 'required',
-      ...(input.principalId
+      ...(credentials
         ? {
             allowCredentials: credentials.map((row) => ({
               id: row.identifier,
@@ -437,6 +434,20 @@ export class Authentication {
       ],
     );
     return { challengeId: id, principalId: input.principalId ?? null, options };
+  }
+  // The passkeys that may answer for a principal: the one named, to be handed the private key, or else those that hold
+  // the private key, since the principal's other passkeys cannot open it.
+  private async answering(principalId: string, credentialId?: string) {
+    const passkeys = await this.db.all<CredentialRow>(
+      "SELECT * FROM credentials WHERE principal_id=$1 AND kind='passkey'",
+      [principalId],
+    );
+    if (credentialId) return [required(passkeys.find((row) => row.id === credentialId), 'The passkey was not found.')];
+    if (!passkeys.length) fail(409, 'passkey_required', 'Add a passkey to this principal.');
+    if (!(await this.principals.get(principalId)).public_key) return passkeys;
+    const holding = passkeys.filter((row) => row.private_wrap !== null);
+    if (!holding.length) fail(409, 'wrapped_key_required', 'None of the passkeys holds the private key.');
+    return holding;
   }
   async verifyPasskey(
     browser: string,

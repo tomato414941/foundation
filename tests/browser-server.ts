@@ -232,6 +232,11 @@ app.post<{ Params: { id: string }; Body: { connected: boolean } }>('/__test/exec
   }
   return { ok: true };
 });
+// A passkey registered where the browser could not wrap the private key for it.
+app.post<{ Params: { id: string } }>('/__test/credentials/:id/unwrap', async request => {
+  await context.db.pool.query('UPDATE credentials SET private_wrap=NULL WHERE id=$1', [request.params.id]);
+  return { ok: true };
+});
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,
 }));

@@ -31,6 +31,7 @@ export const PasskeyStart = z
     intent: z.enum(['register', 'authenticate']),
     name: Name.optional(),
     principalId: Id.optional(),
+    credentialId: Id.optional(),
     returnTo: z.string().max(2048).optional(),
   })
   .strict();
