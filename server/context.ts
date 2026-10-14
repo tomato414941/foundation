@@ -35,6 +35,9 @@ import { Executions } from './executions.js';
 import { canonical } from '../shared/authority.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
+import { ManagedProcesses } from './managed-processes.js';
+import { OpenSSH } from './ssh-client.js';
+import type { SSHClient } from './ssh-client.js';
 import { Invocations } from './invocations.js';
 
 export interface Dependencies {
@@ -44,6 +47,7 @@ export interface Dependencies {
   payments?: PaymentProvider;
   storage?: ObjectStore;
   runner?: Runner;
+  ssh?: SSHClient;
 }
 export async function createContext(config: Configuration, deps: Dependencies = {}, options: { migrate?: boolean } = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
@@ -88,7 +92,9 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       vault,
       config,
       delegation,
+      deps.ssh ?? new OpenSSH(),
     );
+  const managedProcesses = new ManagedProcesses(processes, environments);
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
@@ -159,6 +165,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations,
     oauthRelays,
     processes,
+    managedProcesses,
     invocations,
   };
   if (options.migrate) {

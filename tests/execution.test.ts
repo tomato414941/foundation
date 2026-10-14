@@ -5,13 +5,10 @@ import { createContext } from '../server/context.js';
 import { MemoryPayments, MemoryObjects, MemoryRunner } from './fakes.js';
 import { ApprovalRequest, EnvironmentInput } from '../shared/contracts.js';
 import { buildApp } from '../server/app.js';
-import { EnvironmentBootstrap } from '../shared/protocol.js';
-import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { signEnvironment } from '../shared/runtime-protocol.js';
 import { Operations } from '../shared/custody.js';
 import { CommandProcess } from '../runtime/command.js';
 import { delegatedFixture } from './delegation-support.js';
-import { randomBytes } from 'node:crypto';
 
 test('配下のプリンシパルの支払いを支払元のアカウントで管理する', async (t) => {
   const f = await fixture(),
@@ -34,9 +31,9 @@ test('配下のプリンシパルの支払いを支払元のアカウントで�
   );
 });
 
-test('運営環境が自分の鍵で登録し、停止時に実行権を失効させて使用量を記録する', async t => {
+test('SSHでVMの起動を確認し、停止時に使用量を記録する', async t => {
   const f = await fixture(), payments = new MemoryPayments(), runner = new MemoryRunner();
-  const c = await createContext(f.config, { db: f.db, mailer: f.mailer, payments, runner });
+  const c = await createContext(f.config, { db: f.db, mailer: f.mailer, payments, runner, ssh: runner.ssh });
   t.after(f.close);
   const owner = await f.person();
   await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')",
@@ -45,25 +42,9 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
     EnvironmentInput.parse({ lifetime: { maxSeconds: 120, idleSeconds: 60 } }));
   assert.equal(row.data.state, 'starting');
   await c.environments.tick();
-  const input = EnvironmentBootstrap.parse(JSON.parse(Buffer.from(
-    runner.machines.get(row.id)!.environment.FOUNDATION_EXECUTOR_BOOTSTRAP!, 'base64url').toString()));
-  const keys = await newIdentityKeys(), binding = bindKeys(input.executorId, keys);
-  const token = 'fk_' + randomBytes(32).toString('base64url');
-  const enrollment = { bootstrap: input.bootstrap, binding: await signBinding(binding, keys), token };
-  await c.environments.enroll(row.id, enrollment);
-  await c.environments.enroll(row.id, { ...enrollment, binding: await signBinding(binding, keys) });
-  const actor = (await c.authentication.authenticate(token))!;
-  assert.equal(actor.id, input.executorId);
-  const registration = await signEnvironment({ format: 3, id: row.id, origin: f.config.origin,
-    ownerId: owner.actor.id, name: input.name, executor: binding, operatorId: actor.id,
-    driver: 'managed', capabilities: [Operations.http, Operations.command, Operations.connect],
-    isolation: 'process', functionImage: input.functionImage, revision: 1 }, keys);
-  await c.delegation.register(actor, registration);
   assert.equal((await c.resources.get(row.id)).data.state, 'running');
-  assert.equal((await c.delegation.environment(row.id)).registration.signature, registration.signature);
   await f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb((date_trunc('second',now())-interval '2 seconds')::text)) WHERE id=$1", [row.id]);
   await c.environments.stop(owner.actor, await c.resources.get(row.id));
-  assert.equal(await c.authentication.authenticate(token), null);
   await f.db.pool.query("UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1", [row.id]);
   await c.environments.tick();
   assert.equal((await c.resources.get(row.id)).data.state, 'stopped');

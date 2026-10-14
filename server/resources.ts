@@ -133,7 +133,9 @@ export class Resources {
               : row.kind === 'environment'
                 ? EnvironmentResource.shape.data.strip().parse({ ...row.data,
                     connected: row.data.state === 'running' && environmentConnected(await this.db.one<EnvironmentHeartbeat>(
-                      'SELECT heartbeat_at,stopped_at FROM executor_environments WHERE resource_id=$1', [row.id])),
+                      row.data.driver === 'managed'
+                        ? 'SELECT ssh_checked_at AS heartbeat_at,NULL::timestamptz AS stopped_at FROM environment_jobs WHERE resource_id=$1'
+                        : 'SELECT heartbeat_at,stopped_at FROM executor_environments WHERE resource_id=$1', [row.id])),
                   })
                 : row.data;
     return Resource.parse({

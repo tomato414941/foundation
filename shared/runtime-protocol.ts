@@ -14,7 +14,7 @@ export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:rol
 export const EnvironmentManifest = z.object({
   format: z.literal(3), id: Id, origin: Origin, ownerId: Id,
   name: Name, executor: KeyBinding, operatorId: Id,
-  driver: z.enum(['attached', 'managed']),
+  driver: z.literal('attached'),
   capabilities: z.array(Operation).min(1).max(6),
   functionVersion: z.number().int().positive().optional(),
   httpVersion: z.number().int().positive().optional(),

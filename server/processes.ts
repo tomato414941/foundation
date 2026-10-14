@@ -12,8 +12,8 @@ import { Operations } from '../shared/custody.js';
 import { ProcessView } from '../shared/process.js';
 import type { Completion, ProcessInfo, ProcessRequest } from '../shared/process.js';
 
-interface ProcessRow {
-  id: string; owner_id: string; actor_id: string; executor_id: string; environment_id: string;
+export interface ProcessRow {
+  id: string; owner_id: string; actor_id: string; executor_id: string | null; environment_id: string;
   actor: Actor; request: ProcessRequest & { workingDirectory: string }; state: ProcessInfo['state'];
   result: ProcessInfo['result']; error: string | null;
   phase: 'queued' | 'claimed' | 'dispatched' | 'settled'; cancel_requested: boolean;
@@ -27,7 +27,7 @@ export class Processes {
     delegation.queues.add(this.queue);
   }
 
-  private view(row: ProcessRow): ProcessInfo {
+  view(row: ProcessRow): ProcessInfo {
     return ProcessView.parse({ ...row.request, id: row.id, ownerId: row.owner_id, actorId: row.actor_id,
       environmentId: row.environment_id, state: row.state, result: row.result, error: row.error,
       createdAt: iso(row.created_at), startedAt: row.started_at ? iso(row.started_at) : null,
@@ -45,19 +45,23 @@ export class Processes {
       [id, JSON.stringify(input)]);
     return input;
   }
-  private async validate(actor: Actor, environmentId: string, connection: Queryable = this.resources.db.pool) {
+  async validate(actor: Actor, environmentId: string, connection: Queryable = this.resources.db.pool) {
     const resource = await this.resources.get(environmentId, connection);
     if (resource.kind !== 'environment') fail(400, 'wrong_kind', 'Choose an execution environment.');
     await this.resources.authorization.requireResource(actor, resource, 'execute', connection);
     if (resource.data.state !== 'running' || resource.data.deletion)
       fail(409, 'environment_stopped', 'Choose a running execution environment.');
+    if (resource.data.driver === 'managed') {
+      if (!resource.data.processes) fail(409, 'commands_unavailable', 'This environment has not enabled process execution.');
+      return { resource, executorId: null };
+    }
     const environment = await this.delegation.environment(environmentId, connection);
     if (environment.stopped_at) fail(409, 'environment_stopped', 'Choose a running execution environment.');
     if (!resource.data.processes || !environment.registration.manifest.capabilities.includes(Operations.command))
       fail(409, 'commands_unavailable', 'This environment has not enabled process execution.');
     if (!environmentConnected(environment))
       fail(503, 'environment_unavailable', 'The execution environment is not responding.');
-    return { resource, environment };
+    return { resource, executorId: environment.executor_id };
   }
   async create(actor: Actor, environmentId: string, input: ProcessRequest & { id?: string }) {
     const { id = randomUUID(), ...request } = input;
@@ -72,15 +76,15 @@ export class Processes {
           fail(409, 'process_conflict', 'Use a new process ID for a different command.');
         return this.view(previous);
       }
-      const { resource, environment } = await this.validate(actor, environmentId, connection);
+      const { resource, executorId } = await this.validate(actor, environmentId, connection);
       const workingDirectory = request.workingDirectory ?? (resource.data.processes as { workingDirectory: string }).workingDirectory;
       const active = await this.resources.db.one<{ count: string }>(
-        "SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND state IN ('queued','running')", [environmentId], connection);
+        "SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND phase<>'settled'", [environmentId], connection);
       if (Number(active?.count) >= 20) fail(429, 'process_limit', 'Wait for an existing process to finish.');
       const row = await this.resources.db.one<ProcessRow>(
         `INSERT INTO environment_processes(id,owner_id,actor_id,executor_id,environment_id,state,actor,request)
          VALUES($1,$2,$3,$4,$5,'queued',$6,$7) ON CONFLICT(id) DO NOTHING RETURNING *`,
-        [id, resource.owner_id, actor.id, environment.executor_id, environmentId,
+        [id, resource.owner_id, actor.id, executorId, environmentId,
           JSON.stringify(actor), JSON.stringify({ ...request, workingDirectory })], connection);
       if (!row) fail(409, 'process_conflict', 'Use a new process ID for a different command.');
       await this.resources.audit.record(resource.owner_id, actor.id, 'process.create', id, { environmentId }, connection);
@@ -164,7 +168,15 @@ export class Processes {
     const row = await this.row(id);
     if (row.actor_id === actor.id) await this.resources.authorization.active(actor);
     else await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'execute');
-    await this.queue.cancel(id);
+    if (row.executor_id === null) await this.resources.db.pool.query(
+      `UPDATE environment_processes SET cancel_requested=true,
+       state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
+       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'settled' END,
+       error=CASE WHEN phase='dispatched' THEN 'cancellation_pending' ELSE NULL END,
+       finished_at=CASE WHEN phase='dispatched' THEN NULL ELSE now() END,
+       lease_until=CASE WHEN lease_token IS NULL THEN now() ELSE lease_until END
+       WHERE id=$1 AND phase<>'settled'`, [id]);
+    else await this.queue.cancel(id);
     return this.get(actor, id);
   }
   async recover() {

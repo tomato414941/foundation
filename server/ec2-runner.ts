@@ -8,7 +8,7 @@ import {
 import type { Instance, Tag, Filter } from '@aws-sdk/client-ec2';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import type { Configuration } from './config.js';
-import type { Runner } from './runner.js';
+import type { Runner, MachineSSH } from './runner.js';
 import { DomainError, fail } from './errors.js';
 
 const managed = 'foundation:managed', environmentTag = 'foundation:environment';
@@ -168,7 +168,7 @@ export class EC2Runner implements Runner {
   async findVolume(id: string) {
     return this.call(async () => single((await this.client.send(new DescribeVolumesCommand({ Filters: filters(id) }))).Volumes ?? [], 'disks')?.VolumeId ?? null);
   }
-  async start(id: string, options: EnvironmentOptions, environment: Record<string, string>,
+  async start(id: string, options: EnvironmentOptions, ssh: MachineSSH,
     created: (machineId: string, volumeId: string, host: string) => Promise<void>, networkSlot: number) {
     return this.call(async () => {
       await this.network();
@@ -183,14 +183,15 @@ export class EC2Runner implements Runner {
         if (image?.Architecture !== 'x86_64' || image.State !== 'available' || image.RootDeviceType !== 'ebs' || !image.RootDeviceName)
           fail(503, 'image_unavailable', 'The environment machine image is not configured.');
         const root = image.BlockDeviceMappings?.find(item => item.DeviceName === image.RootDeviceName)?.Ebs;
-        const content = Object.entries({ XDG_CONFIG_HOME: '/data/config',
-          FOUNDATION_EXECUTOR_BOOTSTRAP: environment.FOUNDATION_EXECUTOR_BOOTSTRAP ?? '' })
-          .map(([key, value]) => key + '=' + JSON.stringify(value)).join('\n') + '\n';
-        const userData = '#cloud-config\n' + JSON.stringify({ write_files: [{ path: '/etc/foundation/environment.env',
-          permissions: '0600', owner: 'root:root', encoding: 'b64', content: Buffer.from(content).toString('base64') },
-          { path: '/etc/systemd/system/foundation-environment.service.d/runtime.conf', permissions: '0644', owner: 'root:root',
-            content: '[Service]\nRuntimeDirectory=sshd\nRuntimeDirectoryMode=0755\nStandardOutput=journal+console\nStandardError=journal+console\n' }],
-          runcmd: [['systemctl', 'daemon-reload'], ['systemctl', 'enable', '--now', 'foundation-environment.service']] });
+        const userData = '#cloud-config\n' + JSON.stringify({
+          ssh_pwauth: false, disable_root: true, ssh_deletekeys: true,
+          ssh_keys: { ed25519_private: ssh.keys.hostPrivateKey, ed25519_public: ssh.keys.hostPublicKey },
+          write_files: [{ path: '/etc/ssh/foundation_authorized_keys', permissions: '0644', owner: 'root:root',
+            content: ssh.keys.publicKey + '\n' },
+          { path: '/etc/ssh/sshd_config.d/60-foundation.conf', permissions: '0644', owner: 'root:root',
+            content: 'Match User ubuntu\n  AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/foundation_authorized_keys\nMatch all\n' }],
+          runcmd: [['systemctl', 'reload', 'ssh.service']],
+        });
         if (Buffer.byteLength(userData) > 16_384) fail(400, 'bootstrap_too_large', 'The environment configuration is too large.');
         try {
           machine = (await this.client.send(new RunInstancesCommand({ ImageId: image.ImageId, ClientToken: id,

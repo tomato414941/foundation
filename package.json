@@ -19,7 +19,7 @@
     "test": "npm run build:cli && node scripts/test-database.mjs node --import tsx --test --test-timeout=60000 tests/*.test.ts",
     "test:ui": "node scripts/test-database.mjs python3 tests/browser.py",
     "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts",
-    "build:environment": "npm run build:cli && tsx deploy/environment/build-image.ts",
+    "prepare:environment": "tsx deploy/environment/prepare.ts",
     "test:ec2": "tsx tests/ec2-live.ts",
     "migrate": "node --env-file-if-exists=.env dist/server/migrate.js"
   },

@@ -83,27 +83,23 @@ export class Delegation {
         'SELECT r.* FROM resources r JOIN environment_jobs j ON j.resource_id=r.id WHERE r.id=$1 FOR UPDATE OF r',
         [manifest.id], connection,
       );
-      if (reserved && (reserved.owner_id !== manifest.ownerId || reserved.data.executorId !== actor.id ||
-        !['starting', 'running'].includes(String(reserved.data.state)) || manifest.driver !== 'managed' ||
-        manifest.isolation !== 'process' || manifest.commandImage ||
-        manifest.capabilities.includes(Operations.function) && !manifest.functionImage))
-        fail(403, 'forbidden', 'Use the identity and isolation reserved for this environment.');
+      if (reserved) fail(409, 'environment_reserved', 'Register the runtime as a separate environment.');
       if (old) {
         if (old.executor_id !== actor.id || old.registration.manifest.ownerId !== manifest.ownerId)
           fail(403, 'forbidden', 'This execution environment belongs to another identity.');
-        if (old.stopped_at && reserved?.data.state !== 'starting')
+        if (old.stopped_at)
           fail(409, 'environment_stopped', 'Start the environment before registering it.');
         const same = canonical(old.registration) === canonical(environment);
-        if (same && !old.stopped_at && reserved?.data.state !== 'starting') return this.resources.get(manifest.id, connection);
+        if (same && !old.stopped_at) return this.resources.get(manifest.id, connection);
         if (!same && manifest.revision !== old.registration.manifest.revision + 1)
           fail(409, 'changed', 'Use the next environment revision.');
       } else {
-        if (!reserved && !(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
+        if (!(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
           fail(403, 'forbidden', 'You cannot open an environment for this principal.');
         if (manifest.revision !== 1) fail(400, 'invalid_revision', 'Start the environment at revision one.');
       }
       const now = new Date().toISOString();
-      const previous = old || reserved ? await this.resources.get(manifest.id, connection) : null;
+      const previous = old ? await this.resources.get(manifest.id, connection) : null;
       const { awsPrincipal: _awsPrincipal, image: _image, ...metadata } = previous?.data ?? {};
       const data = {
         ...metadata,

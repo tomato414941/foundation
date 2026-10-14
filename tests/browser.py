@@ -176,6 +176,16 @@ class BrowserTests(unittest.TestCase):
         self.trust_fingerprint(page, principal["id"], fingerprint)
 
     def executor(self, page, principal, name="Browser executor"):
+        response = page.request.post(ORIGIN + "/__test/executor", data={"ownerId": principal["id"], "name": name})
+        self.assertTrue(response.ok, response.text())
+        environment = response.json()
+        path = f"{ORIGIN}/p/{principal['id']}/environments/{environment['id']}"
+        page.goto(path)
+        self.environments.append((page, environment["id"]))
+        self.trust_fingerprint(page, environment["principalId"], environment["fingerprint"])
+        return path
+
+    def managed_environment(self, page, principal, name):
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(response.ok, response.text())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
@@ -183,11 +193,8 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
         expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        path = page.url
-        self.environments.append((page, path.rsplit('/', 1)[1]))
-        fingerprint = page.request.get(ORIGIN + "/__test/executor/" + path.rsplit("/", 1)[1] + "/fingerprint").json()
-        self.trust_fingerprint(page, fingerprint["id"], fingerprint["fingerprint"])
-        return path
+        self.environments.append((page, page.url.rsplit('/', 1)[1]))
+        return page.url
 
     def saved_connection(self, page, name):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
@@ -1333,7 +1340,8 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
         self.assertEqual(page.url.rsplit("/", 1)[1], environment_id)
         restarted = page.request.get(ORIGIN + "/api/resources/" + environment_id).json()
-        self.assertEqual(restarted["data"]["executorId"], environment["data"]["executorId"])
+        self.assertEqual(restarted["ownerId"], environment["ownerId"])
+        self.assertEqual(restarted["data"]["ssh"]["fingerprint"], environment["data"]["ssh"]["fingerprint"])
 
     def test_数日後の自動停止を設定して作成し利用枠を使い切ると次の起動を止める(self):
         page, principal = self.passkey_account("Quota environment owner")
@@ -1417,7 +1425,7 @@ class BrowserTests(unittest.TestCase):
             response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
             self.assertTrue(response.ok, response.text())
             self.assertEqual(response.json()["authorizedKeys"], [public_keys[1]])
-            self.assertEqual(response.json()["workingDirectory"], "/workspace")
+            self.assertEqual(response.json()["workingDirectory"], "/home/ubuntu")
             page.reload()
             expect(editor).to_have_value(public_keys[1])
             self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
@@ -1480,7 +1488,7 @@ class BrowserTests(unittest.TestCase):
         with page.expect_download() as download:
             page.get_by_role("link", name="ダウンロード", exact=True).click()
         self.assertEqual(Path(download.value.path()).read_text(), "browser file")
-        self.executor(page, principal, "Worker")
+        self.managed_environment(page, principal, "Worker")
         page.get_by_role("button", name="停止", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
@@ -1526,7 +1534,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_スマホで一覧と詳細を行き来し削除中の表示を再読込後も確認して削除を完了する(self):
         owner, principal = self.passkey_account("Mobile deletion owner")
-        path = self.executor(owner, principal, "Mobile deletion environment")
+        path = self.managed_environment(owner, principal, "Mobile deletion environment")
         environment_id = path.rsplit("/", 1)[1]
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
@@ -1565,7 +1573,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_削除の失敗理由を確認画面に表示し再試行して一覧へ戻る(self):
         page, principal = self.passkey_account("Deletion retry owner")
-        path = self.executor(page, principal, "Retry deletion environment")
+        path = self.managed_environment(page, principal, "Retry deletion environment")
         page.set_viewport_size({"width": 390, "height": 844})
         environment_id = path.rsplit("/", 1)[1]
         page.request.post(ORIGIN + "/__test/deletion/" + environment_id, data={"phase": "volume", "mode": "fail"})

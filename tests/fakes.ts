@@ -1,6 +1,8 @@
 import type { PaymentProvider, PaymentEvent } from '../server/billing.js';
 import type { ObjectStore } from '../server/objects.js';
-import type { Runner } from '../server/runner.js';
+import type { MachineSSH, Runner } from '../server/runner.js';
+import { OpenSSH } from '../server/ssh-client.js';
+import type { SSHClient, SSHDestination } from '../server/ssh-client.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 
 export class MemoryPayments implements PaymentProvider {
@@ -45,19 +47,31 @@ export class MemoryObjects implements ObjectStore {
     return 'https://objects.example/published/' + name + '?expires=' + seconds;
   }
 }
+export class MemorySSH implements SSHClient {
+  sessions = new Map<string, number>();
+  unavailable = new Set<string>();
+  configurations = new Map<string, string>();
+  keys() { return new OpenSSH().keys(); }
+  async run(destination: SSHDestination, _command: string, input?: string) {
+    if (this.unavailable.has(destination.id)) throw new Error('SSH unavailable');
+    this.configurations.set(destination.id, input ?? '');
+    return { code: 0, stdout: String((this.sessions.get(destination.id) ?? 0) + 1) + '\n', stderr: '' };
+  }
+}
 export class MemoryRunner implements Runner {
   readonly enabled = true;
-  machines = new Map<string, { environment: Record<string, string>; options: EnvironmentOptions; state: 'running' | 'stopped' }>();
+  readonly ssh = new MemorySSH();
+  machines = new Map<string, { ssh: MachineSSH; options: EnvironmentOptions; state: 'running' | 'stopped' }>();
   volumes = new Set<string>();
   networks = new Set<string>();
   async start(
     id: string,
     options: EnvironmentOptions,
-    environment: Record<string, string>,
+    ssh: MachineSSH,
     created: (id: string, volume: string, host: string) => Promise<void>,
   ) {
     this.networks.add(id);
-    this.machines.set(id, { environment, options, state: 'running' });
+    this.machines.set(id, { ssh, options, state: 'running' });
     this.volumes.add('vol_' + id.replaceAll('-', ''));
     await created(id, 'vol_' + id.replaceAll('-', ''), id + '.ssh.foundation.test');
     return id;

@@ -24,7 +24,6 @@ export function EnvironmentSSH({ item, canUpdate, busy, saved }: {
         <code className="min-w-0 flex-1 break-all font-mono text-sm">{sshCommand(ssh)}</code>
         <Copy value={sshCommand(ssh)} />
       </div>
-      <p className="text-sm leading-relaxed text-muted-foreground">{t('sshWorkspaceHelp')}</p>
     </>}
     {value.fingerprint && <>
       <Detail label={t('sshHostFingerprint')}>

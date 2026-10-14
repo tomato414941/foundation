@@ -16,13 +16,10 @@ import { detectAwsPrincipal } from '../../runtime/aws-principal.js';
 import { Operations } from '../../shared/custody.js';
 import { ProcessBroker, ProcessExecutor } from '../../runtime/process.js';
 import { FunctionBroker, FunctionExecutor } from '../../runtime/functions.js';
-import { SSHServer } from '../../runtime/ssh.js';
-import { SSHWorkerState } from '../../shared/ssh.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; isolation: 'process' | 'container';
-  image?: string; functionImage?: string; managed?: boolean; once?: boolean;
-  ssh?: { port: number };
+  image?: string; functionImage?: string; once?: boolean;
 }) {
   const { directory, keys, binding, broker, transport } = privateClient(client);
   const id = Id.parse(options.id ?? crypto.randomUUID()), path = join(directory, 'executors', id);
@@ -33,12 +30,11 @@ export async function startAgent(client: Client, options: {
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  let ssh: SSHServer | undefined;
   try {
     const journal = new FileJournal(path, client.identity.origin, binding, keys);
     let environment = await journal.read<RegisteredEnvironment>('environment_' + id);
     const awsPrincipal = await detectAwsPrincipal();
-    const settings = environment && !options.managed ? { isolation: environment.manifest.isolation,
+    const settings = environment ? { isolation: environment.manifest.isolation,
       image: environment.manifest.commandImage, functionImage: environment.manifest.functionImage } : options;
     const execution = { isolation: settings.isolation, ...(settings.image ? { commandImage: settings.image } : {}),
       ...(settings.functionImage ? { functionImage: settings.functionImage } : {}) };
@@ -59,7 +55,7 @@ export async function startAgent(client: Client, options: {
       }
     } else {
       environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
-        name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
+        name: options.name, executor: binding, operatorId: binding.principalId, driver: 'attached',
         capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, resultVersion: 1,
         ...execution,
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
@@ -71,24 +67,16 @@ export async function startAgent(client: Client, options: {
       ...(environment.manifest.awsPrincipal ? { awsPrincipal: environment.manifest.awsPrincipal } : {}),
       ...(environment.manifest.isolation === 'process' ? { notice: 'Only allow trusted code on this host.' } : {}) }) + '\n');
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);
-    const workingDirectory = environment.manifest.isolation === 'container' || options.managed && options.ssh
-      ? '/workspace' : options.managed ? workspace : process.cwd();
+    const workingDirectory = environment.manifest.isolation === 'container' ? '/workspace' : process.cwd();
     const commands = new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage,
-      workspace, ...(options.managed ? { cwd: workspace } : {}) });
+      workspace });
     const functionCommands = environment.manifest.functionImage
       ? new CommandProcess({ isolation: 'container', image: environment.manifest.functionImage }) : commands;
     const executor = new Executor(environment, keys, broker, journal, transport, commands, connections, functionCommands);
     const functions = new FunctionExecutor(executor, new FunctionBroker(client), journal);
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
-    if (options.managed && options.ssh) {
-      ssh = new SSHServer({ directory: join(path, 'ssh'), workspace,
-        workspaceLink: '/workspace', port: options.ssh.port },
-      input => client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST', body: input }, SSHWorkerState));
-      await ssh.start();
-    }
     const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, commands);
     do {
-      ssh?.ensureRunning();
       const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await functions.reconcile(), ...await processes.reconcile()];
       if (pending.length) process.stderr.write(JSON.stringify({ event: 'reconciliation_pending', ids: pending }) + '\n');
       let claimed = false;
@@ -101,11 +89,8 @@ export async function startAgent(client: Client, options: {
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {
-    try { await ssh?.stop(); }
-    finally {
-      process.off('SIGINT', stop); process.off('SIGTERM', stop);
-      await release();
-    }
+    process.off('SIGINT', stop); process.off('SIGTERM', stop);
+    await release();
   }
   return 0;
 }

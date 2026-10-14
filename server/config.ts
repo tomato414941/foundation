@@ -26,7 +26,6 @@ const Environment = z.object({
   STRIPE_COMPUTE_METER: z.string().default('foundation_compute_seconds'),
   STRIPE_STORAGE_METER: z.string().default('foundation_storage_byte_hours'),
   FOUNDATION_BUCKET: z.string().default(''),
-  ENVIRONMENT_FUNCTION_IMAGE: z.string().default(''),
   EC2_ENVIRONMENT_AMI: z.string().regex(/^(?:ami-[a-f0-9]+)?$/).default(''),
   EC2_ENVIRONMENT_VPC: z.string().regex(/^(?:vpc-[a-f0-9]+)?$/).default(''),
   EC2_ENVIRONMENT_ACL: z.string().regex(/^(?:acl-[a-f0-9]+)?$/).default(''),

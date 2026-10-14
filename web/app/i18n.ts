@@ -100,8 +100,6 @@ const words: Record<string, [string, string]> = {
     'Enter one public key from a .pub file per line. Save an empty list to stop accepting new SSH connections.'],
   sshAccessHelp: ['登録した鍵で環境本体を操作できます。SSHの接続権限は、Foundationの共有設定とは別に管理します。',
     'Registered keys allow access to the machine. SSH access is managed separately from Foundation sharing permissions.'],
-  sshWorkspaceHelp: ['作業ファイルは /workspace に保存します。SSHとAPIのコマンド実行から利用できます。APIのコマンドは設定したイメージ内で動きます。',
-    'Save working files in /workspace to use them through SSH and the command API. API commands run in the configured image.'],
   sshHostFingerprint: ['SSHホスト鍵の指紋', 'SSH host key fingerprint'],
   sshFingerprintHelp: ['初回接続時に表示されるホスト鍵の指紋が、この値と一致することを確認してください。',
     'On your first connection, check that the displayed host key fingerprint matches this value.'],

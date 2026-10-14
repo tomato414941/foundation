@@ -38,19 +38,12 @@ export const SSHSettings = z.object({ authorizedKeys: z.array(SSHPublicKey).max(
 export const SSHUpdate = SSHSettings.extend({ revision: z.number().int().positive().optional() });
 export const SSHConnection = SSHSettings.extend({
   host: z.string().min(1).max(253).nullable(), port: z.number().int().min(1).max(65535),
-  username: z.literal('root'), workingDirectory: z.literal('/workspace'),
+  username: z.string().regex(/^[a-z_][a-z0-9_-]*$/), workingDirectory: z.string().startsWith('/').max(4096),
   hostKey: SSHPublicKey.nullable(), fingerprint: z.string().nullable(),
   revision: z.number().int().positive(), appliedRevision: z.number().int().nonnegative(),
   activeSessions: z.number().int().min(0).max(1024),
 }).strict();
 export const SSHView = SSHConnection.extend({ state: z.enum(['starting', 'configuring', 'ready', 'disabled', 'stopped']) });
-export const SSHHeartbeat = z.object({
-  hostKey: SSHPublicKey, appliedRevision: z.number().int().nonnegative(),
-  activeSessions: z.number().int().min(0).max(1024),
-}).strict();
-export const SSHConfiguration = SSHSettings.extend({ port: z.number().int().min(1).max(65535),
-  revision: z.number().int().positive() }).strict();
-export const SSHWorkerState = z.object({ configuration: SSHConfiguration.nullable() }).strict();
 export type SSHConnectionInfo = z.infer<typeof SSHView>;
 
 export function sshCommand(value: Pick<SSHConnectionInfo, 'host' | 'port' | 'username'>) {

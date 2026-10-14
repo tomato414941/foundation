@@ -48,7 +48,7 @@ export class TaskQueue {
       error=CASE WHEN phase='dispatched' THEN $1::${this.errorType} ELSE NULL END,
       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'queued' END,
       finished_at=CASE WHEN phase='dispatched' THEN now() ELSE NULL END,lease_until=NULL
-      WHERE lease_until<now() AND (state='running' OR
+      WHERE ${this.table === 'environment_processes' ? 'executor_id IS NOT NULL AND ' : ''}lease_until<now() AND (state='running' OR
         (state='uncertain' AND cancel_requested=true AND phase='dispatched' AND finished_at IS NULL))`,
       [this.error({ code: 'execution_interrupted', message: 'Check the result before starting this work again.' })]);
   }

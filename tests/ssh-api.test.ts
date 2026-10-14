@@ -7,11 +7,7 @@ import { MemoryRunner } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { EnvironmentInput } from '../shared/contracts.js';
-import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { SSHView, sshKeyBytes } from '../shared/ssh.js';
-import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { signEnvironment } from '../shared/runtime-protocol.js';
-import { Operations } from '../shared/custody.js';
 
 function publicKey() {
   const field = (value: Buffer) => {
@@ -24,7 +20,7 @@ async function setup(t: TestContext) {
   const f = await fixture({ FOUNDATION_BILLING_MODE: 'included', FOUNDATION_INCLUDED_ENVIRONMENTS: '10' });
   t.after(f.close);
   const owner = await f.person(), other = await f.person('Other principal'), runner = new MemoryRunner();
-  const c = await createContext(f.config, { db: f.db, runner }), app = await buildApp(c);
+  const c = await createContext(f.config, { db: f.db, runner, ssh: runner.ssh }), app = await buildApp(c);
   t.after(() => app.close());
   const headers = { authorization: 'Bearer ' + owner.token };
   const keys = [publicKey()];
@@ -34,17 +30,7 @@ async function setup(t: TestContext) {
 }
 async function register(s: Awaited<ReturnType<typeof setup>>) {
   await s.c.environments.tick();
-  const bootstrap = EnvironmentBootstrap.parse(JSON.parse(Buffer.from(
-    s.runner.machines.get(s.row.id)!.environment.FOUNDATION_EXECUTOR_BOOTSTRAP!, 'base64url').toString()));
-  const keys = await newIdentityKeys(), binding = bindKeys(bootstrap.executorId, keys);
-  const token = 'fk_' + randomBytes(32).toString('base64url');
-  await s.c.environments.enroll(s.row.id, { bootstrap: bootstrap.bootstrap, binding: await signBinding(binding, keys), token });
-  const actor = (await s.c.authentication.authenticate(token))!;
-  await s.c.delegation.register(actor, await signEnvironment({ format: 3, id: s.row.id,
-    origin: s.f.config.origin, ownerId: s.owner.actor.id, name: bootstrap.name, executor: binding,
-    operatorId: actor.id, driver: 'managed', capabilities: [Operations.command],
-    isolation: 'process', functionImage: bootstrap.functionImage, revision: 1 }, keys));
-  return { actor, headers: { authorization: 'Bearer ' + token }, hostKey: publicKey() };
+
 }
 
 test('公開鍵を登録した環境の接続情報を返し、鍵の変更を実行環境へ届けて反映状態を示す', async t => {
@@ -55,64 +41,54 @@ test('公開鍵を登録した環境の接続情報を返し、鍵の変更を�
   assert.equal(starting.state, 'starting');
   assert.equal(starting.host, null);
   assert.equal(starting.port, 22);
-  assert.equal(starting.username, 'root');
-  assert.equal(starting.workingDirectory, '/workspace');
+  assert.equal(starting.username, 'ubuntu');
+  assert.equal(starting.workingDirectory, '/home/ubuntu');
   assert.deepEqual(starting.authorizedKeys, keys);
-  const executor = await register(s);
+  await register(s);
   assert.equal((await s.c.environments.ssh(s.owner.actor, row.id))!.host, row.id + '.ssh.foundation.test');
-  const beat = (appliedRevision: number) => app.inject({ method: 'POST', url: url + '/heartbeat', headers: executor.headers,
-    payload: { hostKey: executor.hostKey, appliedRevision, activeSessions: 0 } });
-  const initial = await beat(0);
-  assert.equal(initial.statusCode, 200, initial.body);
-  assert.deepEqual(initial.json().configuration, { authorizedKeys: keys, port: starting.port, revision: 1 });
-  await beat(1);
+  const hostKey = s.runner.machines.get(row.id)!.ssh.keys.hostPublicKey;
   const ready = SSHView.parse((await app.inject({ url, headers })).json());
   assert.equal(ready.state, 'ready');
-  assert.equal(ready.hostKey, executor.hostKey);
-  assert.equal(ready.fingerprint, 'SHA256:' + createHash('sha256').update(sshKeyBytes(executor.hostKey)!).digest('base64').replace(/=+$/, ''));
+  assert.equal(ready.hostKey, hostKey);
+  assert.equal(ready.fingerprint, 'SHA256:' + createHash('sha256').update(sshKeyBytes(hostKey)!).digest('base64').replace(/=+$/, ''));
   const replacement = publicKey();
   const update = await app.inject({ method: 'PUT', url, headers, payload: { authorizedKeys: [replacement], revision: ready.revision } });
   assert.equal(update.statusCode, 200, update.body);
   assert.equal(update.json().state, 'configuring');
-  assert.equal((await beat(1)).json().configuration.revision, 2);
-  assert.deepEqual((await beat(1)).json().configuration.authorizedKeys, [replacement]);
-  await beat(2);
+  await s.c.environments.syncSSH(row.id);
   assert.equal((await app.inject({ url, headers })).json().state, 'ready');
   const conflict = await app.inject({ method: 'PUT', url, headers, payload: { authorizedKeys: keys, revision: 1 } });
   assert.equal(conflict.statusCode, 409);
   const disable = await app.inject({ method: 'PUT', url, headers, payload: { authorizedKeys: [], revision: 2 } });
   assert.equal(disable.statusCode, 200, disable.body);
-  await beat(3);
+  await s.c.environments.syncSSH(row.id);
   assert.equal((await app.inject({ url, headers })).json().state, 'disabled');
 });
 
-test('編集権限のあるプリンシパルがSSH鍵を設定し、登録した実行環境だけがホスト鍵を報告する', async t => {
-  const s = await setup(t), executor = await register(s), { app, row, c, owner, other } = s;
+test('編集権限のあるプリンシパルがSSH鍵を設定する', async t => {
+  const s = await setup(t), { app, row, c, owner, other } = s;
+  await register(s);
   const url = '/api/environments/' + row.id + '/ssh', headers = { authorization: 'Bearer ' + other.token };
   assert.equal((await app.inject({ url, headers })).statusCode, 403);
   for (const relation of ['reader', 'runner'])
     await c.relations.draw(owner.actor, { subjectId: other.actor.id, relation, objectId: row.id });
   assert.equal((await app.inject({ url, headers })).statusCode, 200);
   assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { authorizedKeys: [publicKey()] } })).statusCode, 403);
-  assert.equal((await app.inject({ method: 'POST', url: url + '/heartbeat', headers: s.headers,
-    payload: { hostKey: executor.hostKey, appliedRevision: 1, activeSessions: 0 } })).statusCode, 403);
-  const heartbeat = { hostKey: executor.hostKey, appliedRevision: 1, activeSessions: 0 };
-  assert.equal((await app.inject({ method: 'POST', url: url + '/heartbeat', headers: executor.headers, payload: heartbeat })).statusCode, 200);
-  const changed = await app.inject({ method: 'POST', url: url + '/heartbeat', headers: executor.headers,
-    payload: { ...heartbeat, hostKey: publicKey() } });
-  assert.equal(changed.statusCode, 409);
-  assert.equal(changed.json().error.code, 'ssh_host_key_changed');
+  await c.relations.draw(owner.actor, { subjectId: other.actor.id, relation: 'editor', objectId: row.id });
+  assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { authorizedKeys: [publicKey()] } })).statusCode, 200);
   const malformed = await app.inject({ method: 'PUT', url, headers: s.headers, payload: { authorizedKeys: ['not a public key'] } });
   assert.equal(malformed.statusCode, 400);
 });
 
 test('SSH接続中はアイドル停止を延期し、接続終了後にアイドル停止する', async t => {
-  const s = await setup(t), executor = await register(s);
-  await s.c.environments.sshHeartbeat(executor.actor, s.row.id, { hostKey: executor.hostKey, appliedRevision: 1, activeSessions: 1 });
+  const s = await setup(t);
+  await register(s);
+  s.runner.ssh.sessions.set(s.row.id, 1);
   await s.f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb((now()-interval '2 minutes')::text)) WHERE id=$1", [s.row.id]);
   await s.c.environments.tick();
   assert.equal((await s.c.resources.get(s.row.id)).data.state, 'running');
-  await s.c.environments.sshHeartbeat(executor.actor, s.row.id, { hostKey: executor.hostKey, appliedRevision: 1, activeSessions: 0 });
+  s.runner.ssh.sessions.set(s.row.id, 0);
+  await s.f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb((now()-interval '2 minutes')::text)) WHERE id=$1", [s.row.id]);
   await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [s.row.id]);
   await s.c.environments.tick();
   assert.equal((await s.c.environments.ssh(s.owner.actor, s.row.id))!.state, 'stopped');
@@ -120,8 +96,9 @@ test('SSH接続中はアイドル停止を延期し、接続終了後にアイ�
 });
 
 test('SSH接続中も最長稼働時間を適用して環境を停止する', async t => {
-  const s = await setup(t), executor = await register(s);
-  await s.c.environments.sshHeartbeat(executor.actor, s.row.id, { hostKey: executor.hostKey, appliedRevision: 1, activeSessions: 1 });
+  const s = await setup(t);
+  await register(s);
+  s.runner.ssh.sessions.set(s.row.id, 1);
   await s.f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb((now()-interval '11 minutes')::text)) WHERE id=$1", [s.row.id]);
   await s.f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [s.row.id]);
   await s.c.environments.tick();

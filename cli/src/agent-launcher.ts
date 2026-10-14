@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export function launchAgent(mode: 'start' | 'managed', options?: object): Promise<number> {
+export function launchAgent(mode: 'start', options?: object): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), mode], {
       stdio: 'inherit', env: { ...process.env, ...(options ? { FOUNDATION_AGENT_OPTIONS: JSON.stringify(options) } : {}) },

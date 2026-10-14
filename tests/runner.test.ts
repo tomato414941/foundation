@@ -132,7 +132,7 @@ async function setup(t: TestContext) {
   t.mock.method(client, 'send', provider.send.bind(provider));
   return { provider, runner: new EC2Runner(config, client, async () => {}) };
 }
-const bootstrap = { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from('{}').toString('base64url') };
+const bootstrap = { keys: await new (await import('../server/ssh-client.js')).OpenSSH().keys(), authorizedKeys: [] };
 
 test('環境ごとにVM・暗号化ディスク・サブネットとSSHアドレスを割り当て、AWS側で内部通信を制限する', async t => {
   const { provider, runner } = await setup(t), connections: any[] = [];
@@ -150,7 +150,10 @@ test('環境ごとにVM・暗号化ディスク・サブネットとSSHアドレ
     const data = Buffer.from(request.input.UserData, 'base64').toString();
     assert.ok(data.startsWith('#cloud-config\n'));
     const cloud = JSON.parse(data.slice('#cloud-config\n'.length));
-    assert.equal(cloud.write_files[0].permissions, '0600');
+    assert.equal(cloud.ssh_keys.ed25519_private, bootstrap.keys.hostPrivateKey);
+    assert.equal(cloud.ssh_keys.ed25519_public, bootstrap.keys.hostPublicKey);
+    assert.equal(cloud.write_files[0].permissions, '0644');
+    assert.equal(cloud.write_files[0].content.trim(), bootstrap.keys.publicKey.trim());
   }
 });
 

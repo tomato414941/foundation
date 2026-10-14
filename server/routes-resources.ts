@@ -5,7 +5,6 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
-import * as P from '../shared/protocol.js';
 
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
@@ -144,13 +143,6 @@ export async function routesResources(app: ApiApp, context: Context) {
       }
     },
   );
-  app.post('/api/environments/:id/enroll', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    schema: { params: C.IdParams, body: P.EnvironmentEnrollment, response: { 200: C.Ok }, security: [] },
-  }, async request => {
-    await environments.enroll(request.params.id, request.body);
-    return { ok: true as const };
-  });
   app.addContentTypeParser(
     'application/octet-stream',
     { parseAs: 'buffer', bodyLimit: 25 * 1024 * 1024 },

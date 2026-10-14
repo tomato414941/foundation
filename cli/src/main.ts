@@ -142,7 +142,6 @@ const options = {
   id: textOption,
   isolation: textOption,
   image: textOption,
-  managed: booleanOption,
   once: booleanOption,
   method: textOption,
   'client-id': textOption,
@@ -426,7 +425,6 @@ async function main(argv: string[]) {
     await login(args);
     return 0;
   }
-  if (command === 'agent' && args.positionals[0] === 'managed') return launchAgent('managed');
   const client = new Client(await readIdentity(args.values.origin));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
@@ -455,7 +453,7 @@ async function main(argv: string[]) {
     return launchAgent('start', { origin: client.identity.origin, id: args.values.id ? Id.parse(args.values.id) : undefined,
       ownerId: owner, name: Name.parse(args.values.name ?? hostname()),
       isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
-      image: args.values.image, managed: args.values.managed, once: args.values.once });
+      image: args.values.image, once: args.values.once });
   }
   if (command === 'app') {
     const resource = await saveApp(client, { ownerId: owner,

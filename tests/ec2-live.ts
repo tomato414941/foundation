@@ -10,21 +10,23 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { EC2Runner } from '../server/ec2-runner.js';
 import { buildApp } from '../server/app.js';
+import { Worker } from '../server/worker.js';
 import type { ResourceRow } from '../server/resources.js';
 
-// Run against a disposable database schema and a public HTTPS test origin.
-const origin = process.env.EC2_TEST_ORIGIN;
-if (!origin || !process.env.EC2_ENVIRONMENT_AMI) throw new Error('Set EC2_TEST_ORIGIN and the EC2 environment configuration.');
+// Run against a disposable database schema and disposable EC2 instances.
+const origin = process.env.EC2_TEST_ORIGIN ?? 'http://127.0.0.1:3461';
+if (!process.env.EC2_ENVIRONMENT_AMI) throw new Error('Set the EC2 environment configuration.');
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const execute = promisify(execFile), directory = await mkdtemp(join(tmpdir(), 'foundation-ec2-live-'));
 let interrupted = false;
 const stop = () => { interrupted = true; };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
 const f = await fixture({ ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => Boolean(entry[1]) &&
-  (entry[0].startsWith('EC2_ENVIRONMENT_') || entry[0] === 'AWS_REGION' || entry[0] === 'ENVIRONMENT_FUNCTION_IMAGE'))),
+  (entry[0].startsWith('EC2_ENVIRONMENT_') || entry[0] === 'AWS_REGION'))),
   FOUNDATION_ORIGIN: origin, FOUNDATION_BILLING_MODE: 'included', FOUNDATION_INCLUDED_ENVIRONMENTS: '10' });
 const runner = new EC2Runner(f.config), c = await createContext(f.config, { db: f.db, runner }), app = await buildApp(c);
 const rows: ResourceRow[] = [], failures: unknown[] = [];
+const worker = new Worker(c, error => { failures.push(error); });
 const key = join(directory, 'key'), known = join(directory, 'known_hosts');
 await execute('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
 const publicKey = (await readFile(key + '.pub', 'utf8')).trim();
@@ -43,9 +45,10 @@ const api = async (method: string, path: string, owner: typeof owners[number], b
   return result.json();
 };
 const ssh = (host: string, command: string) => execute('ssh', ['-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
-  '-o', 'UserKnownHostsFile=' + known, '-o', 'ConnectTimeout=15', 'root@' + host, command], { timeout: 45_000 });
+  '-o', 'UserKnownHostsFile=' + known, '-o', 'ConnectTimeout=15', 'ubuntu@' + host, command], { timeout: 45_000 });
 try {
   await app.listen({ host: '127.0.0.1', port: Number(process.env.EC2_TEST_PORT ?? '3461') });
+  worker.start();
   for (const owner of [owners[0]!, owners[0]!, owners[1]!]) {
     const result = await api('POST', '/api/principals/' + owner.actor.id + '/resources', owner, { kind: 'environment',
       options: { lifetime: { idleSeconds: 900, maxSeconds: 1800 }, ssh: { authorizedKeys: [publicKey] } } });
@@ -70,14 +73,14 @@ try {
   assert.equal(new Set(instances.map(value => value.SubnetId)).size, 3);
   for (const [index, row] of rows.entries()) {
     const host = connections[index]!.host!;
-    assert.equal((await ssh(host, 'printf env-' + index + ' > /workspace/marker.txt; cat /workspace/marker.txt')).stdout, 'env-' + index);
+    assert.equal((await ssh(host, 'printf env-' + index + ' > /home/ubuntu/marker.txt; cat /home/ubuntu/marker.txt')).stdout, 'env-' + index);
     const owner = owners.find(value => value.actor.id === row.owner_id)!;
     const started = await api('POST', '/api/environments/' + row.id + '/processes', owner,
-      { command: ['sh', '-c', 'cat marker.txt; printf api-' + index + ' > api.txt'], workingDirectory: '/workspace' });
+      { command: ['sh', '-c', 'cat marker.txt; printf api-' + index + ' > api.txt'], workingDirectory: '/home/ubuntu' });
     const completed = await wait(() => api('GET', '/api/processes/' + started.id, owner), value => !['queued', 'running'].includes(value.state));
     assert.equal(completed.state, 'succeeded', JSON.stringify(completed));
     assert.equal(completed.result.stdout, 'env-' + index);
-    assert.equal((await ssh(host, 'cat /workspace/api.txt')).stdout, 'api-' + index);
+    assert.equal((await ssh(host, 'cat /home/ubuntu/api.txt')).stdout, 'api-' + index);
     const otherInstances = instances.filter(value => value.PublicIpAddress !== host);
     for (const target of otherInstances) {
       const probe = 'timeout 3 bash -c ' + quote('echo > /dev/tcp/' + target.PrivateIpAddress + '/22') +
@@ -90,9 +93,9 @@ try {
       'curl -s -o /dev/null -w "%{http_code}" -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/iam/security-credentials/');
     assert.equal(profile.stdout, '404');
   }
-  console.log('Verified: three isolated VMs, SSH, API/workspace sharing, private network denial in both directions, and no guest AWS role.');
+  console.log('Verified: three isolated VMs, SSH, API/home/ubuntu sharing, private network denial in both directions, and no guest AWS role.');
   for (const [index, connection] of connections.entries())
-    assert.equal((await ssh(connection.host!, 'cat /workspace/marker.txt')).stdout, 'env-' + index);
+    assert.equal((await ssh(connection.host!, 'cat /home/ubuntu/marker.txt')).stdout, 'env-' + index);
   await c.environments.stop({ id: rows[0]!.owner_id }, await c.resources.get(rows[0]!.id));
   await f.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [rows[0]!.id]);
   await c.environments.tick();
@@ -119,6 +122,7 @@ finally {
       assert.equal(await runner.findVolume(row.id), null);
     } catch (error) { failures.push(error); }
   }
+  await worker.stop();
   await app.close();
   await f.close();
   await rm(directory, { recursive: true, force: true });

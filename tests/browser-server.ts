@@ -4,9 +4,8 @@ import { MemoryObjects, MemoryPayments, MemoryRunner } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
-import { randomBytes } from 'node:crypto';
-import { bindKeys, fingerprint, newIdentityKeys, signBinding } from '../shared/authority.js';
-import { EnvironmentBootstrap } from '../shared/protocol.js';
+import { randomUUID } from 'node:crypto';
+import { fingerprint } from '../shared/authority.js';
 import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, signEnvironment } from '../shared/runtime-protocol.js';
 import { Client } from '../cli/src/client.js';
 import { HttpBroker } from '../runtime/broker.js';
@@ -15,9 +14,7 @@ import { FunctionExecutor, FunctionBroker } from '../runtime/functions.js';
 import { Connections } from '../runtime/connections.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
-import type { EnvironmentOptions } from '../shared/contracts.js';
 import { DomainError } from '../server/errors.js';
-import { SSHWorkerState } from '../shared/ssh.js';
 import type { Transport } from '../server/transport.js';
 import type { AwsConnectionRequest } from '../shared/aws.js';
 import { ovhSignature } from '../runtime/ovh.js';
@@ -30,11 +27,8 @@ const roleRequests = new Map<string, Array<{ arn: string; externalId: string; re
 const awsRequests = new Map<string, AwsConnectionRequest[]>();
 const oauthRequests = new Map<string, Array<{ clientId: string | null; clientSecret: string | null; scope: string | null }>>();
 const ovhApprovals = new Map<string, { redirection: string; consumerKey: string; rules: Array<{ method: string; path: string }>; approved: boolean }>();
-const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
-  private suspended = new Map<string, { agent: Executor; functions: FunctionExecutor | undefined;
-    ssh: NonNullable<ReturnType<typeof sshAgents.get>> }>();
   private async beforeDelete(id: string, phase: 'stop' | 'volume') {
     const key = phase === 'stop' ? id : [...deletions.keys()].find(key => 'vol_' + key.replaceAll('-', '') === id);
     const plan = key ? deletions.get(key) : null;
@@ -42,25 +36,16 @@ class BrowserRunner extends MemoryRunner {
     if (plan.fail) { plan.fail = false; throw new DomainError(502, 'runner_unavailable', 'Provider unavailable'); }
     if (plan.gate) await plan.gate;
   }
-  override async start(id: string, options: EnvironmentOptions, environment: Record<string, string>,
-    created: (id: string, volume: string) => Promise<void>) {
-    const machine = await super.start(id, options, environment, created);
-    if (agents.has(id)) return machine;
-    const bootstrap = EnvironmentBootstrap.parse(JSON.parse(Buffer.from(environment.FOUNDATION_EXECUTOR_BOOTSTRAP!, 'base64url').toString()));
-    const keys = await newIdentityKeys(), binding = bindKeys(bootstrap.executorId, keys);
-    const token = 'fk_' + randomBytes(32).toString('base64url');
-    const enrollment = await app.inject({ method: 'POST', url: '/api/environments/' + id + '/enroll',
-      payload: { bootstrap: bootstrap.bootstrap, binding: await signBinding(binding, keys), token } });
-    if (enrollment.statusCode !== 200) throw new Error(enrollment.body);
+  async attach(ownerId: string, name: string) {
+    const id = randomUUID(), principal = await fixtureData.person(name + ' principal');
+    const { keys, binding, token } = principal;
+    await context.relations.draw({ id: ownerId }, { subjectId: principal.actor.id, relation: 'agent', objectId: ownerId });
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
-    const registration = await signEnvironment({ format: 3, id, origin, ownerId: bootstrap.ownerId,
-      name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
+    const registration = await signEnvironment({ format: 3, id, origin, ownerId,
+      name, executor: binding, operatorId: binding.principalId, driver: 'attached',
       capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, resultVersion: 1,
-      isolation: 'process', functionImage: bootstrap.functionImage,
-      awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
+      isolation: 'process', awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
-    if (bootstrap.ssh) sshAgents.set(id, { client, revision: 0,
-      hostKey: 'ssh-ed25519 ' + Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), randomBytes(32)]).toString('base64') });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
     const transport: Transport = { async send(request) {
       if (request.url === 'https://receiver.example/private-webhook' && request.method === 'POST') {
@@ -107,7 +92,7 @@ class BrowserRunner extends MemoryRunner {
       }
       return { status: 200, headers: {}, body: new TextEncoder().encode('{}') };
     } };
-    // This UI fixture simulates provisioning; container isolation has its own integration test.
+    // The fixture attaches an optional runtime for protected operation tests.
     agents.set(id, new Executor(registration, keys, broker, journal, transport,
       new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport, {
         async obtain(input) {
@@ -138,31 +123,14 @@ class BrowserRunner extends MemoryRunner {
         },
       })));
     functionAgents.set(id, new FunctionExecutor(agents.get(id)!, new FunctionBroker(client), journal));
-    return machine;
+    return { id, principalId: binding.principalId, fingerprint: await fingerprint(binding) };
   }
-  override async stop(id: string) {
-    await this.beforeDelete(id, 'stop');
-    const agent = agents.get(id), ssh = sshAgents.get(id);
-    if (agent && ssh) this.suspended.set(id, { agent, ssh, functions: functionAgents.get(id) });
-    agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); disconnected.delete(id);
-    await super.stop(id);
-  }
-  override async resume(id: string) {
-    const result = await super.resume(id), saved = this.suspended.get(id);
-    if (saved) {
-      await saved.ssh.client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: saved.agent.environment });
-      agents.set(id, saved.agent);
-      sshAgents.set(id, saved.ssh);
-      if (saved.functions) functionAgents.set(id, saved.functions);
-      this.suspended.delete(id);
-    }
-    return result;
-  }
-  override async terminate(id: string) { this.suspended.delete(id); await super.terminate(id); }
+  override async stop(id: string) { await this.beforeDelete(id, 'stop'); await super.stop(id); }
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
 const fixtureData = await fixture();
+const browserRunner = new BrowserRunner();
 const port = Number(process.env.FOUNDATION_TEST_PORT ?? 3458);
 const origin = 'http://localhost:' + port;
 const context = await createContext(
@@ -178,7 +146,7 @@ const context = await createContext(
     mailer: fixtureData.mailer,
     storage: new MemoryObjects(),
     payments: new MemoryPayments(),
-    runner: new BrowserRunner(),
+    runner: browserRunner, ssh: browserRunner.ssh,
     transport: {
       async send(request) {
         return {
@@ -194,6 +162,8 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
+app.post<{ Body: { ownerId: string; name: string } }>('/__test/executor', request =>
+  browserRunner.attach(request.body.ownerId, request.body.name));
 app.get<{ Params: { id: string } }>('/__test/executor/:id/roles', async request => roleRequests.get(request.params.id) ?? []);
 app.get<{ Params: { id: string } }>('/__test/executor/:id/aws', async request => awsRequests.get(request.params.id) ?? []);
 app.get<{ Params: { id: string } }>('/__test/executor/:id/oauth', async request => oauthRequests.get(request.params.id) ?? []);
@@ -258,14 +228,8 @@ try {
 worker.start();
 const executorTimer = setInterval(() => {
   for (const [id, agent] of agents) if (!running.has(id) && !disconnected.has(id)) {
-    const task = agent.tick().then(() => functionAgents.get(id)?.tick()).then(async () => {
-      const ssh = sshAgents.get(id);
-      if (ssh) {
-        const state = await ssh.client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST',
-          body: { hostKey: ssh.hostKey, appliedRevision: ssh.revision, activeSessions: 0 } }, SSHWorkerState);
-        if (state.configuration) ssh.revision = state.configuration.revision;
-      }
-    }).catch(error => app.log.error(error)).finally(() => running.delete(id));
+    const task = agent.tick().then(() => functionAgents.get(id)?.tick())
+      .catch(error => app.log.error(error)).finally(() => running.delete(id));
     running.set(id, task);
   }
 }, 1000);

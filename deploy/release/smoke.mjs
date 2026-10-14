@@ -18,13 +18,14 @@ import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
 import { encode, decode } from '../../dist/shared/encryption.js';
 import { cleanupIdentities } from './cleanup.mjs';
+import { OpenSSH } from '../../dist/server/ssh-client.js';
 
 // Only disposable identities and test material are used, including against production.
 const config = await configuration();
 const context = await createContext(config);
 const directory = await mkdtemp(join(tmpdir(), 'foundation-release-smoke-'));
 const identities = [], resources = [];
-let environment, agent, mcp, finished = false;
+let environment, vm, agent, mcp, finished = false;
 const check = async path => {
   const response = await fetch(config.origin + path, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
   assert.equal(response.status, 200, 'Public request failed: ' + path);
@@ -54,19 +55,32 @@ try {
     identities[index] = { id: binding.principalId, client, custody, functions, binding, trust };
   }
   const [owner, caller] = identities;
-  if (process.env.RELEASE_SMOKE_MODE === 'attached') {
-    const home = join(directory, 'agent');
-    process.env.XDG_CONFIG_HOME = home;
-    await saveIdentity(owner.client.identity);
-    environment = crypto.randomUUID();
-    agent = spawn(process.execPath, ['/app/release/cli.mjs', 'agent', 'start', '--id', environment, '--isolation', 'process'],
-      { env: { ...process.env, XDG_CONFIG_HOME: home }, stdio: 'ignore' });
-  } else {
+  if (process.env.RELEASE_SMOKE_MODE !== 'attached') {
+    const ssh = new OpenSSH(), direct = await ssh.keys();
     const created = await owner.client.json('/api/principals/' + owner.id + '/resources', { method: 'POST', body: {
-      kind: 'environment', name: 'Release verification', options: { lifetime: { idleSeconds: 300, maxSeconds: 600 } },
+      kind: 'environment', name: 'Release VM verification', options: {
+        lifetime: { idleSeconds: 300, maxSeconds: 600 }, ssh: { authorizedKeys: [direct.publicKey] },
+      },
     } });
-    environment = created.id;
+    vm = created.id;
+    await wait(() => owner.client.json('/api/resources/' + vm), value => value.data.state === 'running');
+    const started = await owner.client.json('/api/environments/' + vm + '/processes', { method: 'POST', body: {
+      command: ['sh', '-c', 'printf release-shared > release-check.txt; printf ready'],
+    } });
+    const completed = await wait(() => owner.client.json('/api/processes/' + started.id), value => Boolean(value.finishedAt));
+    assert.equal(completed.state, 'succeeded'); assert.equal(completed.result.stdout, 'ready');
+    const connection = await owner.client.json('/api/environments/' + vm + '/ssh');
+    const read = await ssh.run({ id: vm, host: connection.host, port: connection.port, username: connection.username,
+      privateKey: direct.privateKey, hostKey: connection.hostKey }, 'cat release-check.txt');
+    assert.equal(read.stdout, 'release-shared');
+    await owner.client.json('/api/relations', { method: 'POST', body: { subjectId: caller.id, relation: 'runner', objectId: vm } });
   }
+  const home = join(directory, 'agent');
+  process.env.XDG_CONFIG_HOME = home;
+  await saveIdentity(owner.client.identity);
+  environment = crypto.randomUUID();
+  agent = spawn(process.execPath, ['/app/release/cli.mjs', 'agent', 'start', '--id', environment, '--isolation', 'process'],
+    { env: { ...process.env, XDG_CONFIG_HOME: home }, stdio: 'ignore' });
   const registration = await wait(async () => {
     try { return await owner.client.json('/api/environments/' + environment + '/registration'); }
     catch (error) { if (error.status === 404 || error.status === 409) return { registration: null }; throw error; }
@@ -105,6 +119,13 @@ try {
     assert.notEqual(response.isError, true, 'The MCP function operation failed.');
     return response.structuredContent.data;
   };
+  if (vm) {
+    const started = await call('foundation_api', { method: 'POST', path: '/api/environments/' + vm + '/processes',
+      body: { command: ['cat', 'release-check.txt'] } });
+    assert.equal(started.status, 202);
+    const completed = await wait(() => caller.client.json('/api/processes/' + started.body.id), value => Boolean(value.finishedAt));
+    assert.equal(completed.state, 'succeeded'); assert.equal(completed.result.stdout, 'release-shared');
+  }
   const available = await call('foundation_functions', { query: 'Release function' });
   assert.ok(available.body.items.some(item => item.id === fn.id));
   const started = (await call('foundation_invoke_function', { functionId: fn.id, arguments: arguments_ })).body;
@@ -130,16 +151,16 @@ try {
     try { await context.resources.delete({ id: (await context.resources.get(id)).owner_id }, await context.resources.get(id)); }
     catch (error) { failures.push(error); }
   }
-  if (environment) {
+  for (const id of [environment, vm].filter(Boolean)) {
     try {
-      const row = await context.resources.get(environment);
+      const row = await context.resources.get(id);
       if (row.data.driver === 'attached') await context.resources.delete({ id: row.owner_id }, row);
       else {
         await context.environments.remove({ id: row.owner_id }, row);
         await wait(async () => {
-        await context.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [environment]);
+        await context.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [id]);
         await context.environments.tick();
-        return context.environments.deletion({ id: row.owner_id }, environment);
+        return context.environments.deletion({ id: row.owner_id }, id);
         }, value => value.state === 'complete', 360);
       }
     } catch (error) { failures.push(error); }
@@ -152,4 +173,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, function: true, mcp: true, encryptedInputs: true, encryptedOutput: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, cleanup: true }));
