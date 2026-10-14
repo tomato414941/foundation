@@ -17,10 +17,7 @@
           "include_granted_scopes": "true"
         },
         "scopes": {
-          "default": [
-            "openid",
-            "https://www.googleapis.com/auth/userinfo.email"
-          ],
+          "default": [],
           "docs": "https://developers.google.com/identity/protocols/oauth2/scopes"
         },
         "outputs": {

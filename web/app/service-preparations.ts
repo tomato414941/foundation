@@ -1,8 +1,11 @@
 import type { CatalogConnectionMethod } from '../../shared/contracts';
 import { connectionMethod } from '../../shared/connection-methods';
 
-interface ServicePreparation { instructions: string[]; scopes: boolean; docs?: boolean }
+interface ServicePreparation { instructions: string[]; scopes: boolean; scopesRequired?: boolean; docs?: boolean }
 const preparations: Array<{ authorization: 'application' | 'browser'; matches(method: CatalogConnectionMethod): boolean; preparation: ServicePreparation }> = [
+  // Google rejects an authorization request without scopes, and none are chosen in advance.
+  { authorization: 'browser', matches: method => method.id === 'google:oauth',
+    preparation: { instructions: [], scopes: true, scopesRequired: true } },
   { authorization: 'browser', matches: method => method.id === 'runpod:mcp-oauth',
     preparation: { instructions: [], scopes: false } },
   { authorization: 'application', matches: method => method.id === 'shopify:client_credentials',

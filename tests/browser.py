@@ -1666,7 +1666,7 @@ class BrowserTests(unittest.TestCase):
         self.saved_connection(page, "AWS keys")
         self.assertEqual(page.url, path)
 
-    def test_Googleの認可をブラウザで交換して接続を保存する(self):
+    def test_Googleの認可で入力したスコープだけを求めてブラウザで交換し接続を保存する(self):
         page, principal = self.passkey_account("Browser authorization owner")
         exchanges = []
         def exchange(route):
@@ -1679,8 +1679,13 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="名前", exact=True).fill("Google account")
         page.get_by_role("button", name="接続する", exact=True).click()
         link = page.get_by_role("link", name="サービスで認可する", exact=True)
+        expect(link).to_have_count(0)
+        page.get_by_role("textbox", name="スコープ", exact=True).fill("https://www.googleapis.com/auth/gmail.readonly")
+        page.get_by_role("button", name="接続する", exact=True).click()
         expect(link).to_be_visible()
-        state = parse_qs(urlparse(link.get_attribute("href")).query)["state"][0]
+        query = parse_qs(urlparse(link.get_attribute("href")).query)
+        self.assertEqual(query["scope"], ["https://www.googleapis.com/auth/gmail.readonly"])
+        state = query["state"][0]
         page.goto(ORIGIN + "/oauth/callback?state=" + state + "&code=browser-google-code")
         saved = self.saved_connection(page, "Google account")
         self.assertEqual(saved["data"]["methodId"], "google:oauth")
