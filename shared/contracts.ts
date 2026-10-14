@@ -250,10 +250,27 @@ export const OvhDefinition = z.object({
   outputs: OutputMap,
   hint: z.string().optional(),
 }).strict();
+const OutputName = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
+const HttpHeaderName = z.union([
+  z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/),
+  z.object({ output: OutputName }).strict(),
+]);
+export const HttpConnection = z.object({
+  urlField: z.string().min(1).max(100).optional(),
+  authentication: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('none') }).strict(),
+    z.object({ kind: z.literal('bearer'), token: OutputName }).strict(),
+    z.object({ kind: z.literal('basic'), username: OutputName, password: OutputName }).strict(),
+    z.object({ kind: z.literal('header'), name: HttpHeaderName, value: OutputName }).strict(),
+    z.object({ kind: z.literal('query'), name: HttpHeaderName, value: OutputName }).strict(),
+  ]),
+}).strict();
+export type HttpConnectionSpec = z.infer<typeof HttpConnection>;
 const methodMetadata = {
   name: Name,
   docs: z.url().optional(),
   console: UrlTemplate.optional(),
+  http: HttpConnection.optional(),
 };
 export const OAuthMethod = z
   .object({ ...methodMetadata, kind: z.literal('oauth'), config: OAuthDefinition })
@@ -346,7 +363,8 @@ export const Binding = z
   .strict();
 export const HttpRequest = z
   .object({
-    url: z.string().max(4096),
+    url: z.string().min(1).max(4096).optional(),
+    connectionId: Id.optional(),
     method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
     headers: z.record(z.string(), z.string().max(8192)).default({}),
     body: z.string().max(1_000_000).optional(),
@@ -354,7 +372,9 @@ export const HttpRequest = z
     form: z.record(z.string(), z.string()).optional(),
     bindings: z.array(Binding).max(32).default([]),
   })
-  .strict();
+  .strict().refine(value => Boolean(value.url || value.connectionId), {
+    message: 'Choose a connection or enter a destination URL.',
+  });
 export type HttpRequestInput = z.infer<typeof HttpRequest>;
 export const Command = z
   .object({
@@ -441,6 +461,7 @@ export const ConnectionResource = z.object({
     settings: z.array(z.object({ name: z.string(), label: z.string(), value: z.string() })).default([]),
     methodName: z.string(),
     methodKind: AuthKind,
+    http: HttpConnection.optional(),
     services: z.array(z.object({ id: z.string(), name: Name })).default([]),
     account: z.string(),
     accountId: z.string().nullable().default(null),

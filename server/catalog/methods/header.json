@@ -1,0 +1,48 @@
+{
+  "id": "http:header",
+  "name": "API key in header",
+  "http": {
+    "urlField": "url",
+    "authentication": {
+      "kind": "header",
+      "name": {
+        "output": "HEADER_NAME"
+      },
+      "value": "API_KEY"
+    }
+  },
+  "kind": "token",
+  "config": {
+    "fields": [
+      {
+        "name": "url",
+        "label": "Destination URL",
+        "secret": true,
+        "inputType": "password",
+        "required": true,
+        "pattern": "^https://.+$",
+        "placeholder": "https://api.example.com/endpoint"
+      },
+      {
+        "name": "headerName",
+        "label": "Header name",
+        "secret": false,
+        "required": true,
+        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        "defaultValue": "X-API-Key"
+      },
+      {
+        "name": "key",
+        "label": "API key",
+        "secret": true,
+        "inputType": "password",
+        "required": true
+      }
+    ],
+    "outputs": {
+      "URL": "/url",
+      "HEADER_NAME": "/headerName",
+      "API_KEY": "/key"
+    }
+  }
+}

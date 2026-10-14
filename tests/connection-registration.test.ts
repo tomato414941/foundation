@@ -19,14 +19,18 @@ import { DomainError } from '../server/errors.js';
 function browser(f: Awaited<ReturnType<typeof flowFixture>>, custody = f.client) {
   return new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'browser'));
 }
-const valueFor = (name: string) => name === 'domain' ? 'example.com' : name === 'tenant' ? 'common' :
+const valueFor = (name: string) => name === 'url' ? 'https://receiver.example/webhook' :
+  name === 'domain' ? 'example.com' : name === 'tenant' ? 'common' :
   name === 'site' ? 'example.atlassian.net' : name === 'email' ? 'person@example.com' : name === 'shop' || name === 'subdomain' ? 'example' : 'private-value-' + name;
 
 test('サービスへアクセスできない端末でも入力式の認証情報を暗号化して保存する', async t => {
   const f = await flowFixture(() => { throw new Error('The service is offline.'); }); t.after(f.close);
-  const custody = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys, new JournalTrust(new MemoryJournal()));
-  const client = browser(f, custody), catalog = await custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod));
+  const catalog = await f.api(f.stranger.token).json('/api/connection-methods', {}, listOf(CatalogMethod));
+  let device = 0;
   for (const method of catalog.items.filter(method => method.registration.kind === 'input')) await t.test(method.id, async () => {
+    const custody = new CustodyClient(f.api(f.stranger.token, '198.18.0.' + ++device), f.config.origin,
+      f.stranger.binding, f.stranger.keys, new JournalTrust(new MemoryJournal()));
+    const client = browser(f, custody);
     const definitions = method.kind === 'aws' ? [] : method.config.fields;
     const entered = Object.fromEntries(definitions.map(field => [field.name, field.choices?.[0]?.value ?? field.defaultValue ??
       (field.name === 'endpoint' ? 'https://storage.example.com' : field.name === 'region' ? 'us-east-1' :

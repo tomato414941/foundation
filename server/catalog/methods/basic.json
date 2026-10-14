@@ -1,0 +1,45 @@
+{
+  "id": "http:basic",
+  "name": "Basic authentication",
+  "http": {
+    "urlField": "url",
+    "authentication": {
+      "kind": "basic",
+      "username": "USERNAME",
+      "password": "PASSWORD"
+    }
+  },
+  "kind": "token",
+  "config": {
+    "fields": [
+      {
+        "name": "url",
+        "label": "Destination URL",
+        "secret": true,
+        "inputType": "password",
+        "required": true,
+        "pattern": "^https://.+$",
+        "placeholder": "https://api.example.com/endpoint"
+      },
+      {
+        "name": "username",
+        "label": "Username",
+        "secret": true,
+        "required": true,
+        "pattern": "^[^:]+$"
+      },
+      {
+        "name": "password",
+        "label": "Password",
+        "secret": true,
+        "inputType": "password",
+        "required": true
+      }
+    ],
+    "outputs": {
+      "URL": "/url",
+      "USERNAME": "/username",
+      "PASSWORD": "/password"
+    }
+  }
+}

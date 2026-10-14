@@ -36,6 +36,12 @@ export class Catalog {
       definitions = new Map<string, ServiceDescription>(),
       methods = new Map<string, MethodDescription>(),
       catalog = new Catalog(definitions, methods, resources, config);
+    const methodDirectory = new URL('methods/', directory);
+    for (const filename of (await readdir(methodDirectory)).filter(name => name.endsWith('.json')).sort()) {
+      const { id, ...data } = JSON.parse(await readFile(new URL(filename, methodDirectory), 'utf8'));
+      if (typeof id !== 'string' || !id || methods.has(id)) throw new Error('Use distinct catalog method IDs.');
+      methods.set(id, MethodDefinition.parse(data));
+    }
     for (const filename of (await readdir(directory)).filter((name) => name.endsWith('.json')).sort()) {
       const { id: rawId, ...data } = JSON.parse(await readFile(new URL(filename, directory), 'utf8'));
       const id = String(rawId),
@@ -43,7 +49,10 @@ export class Catalog {
         references: Record<string, string> = {};
       for (const [key, value] of Object.entries(input.methods)) {
         const methodId = typeof value === 'string' ? value : id + ':' + key;
-        if (typeof value !== 'string') methods.set(methodId, MethodDefinition.parse(value));
+        if (typeof value !== 'string') {
+          if (methods.has(methodId)) throw new Error('Use distinct catalog method IDs.');
+          methods.set(methodId, MethodDefinition.parse(value));
+        }
         references[key] = methodId;
       }
       catalog.checkTargets(input);

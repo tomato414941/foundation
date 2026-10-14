@@ -6,7 +6,7 @@ import { Principal, Resource } from '../../shared/contracts';
 import type { JsonValue } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
-import { RequestFields } from './resource-form';
+import { httpConnections, httpRequestFromForm, RequestFields } from './http-request';
 import { resourcePath } from './navigation';
 import { executionClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
@@ -17,10 +17,11 @@ async function runResource(params: LoaderFunctionArgs['params']) {
     throw new Response('Not found', { status: 404 });
   return resource;
 }
-export async function runLoader({ params }: LoaderFunctionArgs) {
+export async function runLoader({ params, request }: LoaderFunctionArgs) {
   const resource = await runResource(params);
-  const environments = resource ? [] : await availableEnvironments(params.owner!);
-  return { resource, environments };
+  const [environments, connections] = await Promise.all([resource ? [] : availableEnvironments(params.owner!),
+    resource ? [] : httpConnections(params.owner!, request.signal)]);
+  return { resource, environments, connections };
 }
 export async function runAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
@@ -48,13 +49,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
     } else
       input = {
         kind: 'http',
-        request: {
-          url: formText(form, 'url'),
-          method: formText(form, 'httpMethod') as 'GET',
-          headers: jsonField(form, 'headers', {}),
-          ...(formText(form, 'body') ? { body: String(form.get('body')) } : {}),
-          bindings: jsonField(form, 'bindings', []),
-        },
+        request: httpRequestFromForm(form) as unknown as JsonValue,
       };
     const client = await executionClient();
     let ownerId = params.owner!;
@@ -73,7 +68,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
   });
 }
 export default function RunForm() {
-  const { resource, environments } = useLoaderData<typeof runLoader>();
+  const { resource, environments, connections } = useLoaderData<typeof runLoader>();
   const result = useActionData<typeof runAction>();
   const { t } = useTranslation();
   return (
@@ -95,7 +90,7 @@ export default function RunForm() {
           ) : (
             <>
               <Panel>
-                <RequestFields />
+                <RequestFields connections={connections} />
               </Panel>
             </>
           )}

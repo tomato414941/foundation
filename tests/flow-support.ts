@@ -37,9 +37,10 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const app = await buildApp(context);
   const requests: OutboundRequest[] = [];
   const transport: Transport = { async send(request) { requests.push(request); return respond(request); } };
-  const api = (token: string): JsonApi => ({ async json<T>(path: string,
+  const api = (token: string, remoteAddress?: string): JsonApi => ({ async json<T>(path: string,
     options: { method?: string; body?: unknown } = {}, schema?: z.ZodType<T>): Promise<T> {
     const result = await app.inject({ method: (options.method ?? 'GET') as 'GET', url: path,
+      ...(remoteAddress ? { remoteAddress } : {}),
       headers: { authorization: 'Bearer ' + token },
       ...(options.body !== undefined ? { payload: options.body as object } : {}) });
     const value = result.statusCode === 204 ? null : result.json();

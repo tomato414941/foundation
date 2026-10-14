@@ -391,6 +391,25 @@ test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端�
   assert.equal(used.stdout, '[redacted]');
 });
 
+test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLとトークンを端末で使用する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'HTTP owner', '--origin', c.origin])).code, 0);
+  const result = await c.run(['connect', '--method', 'http:bearer', '--name', 'My webhook', '--fields', '@-'],
+    JSON.stringify({ url: 'https://receiver.example/private-hook', token: 'cli-private-bearer' }));
+  assert.equal(result.code, 0, result.stderr);
+  const connected = JSON.parse(result.stdout);
+  assert.equal(connected.kind, 'connected');
+  const resource = await c.run(['api', 'GET', '/api/resources/' + connected.connectionId]);
+  assert.equal(resource.code, 0, resource.stderr);
+  assert.deepEqual(JSON.parse(resource.stdout).data.services, []);
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'URL', source: { id: connected.connectionId, output: 'URL' } },
+    { name: 'TOKEN', source: { id: connected.connectionId, output: 'TOKEN' } },
+  ]), '--', process.execPath, '-e', 'console.log(process.env.URL);console.log(process.env.TOKEN)']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, '[redacted]\n[redacted]\n');
+});
+
 test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡してAWS APIを呼び出す', async t => {
   const requests: Array<{ action: string; authorization: string; session?: string }> = [];
   const aws = createHttpServer((request, response) => {

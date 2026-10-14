@@ -7,10 +7,11 @@ import {
 } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import {
-  ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
+  HTTP_RUNTIME_VERSION, ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
 } from '../shared/runtime-protocol.js';
 import type { ExecutableOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { functionProgram } from '../shared/functions.js';
+import { httpSources } from '../shared/http-connections.js';
 import { authorizeOperationContext } from '../shared/operation-authorization.js';
 import { atPointer, pointerParts, redact, setPointer } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
@@ -32,6 +33,9 @@ export interface ExecutionExtension {
   validate(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]): Promise<void>;
   execute(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue>;
   outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<Record<string, string>>;
+  httpDestination?(content: CustodyContent, intent: ExecutionIntent, request: HttpRequestInput): Promise<string>;
+  http?(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
+    request: HttpRequestInput): Promise<{ url: string; headers: Record<string, string>; sensitive: string[] }>;
   recover?(operation: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null>;
 }
 // A variable is used whole; a connection is used through one of its named outputs.
@@ -191,8 +195,16 @@ export class Executor {
       throw new Error('Run the exact function authorized by this intent.');
     if (operation.kind !== 'function' && (intent.functionId || intent.functionDigest)) throw new Error('Use function authorization only for a saved function.');
     const request = this.request(operation);
+    let destination = request?.url;
     if (request) {
-      publicUrl(request.url, intent.origin);
+      if (request.connectionId) {
+        const content = sources.find(value => value.policy.id === request.connectionId);
+        if (this.environment.manifest.httpVersion !== HTTP_RUNTIME_VERSION || !this.extension?.httpDestination ||
+          !content || content.policy.contentType !== ContentTypes.tokenSet)
+          throw new Error('Choose an HTTP connection and a current execution environment.');
+        destination = await this.extension.httpDestination(content, intent, request);
+      }
+      publicUrl(destination!, intent.origin);
       if ([request.body, request.json, request.form].filter(value => value !== undefined).length > 1)
         throw new Error('Choose one request body format.');
       for (const binding of request.bindings) {
@@ -218,12 +230,14 @@ export class Executor {
     }
     const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
     const references = program.kind === 'command' ? program.inputs.map(input => input.source)
-      : request ? request.bindings.flatMap(binding => binding.parts.filter((part): part is SourceReference => typeof part !== 'string')) : [];
+      : request ? httpSources(request) : [];
     for (const source of references) {
       const content = sources.find(value => value.policy.id === source.id);
-      if (!content || !fits(content, source)) throw new Error('Use the input named in the signed request.');
-      await authorizeUse(content, intent, { ...(request ? { destination: request.url } : {}) });
-      await useContent(content, intent, this.keys, { ...(request ? { destination: request.url } : {}) });
+      const connection = request?.connectionId === source.id && source.output === undefined;
+      if (!content || !(connection ? content.policy.contentType === ContentTypes.tokenSet : fits(content, source)))
+        throw new Error('Use the input named in the signed request.');
+      await authorizeUse(content, intent, { destination });
+      await useContent(content, intent, this.keys, { destination });
     }
     if (operation.kind === 'connect' || operation.kind === 'refresh' || operation.kind === 'revoke') {
       if (!this.extension) throw new Error('This executor cannot manage connections.');
@@ -236,14 +250,17 @@ export class Executor {
       return this.extension!.execute(operation.input, intent, sources, signal);
     const request = this.request(operation);
     const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;
+    const destination = request?.connectionId
+      ? await this.extension!.httpDestination!(sources.find(content => content.policy.id === request.connectionId)!, intent, request)
+      : request?.url;
     const sensitive: string[] = [], cache = new Map<string, Promise<Record<string, string>>>();
     const resolve = async (source: SourceReference) => {
       const content = sources.find(content => content.policy.id === source.id)!;
       if (content.policy.contentType === ContentTypes.value) return useContent(content, intent, this.keys, {
-        ...(request ? { destination: request.url } : {}),
+        ...(request ? { destination } : {}),
       });
       if (!this.extension) throw new Error('This executor cannot use connections.');
-      if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal, request?.url));
+      if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal, destination));
       const outputs = await cache.get(source.id)!;
       if (!source.output || !Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
       return encode(outputs[source.output]!);
@@ -275,10 +292,18 @@ export class Executor {
       }
       setPointer(spec, binding.pointer, value);
     }
+    if (spec.connectionId) {
+      if (!this.extension?.http) throw new Error('This executor cannot use HTTP connections.');
+      const authenticated = await this.extension.http(sources.find(content => content.policy.id === spec.connectionId)!,
+        intent, sources, signal, spec);
+      spec.url = authenticated.url;
+      spec.headers = authenticated.headers;
+      sensitive.push(...authenticated.sensitive);
+    }
     let body = spec.body;
     if (spec.json !== undefined) { body = JSON.stringify(spec.json); spec.headers['content-type'] = 'application/json'; }
     if (spec.form !== undefined) { body = new URLSearchParams(spec.form).toString(); spec.headers['content-type'] = 'application/x-www-form-urlencoded'; }
-    const response = await this.transport.send({ url: spec.url, method: spec.method, headers: spec.headers,
+    const response = await this.transport.send({ url: spec.url!, method: spec.method, headers: spec.headers,
       ...(body === undefined ? {} : { body }), signal });
     if (operation.kind === 'function') {
       if (response.status < 200 || response.status >= 300)

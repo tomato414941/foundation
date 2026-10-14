@@ -1,0 +1,47 @@
+{
+  "id": "http:query",
+  "name": "API key in query",
+  "http": {
+    "urlField": "url",
+    "authentication": {
+      "kind": "query",
+      "name": {
+        "output": "PARAMETER_NAME"
+      },
+      "value": "API_KEY"
+    }
+  },
+  "kind": "token",
+  "config": {
+    "fields": [
+      {
+        "name": "url",
+        "label": "Destination URL",
+        "secret": true,
+        "inputType": "password",
+        "required": true,
+        "pattern": "^https://.+$",
+        "placeholder": "https://api.example.com/endpoint"
+      },
+      {
+        "name": "parameterName",
+        "label": "Query parameter name",
+        "secret": false,
+        "required": true,
+        "defaultValue": "api_key"
+      },
+      {
+        "name": "key",
+        "label": "API key",
+        "secret": true,
+        "inputType": "password",
+        "required": true
+      }
+    ],
+    "outputs": {
+      "URL": "/url",
+      "PARAMETER_NAME": "/parameterName",
+      "API_KEY": "/key"
+    }
+  }
+}

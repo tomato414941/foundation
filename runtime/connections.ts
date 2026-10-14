@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { canonical } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
-import type { JsonValue, MethodDescription } from '../shared/contracts.js';
+import type { HttpRequestInput, JsonValue, MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata, requiresApp } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { connectionMethod } from '../shared/connection-methods.js';
@@ -19,6 +19,7 @@ import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
 import type { ConnectionCheckpoint, ConnectionProvider } from './connection-provider.js';
 import { utf8 } from './inputs.js';
+import { authenticateHttp, connectionDestination } from '../shared/http-connections.js';
 
 export interface ConnectionBroker {
   prepare(id: string, resourceId: string, expectedRevision: number): Promise<ConnectionOperation>;
@@ -58,8 +59,11 @@ export class Connections implements ExecutionExtension {
     if (!content) fail(409, 'input_required', 'Include the connection and its application in this execution.');
     return content;
   }
-  private async material(content: CustodyContent, intent: ExecutionIntent, destination?: string) {
-    const material = ConnectionMaterial.safeParse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
+  private async material(content: CustodyContent, intent: ExecutionIntent,
+    destination?: string | ((state: ConnectionState) => string)) {
+    const target = typeof destination === 'function'
+      ? (bytes: Uint8Array) => destination(ConnectionMaterial.parse(JSON.parse(utf8(bytes)))) : destination;
+    const material = ConnectionMaterial.safeParse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination: target }))));
     if (!material.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
     const result = material.data;
     if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
@@ -116,6 +120,19 @@ export class Connections implements ExecutionExtension {
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(content, state, intent, sources, signal, destination);
     return this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
+  }
+
+  async httpDestination(content: CustodyContent, intent: ExecutionIntent, request: HttpRequestInput) {
+    const state = await this.material(content, intent, state => connectionDestination(state, request, intent.origin));
+    return connectionDestination(state, request, intent.origin);
+  }
+
+  async http(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
+    request: HttpRequestInput) {
+    const url = await this.httpDestination(content, intent, request);
+    const state = await this.material(content, intent, url);
+    const outputs = await this.outputs(content, intent, sources, signal, url);
+    return authenticateHttp(url, request.headers, state.method.http!, outputs);
   }
 
   private async refreshed(record: Renewal, material: ConnectionState) {

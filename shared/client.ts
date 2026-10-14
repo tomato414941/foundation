@@ -11,9 +11,10 @@ import {
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun, UseGrant } from './custody.js';
 import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
-import { RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
+import { HTTP_RUNTIME_VERSION, RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
 import { KeyringState, keyringClaim, openKeyring, signKeyring } from './keyring.js';
+import { httpSources } from './http-connections.js';
 import type { KeyringEntryValue, KeyringValue } from './keyring.js';
 
 export interface JsonApi {
@@ -342,6 +343,8 @@ export class CustodyClient {
     let expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
     const program = operation;
     const request = program.kind === 'http' ? program.request : null;
+    if (request?.connectionId && environment.manifest.httpVersion !== HTTP_RUNTIME_VERSION)
+      throw new ClientFailure('http_runtime_required', 'Update this execution environment to use HTTP connections.');
     if (operation.kind === 'http') {
       const save = options.save ?? {};
       const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, name]) =>
@@ -349,12 +352,12 @@ export class CustodyClient {
       operation.save = outputs;
     }
     const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)
-      : request ? request.bindings.flatMap(binding => binding.parts.flatMap(part => typeof part === 'string' ? [] : [part.id])) : [];
+      : request ? httpSources(request).map(source => source.id) : [];
     const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
     for (let index = 0; index < sources.length; index++) {
       const source = sources[index]!, credential = source.policy.contentType === ContentTypes.clientCredential;
       const use = credential && operation.kind !== 'revoke' ? Operations.refresh : Operations[operation.kind];
-      const destination = credential ? undefined : request ? new URL(request.url).origin : undefined;
+      const destination = credential || !request?.url ? undefined : new URL(request.url).origin;
       const permitted = source.policy.grants.some(grant => 'actor' in grant &&
         canonical(grant.actor) === canonical(this.binding) && canonical(grant.executor) === canonical(environment.manifest.executor) &&
         grant.operations.includes(use) && grantExpiration(grant) >= Date.parse(expiresAt) &&
@@ -395,7 +398,8 @@ export class CustodyClient {
     const credential = (content: CustodyContent) => content.policy.contentType === ContentTypes.clientCredential;
     for (const source of sources) await authorizeUse(source, credential(source) &&
       intent.operation !== Operations.connect && intent.operation !== Operations.revoke ? { ...intent, operation: Operations.refresh } : intent,
-      credential(source) ? {} : { destination: request?.url });
+      credential(source) ? {} : { destination: request?.url,
+        destinationPending: Boolean(request?.connectionId && !request.url) });
     return prepareRun(intent, operation, this.keys);
   }
   async submit(ownerId: string, environmentId: string, operation: ExecutionOperation,

@@ -440,7 +440,7 @@ export async function openRun(input: SealedRun, executor: BoundKeys, keys: KeyMa
 
 export async function authorizeUse(
   input: CustodyContent, intent: ExecutionIntent,
-  options: { destination?: string; now?: number } = {},
+  options: { destination?: string; destinationPending?: boolean; now?: number } = {},
 ) {
   const content = await verifyContent(input), policy = content.policy;
   const pin = intent.sources.find(source => source.id === policy.id);
@@ -460,7 +460,7 @@ export async function authorizeUse(
     if ('function' in grant) return intent.operation === Operations.function || intent.operation === Operations.refresh;
     if (intent.operation === Operations.function && !grant.callerProgram &&
       (!intent.functionDigest || !grant.functionDigests.includes(intent.functionDigest))) return false;
-    if (grant.origins.length && (!options.destination || !grant.origins.includes(new URL(options.destination).origin)))
+    if (!options.destinationPending && grant.origins.length && (!options.destination || !grant.origins.includes(new URL(options.destination).origin)))
       return false;
     // Arbitrary programs can disclose their inputs. Such grants must be explicit.
     return (intent.operation !== Operations.command && intent.operation !== Operations.http) || grant.callerProgram;
@@ -471,9 +471,14 @@ export async function authorizeUse(
 
 export async function useContent(
   content: CustodyContent, intent: ExecutionIntent, keys: KeyMaterial,
-  options: { destination?: string; now?: number } = {},
+  options: { destination?: string | ((bytes: Uint8Array) => string); now?: number } = {},
 ) {
-  await authorizeUse(content, intent, options);
-  return open(content.sealed, keys.encryption, intent.executor.id,
+  const destination = options.destination;
+  // A sealed destination is checked after opening it. No bytes are returned until both grant checks pass.
+  await authorizeUse(content, intent, { now: options.now,
+    ...(typeof destination === 'function' ? { destinationPending: true } : { destination }) });
+  const bytes = await open(content.sealed, keys.encryption, intent.executor.id,
     await contentContext(content.policy, content.materialRevision));
+  if (typeof destination === 'function') await authorizeUse(content, intent, { now: options.now, destination: destination(bytes) });
+  return bytes;
 }

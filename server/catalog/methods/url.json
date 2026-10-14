@@ -1,0 +1,27 @@
+{
+  "id": "http:url",
+  "name": "URL without authentication",
+  "http": {
+    "urlField": "url",
+    "authentication": {
+      "kind": "none"
+    }
+  },
+  "kind": "token",
+  "config": {
+    "fields": [
+      {
+        "name": "url",
+        "label": "Destination URL",
+        "secret": true,
+        "inputType": "password",
+        "required": true,
+        "pattern": "^https://.+$",
+        "placeholder": "https://api.example.com/endpoint"
+      }
+    ],
+    "outputs": {
+      "URL": "/url"
+    }
+  }
+}

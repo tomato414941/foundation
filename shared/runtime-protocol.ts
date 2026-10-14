@@ -7,7 +7,8 @@ import { ContentTypes, Operation, Operations, Origin, PolicyApproval, ProtectedC
 import type { ApprovedPolicy, ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
-export const FUNCTION_RUNTIME_VERSION = 3;
+export const FUNCTION_RUNTIME_VERSION = 4;
+export const HTTP_RUNTIME_VERSION = 1;
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
 export const EnvironmentManifest = z.object({
@@ -16,6 +17,7 @@ export const EnvironmentManifest = z.object({
   driver: z.enum(['attached', 'managed']),
   capabilities: z.array(Operation).min(1).max(6),
   functionVersion: z.number().int().positive().optional(),
+  httpVersion: z.number().int().positive().optional(),
   resultVersion: z.literal(1).optional(),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),

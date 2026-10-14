@@ -1,4 +1,11 @@
 export const serviceLabels: Record<string, string> = {
+  'http.token.url.label': '送信先URL',
+  'http.token.token.label': 'Bearerトークン',
+  'http.token.username.label': 'ユーザー名',
+  'http.token.password.label': 'パスワード',
+  'http.token.key.label': 'APIキー',
+  'http.token.headerName.label': 'ヘッダー名',
+  'http.token.parameterName.label': 'クエリパラメーター名',
   'openai.token.token.label': 'APIキー',
   'openai.token.token.note': 'モデルの呼び出しに使用するAPIキーを入力してください。ChatGPTの月額契約とは別にAPI利用料金がかかります。',
   'openai.token.adminKey.label': 'Admin APIキー',

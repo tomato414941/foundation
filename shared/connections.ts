@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ApprovalMethod, AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
+import { ApprovalMethod, AuthKind, AwsMethod, HttpConnection, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
 import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
@@ -66,6 +66,7 @@ export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
 // Signed with the encrypted content. Display names are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
   methodId: z.string().min(1).max(200), methodKind: AuthKind,
+  http: HttpConnection.optional(),
   generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
@@ -82,6 +83,7 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
   const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
     methodId: state.methodId, methodKind: state.method.kind,
+    ...(state.method.http ? { http: state.method.http } : {}),
     generation: state.generation, authorizationDigest, appId: state.appId,
     accountId: connectionAccount(state, facts),
     accountVerified: facts.accountVerified,

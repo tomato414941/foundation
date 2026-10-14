@@ -1,4 +1,4 @@
-import { FUNCTION_RUNTIME_VERSION } from '../shared/runtime-protocol.js';
+import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION } from '../shared/runtime-protocol.js';
 import type { Actor } from './authorization.js';
 import type { Resources } from './resources.js';
 import type { Custody } from './custody.js';
@@ -29,7 +29,15 @@ export class Functions {
       fail(400, 'invalid_input', 'Choose an output provided by this connection.');
   }
   async validate(actor: Actor, spec: HttpRequestInput) {
-    publicUrl(spec.url, this.origin);
+    if (spec.url) publicUrl(spec.url, this.origin);
+    if (spec.connectionId) {
+      const row = await this.resources.get(spec.connectionId);
+      if (row.kind !== 'connection' || !row.data.http)
+        fail(400, 'wrong_kind', 'Choose a connection that provides HTTP authentication.');
+      await this.resources.authorization.requireResource(actor, row, 'use');
+      if (!spec.url && !(row.data.http as Record<string, unknown>).urlField)
+        fail(400, 'invalid_url', 'Enter a destination URL for this connection.');
+    }
     if ([spec.body, spec.json, spec.form].filter(value => value !== undefined).length > 1)
       fail(400, 'multiple_bodies', 'Choose one request body format.');
     for (const binding of spec.bindings) {
@@ -52,6 +60,9 @@ export class Functions {
       names.add(parameter.name);
     }
     const environment = await delegation.environment(spec.environmentId);
+    if (spec.program.kind === 'http' && spec.program.request.connectionId &&
+      environment.registration.manifest.httpVersion !== HTTP_RUNTIME_VERSION)
+      fail(409, 'http_runtime_required', 'Update this execution environment to use HTTP connections.');
     await this.resources.authorization.requireResource(actor, await this.resources.get(spec.environmentId), 'execute');
     if (environment.registration.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
       fail(409, 'function_runtime_required', 'Update this execution environment to the current Foundation CLI or create a new environment.');

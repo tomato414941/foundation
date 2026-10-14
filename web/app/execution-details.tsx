@@ -21,6 +21,7 @@ type Output = { state: 'available'; value: JsonValue; kind: RunKindName } |
 export type StepDetails = {
   startedAt: string | null; finishedAt: string | null; environmentId: string | null;
   program: z.infer<typeof PrivateProgram>['operation'] | null;
+  connection?: ResourceView | null;
   output: Output | null;
 };
 const terminal = ['succeeded', 'failed', 'uncertain', 'cancelled'];
@@ -59,6 +60,10 @@ export async function loadExecutionDetails(item: ExecutionView, canReadOutput: b
         input && typeof input === 'object' && !Array.isArray(input) && typeof input.programId === 'string') {
         const program = await new SealedContinuationStore(custody).get(input.programId, PrivateProgram);
         if (program && await hash(reviewedProgram(program.operation)) === input.programDigest) details.program = program.operation;
+        if (details.program?.kind === 'http' && details.program.request.connectionId) {
+          try { details.connection = await api('/resources/' + details.program.request.connectionId, { signal }, Resource); }
+          catch (error) { if (signal.aborted) throw error; }
+        }
       }
     } catch (error) {
       if (signal.aborted) throw error;
@@ -99,6 +104,10 @@ export function ExecutionFacts({ details, environments }: { details: StepDetails
     </Detail>}
     {details.program?.kind === 'command' && <Detail label={t('command')}><code className="text-sm whitespace-pre-wrap wrap-anywhere">{details.program.command.map(value => /^[\w./:=+-]+$/.test(value) ? value : JSON.stringify(value)).join(' ')}</code></Detail>}
     {details.program?.kind === 'http' && <Detail label={t('http')}>{details.program.request.method} {details.program.request.url}</Detail>}
+    {details.program?.kind === 'http' && details.program.request.connectionId && <Detail label={t('connection')}>
+      {details.connection ? <Link className="underline underline-offset-4" to={resourcePath(details.connection)}>{details.connection.name}</Link>
+        : details.program.request.connectionId}
+    </Detail>}
     {details.startedAt && <Detail label={t('executionStarted')}><DateText value={details.startedAt} seconds /></Detail>}
     {details.finishedAt && <Detail label={t('executionFinished')}><DateText value={details.finishedAt} seconds /></Detail>}
     {duration !== null && <Detail label={t('executionDuration')}>{t('executionSeconds', { value: new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 3 }).format(duration) })}</Detail>}

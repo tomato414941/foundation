@@ -1,0 +1,36 @@
+{
+  "id": "http:bearer",
+  "name": "Bearer token",
+  "http": {
+    "urlField": "url",
+    "authentication": {
+      "kind": "bearer",
+      "token": "TOKEN"
+    }
+  },
+  "kind": "token",
+  "config": {
+    "fields": [
+      {
+        "name": "url",
+        "label": "Destination URL",
+        "secret": true,
+        "inputType": "password",
+        "required": true,
+        "pattern": "^https://.+$",
+        "placeholder": "https://api.example.com/endpoint"
+      },
+      {
+        "name": "token",
+        "label": "Bearer token",
+        "secret": true,
+        "inputType": "password",
+        "required": true
+      }
+    ],
+    "outputs": {
+      "URL": "/url",
+      "TOKEN": "/token"
+    }
+  }
+}

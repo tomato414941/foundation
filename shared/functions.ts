@@ -1,6 +1,7 @@
 import { Template } from '@fedify/uri-template';
 import { Command, HttpRequest } from './contracts.js';
 import type { FunctionSpec, JsonValue, SourceReference } from './contracts.js';
+import { httpSources } from './http-connections.js';
 
 export function functionArguments(spec: FunctionSpec, args: Record<string, JsonValue>) {
   const values: Record<string, JsonValue> = {};
@@ -47,18 +48,21 @@ export function functionProgram(spec: FunctionSpec, args: Record<string, JsonVal
       return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, substitute(child, structured)]));
     return value;
   };
-  const url = new Template(request.url).expand(Object.fromEntries(Object.entries(values).map(([name, value]) => [name, text(value)])));
+  const url = request.url === undefined ? undefined : new Template(request.url).expand(
+    Object.fromEntries(Object.entries(values).map(([name, value]) => [name, text(value)])));
   const filled = HttpRequest.parse({
     ...(substitute(request as unknown as JsonValue) as Record<string, JsonValue>),
-    url, bindings: request.bindings,
+    ...(url === undefined ? {} : { url }), connectionId: request.connectionId, bindings: request.bindings,
     ...(request.json === undefined ? {} : { json: substitute(request.json, true) }),
   });
-  const fixed = new URL(request.url.replace(/\{[^}]+\}/g, 'placeholder'));
-  if (new URL(url).origin !== fixed.origin) throw new Error('The function must have a fixed destination host.');
+  if (request.url !== undefined) {
+    const fixed = new URL(request.url.replace(/\{[^}]+\}/g, 'placeholder'));
+    if (new URL(url!).origin !== fixed.origin) throw new Error('The function must have a fixed destination host.');
+  }
   return { kind: 'http' as const, request: filled, responseFormat: spec.program.responseFormat };
 }
 
 export function functionSources(spec: FunctionSpec): SourceReference[] {
   return spec.program.kind === 'command' ? spec.program.inputs.map(input => input.source)
-    : spec.program.request.bindings.flatMap(binding => binding.parts.filter((part): part is SourceReference => typeof part !== 'string'));
+    : httpSources(spec.program.request);
 }

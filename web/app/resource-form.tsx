@@ -7,7 +7,7 @@ import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } fro
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { CatalogEntry, CatalogMethod, FunctionDefinition, Resource, Payment, Usage, listOf } from '../../shared/contracts';
-import type { CatalogConnectionMethod, HttpRequestInput } from '../../shared/contracts';
+import type { CatalogConnectionMethod } from '../../shared/contracts';
 import { decode } from '../../shared/encryption';
 import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
@@ -26,6 +26,7 @@ import { connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
 import { connectionSubmission } from './execution-form';
 import { FunctionAccessFields, inputAccessFromForm } from './function-access';
+import { httpConnections, httpRequestFromForm, RequestFields } from './http-request';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -53,6 +54,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connections,
     shared,
     environments,
+    httpConnectionItems,
   ] = await Promise.all([
     id ? api((kind === 'function' ? '/functions/' : '/resources/') + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
@@ -74,6 +76,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
     ['variable', 'app', 'function'].includes(kind) ? availableEnvironments(params.owner!) : [],
+    kind === 'function' ? httpConnections(params.owner!, request.signal) : [],
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -138,6 +141,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connection,
     appMaterial,
     environments,
+    httpConnections: httpConnectionItems,
     selectedExecutors,
     content,
     binary,
@@ -214,13 +218,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         program: formText(form, 'programKind') === 'command' ? {
           kind: 'command', command: jsonField(form, 'command', []),
           inputs: jsonField(form, 'inputs', []), timeoutSeconds: Number(formText(form, 'timeoutSeconds')),
-        } : { kind: 'http', responseFormat: formText(form, 'responseFormat'), request: {
-          url: formText(form, 'url'),
-          method: formText(form, 'httpMethod'),
-          headers: jsonField(form, 'headers', {}),
-          ...(formText(form, 'body') ? { body: String(form.get('body')) } : {}),
-          bindings: jsonField(form, 'bindings', []),
-        } },
+        } : { kind: 'http', responseFormat: formText(form, 'responseFormat'), request: httpRequestFromForm(form) },
         parameters: jsonField(form, 'parameters', []),
         result: formText(form, 'programKind') === 'http' ? 'json' : formText(form, 'result'),
         inputAccess: inputAccessFromForm(form),
@@ -245,39 +243,6 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     return redirect(resourcePath(result));
   });
 }
-export function RequestFields({
-  value,
-}: {
-  value?: HttpRequestInput;
-}) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <InputField
-        name="url"
-        label={t('url')}
-        defaultValue={value?.url ?? ''}
-        required
-        placeholder="https://api.example.com/items"
-      />
-      <SelectField name="httpMethod" label={t('httpMethod')} defaultValue={value?.method ?? 'GET'}>
-        {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map((method) => (
-          <SelectItem key={method} value={method}>
-            {method}
-          </SelectItem>
-        ))}
-      </SelectField>
-      <JsonField name="headers" label={t('headers')} value={value?.headers ?? {}} rows={3} />
-      <TextareaField
-        name="body"
-        label={t('body')}
-        defaultValue={value?.body ?? (value?.json === undefined ? '' : JSON.stringify(value.json))}
-        rows={3}
-      />
-      <JsonField name="bindings" label={t('bindings')} value={value?.bindings ?? []} rows={3} />
-    </>
-  );
-}
 export default function ResourceForm() {
   const data = useLoaderData<typeof formLoader>();
   const result = useActionData<typeof formAction>();
@@ -290,6 +255,7 @@ export default function ResourceForm() {
     : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
   const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).requiresApp);
   const preferred = (methods: CatalogConnectionMethod[]) =>
+    methods.find(method => method.id === 'http:bearer') ??
     methods.find(method => method.registration.device === 'browser' && connectionMethod(method).browserAuthorization &&
       !connectionMethod(method).requiresApp) ??
     methods.find(method => method.registration.device === 'browser' && !connectionMethod(method).requiresApp) ??
@@ -301,7 +267,8 @@ export default function ResourceForm() {
         ? (data.catalog.find((item) =>
             Object.values(item.methods).some((method) => method.id === existing.data.methodId),
           )?.id ?? '')
-        : (data.serviceId ?? (data.methodId ? '' : (data.catalog[0]?.id ?? ''))),
+        : (data.serviceId ?? (data.methodId ? data.catalog.find(item =>
+            Object.values(item.methods).some(method => method.id === data.methodId))?.id ?? '' : '')),
   );
   const service = data.catalog.find((item) => item.id === serviceId);
   const initialMethod = existing && (existing.kind === 'connection' || existing.kind === 'app')
@@ -317,7 +284,8 @@ export default function ResourceForm() {
           (entry.targets.find(item => item.id === selectedTarget) ?? entry.targets[0])?.methods.includes(key)).flatMap(([, method]) =>
           eligibleMethods.filter((item) => item.id === method.id),
         )
-      : eligibleMethods;
+      : eligibleMethods.filter(method => !data.catalog.some(item =>
+          Object.values(item.methods).some(candidate => candidate.id === method.id)));
   const methods = offered(service, target?.id);
   const [methodId, setMethodId] = useState(
     existing && (existing.kind === 'connection' || existing.kind === 'app')
@@ -357,7 +325,7 @@ export default function ResourceForm() {
       name="name"
       label={t('name')}
       defaultValue={existing?.name ?? ''}
-      required={!['environment', 'connection', 'object'].includes(data.kind)}
+      required={!['environment', 'connection', 'object'].includes(data.kind) || data.kind === 'connection' && !service}
       hint={data.kind === 'object' && fileName ? fileName : undefined}
       maxLength={200}
     />
@@ -466,7 +434,7 @@ export default function ResourceForm() {
                         setMethodId(preferred(offered(next, nextTarget?.id))?.id ?? '');
                       }}
                     >
-                      <SelectItem value="none">{t('allMethods')}</SelectItem>
+                      <SelectItem value="none">{t('noService')}</SelectItem>
                       {data.catalog
                         .filter(
                           (item) =>
@@ -550,7 +518,8 @@ export default function ResourceForm() {
                       <SelectItem value="http">{t('http')}</SelectItem>
                     </SelectField>
                     {programKind === 'http' ? <Panel title={t('http')}>
-                      <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined} />
+                      <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined}
+                        connections={data.httpConnections} />
                       <SelectField name="responseFormat" label={t('functionResponseFormat')} defaultValue={spec?.program.kind === 'http' ? spec.program.responseFormat : 'json'}>
                         <SelectItem value="json">JSON</SelectItem>
                         <SelectItem value="text">{t('functionText')}</SelectItem>
