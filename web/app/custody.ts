@@ -27,7 +27,15 @@ class BrowserTrust implements TrustStore {
     await stored('records', 'readwrite', store => store.put({ value, signature }, this.key(id)));
   }
   binding(id: string) { return this.get<BoundKeys>('identity:' + id); }
+  async bindings() {
+    const prefix = this.key('identity:'), keys = await stored('records', 'readonly',
+      store => store.getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff')));
+    const bindings = await Promise.all(keys.map(key => this.get<BoundKeys>(String(key).slice(this.key('').length))));
+    return bindings.filter(binding => binding !== null);
+  }
   async rememberBinding(binding: BoundKeys) { await validateBinding(binding); await this.put('identity:' + binding.principalId, binding); }
+  keyring() { return this.get<{ revision: number; digest: string }>('keyring'); }
+  async rememberKeyring(seen: { revision: number; digest: string }) { await this.put('keyring', seen); }
   checkpoint(content: CustodyContent) {
     return this.get<{ policy: CustodyPolicy; materialRevision: number; digest: string }>(
       'checkpoint:' + content.policy.format + ':' + content.policy.id);

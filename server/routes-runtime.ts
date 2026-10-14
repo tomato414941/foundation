@@ -7,11 +7,12 @@ import { iso } from './database.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
 import { SignedBinding } from '../shared/authority.js';
+import { KeyringState, KeyringWrite } from '../shared/keyring.js';
 import { ContentTypes } from '../shared/custody.js';
 import { SharedReceipt } from '../shared/runtime-protocol.js';
 
 export async function routesRuntime(app: ApiApp, context: Context) {
-  const { bindings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
+  const { bindings, keyrings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
   app.post('/api/oauth/relays', {
     schema: { body: P.RegisterRelay, response: { 201: P.OAuthRelay } },
   }, async (request, reply) => reply.code(201).send(await context.oauthRelays.register(actor(request), request.body)));
@@ -29,6 +30,12 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     const { previousSignature, ...binding } = request.body;
     return bindings.publish(actor(request), binding, previousSignature);
   });
+  app.get('/api/principals/:id/keyring', {
+    schema: { params: C.IdParams, response: { 200: KeyringState } },
+  }, request => keyrings.get(actor(request), request.params.id));
+  app.put('/api/principals/:id/keyring', {
+    schema: { params: C.IdParams, body: KeyringWrite, response: { 200: KeyringState } },
+  }, request => keyrings.put(actor(request), request.params.id, request.body));
   app.get('/api/principals/:id/bound-recipients', {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.BoundRecipient) } },
   }, async request => {

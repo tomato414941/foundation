@@ -58,6 +58,7 @@ export const ResourceKind = z.enum([
   'object',
   'environment',
   'function',
+  'keyring',
 ]);
 export type ResourceKindName = z.infer<typeof ResourceKind>;
 export const PublicKey = z
@@ -498,6 +499,12 @@ export const FunctionResource = z.object({
     environmentId: Id.optional(), program: FunctionProgram.optional(),
   }),
 });
+// The public keys a principal verified, as one list it signs. Its devices read the list from the signature.
+export const KeyringResource = z.object({
+  ...resourceBase,
+  kind: z.literal('keyring'),
+  data: z.object({ revision: z.number().int().positive(), signature: z.string() }),
+});
 export const Resource = z.discriminatedUnion('kind', [
   VariableResource,
   ConnectionResource,
@@ -507,6 +514,7 @@ export const Resource = z.discriminatedUnion('kind', [
   ObjectResource,
   EnvironmentResource,
   FunctionResource,
+  KeyringResource,
 ]);
 export type ResourceView = z.infer<typeof Resource>;
 export type VariableView = z.infer<typeof VariableResource>;

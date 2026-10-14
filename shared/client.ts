@@ -13,13 +13,20 @@ import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotecti
 import type { ProtectedWrite } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
+import { KeyringState, keyringClaim, openKeyring, signKeyring } from './keyring.js';
+import type { KeyringEntryValue, KeyringValue } from './keyring.js';
 
 export interface JsonApi {
   json<T = unknown>(path: string, options?: { method?: string; body?: unknown; signal?: AbortSignal }, schema?: z.ZodType<T>): Promise<T>;
 }
 export interface TrustStore {
+  // Keys this device verified before identities kept them in their keyrings. They still count, and are moved there.
   binding(principalId: string): Promise<BoundKeys | null>;
+  bindings(): Promise<BoundKeys[]>;
   rememberBinding(binding: BoundKeys): Promise<void>;
+  // The last revision of this identity's keyring the device saw, so that an older list is not taken for it.
+  keyring(): Promise<{ revision: number; digest: string } | null>;
+  rememberKeyring(seen: { revision: number; digest: string }): Promise<void>;
   // What this device last observed of the content's item. Each policy format keeps its own record, so a
   // new format starts fresh instead of reading records written in another one.
   checkpoint(content: CustodyContent): Promise<{ policy: CustodyPolicy; materialRevision: number; digest: string } | null>;
@@ -35,25 +42,114 @@ export class SubmissionPending extends Error {
     super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
   }
 }
+const errorIs = (error: unknown, ...codes: Array<string | number>) => !!error && typeof error === 'object' &&
+  (('code' in error && codes.includes(String(error.code))) || ('status' in error && codes.includes(Number(error.status))));
 export class CustodyClient {
+  private verifiedKeys?: Promise<Map<string, KeyringEntryValue>>;
   constructor(readonly api: JsonApi, readonly origin: string, readonly binding: BoundKeys,
     readonly keys: KeyMaterial, readonly trust: TrustStore) {}
 
   async trusted(binding: BoundKeys) {
-    const pinned = binding.principalId === this.binding.principalId ? this.binding : await this.trust.binding(binding.principalId);
-    if (!pinned || canonical(pinned) !== canonical(binding))
+    if (!(await this.verifies(binding)))
       throw new ClientFailure('identity_untrusted', 'Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
     return binding;
+  }
+  // Whether this identity verified the keys: its own, those in its keyring, or those this device verified before
+  // keyrings. A keyring's entry for a principal decides over what this device verified earlier.
+  private async verifies(binding: BoundKeys) {
+    if (binding.principalId === this.binding.principalId) return canonical(this.binding) === canonical(binding);
+    const known = (await this.keyring()).get(binding.principalId)?.binding ?? await this.trust.binding(binding.principalId);
+    return !!known && canonical(known) === canonical(binding);
+  }
+  // Whether this identity verified another's current keys: not until it does, and not again once they change.
+  async verifiedIdentity(id: string) {
+    return this.verifies((await this.inspectIdentity(id)).binding);
+  }
+  // The keys this identity verified on any of its devices, by principal.
+  keyring() {
+    return this.verifiedKeys ??= this.loadKeyring().catch(error => { this.verifiedKeys = undefined; throw error; });
+  }
+  private async loadKeyring() {
+    let keys: KeyringEntryValue[];
+    try { keys = (await this.readKeyring()).keyring?.keys ?? []; }
+    catch (error) {
+      // Where this identity may not read its keyring, as through a link made for one request, only this device's keys count.
+      if (errorIs(error, 401, 403)) return new Map<string, KeyringEntryValue>();
+      throw error;
+    }
+    const listed = new Set(keys.map(entry => entry.binding.principalId)), verifiedAt = new Date().toISOString();
+    const moving = (await this.trust.bindings())
+      .filter(binding => binding.principalId !== this.binding.principalId && !listed.has(binding.principalId));
+    if (moving.length) {
+      try {
+        keys = (await this.changeKeyring(current => [...current, ...moving
+          .filter(binding => !current.some(entry => entry.binding.principalId === binding.principalId))
+          .map(binding => ({ binding, verifiedAt }))])).keys;
+      } catch (error) {
+        // They still count on this device and are moved another time.
+        if (error instanceof ClientFailure) throw error;
+      }
+    }
+    return new Map(keys.map(entry => [entry.binding.principalId, entry]));
+  }
+  // The keyring as this identity signed it, refused when it is older than the one this device last saw.
+  private async readKeyring(): Promise<{ version: number | null; revision: number; keyring: KeyringValue | null }> {
+    const path = '/api/principals/' + this.binding.principalId + '/keyring';
+    const { keyring: stored } = await this.api.json(path, {}, KeyringState), seen = await this.trust.keyring();
+    const conflict = () => new ClientFailure('keyring_conflict',
+      'The list of verified public keys does not match what this device saw before.');
+    if (!stored) {
+      if (seen) throw conflict();
+      return { version: null, revision: 0, keyring: null };
+    }
+    const claim = keyringClaim(stored.signature);
+    // A list signed with keys this identity has since replaced is not read; the next change writes over it.
+    if (claim.signerId !== this.binding.id) return { version: stored.version, revision: claim.revision, keyring: null };
+    const keyring = await openKeyring(stored.signature, this.binding).catch(() => { throw conflict(); });
+    const digest = await hash(keyring);
+    if (keyring.ownerId !== this.binding.principalId || keyring.origin !== this.origin || (seen &&
+      (keyring.revision < seen.revision || (keyring.revision === seen.revision && digest !== seen.digest)))) throw conflict();
+    if (!seen || keyring.revision > seen.revision) await this.trust.rememberKeyring({ revision: keyring.revision, digest });
+    return { version: stored.version, revision: keyring.revision, keyring };
+  }
+  // Signs the changed list as the next revision, reading it again when another device changed it first.
+  private async changeKeyring(change: (keys: KeyringEntryValue[]) => KeyringEntryValue[]) {
+    for (let attempt = 1; ; attempt++) {
+      const current = await this.readKeyring();
+      const keyring: KeyringValue = { origin: this.origin, ownerId: this.binding.principalId, signerId: this.binding.id,
+        revision: current.revision + 1, keys: change(current.keyring?.keys ?? []) };
+      try {
+        await this.api.json('/api/principals/' + this.binding.principalId + '/keyring', { method: 'PUT',
+          body: { version: current.version, signature: await signKeyring(keyring, this.keys.signing) } }, KeyringState);
+      } catch (error) {
+        if (attempt < 3 && errorIs(error, 'changed')) continue;
+        throw error;
+      }
+      await this.trust.rememberKeyring({ revision: keyring.revision, digest: await hash(keyring) });
+      return keyring;
+    }
   }
   async inspectIdentity(id: string) {
     const signed = await this.api.json('/api/identities/' + Id.parse(id) + '/binding', {}, SignedBinding);
     await verifyBinding(signed);
     return { ...signed, fingerprint: await fingerprint(signed.binding) };
   }
+  // Adds the verified keys to this identity's keyring, for each of its devices to use.
   async trustIdentity(id: string, expectedFingerprint: string) {
     const identity = await this.inspectIdentity(id);
     if (identity.fingerprint !== expectedFingerprint) throw new ClientFailure('fingerprint_mismatch', 'The identity fingerprint does not match.');
-    await this.trust.rememberBinding(identity.binding);
+    if (id === this.binding.principalId || canonical((await this.keyring()).get(id)?.binding ?? null) === canonical(identity.binding))
+      return identity;
+    const verifiedAt = new Date().toISOString();
+    try {
+      const keyring = await this.changeKeyring(keys =>
+        [...keys.filter(entry => entry.binding.principalId !== id), { binding: identity.binding, verifiedAt }]);
+      this.verifiedKeys = Promise.resolve(new Map(keyring.keys.map(entry => [entry.binding.principalId, entry])));
+    } catch (error) {
+      // Where this identity may not change its keyring, as through a link made for one request, this device keeps it.
+      if (!errorIs(error, 401, 403)) throw error;
+      await this.trust.rememberBinding(identity.binding);
+    }
     return identity;
   }
   async environment(id: string, trusted = true) {

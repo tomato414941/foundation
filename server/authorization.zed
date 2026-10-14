@@ -52,6 +52,8 @@ definition principal {
   permission create_object = create + use
   permission create_environment = create + use
   permission create_function = create + use
+  // Only those who act as it keep the list of public keys it verified, so that an agent cannot vouch for a key.
+  permission create_keyring = stands
 }
 
 // What a key protects: a value, a connection to a service, or an application used to connect. It is sealed for the
@@ -201,4 +203,14 @@ definition function {
   permission transfer = owner->stands + transferrer->stands
   permission execute = owner->use + runner->stands
   permission rename = update
+}
+
+// The public keys a principal verified with their holders, as one list signed by whoever acts as it. Nothing in it is
+// secret: its agents may read it, and only those who act as the principal change it.
+definition keyring {
+  relation owner: principal
+
+  permission read = owner->use
+  permission update = owner->stands
+  permission delete = owner->stands
 }

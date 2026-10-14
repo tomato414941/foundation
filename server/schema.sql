@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS challenges (
 CREATE TABLE IF NOT EXISTS resources (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function','keyring')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,
@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS resources (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
+ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_kind_check;
+ALTER TABLE resources ADD CONSTRAINT resources_kind_check
+  CHECK (kind IN ('variable','connection','service','method','app','object','environment','function','keyring'));
 -- The lines drawn between principals and onto what they hold: the subject is the relation of the object, a principal
 -- or a resource. What each relation may be is the authorization schema's; whom a thing belongs to is kept with it.
 CREATE TABLE IF NOT EXISTS relations (

@@ -25,6 +25,7 @@ import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
 import { Devices } from './devices.js';
 import { Bindings } from './bindings.js';
+import { Keyrings } from './keyrings.js';
 import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
@@ -70,6 +71,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     transport = deps.transport ?? new PublicTransport(config.origin),
     functions = new Functions(resources, config.origin);
   const bindings = new Bindings(db, authorization, audit),
+    keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
     custody = new Custody(resources, bindings, relations, config.origin),
     delegation = new Delegation(resources, bindings, custody, config.origin),
     connectionOperations = new ConnectionOperations(custody),
@@ -153,6 +155,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     executions,
     devices,
     bindings,
+    keyrings,
     custody,
     delegation,
     connectionOperations,

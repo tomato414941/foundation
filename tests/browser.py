@@ -124,14 +124,17 @@ class BrowserTests(unittest.TestCase):
         page.goto(ORIGIN + "/account/trust")
         page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(principal_id)
         page.get_by_role("textbox", name="公開鍵の指紋", exact=True).fill(fingerprint)
-        page.get_by_role("button", name="相手の鍵を確認", exact=True).click()
-        expect(page.get_by_text("保存しました。", exact=True)).to_be_visible()
+        page.get_by_role("button", name="相手の公開鍵を検証", exact=True).click()
+        expect(page.get_by_text(re.compile(r"の公開鍵を検証しました。$"))).to_be_visible()
+        expect(page.get_by_text(principal_id, exact=True)).to_be_visible()
+        expect(page.get_by_role("textbox", name="公開鍵の指紋", exact=True)).to_be_hidden()
+        page.screenshot(path=str(ARTIFACTS / "identity-verified-ja.png"), full_page=True)
         page.goto(previous)
 
     def trust(self, page, other, principal):
         previous = other.url
         other.goto(ORIGIN + "/account/trust")
-        fingerprint = other.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+        fingerprint = other.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
         other.goto(previous)
         self.trust_fingerprint(page, principal["id"], fingerprint)
 
@@ -171,6 +174,11 @@ class BrowserTests(unittest.TestCase):
             agent = cli("init", "--name", "Linked AI", "--origin", ORIGIN)
             url = cli("request-access", "--to", principal["id"])["url"]
             self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
+            owner.goto(url.split("#")[0])
+            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、この依頼を開き直してください。", exact=True)).to_be_visible()
+            expect(owner.get_by_role("button", name="承認", exact=True)).to_be_disabled()
+            owner.screenshot(path=str(ARTIFACTS / "agent-approval-unverified-ja.png"), full_page=True)
+            owner.goto(ORIGIN + "/account")
             owner.goto(url.replace(agent["fingerprint"], "sha256:" + "0" * 64))
             owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_text("公開鍵の指紋が一致しません。相手に現在の指紋を確認してください。", exact=True)).to_be_visible()
@@ -179,8 +187,11 @@ class BrowserTests(unittest.TestCase):
             owner.goto(url)
             owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
+            expect(owner.get_by_text("開ける相手の変更を、1件の項目に反映しました。", exact=True)).to_be_visible()
+            owner.screenshot(path=str(ARTIFACTS / "agent-approval-sealed-ja.png"), full_page=True)
             owner.goto(ORIGIN + "/account/trust")
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            expect(owner.get_by_text(agent["principal"]["id"], exact=True)).to_be_visible()
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
             cli("trust", principal["id"], "--fingerprint", owner_fingerprint)
             self.assertEqual(cli("read", variable_id), "linked-variable-value")
 
@@ -212,7 +223,7 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
             self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
             owner.goto(ORIGIN + "/account/trust")
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
             executor = owner.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
             for identity_id, value in [(principal["id"], owner_fingerprint), (executor["id"], executor["fingerprint"])]:
                 trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", identity_id, "--fingerprint", value],
@@ -567,7 +578,7 @@ class BrowserTests(unittest.TestCase):
         child = created.json()
         self.assertIsNone(child["publicKey"])
         page.goto(ORIGIN + "/account/trust")
-        owner_fingerprint = page.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+        owner_fingerprint = page.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
         page.goto(f"{ORIGIN}/p/{child['id']}/settings/credentials/new")
         self.select(page, "種類", "APIキー")
         page.get_by_role("textbox", name="名前", exact=True).fill("Child key")
@@ -942,7 +953,7 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
             self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
             owner.goto(ORIGIN + "/account/trust")
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
+            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
             trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
                 capture_output=True, text=True, env=environment)
             self.assertEqual(trusted.returncode, 0, trusted.stderr)

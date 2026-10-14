@@ -196,6 +196,8 @@ export class Accounts {
         [from.id, to.id],
       ]);
       for (const row of rows) {
+        // The other account's list of verified public keys is signed with that account's keys, so it is removed with it.
+        if (row.kind === 'keyring') continue;
         let name = row.name;
         if (
           await c.db.one(

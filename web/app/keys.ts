@@ -63,14 +63,14 @@ async function keep(id: string, keys: IdentityKeys) {
   unlocked.set(id, keys);
   reprotectInBackground(id);
 }
-// The items this browser last could not seal again for a principal, by name, and why.
-export type Resealing = { failed: Array<{ id: string; name: string | null; code: string }> };
+// How many items this browser last sealed again for a principal, and those it could not, by name, and why.
+export type Resealing = { done: number; failed: Array<{ id: string; name: string | null; code: string }> };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
 async function reseal(id: string) {
   if (!(await getIdentity(id))) return null;
   const { custodyClient } = await import('./custody');
-  const { failed } = await (await custodyClient(id)).reprotectPending();
-  const outcome = { failed: await Promise.all(failed.map(async item => ({ ...item,
+  const { done, failed } = await (await custodyClient(id)).reprotectPending();
+  const outcome = { done: done.length, failed: await Promise.all(failed.map(async item => ({ ...item,
     name: await api('/resources/' + item.id, {}, Resource).then(resource => resource.name, () => null) }))) };
   resealing.set(id, outcome);
   for (const notify of watching) notify();
