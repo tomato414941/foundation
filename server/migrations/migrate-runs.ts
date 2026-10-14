@@ -21,6 +21,8 @@ export async function migrateRuns(db: Database, vault: Vault) {
       const rows = await db.all<HistoricalRun>('SELECT * FROM runs ORDER BY created_at,id', [], connection);
       if (rows.some(row => row.state === 'queued' || row.state === 'running'))
         throw new Error('Finish historical server runs before migrating their results.');
+      // Keep the previous server's maintenance cycle from expiring imported history during the rollout.
+      const expiresAt = new Date(Date.now() + 86_400_000);
       for (const row of rows) {
         const actor = { id: row.actor_id }, input = { ownerId: row.owner_id,
           ...(row.kind === 'function' ? row.resource_id ? { functionId: row.resource_id } : {}
@@ -32,7 +34,7 @@ export async function migrateRuns(db: Database, vault: Vault) {
           archive: { format: 'server-run', record: row } };
         await connection.query(`INSERT INTO executions(id,actor_id,creator_id,owner_id,state,wait,snapshot,expires_at,created_at)
           VALUES($1,$2,$2,$3,$4,NULL,$5,$6,$7)`, [row.id, row.actor_id, row.owner_id, row.state,
-          await vault.encrypt(snapshot, 'operation-execution:' + row.id), row.finished_at ?? row.created_at, row.created_at]);
+          await vault.encrypt(snapshot, 'operation-execution:' + row.id), expiresAt, row.created_at]);
       }
       await connection.query('DROP TABLE runs');
     }

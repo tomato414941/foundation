@@ -34,6 +34,7 @@ test('保存済みのHTTP実行の結果と実行者を保持して履歴へ移�
   await f.db.pool.query('DELETE FROM schema_migrations WHERE name=ANY($1::text[])', [[SchemaMigration, 'historical-server-runs']]);
   const c = await createContext(f.config, { db: f.db, mailer: f.mailer }, { migrate: true });
   await createContext(f.config, { db: f.db, mailer: f.mailer }, { migrate: true });
+  await f.db.pool.query('UPDATE executions SET expires_at=created_at WHERE id=ANY($1::uuid[])', [[succeeded, failed]]);
   const history = await c.executions.list(owner.actor);
   assert.equal(history.items.length, 2);
   const completed = await c.executions.get(owner.actor, succeeded);
