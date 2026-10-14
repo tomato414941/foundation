@@ -23,10 +23,6 @@
           "SLACK_TEAM_ID": "/account",
           "SLACK_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://slack.com/api/auth.revoke",
-          "style": "bearer"
-        },
         "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID.",
         "okPointer": "/ok",
         "scopes": {

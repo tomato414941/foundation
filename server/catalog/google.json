@@ -23,10 +23,6 @@
           ],
           "docs": "https://developers.google.com/identity/protocols/oauth2/scopes"
         },
-        "revoke": {
-          "url": "https://oauth2.googleapis.com/revoke",
-          "auth": "none"
-        },
         "outputs": {
           "GOOGLE_OAUTH_ACCESS_TOKEN": "/accessToken",
           "CLOUDSDK_AUTH_ACCESS_TOKEN": "/accessToken",

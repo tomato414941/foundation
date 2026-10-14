@@ -14,8 +14,9 @@
         "tokenUrl": "https://github.com/login/oauth/access_token",
         "tokenFormat": "json",
         "revoke": {
-          "url": "https://api.github.com/applications/{clientId}/grant",
-          "style": "github"
+          "url": "https://api.github.com/applications/{clientId}/token",
+          "style": "github",
+          "tokenOnly": true
         },
         "outputs": {
           "GH_TOKEN": "/accessToken",

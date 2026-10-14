@@ -24,7 +24,8 @@
         "revoke": {
           "url": "https://login.salesforce.com/services/oauth2/revoke",
           "style": "rfc7009",
-          "auth": "none"
+          "auth": "none",
+          "tokenOnly": true
         },
         "keep": [
           "instance_url",

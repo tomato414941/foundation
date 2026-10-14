@@ -24,7 +24,8 @@
         },
         "revoke": {
           "url": "https://app.asana.com/-/oauth_revoke",
-          "style": "rfc7009"
+          "style": "rfc7009",
+          "tokenOnly": true
         },
         "scopes": {
           "default": [],

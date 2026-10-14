@@ -1,5 +1,5 @@
 import { Button } from '../components/ui/button';
-import { InputField, TextareaField, CheckboxField } from '../form-fields';
+import { InputField, TextareaField } from '../form-fields';
 import { Notice } from '../components';
 import { useState } from 'react';
 import { Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
@@ -43,7 +43,8 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   });
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
-  return { resource, environments: resource.kind === 'connection' ? await availableEnvironments(resource.ownerId) : [] };
+  return { resource, environments: resource.kind === 'connection' && resource.data.revocable
+    ? await availableEnvironments(resource.ownerId) : [] };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -58,7 +59,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       await api(`/resources/${params.id}/stop`, { method: 'POST', body: {} });
       return { ok: true };
     }
-    if (form.has('revoke')) {
+    if (formText(form, 'intent') === 'disconnect') {
       const result = await (await executionClient()).execute({ name: 'connection.revoke',
         input: { ownerId: params.owner, environmentId: formText(form, 'environmentId'), connectionId: params.id } });
       if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('execution_required');
@@ -89,7 +90,6 @@ export default function ResourceDetail() {
     expiresAt: string;
   } | null>(null);
   const [minutes, setMinutes] = useState(15);
-  const [revoke, setRevoke] = useState(true);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   const environment = item.kind === 'environment' ? item : null;
   const status = environment ? environmentState(environment) : null;
@@ -280,12 +280,9 @@ export default function ResourceDetail() {
       {item.kind !== 'environment' && can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
-            {item.kind === 'connection' && item.data.methodKind === 'oauth' && (
-              <><CheckboxField name="revoke" checked={revoke} onCheckedChange={value => setRevoke(value === true)} label={t('revokeProvider')} />
-                {revoke && <EnvironmentChoice items={environments} />}</>
-            )}
-            {item.kind === 'connection' && (
-              <p className="leading-relaxed text-sm">{t('disconnectHelp')}</p>
+            {environments.length > 0 && (
+              <><input type="hidden" name="intent" value="disconnect" />
+                <EnvironmentChoice items={environments} /></>
             )}
           </Confirm>
         </div>

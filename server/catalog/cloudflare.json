@@ -17,9 +17,6 @@
           ],
           "docs": "https://developers.cloudflare.com/fundamentals/oauth/"
         },
-        "revoke": {
-          "url": "https://dash.cloudflare.com/oauth2/revoke"
-        },
         "outputs": {
           "CLOUDFLARE_API_TOKEN": "/accessToken",
           "CLOUDFLARE_OAUTH_EXPIRES_AT": "/expiresAt"

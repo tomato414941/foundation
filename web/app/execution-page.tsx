@@ -245,7 +245,7 @@ export default function ExecutionPage() {
         {approval?.need === 'verification' && <Notice tone="warning">{t('approvalUnverified', { name: approval.name })}</Notice>}
         {pending && item.canRespond && !needsKeys && !item.waiting?.continuation && (awaitingApproval || current) && <div className="flex flex-wrap items-center gap-4">
           <Button type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!approval)}>
-            {t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'revokeConnection' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
+            {t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           </Button>
           {canDecline && <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('decline')}</Button>}
         </div>}

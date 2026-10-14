@@ -176,8 +176,7 @@ const words: Record<string, [string, string]> = {
   operationInitiator: ['開始したプリンシパル', 'Initiating principal'],
   operationResponder: ['対応するプリンシパル', 'Responding principal'],
   cancelOperation: ['操作を取り消す', 'Cancel operation'],
-  connectionTarget: ['解除する接続', 'Connection to revoke'],
-  revokeConnection: ['接続を解除', 'Revoke connection'],
+  connectionTarget: ['解除する接続', 'Connection to disconnect'],
   runs: ['実行履歴', 'Runs'],
   shared: ['共有された項目', 'Shared with me'],
   settings: ['設定', 'Settings'],
@@ -251,7 +250,6 @@ const words: Record<string, [string, string]> = {
   deleteBody: ['削除すると元に戻せません。', 'This action cannot be undone.'],
   disconnect: ['接続を解除', 'Disconnect'],
   reconnect: ['再接続', 'Reconnect'],
-  revokeProvider: ['サービス側のアクセス権も取り消す', 'Also revoke access at the service'],
   reveal: ['内容を表示', 'Reveal content'],
   hide: ['内容を隠す', 'Hide content'],
   value: ['値', 'Value'],
@@ -379,10 +377,6 @@ const words: Record<string, [string, string]> = {
   connectionUseHelp: [
     'この接続の「利用」を共有した相手は、認証情報を受け取れます。特定の操作だけを許可する場合は、その接続を使う関数の「実行」を共有してください。',
     'People with use permission for this connection can receive its credentials. To allow only a specific operation, share execute permission for a function that uses it.',
-  ],
-  disconnectHelp: [
-    'Foundationからの削除や共有解除だけでは、渡した認証情報は失効しません。必要に応じて外部サービス側でもキーやアクセス権を取り消してください。',
-    'Removing a connection or its sharing permissions in Foundation does not invalidate credentials already delivered. Revoke keys or access at the external service when needed.',
   ],
   clientId: ['クライアントID', 'Client ID'],
   clientSecret: ['クライアントシークレット', 'Client secret'],
@@ -821,9 +815,9 @@ const errors: Array<[string[], string, string]> = [
     'The service response could not be verified. Check the account and permissions, then try again.',
   ],
   [
-    ['manual_revoke', 'revoke_failed'],
-    'サービス側でアクセスを取り消してから、接続を削除してください。',
-    'Revoke access at the service, then remove this connection.',
+    ['revoke_failed'],
+    'サービス側でトークンを取り消せませんでした。',
+    'The service did not revoke the token.',
   ],
   [
     ['subscription_active'],

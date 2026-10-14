@@ -7,6 +7,7 @@ export interface ConnectionMethodBehavior {
   application: 'required' | 'implicit' | 'none';
   requiresApp: boolean;
   browserAuthorization: boolean;
+  revocable: boolean;
   fields: ConnectionField[];
   outputs: string[];
 }
@@ -19,22 +20,23 @@ export function connectionMethod(method: MethodDescription): ConnectionMethodBeh
       return {
         family: 'oauth', application, requiresApp: application === 'required',
         browserAuthorization: method.config.grantType !== 'client_credentials',
+        revocable: method.config.revoke?.tokenOnly === true,
         fields: method.config.fields,
         outputs: Object.keys(method.config.outputs),
       };
     case 'token':
-      return { family: 'token', application: 'none', requiresApp: false, browserAuthorization: false,
+      return { family: 'token', application: 'none', requiresApp: false, browserAuthorization: false, revocable: false,
         fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
     case 'approval':
-      return { family: 'approval', application: 'none', requiresApp: false, browserAuthorization: true,
+      return { family: 'approval', application: 'none', requiresApp: false, browserAuthorization: true, revocable: false,
         fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
     case 'ovh': {
       const browser = method.config.authorization === 'consumer_key';
       return { family: 'ovh', application: browser ? 'required' : 'none', requiresApp: browser,
-        browserAuthorization: browser, fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
+        browserAuthorization: browser, revocable: false, fields: method.config.fields, outputs: Object.keys(method.config.outputs) };
     }
     case 'aws':
-      return { family: 'aws', application: 'none', requiresApp: false, browserAuthorization: false, fields: [],
+      return { family: 'aws', application: 'none', requiresApp: false, browserAuthorization: false, revocable: false, fields: [],
         outputs: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION'] };
   }
 }

@@ -24,7 +24,8 @@
         },
         "revoke": {
           "url": "https://api.hubapi.com/oauth/v1/refresh-tokens/{refreshToken}",
-          "style": "delete"
+          "style": "delete",
+          "tokenOnly": true
         },
         "scopes": {
           "default": [

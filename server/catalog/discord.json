@@ -22,10 +22,6 @@
           "DISCORD_ACCESS_TOKEN": "/accessToken",
           "DISCORD_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://discord.com/api/oauth2/token/revoke",
-          "style": "rfc7009"
-        },
         "scopes": {
           "default": [
             "identify"

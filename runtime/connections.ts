@@ -91,7 +91,7 @@ export class Connections implements ExecutionExtension {
     const action = ConnectionAction.parse(input);
     if (intent.operation !== Operations[action.action]) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     const state = await this.material(this.source(action.id, ContentTypes.tokenSet, sources), intent);
-    await this.connectionApp(state, intent, sources);
+    if (action.action === 'refresh' || connectionMethod(state.method).revocable) await this.connectionApp(state, intent, sources);
   }
   async execute(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
     const action = ConnectionAction.parse(input);
@@ -104,10 +104,9 @@ export class Connections implements ExecutionExtension {
         const refreshed = await this.refresh(content, state, intent, sources, signal);
         return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
       }
-      const provider = this.provider(state.method);
-      if (!provider.revoke) fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
-      await provider.revoke(state, await this.connectionApp(state, intent, sources), signal);
-      return { kind: 'revoked', id: content.policy.id };
+      const provider = this.provider(state.method), revoked = connectionMethod(state.method).revocable && Boolean(provider.revoke);
+      if (revoked) await provider.revoke!(state, await this.connectionApp(state, intent, sources), signal);
+      return { kind: 'disconnected', id: content.policy.id, revoked };
     } finally { this.active.delete(action.id); }
   }
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,

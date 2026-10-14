@@ -27,10 +27,6 @@
             "secret": false
           }
         ],
-        "revoke": {
-          "url": "https://api.ebay.com/identity/v1/oauth2/token/revoke",
-          "auth": "basic"
-        },
         "outputs": {
           "EBAY_ACCESS_TOKEN": "/accessToken",
           "EBAY_ACCOUNT_ID": "/account",

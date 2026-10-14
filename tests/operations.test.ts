@@ -402,23 +402,79 @@ test('同じIDで送信した操作を一度だけ実行し、異なる入力に
     operations: [{ name: 'principal.create', input: { ownerId: f.owner.actor.id, name: 'Changed group' } }] } }), { code: 'execution_conflict' });
 });
 
-test('共通の操作でGoogleの接続を解除し、指定した接続のアクセスをサービス側で取り消す', async t => {
-  const f = await flowFixture(request => request.url.includes('/token')
-    ? jsonResponse({ access_token: 'revoke-token', refresh_token: 'revoke-refresh', token_type: 'Bearer', expires_in: 3600 })
-    : request.url.includes('/userinfo') ? jsonResponse({ sub: 'revoke-account', email: 'revoke@example.com', email_verified: true }) : jsonResponse({ ok: true }));
-  t.after(f.close);
-  const app = await f.saveApp('google:oauth');
-  const start = await f.authorize({ methodId: 'google:oauth', appId: app.id });
+type FlowFixture = Awaited<ReturnType<typeof flowFixture>>;
+async function connectOAuth(f: FlowFixture, methodId: string) {
+  const app = await f.saveApp(methodId);
+  const start = await f.authorize({ methodId, appId: app.id });
   const authorization = await f.tick(start.flow.id);
-  if (authorization.kind !== 'authorize') throw new Error('Expected Google authorization.');
+  if (authorization.kind !== 'authorize') throw new Error('Expected browser authorization.');
   const state = new URL(authorization.url).searchParams.get('state')!;
   await f.connections.complete(start.flow.id, new URLSearchParams({ code: 'approved-code', state }).toString());
   const connection = await f.saved(start.flow.id);
+  if (connection.kind !== 'connection') throw new Error('Expected a connection.');
+  return connection;
+}
+async function disconnect(f: FlowFixture, connectionId: string, run = true) {
   const revocation = await f.operations.execute({ name: 'connection.revoke', input: { ownerId: f.owner.actor.id,
-    environmentId: f.environment.manifest.id, connectionId: connection.id } });
+    environmentId: f.environment.manifest.id, connectionId } });
   if (!('kind' in revocation) || revocation.kind !== 'run') throw new Error('Expected a revocation run.');
-  await f.executor.tick();
-  const completed = await f.client.api.json('/api/executions/' + revocation.task.intent.operationContext!.id, {}, Execution);
+  if (run) await f.executor.tick();
+  return { task: revocation.task, executionId: revocation.task.intent.operationContext!.id };
+}
+const githubToken = (request: { url: string }) => request.url === 'https://github.com/login/oauth/access_token'
+  ? jsonResponse({ access_token: 'github-access', token_type: 'bearer', scope: 'repo' }) : null;
+
+test('GitHubの接続を解除すると、そのトークンだけをサービス側で取り消して接続を削除する', async t => {
+  const f = await flowFixture(request => githubToken(request) ?? { status: 204, headers: {}, body: new Uint8Array() });
+  t.after(f.close);
+  const connection = await connectOAuth(f, 'github:oauth');
+  assert.equal(connection.data.revocable, true);
+  const { task, executionId } = await disconnect(f, connection.id);
+  const completed = await f.client.api.json('/api/executions/' + executionId, {}, Execution);
   assert.equal(completed.state, 'succeeded');
-  assert.equal(f.requests.filter(request => request.url === 'https://oauth2.googleapis.com/revoke').length, 1);
+  const run = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
+  assert.deepEqual(run?.result, { kind: 'disconnected', id: connection.id, revoked: true });
+  const revocations = f.requests.filter(request => request.url.startsWith('https://api.github.com/applications/'));
+  assert.deepEqual(revocations.map(request => [request.method, request.url]),
+    [['DELETE', 'https://api.github.com/applications/application-id/token']]);
+  await assert.rejects(f.client.api.json('/api/resources/' + connection.id), { code: 'not_found' });
+});
+
+test('サービス側での取り消しに失敗しても、解除した接続を削除して結果を記録する', async t => {
+  const f = await flowFixture(request => githubToken(request) ?? { status: 500, headers: {}, body: new Uint8Array() });
+  t.after(f.close);
+  const connection = await connectOAuth(f, 'github:oauth');
+  const { task, executionId } = await disconnect(f, connection.id);
+  const completed = await f.client.api.json('/api/executions/' + executionId, {}, Execution);
+  assert.equal(completed.state, 'succeeded');
+  assert.deepEqual(completed.results, [{ kind: 'run', id: task.id, state: 'failed' }]);
+  await assert.rejects(f.client.api.json('/api/resources/' + connection.id), { code: 'not_found' });
+});
+
+test('そのトークンだけを取り消せない方式の接続は、サービスに取り消しを求めずに解除する', async t => {
+  const f = await flowFixture(request => request.url.endsWith('/token')
+    ? jsonResponse({ access_token: 'google-access', refresh_token: 'google-refresh', token_type: 'Bearer', expires_in: 3600 })
+    : jsonResponse({ ok: true }));
+  t.after(f.close);
+  const connection = await connectOAuth(f, 'google:oauth');
+  assert.equal(connection.data.revocable, false);
+  const sent = f.requests.length;
+  const { task, executionId } = await disconnect(f, connection.id);
+  assert.equal((await f.client.api.json('/api/executions/' + executionId, {}, Execution)).state, 'succeeded');
+  const run = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
+  assert.deepEqual(run?.result, { kind: 'disconnected', id: connection.id, revoked: false });
+  assert.equal(f.requests.length, sent);
+  await assert.rejects(f.client.api.json('/api/resources/' + connection.id), { code: 'not_found' });
+});
+
+test('解除の実行を取り消すと、サービスに要求を送らずに接続を残す', async t => {
+  const f = await flowFixture(request => githubToken(request) ?? { status: 204, headers: {}, body: new Uint8Array() });
+  t.after(f.close);
+  const connection = await connectOAuth(f, 'github:oauth');
+  const { executionId } = await disconnect(f, connection.id, false);
+  await f.client.api.json('/api/executions/' + executionId + '/cancel', { method: 'POST', body: {} });
+  await f.executor.tick();
+  assert.equal((await f.client.api.json('/api/executions/' + executionId, {}, Execution)).state, 'cancelled');
+  assert.equal(f.requests.filter(request => request.url.startsWith('https://api.github.com/applications/')).length, 0);
+  assert.equal((await f.client.api.json('/api/resources/' + connection.id, {}, Resource)).id, connection.id);
 });

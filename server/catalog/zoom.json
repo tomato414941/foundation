@@ -24,7 +24,8 @@
         },
         "revoke": {
           "url": "https://zoom.us/oauth/revoke",
-          "style": "rfc7009"
+          "style": "rfc7009",
+          "tokenOnly": true
         },
         "scopes": {
           "default": [],

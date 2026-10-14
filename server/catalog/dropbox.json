@@ -27,7 +27,8 @@
         },
         "revoke": {
           "url": "https://api.dropboxapi.com/2/auth/token/revoke",
-          "style": "bearer"
+          "style": "bearer",
+          "tokenOnly": true
         },
         "scopes": {
           "default": [

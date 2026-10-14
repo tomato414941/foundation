@@ -281,8 +281,7 @@ export class OAuth {
     return current;
   }
   async revoke(spec: OAuthSpec, app: OAuthApp, current: OAuthToken) {
-    if (!spec.revoke)
-      fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
+    if (!spec.revoke?.tokenOnly) throw new Error('Revoke only with an endpoint that invalidates this token alone.');
     const url = expandUrl(spec.revoke.url, {
       ...this.appValues(spec, app),
       accessToken: current.accessToken,
@@ -304,7 +303,7 @@ export class OAuth {
       try {
         await oauth.processRevocationResponse(response);
       } catch {
-        fail(502, 'revoke_failed', 'Access could not be removed at the service. Try again.');
+        fail(502, 'revoke_failed', 'The service did not revoke the token.');
       }
       return;
     }
@@ -322,7 +321,7 @@ export class OAuth {
       headers,
     });
     if (response.status >= 300)
-      fail(502, 'revoke_failed', 'Access could not be removed at the service. Try again.');
+      fail(502, 'revoke_failed', 'The service did not revoke the token.');
   }
   outputs(spec: OAuthSpec, app: OAuthApp, value: OAuthToken): Record<string, string> {
     const data = {

@@ -20,7 +20,7 @@ const definition = (options: Record<string, unknown> = {}) =>
   OAuthDefinition.parse({
     authorizeUrl: 'https://provider.test/authorize',
     tokenUrl: 'https://provider.test/token',
-    revoke: { url: 'https://provider.test/revoke' },
+    revoke: { url: 'https://provider.test/revoke', tokenOnly: true },
     ...options,
   });
 const response = (body: unknown, status = 200): OutboundResponse => ({
@@ -339,7 +339,7 @@ test('アプリ認証で拒否された認証情報や不正な期限を接続�
   }
 });
 
-test('eBayのRuNameで認可し、独自のトークン種別で更新と失効を実行する', async () => {
+test('eBayのRuNameで認可し、独自のトークン種別で更新する', async () => {
   const spec = await builtin('ebay');
   const ebayApp = { ...app, fields: { ruName: 'Foundation-Application-RuName' } };
   let exchanges = 0;
@@ -355,10 +355,6 @@ test('eBayのRuNameで認可し、独自のトークン種別で更新と失効�
         scope: 'read write',
         exp: Math.floor(Date.now() / 1000) + 3600,
       });
-    if (request.url.endsWith('/revoke')) {
-      assert.equal(form.get('token'), 'ebay-refresh');
-      return response('');
-    }
     if (++exchanges === 1) assert.equal(form.get('redirect_uri'), ebayApp.fields.ruName);
     else assert.equal(form.get('refresh_token'), 'ebay-refresh');
     return response({
@@ -378,10 +374,9 @@ test('eBayのRuNameで認可し、独自のトークン種別で更新と失効�
   const refreshed = await oauth.refresh(spec, ebayApp, connected);
   assert.equal(refreshed.accessToken, 'ebay-access-2');
   assert.equal(refreshed.refreshToken, 'ebay-refresh');
-  await oauth.revoke(spec, ebayApp, refreshed);
 });
 
-test('GitHubのJSON応答からトークンを取得し、専用APIで認可を解除する', async () => {
+test('GitHubのJSON応答からトークンを取得し、そのトークンだけを取り消す', async () => {
   const spec = await builtin('github');
   const githubApp = { clientId: 'github-client', clientSecret: 'github-secret', fields: {} };
   const provider = new Provider((request) => {
@@ -392,7 +387,7 @@ test('GitHubのJSON応答からトークンを取得し、専用APIで認可を�
       assert.equal(body.client_secret, githubApp.clientSecret);
       return response({ access_token: 'github-access', token_type: 'bearer', scope: 'repo' });
     }
-    assert.equal(request.url, 'https://api.github.com/applications/github-client/grant');
+    assert.equal(request.url, 'https://api.github.com/applications/github-client/token');
     assert.equal(request.method, 'DELETE');
     assert.equal(
       Buffer.from(request.headers!.authorization!.slice(6), 'base64').toString(),
@@ -410,26 +405,27 @@ test('GitHubのJSON応答からトークンを取得し、専用APIで認可を�
   await oauth.revoke(spec, githubApp, token);
 });
 
-test('Googleのトークンを取得し、アプリ認証不要の失効要求を送信する', async () => {
-  const spec = await builtin('google');
+test('Salesforceのトークンを取得し、アプリ認証不要の失効要求を送信する', async () => {
+  const spec = await builtin('salesforce');
   const provider = new Provider((request) => {
     if (request.url === spec.tokenUrl)
       return response({
-        access_token: 'google-access',
+        access_token: 'salesforce-access',
         token_type: 'Bearer',
-        id_token: 'unused-identity-token',
-        refresh_token: 'google-refresh',
-        expires_in: 3600,
+        refresh_token: 'salesforce-refresh',
+        instance_url: 'https://example.my.salesforce.com',
+        id: 'https://login.salesforce.com/id/organization/user',
       });
     assert.equal(request.url, spec.revoke!.url);
     assert.deepEqual(Object.fromEntries(new URLSearchParams(String(request.body))), {
-      token: 'google-refresh',
+      token: 'salesforce-refresh',
     });
     return response('');
   });
   const oauth = new OAuth(provider);
-  const token = await oauth.exchange(spec, app, authorization('google-code'), verifier, redirect, ['openid']);
+  const token = await oauth.exchange(spec, app, authorization('salesforce-code'), verifier, redirect, ['refresh_token']);
   await oauth.revoke(spec, app, token);
+  assert.equal(provider.requests.length, 2);
 });
 
 test('OpenRouterのコードをPKCEで交換してAPIキーを取得する', async () => {

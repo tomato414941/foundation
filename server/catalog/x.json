@@ -24,7 +24,8 @@
         },
         "revoke": {
           "url": "https://api.x.com/2/oauth2/revoke",
-          "style": "rfc7009"
+          "style": "rfc7009",
+          "tokenOnly": true
         },
         "scopes": {
           "default": [

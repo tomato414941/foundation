@@ -196,11 +196,14 @@ export const OAuthDefinition = z.object({
       headers: z.record(z.string(), z.string()).default({}),
     })
     .optional(),
+  // Disconnecting asks the service to revoke only when the endpoint invalidates this connection's token and no other.
+  // Saved connections without the mark keep their endpoint readable, but it is not called.
   revoke: z
     .object({
       url: UrlTemplate,
       style: z.enum(['rfc7009', 'bearer', 'github', 'delete']).default('rfc7009'),
       auth: z.enum(['body', 'basic', 'none']).optional(),
+      tokenOnly: z.literal(true).optional(),
     })
     .optional(),
   clientAuth: z.enum(['body', 'basic', 'none']).default('body'),
@@ -445,6 +448,7 @@ export const ConnectionResource = z.object({
     scopesStatus: z.enum(['unknown', 'requested', 'reported']).default('unknown'),
     outputs: z.array(z.string()),
     state: z.enum(['ready', 'reconnect', 'review', 'disconnecting', 'uncertain']),
+    revocable: z.boolean().default(false),
     appId: Id.nullable(),
     generation: Id.optional(),
     authorizationDigest: z.string().optional(),

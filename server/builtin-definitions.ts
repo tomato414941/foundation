@@ -24,7 +24,7 @@ import type { Delegation } from './delegation.js';
 import type { Functions } from './functions.js';
 import type { Invocations } from './invocations.js';
 import { FunctionWrite, Invocation as FunctionInvocation, InvocationInput } from '../shared/function-api.js';
-import { fail } from './errors.js';
+import { DomainError, fail } from './errors.js';
 import { OperationFailed, DefinitionRegistry } from './definitions.js';
 import type { Queryable } from './database.js';
 import { requiresApp } from '../shared/connections.js';
@@ -388,18 +388,29 @@ export function builtinDefinitions(services: Services) {
         const row = await custody.put(who, write);
         return { kind: 'connected', id: row.id, metadata: write.content.metadata };
       } });
-  definitions.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Revoke a connection'], keyholder,
-    { execution: 'keyholder', configure: [], environmentReason: ['外部サービスの認可を実行環境から取り消します。', 'Revoke external service access from an execution environment.'], complete: async (who, input, proof, execution) => {
-      const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
-      if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
-        task.intent.actor.principalId !== who.id || task.intent.ownerId !== input.ownerId || task.environmentId !== input.environmentId ||
-        task.intent.operationContext?.id !== execution.id || task.intent.operationContext.index !== execution.index ||
-        !task.intent.sources.some(source => source.id === input.connectionId))
-        fail(409, 'execution_required', 'Finish the revocation prepared by this operation.');
-      const result = { kind: 'run', id: task.id, state: task.state };
-      if (task.state !== 'succeeded') throw new OperationFailed(result, task.state === 'uncertain');
-      return result;
-    } });
+  // Disconnecting removes what Foundation holds whatever the service answers. Only a cancelled run keeps the connection.
+  definitions.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Disconnect a service'], keyholder,
+    { execution: 'keyholder', configure: [], environmentReason: ['外部サービスの認可を実行環境から取り消します。', 'Revoke external service access from an execution environment.'],
+      review: async (who, input) => {
+        await authorization.requireResource(who, await resources.get(RevokeConnection.parse(input).connectionId), 'delete');
+        return input;
+      },
+      complete: async (who, input, proof, execution) => {
+        const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
+        if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
+          task.intent.actor.principalId !== who.id || task.intent.ownerId !== input.ownerId || task.environmentId !== input.environmentId ||
+          task.intent.operationContext?.id !== execution.id || task.intent.operationContext.index !== execution.index ||
+          !task.intent.sources.some(source => source.id === input.connectionId))
+          fail(409, 'execution_required', 'Finish the revocation prepared by this operation.');
+        const result = { kind: 'run', id: task.id, state: task.state };
+        if (task.state === 'cancelled') throw new OperationFailed(result, false);
+        const connection = await resources.get(input.connectionId).catch(error => {
+          if (error instanceof DomainError && error.code === 'not_found') return null;
+          throw error;
+        });
+        if (connection) await resources.delete(who, connection);
+        return result;
+      } });
   definitions.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
     { execution: 'keyholder', configure: ['environmentId'], environmentReason: ['HTTPリクエストやコマンドを実行環境で処理します。', 'Send the HTTP request or run the command in an execution environment.'], secret: () => false,
       complete: async (who, input, proof, execution) => {
