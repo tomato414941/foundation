@@ -18,7 +18,8 @@
           "OPENROUTER_API_KEY": "/accessToken"
         },
         "adapter": "openrouter",
-        "application": "implicit"
+        "application": "implicit",
+        "browserTokenExchange": "available"
       },
       "docs": "https://openrouter.ai/docs",
       "console": "https://openrouter.ai/keys"

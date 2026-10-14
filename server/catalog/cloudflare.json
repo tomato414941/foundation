@@ -21,7 +21,8 @@
           "CLOUDFLARE_API_TOKEN": "/accessToken",
           "CLOUDFLARE_OAUTH_EXPIRES_AT": "/expiresAt"
         },
-        "hint": "Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Scopes are the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write. List /accounts when using the token and choose the target explicitly. Domain registrations and renewals incur charges."
+        "hint": "Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Scopes are the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write. List /accounts when using the token and choose the target explicitly. Domain registrations and renewals incur charges.",
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developers.cloudflare.com/api/"
     },

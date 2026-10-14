@@ -35,7 +35,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://cybozu.dev/ja/common/docs/oauth-client/"
-        }
+        },
+        "browserTokenExchange": "unknown"
       },
       "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/"
     },

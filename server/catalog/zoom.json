@@ -31,7 +31,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://developers.zoom.us/docs/integrations/oauth-scopes-overview/"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developers.zoom.us/docs/api/",
       "console": "https://marketplace.zoom.us/"

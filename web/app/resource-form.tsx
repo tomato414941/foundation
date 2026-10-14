@@ -12,7 +12,7 @@ import { decode } from '../../shared/encryption';
 import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
-import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
+import { actionResult, api, ApiFailure, errorCode, formText, jsonField, session, upload } from './api';
 import { decryptVariable, requireKeys } from './keys';
 import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
@@ -24,7 +24,7 @@ import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
-import { connectionSubmission } from './execution-form';
+import { connectionSubmission } from './execution-forms/connections';
 import { httpConnections, httpRequestFromForm, RequestFields } from './http-request';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
@@ -87,7 +87,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   let connection: ReturnType<typeof connectionInitialValues> | undefined;
   let selectedExecutors: string[] = [];
   if (kind === 'function') {
-    try { await custodyClient(); } catch { locked = true; }
+    try { await custodyClient(); } catch (error) { if (errorCode(error) !== 'key_locked') throw error; locked = true; }
   }
   if (resource && isProtected(resource.kind)) {
     try {
@@ -101,7 +101,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
           registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
         connection = connectionInitialValues(state);
       }
-    } catch { locked = true; }
+    } catch (error) { if (errorCode(error) !== 'key_locked') throw error; locked = true; }
   }
   if (resource?.kind === 'variable') {
     try {
@@ -111,7 +111,8 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       } catch {
         binary = true;
       }
-    } catch {
+    } catch (error) {
+      if (errorCode(error) !== 'key_locked') throw error;
       locked = true;
     }
   }

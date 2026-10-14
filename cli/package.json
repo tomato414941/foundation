@@ -1,16 +1,18 @@
 {
   "name": "@tomato414941/foundation",
-  "version": "17.0.0",
+  "version": "18.0.0",
   "description": "Manage Foundation resources and run commands in execution environments.",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "bin": {
-    "foundation": "dist/cli.mjs"
+    "foundation": "dist/cli.mjs",
+    "foundation-executor": "dist/agent.mjs"
   },
   "files": [
-    "dist/cli.mjs"
+    "dist/cli.mjs",
+    "dist/agent.mjs"
   ],
   "repository": {
     "type": "git",

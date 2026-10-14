@@ -33,7 +33,8 @@
           ],
           "separator": " ",
           "docs": "https://developer.atlassian.com/cloud/jira/platform/scopes-for-oauth-2-3LO-and-forge-apps/"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.atlassian.com/cloud/",
       "console": "https://developer.atlassian.com/console/myapps/"

@@ -20,7 +20,7 @@ export async function routesExecutions(app: ApiApp, context: Context) {
         if (execution.wait === 'approval' || execution.wait === 'input') return reply.code(202).send(execution);
         const result = execution.results[0];
         const status = typeof endpoint.status === 'function' ? endpoint.status(result ?? null) : endpoint.status ?? 200;
-        return reply.code(status).send(result);
+        return reply.code(status).send(endpoint.output ? endpoint.output(result ?? null) : result);
       },
     });
   }

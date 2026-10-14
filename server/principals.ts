@@ -16,6 +16,7 @@ export interface PrincipalRow {
   public_key: PublicEncryptionKey | null;
   owner_id: string | null;
   retired_at: Date | null;
+  merged_into: string | null;
   created_at: Date;
 }
 export class Principals {

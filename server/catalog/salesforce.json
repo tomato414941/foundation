@@ -39,7 +39,8 @@
           ],
           "separator": " ",
           "docs": "https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_oauth_tokens_scopes.htm"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developer.salesforce.com/docs/apis"
     }

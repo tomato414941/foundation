@@ -24,7 +24,8 @@
         "scopes": {
           "default": [],
           "separator": " "
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/"
     },

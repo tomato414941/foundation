@@ -37,7 +37,8 @@
           ],
           "separator": " ",
           "docs": "https://developer.zendesk.com/api-reference/ticketing/oauth/oauth_tokens/"
-        }
+        },
+        "browserTokenExchange": "unknown"
       },
       "docs": "https://developer.zendesk.com/api-reference/"
     },

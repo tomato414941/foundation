@@ -19,7 +19,7 @@ class AgentUpdateTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.executable = self.root / 'package/dist/cli.mjs'
+        self.executable = self.root / 'package/dist/agent.mjs'
         self.executable.parent.mkdir(parents=True)
         self.executable.write_bytes(b'previous-cli')
         self.metadata = self.executable.parent.parent / 'package.json'
@@ -32,7 +32,7 @@ class AgentUpdateTests(unittest.TestCase):
         self.code = b'updated-cli'
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
-            for name, content in [('package/dist/cli.mjs', self.code), ('package/package.json', b'{"version":"5.1.0"}')]:
+            for name, content in [('package/dist/agent.mjs', self.code), ('package/package.json', b'{"version":"5.1.0"}')]:
                 info = tarfile.TarInfo(name); info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
         self.packed = buffer.getvalue()
@@ -43,7 +43,7 @@ class AgentUpdateTests(unittest.TestCase):
 
     def request(self, url, body=None, token=None):
         if url.endswith('/api/release'):
-            return {'cliVersion': '5.1.0', 'cliSha256': hashlib.sha256(self.code).hexdigest()}
+            return {'cliVersion': '5.1.0', 'agentSha256': hashlib.sha256(self.code).hexdigest()}
         if url.startswith('https://registry.npmjs.org/'):
             return {'dist': {'tarball': 'https://registry.npmjs.org/package.tgz',
                 'integrity': 'sha512-' + base64.b64encode(hashlib.sha512(self.packed).digest()).decode()}}

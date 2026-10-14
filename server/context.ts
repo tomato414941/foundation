@@ -30,11 +30,8 @@ import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
-import { Operations } from '../shared/custody.js';
 import { builtinDefinitions } from './builtin-definitions.js';
 import { Executions } from './executions.js';
-import { migrateExecutions } from './migrate-executions.js';
-import { migrateRequests } from './migrate-requests.js';
 import { canonical } from '../shared/authority.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
@@ -48,7 +45,7 @@ export interface Dependencies {
   storage?: ObjectStore;
   runner?: Runner;
 }
-export async function createContext(config: Configuration, deps: Dependencies = {}) {
+export async function createContext(config: Configuration, deps: Dependencies = {}, options: { migrate?: boolean } = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
   if (!deps.runner) {
     const tables = await db.one<{ jobs: string | null; resources: string | null }>(
@@ -60,7 +57,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND (r.data ? 'image' OR r.data->>'isolation'='container') LIMIT 1"))
       throw new Error('Upgrade existing managed environments to VM command execution before starting this deployment.');
   }
-  await db.initialize();
+  if (options.migrate) await db.migrate();
+  else await db.assertReady();
   const vault = await Vault.initialize(db, config),
     authorization = new Authorization(db),
     audit = new Audit(db),
@@ -95,21 +93,19 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const integrations = new Integrations(db, authorization, config.origin);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
     objects, billing, processes, integrations, custody, delegation, functions, invocations });
-  await migrateExecutions(db, vault);
-  await migrateRequests(db);
   const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin);
   executions.runtime = {
     get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
     cancel: (actor, reference) => reference.kind === 'run' ? delegation.cancel(actor, reference.id) : invocations.cancel(actor, reference.id),
   };
-  await executions.importRuntimeHistory();
   const requests = new Requests(db, authorization, authentication, config.origin, executions);
   delegation.checkOperationContext = async (actor, intent) => {
     const context = intent.operationContext!, { plan } = await executions.input(actor, context.id);
+    const continuation = definitions.get(plan.invocation.name).continuation;
     if (context.index !== plan.index || canonical(context.invocation) !== canonical(plan.invocation) ||
       canonical(intent.approval ?? null) !== canonical(plan.approval ?? null) ||
-      (plan.invocation.name === 'connection.connect' && (plan.continuation?.kind !== 'connection' || plan.continuation.id !== context.continuationId)) ||
-      (['run.execute', 'connection.revoke'].includes(plan.invocation.name) && (plan.continuation?.kind !== 'run' || plan.continuation.id !== intent.id)))
+      !continuation || plan.continuation?.kind !== continuation ||
+      plan.continuation.id !== (continuation === 'connection' ? context.continuationId : intent.id))
       fail(409, 'operation_changed', 'Use the prepared operation and its current continuation.');
   };
   delegation.completed = async task => {
@@ -128,14 +124,13 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   };
   delegation.checkApproval = async (actor, intent) => {
     const { plan } = await executions.input(actor, intent.approval!.id), input = plan.invocation.input;
-    const kind = plan.invocation.name === 'connection.connect' ? 'connect' : plan.invocation.name === 'run.execute'
-      ? (input.operation as { kind: keyof typeof Operations }).kind : plan.invocation.name === 'connection.revoke' ? 'revoke' : null;
+    const operation = definitions.get(plan.invocation.name).delegatedOperation?.(input);
     if (!intent.operationContext || intent.operationContext.id !== intent.approval!.id || plan.index !== intent.approval!.index ||
-      input.ownerId !== intent.ownerId || !kind || intent.operation !== Operations[kind] ||
+      input.ownerId !== intent.ownerId || !operation || intent.operation !== operation ||
       (input.environmentId && input.environmentId !== intent.environmentId))
       throw new Error('Use the operation and execution environment approved by this request.');
   };
-  return {
+  const context = {
     config,
     db,
     vault,
@@ -166,5 +161,15 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     processes,
     invocations,
   };
+  if (options.migrate) {
+    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }] = await Promise.all([
+      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'),
+    ]);
+    await migrateExecutions(db, vault);
+    await migrateRequests(db);
+    await migrateHistory(context);
+    await db.assertReady();
+  }
+  return context;
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;

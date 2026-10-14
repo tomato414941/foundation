@@ -1,3 +1,4 @@
+import { TaskQueue } from './task-queue.js';
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import type { Actor } from './authorization.js';
@@ -24,7 +25,12 @@ interface InvocationRow {
   created_at: Date; started_at: Date | null; finished_at: Date | null;
 }
 export class Invocations {
-  constructor(readonly functions: Functions, readonly custody: Custody, readonly delegation: Delegation) {}
+  readonly queue: TaskQueue;
+  constructor(readonly functions: Functions, readonly custody: Custody, readonly delegation: Delegation) {
+    this.queue = new TaskQueue(functions.resources.db, 'function_invocations', { errorFormat: 'json',
+      cancelledError: { code: 'invocation_cancelled', message: 'The invocation was cancelled before it started.' } });
+    delegation.queues.add(this.queue);
+  }
   get resources() { return this.functions.resources; }
   private row(id: string) { return this.resources.db.one<InvocationRow>('SELECT * FROM function_invocations WHERE id=$1', [id]).then(required); }
   private view(row: InvocationRow): InvocationView {
@@ -114,10 +120,7 @@ export class Invocations {
   async claim(actor: Actor, environmentId: string) {
     await this.delegation.heartbeat(actor, environmentId);
     const lease = randomUUID();
-    const row = await this.delegation.claimGate(environmentId, connection => this.resources.db.one<InvocationRow>(
-      `UPDATE function_invocations SET state='running',phase='claimed',lease_token=$2,lease_until=now()+interval '60 seconds'
-       WHERE id=(SELECT id FROM function_invocations WHERE environment_id=$1 AND state='queued'
-       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease], connection));
+    const row = await this.delegation.claimGate(environmentId, connection => this.queue.claim<InvocationRow>(environmentId, lease, connection));
     if (!row) return null;
     try {
       const current = await this.validate(row);
@@ -134,9 +137,7 @@ export class Invocations {
     const row = await this.row(id);
     await this.delegation.requireExecutor(actor, row.environment_id);
     await this.validate(row);
-    const updated = await this.resources.db.one(
-      `UPDATE function_invocations SET phase='dispatched',started_at=now() WHERE id=$1 AND lease_token=$2
-       AND phase='claimed' AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease]);
+    const updated = await this.queue.dispatch(id, lease);
     if (!updated) fail(409, 'lease_lost', 'This invocation can no longer be started with that lease.');
     await this.activity(row.environment_id);
     return { ok: true as const };
@@ -150,9 +151,7 @@ export class Invocations {
     await this.delegation.heartbeat(actor, row.environment_id);
     if (row.cancel_requested) return { active: false, reason: 'cancelled' as const };
     try { await this.validate(row); } catch { return { active: false, reason: 'authorization_changed' as const }; }
-    const updated = await this.resources.db.one(
-      `UPDATE function_invocations SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2
-       AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease]);
+    const updated = await this.queue.renew(id, lease);
     if (updated) await this.activity(row.environment_id);
     if (updated) return { active: true };
     return { active: false, reason: (await this.row(id)).cancel_requested ? 'cancelled' as const : 'lease_lost' as const };
@@ -182,16 +181,7 @@ export class Invocations {
     const row = await this.row(id);
     if (row.actor_id === actor.id) await this.resources.authorization.active(actor);
     else await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'execute');
-    await this.resources.db.pool.query(
-      `UPDATE function_invocations SET cancel_requested=true,
-       state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'settled' END,
-       error=CASE WHEN phase='dispatched' THEN $2::jsonb ELSE $3::jsonb END,
-       finished_at=CASE WHEN phase='dispatched' THEN NULL ELSE now() END,
-       lease_until=CASE WHEN phase='dispatched' THEN now()+interval '60 seconds' ELSE NULL END
-       WHERE id=$1 AND state IN ('queued','running')`, [id,
-        JSON.stringify({ code: 'cancellation_pending', message: 'Cancellation is waiting for the executor to confirm.' }),
-        JSON.stringify({ code: 'invocation_cancelled', message: 'The invocation was cancelled before it started.' })]);
+    await this.queue.cancel(id);
     return this.get(actor, id);
   }
   async recover() {
@@ -201,13 +191,6 @@ export class Invocations {
        OR NOT EXISTS(SELECT 1 FROM resources f WHERE f.id=i.function_id)
        OR NOT EXISTS(SELECT 1 FROM executor_environments e WHERE e.resource_id=i.environment_id AND e.stopped_at IS NULL))`,
       [JSON.stringify({ code: 'invocation_unavailable', message: 'The function or its environment is no longer available for this invocation.' })]);
-    await this.resources.db.pool.query(
-      `UPDATE function_invocations SET state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'queued' END,
-       error=CASE WHEN phase='dispatched' THEN $1::jsonb ELSE NULL END,
-       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'queued' END,
-       finished_at=CASE WHEN phase='dispatched' THEN now() ELSE NULL END,lease_until=NULL
-       WHERE lease_until<now() AND (state='running' OR
-       (state='uncertain' AND cancel_requested=true AND phase='dispatched' AND finished_at IS NULL))`,
-      [JSON.stringify({ code: 'execution_interrupted', message: 'Check the result before invoking this function again.' })]);
+    await this.queue.recover();
   }
 }

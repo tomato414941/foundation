@@ -50,9 +50,11 @@ def main():
         error.close()
         print("The production release is being verified; the next scheduled update will retry.")
         return
-    executable = Path(shutil.which("foundation")).resolve()
-    if hashlib.sha256(executable.read_bytes()).hexdigest() == release["cliSha256"]:
-        print("The execution agent already uses the verified CLI."); return
+    installed = shutil.which("foundation-executor")
+    if not installed: raise RuntimeError("Install the Foundation executor before scheduling agent updates.")
+    executable = Path(installed).resolve()
+    if hashlib.sha256(executable.read_bytes()).hexdigest() == release["agentSha256"]:
+        print("The execution agent already uses the verified runtime."); return
     # Only the package selected by the verified production release may be installed.
     try:
         pkg = request("https://registry.npmjs.org/%40tomato414941%2Ffoundation/" + release["cliVersion"])
@@ -68,14 +70,12 @@ def main():
     integrity = "sha512-" + base64.b64encode(hashlib.sha512(packed).digest()).decode()
     if integrity != pkg["dist"]["integrity"]: raise ValueError("The CLI package failed its integrity check.")
     with tarfile.open(fileobj=io.BytesIO(packed), mode="r:gz") as archive:
-        code = archive.extractfile("package/dist/cli.mjs").read()
-        metadata = archive.extractfile("package/package.json").read()
-    if hashlib.sha256(code).hexdigest() != release["cliSha256"]: raise ValueError("The CLI does not match the verified release.")
+        code = archive.extractfile("package/dist/agent.mjs").read()
+    if hashlib.sha256(code).hexdigest() != release["agentSha256"]: raise ValueError("The execution agent does not match the verified release.")
     maintenance = origin + "/api/environments/" + args.environment + "/maintenance"
     token = identity["token"]
     stopped = False
-    package = executable.parent.parent / "package.json"
-    previous_code, previous_metadata = executable.read_bytes(), package.read_bytes()
+    previous_code = executable.read_bytes()
     try:
         state = request(maintenance, {"paused": True}, token)
         deadline = time.monotonic() + 60
@@ -86,9 +86,8 @@ def main():
         stopped = True
         subprocess.run(["systemctl", "--user", "stop", args.service], check=True, timeout=30)
         heartbeat = request(maintenance, token=token)["heartbeatAt"]
-        replace(executable, code); replace(package, metadata)
-        version = subprocess.check_output([str(executable), "--version"], text=True).strip()
-        if version != release["cliVersion"]: raise RuntimeError("The installed CLI version is incorrect.")
+        replace(executable, code)
+        subprocess.run([str(executable), "--version"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["systemctl", "--user", "start", args.service], check=True)
         deadline = time.monotonic() + 30
         while True:
@@ -96,10 +95,10 @@ def main():
             if request(maintenance, token=token)["heartbeatAt"] != heartbeat: break
             if time.monotonic() >= deadline: raise RuntimeError("The updated execution agent did not reconnect.")
             time.sleep(1)
-        print("Updated the execution agent to Foundation " + version + "; identity and stored data were retained.")
+        print("Updated the execution agent to " + release["agentSha256"][:12] + "; identity and stored data were retained.")
     except Exception:
         if stopped:
-            replace(executable, previous_code); replace(package, previous_metadata)
+            replace(executable, previous_code)
             subprocess.run(["systemctl", "--user", "start", args.service], check=True)
         raise
     finally:

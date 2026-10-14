@@ -26,7 +26,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://developer.spotify.com/documentation/web-api/concepts/scopes"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.spotify.com/documentation/web-api",
       "console": "https://developer.spotify.com/dashboard"

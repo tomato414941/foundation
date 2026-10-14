@@ -5,6 +5,7 @@ import { Principal, Resource } from '../../shared/contracts';
 import type { JsonValue, ResourceView } from '../../shared/contracts';
 import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { Invocation } from '../../shared/function-api';
+import { ProcessView } from '../../shared/process';
 import { canonical, hash } from '../../shared/authority';
 import { PrivateProgram, reviewedProgram } from '../../shared/operation-authorization';
 import { SealedContinuationStore } from '../../shared/operation-continuations';
@@ -34,6 +35,13 @@ export async function loadExecutionDetails(item: ExecutionView, canReadOutput: b
       program: null, output: null };
     if (!reference) return details;
     try {
+      if (reference.kind === 'process') {
+        const process = await api('/processes/' + reference.id, { signal }, ProcessView);
+        details.startedAt = process.startedAt; details.finishedAt = process.finishedAt; details.environmentId = process.environmentId;
+        if (process.result) details.output = { state: 'available', value: process.result, kind: 'command' };
+        else if (process.error) details.output = { state: 'failed', error: process.error };
+        return details;
+      }
       if (reference.kind === 'function') {
         const invocation = await api('/runtime/functions/' + reference.id, { signal }, Invocation);
         details.startedAt = invocation.startedAt; details.finishedAt = invocation.finishedAt;

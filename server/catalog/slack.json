@@ -28,7 +28,8 @@
           "default": [],
           "separator": ",",
           "docs": "https://api.slack.com/scopes"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://api.slack.com/methods",
       "console": "https://api.slack.com/apps"

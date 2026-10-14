@@ -28,7 +28,8 @@
           ],
           "separator": " ",
           "docs": "https://airtable.com/developers/web/api/scopes"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://airtable.com/developers/web/api/introduction",
       "console": "https://airtable.com/create/oauth"

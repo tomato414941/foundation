@@ -26,7 +26,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://developer.box.com/guides/api-calls/permissions-and-errors/scopes/"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.box.com/reference/",
       "console": "https://app.box.com/developers/console"

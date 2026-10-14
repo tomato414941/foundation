@@ -36,7 +36,8 @@
           "default": [],
           "separator": ",",
           "docs": "https://shopify.dev/docs/api/usage/access-scopes"
-        }
+        },
+        "browserTokenExchange": "unknown"
       },
       "docs": "https://shopify.dev/docs/api/admin-graphql",
       "console": "https://partners.shopify.com/"
@@ -70,10 +71,20 @@
           "SHOPIFY_SHOP": "/shop",
           "SHOPIFY_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "hint": "Use an app installed on a store in your own Shopify organization. Set access scopes in the Dev Dashboard."
+        "hint": "Use an app installed on a store in your own Shopify organization. Set access scopes in the Dev Dashboard.",
+        "browserTokenExchange": "unknown"
       },
       "docs": "https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant",
-      "console": "https://dev.shopify.com/dashboard"
+      "console": "https://dev.shopify.com/dashboard",
+      "preparation": {
+        "scopeSelection": "hidden",
+        "instructions": [
+          {
+            "ja": "自分のShopify組織のストアにインストール済みのアプリを使用してください。権限はDev Dashboardのアプリ設定で指定します。",
+            "en": "Use an app installed on a store in your own Shopify organization. Set its access scopes in the Dev Dashboard."
+          }
+        ]
+      }
     },
     "token": {
       "name": "Shopify · Enter access token",

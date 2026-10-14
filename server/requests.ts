@@ -39,7 +39,8 @@ export class Requests {
     if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own request.');
     const ids = await this.authorization.find(actor.id, 'principal', 'stands');
     const rows = await this.db.all<{ id: string }>(`SELECT id FROM requests WHERE
-      (from_id=$1 OR to_id=ANY($2::uuid[])) AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`, [actor.id, ids, after ?? null, limit + 1]);
+      (from_id=$1 OR to_id=ANY($2::uuid[]) OR EXISTS(SELECT 1 FROM principals p WHERE p.id=from_id AND p.retired_at IS NOT NULL AND p.merged_into=$1))
+      AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`, [actor.id, ids, after ?? null, limit + 1]);
     return { items: await Promise.all(rows.slice(0, limit).map(row => this.get(actor, row.id))), next: rows.length > limit ? rows[limit - 1]!.id : null };
   }
   async create(actor: Actor, input: z.infer<typeof RequestInput>) {

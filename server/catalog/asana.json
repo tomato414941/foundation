@@ -31,7 +31,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://developers.asana.com/docs/oauth-scopes"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developers.asana.com/reference/rest-api-reference",
       "console": "https://app.asana.com/0/my-apps"

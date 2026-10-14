@@ -55,7 +55,7 @@ export async function readRegistry(fetcher = fetch) {
   return response.json();
 }
 
-export async function checkPublishedContent(pkg, registry, bytes, fetcher = fetch) {
+export async function checkPublishedContent(pkg, registry, artifacts, fetcher = fetch) {
   const published = registry.versions[pkg.version];
   if (!published) return;
   const url = new URL(published.dist.tarball);
@@ -65,9 +65,11 @@ export async function checkPublishedContent(pkg, registry, bytes, fetcher = fetc
   const packed = Buffer.from(await response.arrayBuffer());
   const integrity = 'sha512-' + createHash('sha512').update(packed).digest('base64');
   if (integrity !== published.dist.integrity) throw new Error('The published package failed its integrity check.');
-  const previous = execFileSync('tar', ['-xzOf', '-', 'package/dist/cli.mjs'], { input: packed, maxBuffer: 40_000_000 });
-  if (!Buffer.from(bytes).equals(previous))
-    throw new Error('The CLI distribution changed. Increase cli/package.json version before releasing.');
+  for (const [name, bytes] of Object.entries(artifacts)) {
+    const previous = execFileSync('tar', ['-xzOf', '-', 'package/' + name], { input: packed, maxBuffer: 40_000_000 });
+    if (!Buffer.from(bytes).equals(previous))
+      throw new Error('The CLI distribution changed. Increase cli/package.json version before releasing.');
+  }
 }
 
 export async function ensureRelease({ repository, sha, version, token, fetcher = fetch }) {
@@ -168,7 +170,7 @@ async function main() {
       if (process.env.RELEASE_TAG && process.env.RELEASE_TAG !== 'cli-v' + pkg.version)
         throw new Error('The release tag must match the CLI package version.');
       const registry = await readRegistry();
-      await checkPublishedContent(pkg, registry, readFileSync('cli/dist/cli.mjs'));
+      await checkPublishedContent(pkg, registry, { 'dist/cli.mjs': readFileSync('cli/dist/cli.mjs'), 'dist/agent.mjs': readFileSync('cli/dist/agent.mjs') });
       const plan = planRelease(pkg, registry);
       appendFileSync(process.env.GITHUB_OUTPUT, 'publish=' + plan.publish + '\ntag=' + plan.tag + '\n');
       console.log(plan.reason);

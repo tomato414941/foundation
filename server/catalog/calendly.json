@@ -25,7 +25,8 @@
         "scopes": {
           "default": [],
           "separator": " "
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.calendly.com/api-docs",
       "console": "https://developer.calendly.com/"

@@ -3,6 +3,8 @@ import pg from 'pg';
 import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
+export const SchemaMigration = '001-foundation-schema';
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', '002-ssh-environments'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {
@@ -16,17 +18,28 @@ export class Database {
       options: `-c statement_timeout=30000${options.schema ? ' -c search_path=' + options.schema : ''}`,
     });
   }
-  async initialize() {
-    const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
+  async migrate() {
     await this.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
-      await client.query(`DO $$ BEGIN
-        IF to_regclass('operation_executions') IS NOT NULL AND to_regclass('executions') IS NULL THEN
-          ALTER TABLE operation_executions RENAME TO executions;
-        END IF;
-      END $$`);
-      await client.query(schema);
+      const installed = await this.one<{ principals: string | null; migrations: string | null }>(
+        "SELECT to_regclass('principals') AS principals,to_regclass('schema_migrations') AS migrations", [], client);
+      if (!installed?.migrations || !await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [SchemaMigration], client)) {
+        const schema = await readFile(new URL(installed?.principals ? './migrations/001-foundation.sql' : './schema.sql', import.meta.url), 'utf8');
+        await client.query(schema);
+        const names = installed?.principals ? [SchemaMigration] : RequiredMigrations;
+        for (const name of names) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
+      }
+      if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', ['002-ssh-environments'], client)) {
+        await client.query(await readFile(new URL('./migrations/002-ssh-environments.sql', import.meta.url), 'utf8'));
+        await client.query('INSERT INTO schema_migrations(name) VALUES($1)', ['002-ssh-environments']);
+      }
     });
+  }
+  async assertReady() {
+    const installed = await this.one<{ migrations: string | null }>("SELECT to_regclass('schema_migrations') AS migrations");
+    const applied = installed?.migrations ? await this.all<{ name: string }>('SELECT name FROM schema_migrations') : [];
+    if (RequiredMigrations.some(name => !applied.some(row => row.name === name)))
+      throw new Error('Apply database migrations with npm run migrate before starting Foundation.');
   }
   async all<T extends QueryResultRow>(
     sql: string,

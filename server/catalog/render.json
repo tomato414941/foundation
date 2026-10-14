@@ -29,7 +29,8 @@
           "separator": " ",
           "docs": "https://render.com/docs/mcp-server"
         },
-        "hint": "Requires an OAuth client registered with Render for this Foundation instance's callback URL. Use RENDER_MCP_ACCESS_TOKEN with https://mcp.render.com/mcp."
+        "hint": "Requires an OAuth client registered with Render for this Foundation instance's callback URL. Use RENDER_MCP_ACCESS_TOKEN with https://mcp.render.com/mcp.",
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://render.com/docs/mcp-server"
     },

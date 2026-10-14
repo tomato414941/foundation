@@ -15,6 +15,9 @@ export class MemoryJournal implements Journal {
   async read<T>(id: string): Promise<T | null> { return structuredClone(this.entries.get(id) ?? null) as T | null; }
   async write(id: string, value: unknown) { this.entries.set(id, structuredClone(value)); }
   async keys(prefix: string) { return [...this.entries.keys()].filter(key => key.startsWith(prefix)); }
+  async pending(prefix: string) {
+    return (await this.keys(prefix)).filter(key => (this.entries.get(key) as { delivered?: boolean } | undefined)?.delivered !== true);
+  }
 }
 
 export async function delegatedFixture() {

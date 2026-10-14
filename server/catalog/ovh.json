@@ -66,7 +66,8 @@
             ],
             "secret": false
           }
-        ]
+        ],
+        "browserTokenExchange": "unknown"
       },
       "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
       "console": "https://{consoleHost}/manager/"

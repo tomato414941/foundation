@@ -32,7 +32,8 @@
         },
         "keep": [
           "workspace_id"
-        ]
+        ],
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developers.notion.com/reference/intro",
       "console": "https://www.notion.so/profile/integrations"

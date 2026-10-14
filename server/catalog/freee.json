@@ -26,7 +26,8 @@
           "default": [],
           "separator": " ",
           "docs": "https://developer.freee.co.jp/startguide/basic/oauth"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developer.freee.co.jp/reference",
       "console": "https://app.secure.freee.co.jp/developers/applications"

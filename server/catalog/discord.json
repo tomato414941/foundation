@@ -28,7 +28,8 @@
           ],
           "separator": " ",
           "docs": "https://discord.com/developers/docs/topics/oauth2#shared-resources-oauth2-scopes"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://discord.com/developers/docs/reference",
       "console": "https://discord.com/developers/applications"

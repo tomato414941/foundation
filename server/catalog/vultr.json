@@ -35,10 +35,21 @@
           "VULTR_ACCESS_TOKEN": "/accessToken",
           "VULTR_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "hint": "Register the Foundation callback URL on your Vultr OAuth application and attach the required permission policies. Draft applications can be authorized by allowlisted users; public applications require Vultr approval. Uses PKCE and renews access with rotating refresh tokens."
+        "hint": "Register the Foundation callback URL on your Vultr OAuth application and attach the required permission policies. Draft applications can be authorized by allowlisted users; public applications require Vultr approval. Uses PKCE and renews access with rotating refresh tokens.",
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://docs.vultr.com/platform/iam/oauth/access-tokens/how-to-integrate-a-third-party-app-with-vultr-oauth",
-      "console": "https://console.vultr.com/"
+      "console": "https://console.vultr.com/",
+      "preparation": {
+        "scopeSelection": "hidden",
+        "instructions": [
+          {
+            "ja": "VultrでOAuthアプリを登録し、この画面のコールバックURLと必要な権限を設定してください。登録したアプリの認証情報を入力すると、Vultrの画面で接続を許可できます。",
+            "en": "Register an OAuth application in Vultr with this callback URL and the required permission policies. Enter its credentials to authorize the connection in Vultr."
+          }
+        ],
+        "docs": true
+      }
     },
     "token": {
       "name": "Vultr · Enter API key",

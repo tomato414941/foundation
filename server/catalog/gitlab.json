@@ -33,7 +33,8 @@
           ],
           "separator": " ",
           "docs": "https://docs.gitlab.com/integration/oauth_provider/#view-all-authorized-applications"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://docs.gitlab.com/api/rest/",
       "console": "https://gitlab.com/-/user_settings/applications"

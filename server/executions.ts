@@ -47,6 +47,13 @@ interface ExecutionRow {
   state: ExecutionView['state']; wait: ExecutionView['wait'];
   snapshot: string; revision: number; lease_token: string | null; lease_until: Date | null; expires_at: Date; created_at: Date;
 }
+interface ViewMetadata {
+  creator: { id: string; name: string };
+  canRespond: boolean;
+  proposal: NonNullable<ExecutionView['approval']>['proposal'];
+  deliveries: Array<{ id: string }>;
+  runtime: Array<{ id: string; index: number }>;
+}
 // One persisted execution mechanism serves direct calls and calls awaiting a person's response.
 export class Executions {
   runtime!: {
@@ -92,22 +99,19 @@ export class Executions {
       ? { kind: proposed.kind, subject: await named(proposed.subjectId), relation: proposed.relation, object: await named(proposed.objectId) }
       : { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
   }
-  private async view(row: ExecutionRow, snapshot: Snapshot, actor: Actor | null = { id: snapshot.actor.id }): Promise<ExecutionView> {
-    const [creator, canRespond, proposal] = await Promise.all([this.principals.get(row.creator_id),
-      this.canRespond(actor, row), this.proposal(row.proposal)]);
-    const deliveries = await this.db.all<{ id: string }>('SELECT id FROM requests WHERE execution_id=$1 ORDER BY created_at', [row.id]);
-    const runtime = await this.db.all<{ id: string; index: number }>(`SELECT id,(request->'intent'->'operationContext'->>'index')::integer AS index
-      FROM execution_tasks WHERE request->'intent'->'operationContext'->>'id'=$1 ORDER BY created_at`, [row.id]);
+  private async view(row: ExecutionRow, snapshot: Snapshot, actor: Actor | null = { id: snapshot.actor.id }, metadata?: ViewMetadata): Promise<ExecutionView> {
+    const { creator, canRespond, proposal, deliveries, runtime } = metadata ?? await this.metadata(row, actor);
     const currentResult = snapshot.results[snapshot.index];
-    const error = currentResult && typeof currentResult === 'object' && !Array.isArray(currentResult) && 'error' in currentResult ? currentResult.error : null;
+    const fault = currentResult && typeof currentResult === 'object' && !Array.isArray(currentResult) && 'error' in currentResult ? currentResult.error : null;
+    const error = fault && typeof fault === 'object' && !Array.isArray(fault) ? fault : null;
     return Execution.parse({ id: row.id, actorId: row.actor_id, ownerId: row.owner_id ?? row.creator_id,
       requests: deliveries.map(item => item.id), creator: { id: creator.id, name: creator.name },
       steps: snapshot.operations.map((operation, index) => {
         const result = snapshot.results[index];
         const runs: ExecutionView['steps'][number]['runs'] = runtime.filter(run => run.index === index).map(run => ({ kind: 'run' as const, id: run.id }));
         if (snapshot.runtime && index === 0) runs.push(snapshot.runtime);
-        if (!snapshot.runtime && operation.name === 'function.invoke' && result && typeof result === 'object' && !Array.isArray(result) && typeof result.id === 'string')
-          runs.push({ kind: 'function', id: result.id });
+        const reference = !snapshot.runtime && result != null ? this.definitions.get(operation.name).runtimeReference?.(result) : null;
+        if (reference) runs.push(reference);
         return { index, name: operation.name, state: index < snapshot.index ? 'succeeded' : index === snapshot.index ? row.state : 'waiting', runs };
       }),
       approval: row.wait === 'approval' ? { requestId: deliveries.at(-1)?.id ?? null, proposal } : null,
@@ -122,9 +126,20 @@ export class Executions {
       waiting: (row.wait === 'input' || row.wait === 'execution' && !!snapshot.continuation) && canRespond && (actor?.id === row.actor_id || actor?.requestId)
         ? { index: snapshot.index, invocation: { name: snapshot.operations[snapshot.index]!.name, input: snapshot.operations[snapshot.index]!.input },
           continuation: snapshot.continuation, ...(this.operationActor(snapshot).approvalId ? { approval: { id: snapshot.actor.approvalId!, index: snapshot.index } } : {}) } : null,
-      results: snapshot.results.map((result, index) => snapshot.operations[index]?.name === 'function.invoke' && result &&
-        typeof result === 'object' && !Array.isArray(result) && 'result' in result ? result.result : result),
+      results: snapshot.results.map((result, index) => {
+        const present = this.definitions.get(snapshot.operations[index]!.name).resultView;
+        return result != null && present ? present(result) : result;
+      }),
       createdAt: iso(row.created_at), expiresAt: iso(row.expires_at) });
+  }
+  private async metadata(row: ExecutionRow, actor: Actor | null): Promise<ViewMetadata> {
+    const [creator, canRespond, proposal, deliveries, runtime] = await Promise.all([
+      this.principals.get(row.creator_id), this.canRespond(actor, row), this.proposal(row.proposal),
+      this.db.all<{ id: string }>('SELECT id FROM requests WHERE execution_id=$1 ORDER BY created_at', [row.id]),
+      this.db.all<{ id: string; index: number }>(`SELECT id,(request->'intent'->'operationContext'->>'index')::integer AS index
+        FROM execution_tasks WHERE request->'intent'->'operationContext'->>'id'=$1 ORDER BY created_at`, [row.id]),
+    ]);
+    return { creator, canRespond, proposal, deliveries, runtime };
   }
   private async expire(row: ExecutionRow) {
     if (row.expires_at.getTime() > Date.now() || !['waiting', 'running', 'failed'].includes(row.state)) return row;
@@ -165,7 +180,8 @@ export class Executions {
     if (!publicJoin && (!actor ||
       actor.id !== row.creator_id && actor.id !== row.actor_id && !snapshot.responders.includes(actor.id) && !(await this.canRespond(actor, row)) &&
       !(row.owner_id && !actor.requestId && await this.authorization.holds(actor.id, principal(row.owner_id), 'read'))))
-      fail(403, 'forbidden', 'This operation belongs to another principal.');
+      if (!actor || actor.requestId || !await this.db.one('SELECT 1 FROM principals WHERE id=$1 AND retired_at IS NOT NULL AND merged_into=$2', [row.creator_id, actor.id]))
+        fail(403, 'forbidden', 'This operation belongs to another principal.');
     const current = resume ? await this.recover(row) : row;
     return this.view(current, await this.read(current), actor);
   }
@@ -174,11 +190,33 @@ export class Executions {
     if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own operation.');
     const represented = await this.authorization.find(actor.id, 'principal', 'stands');
     if (ownerId) await this.authorization.requirePrincipal(actor, ownerId, 'read');
-    const rows = await this.db.all<{ id: string }>(`SELECT id FROM executions
-      WHERE (($5::uuid IS NULL AND (creator_id=$1 OR actor_id=$1 OR responder_id=ANY($2::uuid[]))) OR owner_id=$5)
-      AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`,
+    const rows = await this.db.all<ExecutionRow & { creator_name: string }>(`SELECT e.*,p.name AS creator_name FROM executions e JOIN principals p ON p.id=e.creator_id
+      WHERE (($5::uuid IS NULL AND (creator_id=$1 OR actor_id=$1 OR responder_id=ANY($2::uuid[]) OR e.owner_id=ANY($2::uuid[]) OR p.merged_into=$1)) OR e.owner_id=$5)
+      AND ($3::uuid IS NULL OR e.id>$3) ORDER BY e.id LIMIT $4`,
       [actor.id, represented, after ?? null, limit + 1, ownerId ?? null]);
-    return { items: await Promise.all(rows.slice(0, limit).map(row => this.get(actor, row.id))), next: rows.length > limit ? rows[limit - 1]!.id : null };
+    const selected = await Promise.all(rows.slice(0, limit).map(async row => ({
+      row: await this.recover(await this.expire(row)), creator: { id: row.creator_id, name: row.creator_name },
+    }))), ids = selected.map(item => item.row.id);
+    const proposalIds = [...new Set(selected.flatMap(({ row }) => row.proposal
+      ? row.proposal.kind === 'line' ? [row.proposal.subjectId, row.proposal.objectId] : [row.proposal.itemId, row.proposal.to] : []))];
+    const [deliveries, runtime, names] = await Promise.all([
+      this.db.all<{ id: string; execution_id: string }>('SELECT id,execution_id FROM requests WHERE execution_id=ANY($1::uuid[]) ORDER BY created_at', [ids]),
+      this.db.all<{ id: string; execution_id: string; index: number }>(`SELECT id,request->'intent'->'operationContext'->>'id' AS execution_id,
+        (request->'intent'->'operationContext'->>'index')::integer AS index FROM execution_tasks
+        WHERE request->'intent'->'operationContext'->>'id'=ANY($1::text[]) ORDER BY created_at`, [ids]),
+      this.db.all<{ id: string; name: string }>('SELECT id,name FROM principals WHERE id=ANY($1::uuid[]) UNION ALL SELECT id,name FROM resources WHERE id=ANY($1::uuid[])', [proposalIds]),
+    ]);
+    const named = (id: string) => ({ id, name: names.find(item => item.id === id)?.name ?? id });
+    const items = await Promise.all(selected.map(async ({ row, creator }) => {
+      const proposed = row.proposal, proposal = !proposed ? null : proposed.kind === 'line'
+        ? { kind: proposed.kind, subject: named(proposed.subjectId), relation: proposed.relation, object: named(proposed.objectId) }
+        : { kind: proposed.kind, item: named(proposed.itemId), to: named(proposed.to) };
+      const canRespond = row.response === 'accepted' && actor.id === row.actor_id || (row.responder_id
+        ? represented.includes(row.responder_id) : row.code_hash ? actor.id !== row.creator_id : actor.id === row.actor_id);
+      return this.view(row, await this.read(row), actor, { creator, canRespond, proposal,
+        deliveries: deliveries.filter(item => item.execution_id === row.id), runtime: runtime.filter(item => item.execution_id === row.id) });
+    }));
+    return { items, next: rows.length > limit ? rows[limit - 1]!.id : null };
   }
   async recordRuntime(kind: 'run' | 'function', job: TaskView | InvocationView) {
     if ('intent' in job && job.intent.operationContext) {
@@ -206,30 +244,6 @@ export class Executions {
       VALUES($1,$2,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING`, [job.id, job.actorId, job.ownerId, state,
       state === 'running' ? 'execution' : null, await this.vault.encrypt(snapshot, 'operation-execution:' + job.id),
       'intent' in job ? job.intent.expiresAt : new Date(Date.now() + 86_400_000), job.createdAt]);
-  }
-  async importRuntimeHistory() {
-    if (await this.db.one("SELECT 1 FROM schema_migrations WHERE name='unified-execution-history'")) return;
-    const jobs = await this.db.all<{ id: string; actor_id: string }>(`SELECT id,actor_id FROM execution_tasks
-      WHERE request->'intent'->'operationContext' IS NULL AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.id=execution_tasks.id)`);
-    for (const job of jobs) await this.recordRuntime('run', await this.runtime.get({ id: job.actor_id }, { kind: 'run', id: job.id }));
-    const functions = await this.db.all<{ id: string; actor_id: string }>(`SELECT id,actor_id FROM function_invocations f
-      WHERE NOT EXISTS(SELECT 1 FROM executions e WHERE e.id=f.id)`);
-    const roots = await this.db.all<{ id: string; snapshot: string }>('SELECT id,snapshot FROM executions');
-    const included = new Set<string>();
-    for (const row of roots) {
-      const snapshot = await this.vault.decrypt<Snapshot>(row.snapshot, 'operation-execution:' + row.id);
-      for (const operation of snapshot.operations)
-        if (operation.name === 'function.invoke' && typeof operation.input.id === 'string') included.add(operation.input.id);
-      for (const result of snapshot.results)
-        if (result && typeof result === 'object' && !Array.isArray(result) && typeof result.id === 'string') included.add(result.id);
-      const owner = snapshot.operations.map(operation => operation.input.ownerId).find(value => Id.safeParse(value).success);
-      if (owner) await this.db.pool.query('UPDATE executions SET owner_id=$2 WHERE id=$1 AND owner_id IS NULL AND EXISTS(SELECT 1 FROM principals WHERE id=$2)', [row.id, owner]);
-    }
-    for (const job of functions) {
-      if (!included.has(job.id)) await this.recordRuntime('function', await this.runtime.get({ id: job.actor_id }, { kind: 'function', id: job.id }));
-    }
-    await this.db.pool.query('UPDATE executions SET owner_id=creator_id WHERE owner_id IS NULL');
-    await this.db.pool.query("INSERT INTO schema_migrations(name) VALUES('unified-execution-history') ON CONFLICT DO NOTHING");
   }
   async plan(id: string, actor: Actor, operations: DefinitionCall[], expiresAt: Date, results?: Array<JsonValue | null>,
     response?: { responderId?: string; message: string; code?: string; pending?: boolean; deliver?: boolean }, submissionDigest: string | null = null) {
@@ -612,8 +626,7 @@ export class Executions {
   async track(actor: Actor, id: string, index: number, continuation: NonNullable<OperationWaiting['continuation']>) {
     return this.locked(id, async () => {
       const { row, snapshot, plan } = await this.input(actor, id);
-      if ((plan.invocation.name !== 'connection.connect' || continuation.kind !== 'connection') &&
-        (!['run.execute', 'connection.revoke'].includes(plan.invocation.name) || continuation.kind !== 'run'))
+      if (this.definitions.get(plan.invocation.name).continuation !== continuation.kind)
         fail(400, 'invalid_continuation', 'Continue the operation that is awaiting input.');
       if (plan.index !== index || (snapshot.continuation && JSON.stringify(snapshot.continuation) !== JSON.stringify(continuation)))
         fail(409, 'execution_changed', 'Continue the operation already in progress.');

@@ -1,3 +1,4 @@
+import { TaskQueue } from './task-queue.js';
 import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
 import { environmentConnected } from './environment-status.js';
@@ -20,7 +21,11 @@ interface ProcessRow {
 }
 
 export class Processes {
-  constructor(readonly resources: Resources, readonly delegation: Delegation) {}
+  readonly queue: TaskQueue;
+  constructor(readonly resources: Resources, readonly delegation: Delegation) {
+    this.queue = new TaskQueue(resources.db, 'environment_processes');
+    delegation.queues.add(this.queue);
+  }
 
   private view(row: ProcessRow): ProcessInfo {
     return ProcessView.parse({ ...row.request, id: row.id, ownerId: row.owner_id, actorId: row.actor_id,
@@ -100,10 +105,7 @@ export class Processes {
   async claim(actor: Actor, environmentId: string) {
     await this.delegation.heartbeat(actor, environmentId);
     const lease = randomUUID();
-    const row = await this.delegation.claimGate(environmentId, connection => this.resources.db.one<ProcessRow>(
-      `UPDATE environment_processes SET state='running',phase='claimed',lease_token=$2,lease_until=now()+interval '60 seconds'
-       WHERE id=(SELECT id FROM environment_processes WHERE environment_id=$1 AND state='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease], connection));
+    const row = await this.delegation.claimGate(environmentId, connection => this.queue.claim<ProcessRow>(environmentId, lease, connection));
     if (!row) return null;
     try { await this.validate(row.actor, environmentId); }
     catch {
@@ -118,9 +120,7 @@ export class Processes {
     const row = await this.row(id);
     await this.delegation.requireExecutor(actor, row.environment_id);
     await this.validate(row.actor, row.environment_id);
-    const updated = await this.resources.db.one(
-      `UPDATE environment_processes SET phase='dispatched',started_at=now() WHERE id=$1 AND lease_token=$2
-       AND phase='claimed' AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease]);
+    const updated = await this.queue.dispatch(id, lease);
     if (!updated) fail(409, 'lease_lost', 'This process can no longer be started with that lease.');
     await this.resources.db.pool.query(
       "UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",
@@ -132,9 +132,7 @@ export class Processes {
     await this.delegation.heartbeat(actor, row.environment_id);
     try { await this.validate(row.actor, row.environment_id); }
     catch { return { active: false }; }
-    const updated = await this.resources.db.one(
-      `UPDATE environment_processes SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2
-       AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease]);
+    const updated = await this.queue.renew(id, lease);
     if (updated) await this.resources.db.pool.query(
       "UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",
       [row.environment_id, new Date().toISOString()]);
@@ -166,21 +164,10 @@ export class Processes {
     const row = await this.row(id);
     if (row.actor_id === actor.id) await this.resources.authorization.active(actor);
     else await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'execute');
-    await this.resources.db.pool.query(
-      `UPDATE environment_processes SET cancel_requested=true,
-       state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'settled' END,
-       error=CASE WHEN phase='dispatched' THEN 'cancellation_pending' ELSE NULL END,
-       finished_at=CASE WHEN phase='dispatched' THEN NULL ELSE now() END,lease_until=NULL
-       WHERE id=$1 AND state IN ('queued','running')`, [id]);
+    await this.queue.cancel(id);
     return this.get(actor, id);
   }
   async recover() {
-    await this.resources.db.pool.query(
-      `UPDATE environment_processes SET state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'queued' END,
-       error=CASE WHEN phase='dispatched' THEN 'execution_interrupted' ELSE NULL END,
-       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'queued' END,
-       finished_at=CASE WHEN phase='dispatched' THEN now() ELSE NULL END,lease_until=NULL
-       WHERE state='running' AND lease_until<now()`);
+    await this.queue.recover();
   }
 }

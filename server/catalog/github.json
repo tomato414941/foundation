@@ -23,7 +23,8 @@
           "GITHUB_TOKEN": "/accessToken"
         },
         "adapter": "github",
-        "hint": "gh and most tools read GH_TOKEN directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Scopes are GitHub OAuth scopes such as repo, workflow, read:org or gist."
+        "hint": "gh and most tools read GH_TOKEN directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Scopes are GitHub OAuth scopes such as repo, workflow, read:org or gist.",
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://docs.github.com/rest",
       "console": "https://github.com/settings/developers"

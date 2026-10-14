@@ -29,7 +29,8 @@
           ],
           "separator": " ",
           "docs": "https://developer.chatwork.com/docs/oauth"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://developer.chatwork.com/reference",
       "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php"

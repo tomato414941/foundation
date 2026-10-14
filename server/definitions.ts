@@ -29,6 +29,10 @@ export interface ProcessingDefinition {
   review?: (actor: Actor, input: Record<string, JsonValue>) => Promise<Record<string, JsonValue>>;
   observe?: (actor: Actor, result: JsonValue) => Promise<{ state: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; result: JsonValue }>;
   cancel?: (actor: Actor, result: JsonValue) => Promise<unknown>;
+  runtimeReference?: (result: JsonValue) => { kind: 'run' | 'function' | 'process'; id: string } | null;
+  resultView?: (result: JsonValue) => JsonValue;
+  continuation?: 'connection' | 'run';
+  delegatedOperation?: (input: unknown) => string;
 }
 export interface OperationEndpoint {
   name: string;
@@ -38,6 +42,7 @@ export interface OperationEndpoint {
   input(params: Record<string, string>, body: unknown, query: unknown): unknown;
   status?: number | ((result: JsonValue) => number);
   bodyLimit?: number;
+  output?: (result: JsonValue) => JsonValue;
 }
 
 // Operations own their validation and implementation. HTTP routes are only transport adapters.
@@ -50,7 +55,9 @@ export class DefinitionRegistry {
       complete?: (actor: Actor, input: z.output<T>, proof: JsonValue, execution: { id: string; index: number }) => Promise<unknown>;
       prepareInput?: (actor: Actor, input: z.output<T>, proof: JsonValue, connection: Queryable) => Promise<unknown>;
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
-      observe?: ProcessingDefinition['observe']; cancel?: ProcessingDefinition['cancel']; review?: ProcessingDefinition['review'] } = {}) {
+      observe?: ProcessingDefinition['observe']; cancel?: ProcessingDefinition['cancel']; review?: ProcessingDefinition['review'];
+      runtimeReference?: ProcessingDefinition['runtimeReference']; resultView?: ProcessingDefinition['resultView'];
+      continuation?: ProcessingDefinition['continuation']; delegatedOperation?: (input: z.output<T>) => string } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
@@ -59,6 +66,10 @@ export class DefinitionRegistry {
         reason: options.environmentReason ? { ja: options.environmentReason[0], en: options.environmentReason[1] } : null },
       ...(options.observe ? { observe: options.observe } : {}), ...(options.cancel ? { cancel: options.cancel } : {}),
       ...(options.review ? { review: options.review } : {}),
+      ...(options.runtimeReference ? { runtimeReference: options.runtimeReference } : {}),
+      ...(options.resultView ? { resultView: options.resultView } : {}),
+      ...(options.continuation ? { continuation: options.continuation } : {}),
+      ...(options.delegatedOperation ? { delegatedOperation: (input: unknown) => options.delegatedOperation!(schema.parse(input)) } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
       ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) =>
         await options.complete!(actor, schema.parse(input), proof, execution) as JsonValue } : {}),

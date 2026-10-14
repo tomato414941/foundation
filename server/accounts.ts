@@ -14,9 +14,10 @@ export class Accounts {
     await c.authorization.requirePrincipal(actor, id, 'export');
     yield JSON.stringify({
       format: 'foundation',
-      version: 3,
+      version: 4,
       exportedAt: new Date().toISOString(),
       principal: await c.principals.view(actor, await c.principals.get(id)),
+      mergedIdentities: await c.db.all('SELECT id,name,public_key AS "publicKey",retired_at AS "retiredAt" FROM principals WHERE merged_into=$1 ORDER BY retired_at,id', [id]),
     }) + '\n';
     let after: string | null = null;
     for (;;) {
@@ -36,6 +37,10 @@ export class Accounts {
         }
         if (row.kind === 'object')
           entry.content = Buffer.from(await c.objects.store.get(row.private_data!)).toString('base64');
+        if (row.kind === 'function') {
+          entry.publication = row.data.publication ?? null;
+          entry.executionSettings = await c.db.one('SELECT version,environment_id AS "environmentId",approval FROM function_settings WHERE function_id=$1', [row.id]) ?? null;
+        }
         yield JSON.stringify(entry) + '\n';
       }
       if (rows.length < 50) break;
@@ -53,6 +58,13 @@ export class Accounts {
       "SELECT id FROM execution_tasks WHERE owner_id=$1 AND receipt ? 'content' ORDER BY id", [id]);
     for (const result of results)
       yield JSON.stringify({ type: 'execution-result', execution: await c.delegation.get(actor, result.id) }) + '\n';
+    after = null;
+    for (;;) {
+      const rows: Array<{ id: string }> = await c.db.all('SELECT id FROM executions WHERE owner_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 50', [id, after]);
+      for (const row of rows) yield JSON.stringify({ type: 'execution', execution: await c.executions.get(actor, row.id, false) }) + '\n';
+      if (rows.length < 50) break;
+      after = rows.at(-1)!.id;
+    }
     await c.audit.record(id, actor.id, 'principal.export', id);
   }
   async remove(actor: Actor, id: string) {
@@ -242,9 +254,12 @@ export class Accounts {
           );
       }
       await connection.query(
-        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,owner_id=CASE WHEN owner_id=$1 THEN $2 ELSE owner_id END WHERE owner_id=$1 OR creator_id=$1 OR responder_id=$1 OR actor_id=$1",
+        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,owner_id=CASE WHEN owner_id=$1 OR owner_id IS NULL AND creator_id=$1 THEN $2 ELSE owner_id END,responder_id=CASE WHEN responder_id=$1 THEN $2 ELSE responder_id END WHERE owner_id=$1 OR creator_id=$1 OR responder_id=$1 OR actor_id=$1",
         [from.id, to.id],
       );
+      await connection.query(`UPDATE requests SET to_id=CASE WHEN to_id=$1 THEN $2 ELSE to_id END,
+        state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
+        answered_at=CASE WHEN state='pending' THEN now() ELSE answered_at END WHERE from_id=$1 OR to_id=$1`, [from.id, to.id]);
       await connection.query(
         "UPDATE credentials SET principal_id=$2,private_wrap=NULL,data=CASE WHEN kind='key' AND NOT data ? 'publicKey' THEN data||jsonb_build_object('publicKey',$3::jsonb) ELSE data END WHERE principal_id=$1",
         [from.id, to.id, JSON.stringify(from.public_key)],
@@ -267,7 +282,8 @@ export class Accounts {
       await connection.query('UPDATE audit_log SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       // Keep the source identity for signed records and immutable authorship, without allowing it to act again.
       await connection.query('DELETE FROM challenges WHERE principal_id=$1', [from.id]);
-      await connection.query('UPDATE principals SET retired_at=now() WHERE id=$1', [from.id]);
+      await connection.query('UPDATE principals SET merged_into=$2 WHERE merged_into=$1', [from.id, to.id]);
+      await connection.query('UPDATE principals SET retired_at=now(),merged_into=$2 WHERE id=$1', [from.id, to.id]);
       await c.audit.record(to.id, to.id, 'principal.merge', to.id, { from: from.id }, connection);
     });
     return c.principals.view(actor, await c.principals.get(to.id));

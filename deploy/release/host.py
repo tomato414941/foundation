@@ -80,9 +80,10 @@ class Deployment:
         if labels.get("org.opencontainers.image.revision") != self.manifest["commit"]:
             raise RuntimeError("The server image belongs to another commit.")
         cli = self.image_file(image, "/app/release/cli.mjs")
+        agent = self.image_file(image, "/app/release/agent.mjs")
         schema = self.image_file(image, "/app/dist/server/schema.sql")
         compose = self.image_file(image, "/app/compose.yaml")
-        if digest(cli) != self.manifest["cliSha256"] or digest(schema) != self.manifest["schemaSha256"]:
+        if digest(cli) != self.manifest["cliSha256"] or digest(agent) != self.manifest["agentSha256"] or digest(schema) != self.manifest["schemaSha256"]:
             raise RuntimeError("The image does not contain the verified release artifacts.")
         previous_schema = self.run("docker", "exec", "foundation-v1-foundation-1", "cat", "/app/dist/server/schema.sql")
         self.changed_schema = hashlib.sha256(previous_schema).hexdigest() != self.manifest["schemaSha256"]
@@ -104,6 +105,7 @@ class Deployment:
             self.persist(update_environment(self.previous.decode(), {"FOUNDATION_IMAGE": image,
                 "FOUNDATION_ENV_FILE": str(self.env), **self.manifest["environment"]}).encode())
             self.persist(compose.read_bytes(), self.compose_path)
+            self.compose("run", "--rm", "--no-deps", "foundation", "node", "dist/server/migrate.js")
             self.compose("up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "180", "foundation")
             self.verify()
             ready = {**self.manifest, "verifiedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}

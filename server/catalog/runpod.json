@@ -102,7 +102,11 @@
         "scopes": {
           "default": []
         },
-        "hint": "Authorize the hosted RunPod MCP server in your browser. This token is for MCP access, not direct REST API calls."
+        "hint": "Authorize the hosted RunPod MCP server in your browser. This token is for MCP access, not direct REST API calls.",
+        "browserTokenExchange": "available"
+      },
+      "preparation": {
+        "scopeSelection": "hidden"
       }
     },
     "flash-approval": {

@@ -25,7 +25,8 @@
         "scopes": {
           "default": [],
           "separator": " "
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://docs.netlify.com/api/get-started/",
       "console": "https://app.netlify.com/user/applications"

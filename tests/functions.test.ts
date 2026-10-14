@@ -123,6 +123,14 @@ test('関数を譲り受けた所有者が処理を保存して実行設定を�
   assert.equal((await functions.result(invoked.id)).state, 'succeeded');
 });
 
+test('実行環境の停止で待機中の関数の呼び出しを中止し、実行履歴に結果を反映する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition()), invocation = await f.functions.invoke(fn.id);
+  await f.delegation.stop(f.owner.actor, f.environment.manifest.id);
+  const result = await f.functions.result(invocation.id);
+  assert.equal(result.state, 'cancelled'); assert.equal(result.error?.code, 'environment_stopped');
+});
+
 test('JSONの引数の型を保ち、宣言と一致しない入力を受付時に検証する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, FunctionDefinition.parse({

@@ -109,7 +109,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     await executor.tick();
     return client.result(await client.api.json('/api/runtime/runs/' + task.id, {}, Task));
   }
-  return { ...f, executorIdentity: f.executor, context, app, api, client, connections, operations, functions, functionExecutor, runtimeConnections, executor, journal, requests,
+  return { ...f, ...context, executorIdentity: f.executor, context, app, api, client, connections, operations, functions, functionExecutor, runtimeConnections, executor, journal, requests,
     method, saveApp, start, authorize, saveConnection, tick, saved, http, transport, flows,
     async close() { await app.close(); await f.close(); } };
 }

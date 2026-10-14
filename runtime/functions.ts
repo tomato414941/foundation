@@ -52,7 +52,7 @@ export class FunctionExecutor {
   }
   async reconcile() {
     const pending: string[] = [];
-    for (const key of await this.journal.keys('invocation_')) {
+    for (const key of await this.journal.pending('invocation_')) {
       try {
         const record = await this.journal.read<Record>(key);
         if (!record || record.delivered || record.phase === 'prepared') continue;

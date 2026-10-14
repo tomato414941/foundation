@@ -28,7 +28,8 @@
           ],
           "separator": " ",
           "docs": "https://docs.digitalocean.com/reference/api/oauth/"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://docs.digitalocean.com/reference/api/",
       "console": "https://cloud.digitalocean.com/account/api/applications"

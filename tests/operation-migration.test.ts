@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { flowFixture } from './flow-support.js';
-import { migrateExecutions } from '../server/migrate-executions.js';
-import { migrateRequests } from '../server/migrate-requests.js';
+import { migrateExecutions } from '../server/migrations/migrate-executions.js';
+import { migrateRequests } from '../server/migrations/migrate-requests.js';
+import { migrateHistory } from '../server/migrations/migrate-history.js';
 import { ApprovalRequest } from '../shared/contracts.js';
 import { Execution } from '../shared/executions.js';
 import { decode } from '../shared/encryption.js';
@@ -60,7 +61,8 @@ test('実行の保存形式を更新しても依頼のURLと入力待ちの実�
   const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Retained input' } }] } }, ApprovalRequest);
   await f.db.pool.query('ALTER TABLE executions RENAME TO operation_executions');
-  await f.db.initialize();
+  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='001-foundation-schema'");
+  await f.db.migrate();
   const retained = await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest);
   assert.equal(retained.url, asked.url);
   assert.equal(retained.executionId, asked.executionId);
@@ -74,7 +76,7 @@ test('既存の実行先の処理を一件の実行として引き継ぎ、再�
   const f = await flowFixture(); t.after(f.close);
   const task = await f.delegation.submit(f.owner.actor, f.request);
   await f.db.pool.query("DELETE FROM schema_migrations WHERE name='unified-execution-history'");
-  await f.context.executions.importRuntimeHistory();
+  await migrateHistory(f.context);
   const execution = await f.client.api.json('/api/executions/' + task.id, {}, Execution);
   assert.equal(execution.state, 'running');
   await f.executor.tick();

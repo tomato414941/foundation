@@ -36,7 +36,8 @@
           ],
           "separator": " ",
           "docs": "https://developers.dropbox.com/oauth-guide"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://www.dropbox.com/developers/documentation/http/documentation",
       "console": "https://www.dropbox.com/developers/apps"

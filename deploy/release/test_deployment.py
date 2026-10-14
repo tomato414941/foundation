@@ -48,11 +48,11 @@ class DeploymentTests(unittest.TestCase):
         self.manifest = {
             "commit": "a" * 40, "image": "ghcr.io/tomato414941/foundation@sha256:" + "b" * 64,
             "cliVersion": "5.1.0", "cliSha256": hashlib.sha256(b"cli").hexdigest(),
-            "schemaSha256": hashlib.sha256(b"schema").hexdigest(), "runtimeSha256": "c" * 64,
+            "agentSha256": hashlib.sha256(b"cli").hexdigest(),
+            "schemaSha256": hashlib.sha256(b"schema").hexdigest(),
             "environment": {"EC2_ENVIRONMENT_AMI": "ami-123", "EC2_ENVIRONMENT_VPC": "vpc-123",
                 "EC2_ENVIRONMENT_ACL": "acl-123", "EC2_ENVIRONMENT_DEFAULT_ACL": "acl-456",
-                "EC2_ENVIRONMENT_ROUTE_TABLE": "rtb-123", "EC2_ENVIRONMENT_ZONE": "ap-northeast-1a",
-                "ENVIRONMENT_FUNCTION_IMAGE": "docker.io/library/node@sha256:" + "d" * 64},
+                "EC2_ENVIRONMENT_ROUTE_TABLE": "rtb-123", "EC2_ENVIRONMENT_ZONE": "ap-northeast-1a"},
         }
 
     def tearDown(self):

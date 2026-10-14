@@ -1,8 +1,8 @@
-import type { Database } from './database.js';
-import type { Vault } from './vault.js';
-import type { Actor } from './authorization.js';
-import type { RequestedOperation, JsonValue } from '../shared/contracts.js';
-import type { DefinitionCall, OperationWaiting } from '../shared/executions.js';
+import type { Database } from '../database.js';
+import type { Vault } from '../vault.js';
+import type { Actor } from '../authorization.js';
+import type { RequestedOperation, JsonValue } from '../../shared/contracts.js';
+import type { DefinitionCall, OperationWaiting } from '../../shared/executions.js';
 
 interface PreviousSnapshot {
   actor: Actor; operations: DefinitionCall[]; index: number; results: Array<JsonValue | null>;

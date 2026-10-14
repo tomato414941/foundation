@@ -31,11 +31,10 @@ import { Client, ApiError } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
-import { startAgent } from './agent.js';
+import { launchAgent } from './agent-launcher.js';
 import { executionClient } from './executions.js';
 import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
 import { OperationMaterial } from '../../shared/execution-client.js';
-import { managedAgent } from './managed-agent.js';
 import { startMcp } from './mcp.js';
 import { FunctionClient } from '../../shared/function-client.js';
 import { FunctionDefinition } from '../../shared/contracts.js';
@@ -427,7 +426,7 @@ async function main(argv: string[]) {
     await login(args);
     return 0;
   }
-  if (command === 'agent' && args.positionals[0] === 'managed') return managedAgent();
+  if (command === 'agent' && args.positionals[0] === 'managed') return launchAgent('managed');
   const client = new Client(await readIdentity(args.values.origin));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
@@ -453,7 +452,7 @@ async function main(argv: string[]) {
   }
   if (command === 'agent') {
     if (args.positionals[0] !== 'start') throw new Error('Use foundation agent start.');
-    return startAgent(client, { id: args.values.id ? Id.parse(args.values.id) : undefined,
+    return launchAgent('start', { origin: client.identity.origin, id: args.values.id ? Id.parse(args.values.id) : undefined,
       ownerId: owner, name: Name.parse(args.values.name ?? hostname()),
       isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
       image: args.values.image, managed: args.values.managed, once: args.values.once });

@@ -23,6 +23,7 @@ export class ProcessBroker {
 }
 interface Record {
   id: string; lease: string; delivered: boolean; completion: Completion | null;
+  phase: 'prepared' | 'dispatched' | 'settled';
 }
 export class ProcessExecutor {
   constructor(readonly environmentId: string, readonly broker: ProcessBroker, readonly journal: Journal,
@@ -34,10 +35,11 @@ export class ProcessExecutor {
   }
   async reconcile() {
     const pending: string[] = [];
-    for (const key of await this.journal.keys('process_')) {
+    for (const key of await this.journal.pending('process_')) {
       const record = await this.journal.read<Record>(key);
-      if (!record || record.delivered) continue;
+      if (!record || record.delivered || record.phase === 'prepared') continue;
       record.completion ??= { state: 'uncertain', result: null, error: 'execution_interrupted' };
+      record.phase = 'settled';
       await this.journal.write(key, record);
       try { await this.deliver(record); } catch { pending.push(record.id); }
     }
@@ -49,12 +51,13 @@ export class ProcessExecutor {
     if (!claim) return false;
     const { lease, process } = claim;
     const previous = await this.journal.read<Record>('process_' + process.id);
-    if (previous) {
+    if (previous && previous.phase !== 'prepared') {
       const completion = previous.completion ?? { state: 'uncertain' as const, result: null, error: 'execution_interrupted' };
       await this.broker.finish(process.id, lease, completion);
+      await this.journal.write('process_' + process.id, { ...previous, lease, completion, phase: 'settled', delivered: true });
       return true;
     }
-    const record: Record = { id: process.id, lease, delivered: false, completion: null };
+    const record: Record = { id: process.id, lease, delivered: false, completion: null, phase: 'prepared' };
     await this.journal.write('process_' + process.id, record);
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -62,6 +65,8 @@ export class ProcessExecutor {
     if (signal.aborted) abort();
     let renewal: NodeJS.Timeout | undefined;
     try {
+      record.phase = 'dispatched';
+      await this.journal.write('process_' + process.id, record);
       await this.broker.dispatch(process.id, lease);
       renewal = setInterval(() => {
         void this.broker.renew(process.id, lease).then(value => { if (!value.active) abort(); }, abort);
@@ -77,6 +82,7 @@ export class ProcessExecutor {
       clearInterval(renewal);
       signal.removeEventListener('abort', abort);
     }
+    record.phase = 'settled';
     await this.journal.write('process_' + process.id, record);
     try { await this.deliver(record); } catch { throw new DeliveryPending(); }
     return true;

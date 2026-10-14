@@ -26,10 +26,14 @@
           "GOOGLE_OAUTH_EXPIRES_AT": "/expiresAt"
         },
         "adapter": "google",
-        "hint": "Scopes are full Google scope URLs, such as https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/cloud-platform. GOOGLE_OAUTH_ACCESS_TOKEN is a Bearer token for Google APIs; the same token is CLOUDSDK_AUTH_ACCESS_TOKEN for gcloud. Choose a Google Cloud --project explicitly."
+        "hint": "Scopes are full Google scope URLs, such as https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/cloud-platform. GOOGLE_OAUTH_ACCESS_TOKEN is a Bearer token for Google APIs; the same token is CLOUDSDK_AUTH_ACCESS_TOKEN for gcloud. Choose a Google Cloud --project explicitly.",
+        "browserTokenExchange": "available"
       },
       "docs": "https://developers.google.com/apis-explorer",
-      "console": "https://console.cloud.google.com/apis/connections"
+      "console": "https://console.cloud.google.com/apis/connections",
+      "preparation": {
+        "scopeSelection": "required"
+      }
     }
   }
 }

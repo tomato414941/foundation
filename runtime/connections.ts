@@ -180,7 +180,7 @@ export class Connections implements ExecutionExtension {
 
   async reconcile() {
     const pending: string[] = [];
-    for (const id of await this.journal.keys('refresh_')) {
+    for (const id of await this.journal.pending('refresh_')) {
       try {
       const record = (await this.journal.read<Renewal>(id))!;
       if (record.delivered) continue;

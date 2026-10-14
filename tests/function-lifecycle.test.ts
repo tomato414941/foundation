@@ -167,7 +167,8 @@ test('保存済みの処理と共有を保持して独立した定義へ移行�
     publication: { format: 1 },
   }, { references: [f.environment.manifest.id] });
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: row.id });
-  await f.db.initialize();
+  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='001-foundation-schema'");
+  await f.db.migrate();
   const current = await f.functions.get(row.id);
   assert.deepEqual(current.data, program());
   assert.equal((await new FunctionClient(f.api(f.stranger.token)).get(row.id)).name, row.name);

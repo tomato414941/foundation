@@ -40,7 +40,8 @@
           ],
           "separator": " ",
           "docs": "https://learn.microsoft.com/graph/permissions-reference"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://learn.microsoft.com/graph/api/overview",
       "console": "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"

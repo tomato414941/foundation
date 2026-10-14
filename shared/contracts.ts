@@ -179,6 +179,7 @@ const Scopes = z.object({
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
+  browserTokenExchange: z.enum(['available', 'unavailable', 'unknown']).optional(),
   application: z.enum(['required', 'implicit']).default('required'),
   grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   issuer: z.url().optional(),
@@ -271,6 +272,11 @@ const methodMetadata = {
   docs: z.url().optional(),
   console: UrlTemplate.optional(),
   http: HttpConnection.optional(),
+  preparation: z.object({
+    scopeSelection: z.enum(['optional', 'required', 'hidden']).default('optional'),
+    instructions: z.array(z.union([z.string().max(2000), z.object({ ja: z.string().max(2000), en: z.string().max(2000) }).strict()])).max(10).default([]),
+    docs: z.boolean().default(false),
+  }).strict().optional(),
 };
 export const OAuthMethod = z
   .object({ ...methodMetadata, kind: z.literal('oauth'), config: OAuthDefinition })

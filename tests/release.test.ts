@@ -19,13 +19,16 @@ test('公開済みCLIと同じ内容を許可し、配布内容の変更には�
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(join(directory, 'package/dist'), { recursive: true });
   await writeFile(join(directory, 'package/dist/cli.mjs'), 'original-cli');
+  await writeFile(join(directory, 'package/dist/agent.mjs'), 'original-agent');
   const packed = execFileSync('tar', ['-czf', '-', '-C', directory, 'package']);
   const pkg = { version: '5.1.0' };
   const registry = { versions: { '5.1.0': { dist: { tarball: 'https://registry.npmjs.org/package.tgz',
     integrity: 'sha512-' + createHash('sha512').update(packed).digest('base64') } } } };
   const fetcher = async () => new Response(packed);
-  await checkPublishedContent(pkg, registry, Buffer.from('original-cli'), fetcher);
-  await assert.rejects(checkPublishedContent(pkg, registry, Buffer.from('updated-cli'), fetcher), /Increase/);
+  const artifacts = { 'dist/cli.mjs': Buffer.from('original-cli'), 'dist/agent.mjs': Buffer.from('original-agent') };
+  await checkPublishedContent(pkg, registry, artifacts, fetcher);
+  await assert.rejects(checkPublishedContent(pkg, registry, { ...artifacts, 'dist/cli.mjs': Buffer.from('updated-cli') }, fetcher), /Increase/);
+  await assert.rejects(checkPublishedContent(pkg, registry, { ...artifacts, 'dist/agent.mjs': Buffer.from('updated-agent') }, fetcher), /Increase/);
 });
 
 test('更新待機中は新規処理を受け取らず、再開後に待っていた処理を実行する', async t => {

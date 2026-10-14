@@ -1,3 +1,4 @@
+import { TaskQueue } from './task-queue.js';
 import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
 import type { Resources, ResourceRow } from './resources.js';
@@ -45,13 +46,18 @@ export interface ClaimedTask {
 }
 
 export class Delegation {
+  readonly queue: TaskQueue;
+  readonly queues = new Set<TaskQueue>();
   checkApproval?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
   checkOperationContext?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
   completed?: (task: TaskView) => Promise<void>;
   constructor(
     readonly resources: Resources, readonly bindings: Bindings,
     readonly custody: Custody, readonly origin: string,
-  ) {}
+  ) {
+    this.queue = new TaskQueue(resources.db, 'execution_tasks');
+    this.queues.add(this.queue);
+  }
 
   async environment(id: string, connection: Queryable = this.resources.db.pool) {
     return required(await this.resources.db.one<EnvironmentRow>(
@@ -239,12 +245,7 @@ export class Delegation {
   async claim(actor: Actor, environmentId: string): Promise<ClaimedTask | null> {
     await this.heartbeat(actor, environmentId);
     const lease = randomUUID();
-    const row = await this.claimGate(environmentId, connection => this.resources.db.one<TaskRow>(
-      `UPDATE execution_tasks SET state='running',phase='claimed',started_at=coalesce(started_at,now()),
-         lease_token=$2,lease_until=now()+interval '60 seconds'
-       WHERE id=(SELECT id FROM execution_tasks WHERE environment_id=$1 AND state='queued'
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [environmentId, lease], connection,
-    ));
+    const row = await this.claimGate(environmentId, connection => this.queue.claim<TaskRow>(environmentId, lease, connection));
     if (!row) return null;
     try {
       const { sources } = await this.validate(row.actor, row.request);
@@ -273,12 +274,8 @@ export class Delegation {
       "UPDATE resources SET data=jsonb_set(data,'{maintenanceUntil}',to_jsonb($2::text)) WHERE id=$1",
       [id, new Date(paused ? Date.now() + 120_000 : 0).toISOString()]);
     const row = await this.resources.get(id);
-    const active = required(await this.resources.db.one<{ count: number }>(
-      `SELECT ((SELECT count(*) FROM execution_tasks WHERE environment_id=$1 AND state='running')+
-        (SELECT count(*) FROM environment_processes WHERE environment_id=$1 AND state='running')+
-        (SELECT count(*) FROM function_invocations WHERE environment_id=$1 AND
-          (state='running' OR (state='uncertain' AND phase='dispatched' AND finished_at IS NULL))))::integer AS count`, [id]));
-    return { paused: Date.parse(String(row.data.maintenanceUntil)) > Date.now(), active: active.count,
+    const active = await Promise.all([...this.queues].map(queue => queue.active(id)));
+    return { paused: Date.parse(String(row.data.maintenanceUntil)) > Date.now(), active: active.reduce((sum, count) => sum + count, 0),
       heartbeatAt: environment.heartbeat_at ? iso(environment.heartbeat_at) : null,
       sshSessions: Number((row.data.ssh as { activeSessions?: number } | undefined)?.activeSessions ?? 0) };
   }
@@ -286,10 +283,7 @@ export class Delegation {
   async renew(actor: Actor, id: string, lease: string) {
     const row = required(await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1', [id]));
     await this.heartbeat(actor, row.environment_id);
-    const updated = await this.resources.db.one(
-      `UPDATE execution_tasks SET lease_until=now()+interval '60 seconds' WHERE id=$1 AND lease_token=$2
-       AND state='running' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease],
-    );
+    const updated = await this.queue.renew(id, lease);
     return { active: Boolean(updated) };
   }
 
@@ -297,10 +291,7 @@ export class Delegation {
     const row = required(await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1', [id]));
     await this.requireExecutor(actor, row.environment_id);
     await this.validate(row.actor, row.request);
-    const updated = await this.resources.db.one(
-      `UPDATE execution_tasks SET phase='dispatched' WHERE id=$1 AND lease_token=$2 AND state='running'
-       AND phase='claimed' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease],
-    );
+    const updated = await this.queue.dispatch(id, lease);
     if (!updated) fail(409, 'lease_lost', 'The execution lease is no longer valid.');
     await this.resources.db.pool.query(
       "UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",
@@ -365,12 +356,7 @@ export class Delegation {
   async cancel(actor: Actor, id: string) {
     const row = required(await this.resources.db.one<TaskRow>('SELECT * FROM execution_tasks WHERE id=$1', [id]));
     await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'execute');
-    await this.resources.db.pool.query(
-      `UPDATE execution_tasks SET cancel_requested=true,
-         state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-         error=CASE WHEN phase='dispatched' THEN 'cancellation_pending' ELSE NULL END,
-         finished_at=now(),lease_until=NULL WHERE id=$1 AND state IN ('queued','running')`, [id],
-    );
+    await this.queue.cancel(id);
     return this.get(actor, id);
   }
 
@@ -384,29 +370,12 @@ export class Delegation {
       `UPDATE resources SET data=data||jsonb_build_object('state','stopped','stoppedAt',$2::text),version=version+1 WHERE id=$1`,
       [environmentId, new Date().toISOString()],
     );
-    await connection.query(
-      `UPDATE execution_tasks SET cancel_requested=true,
-         state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-         error=CASE WHEN phase='dispatched' THEN 'environment_stopped' ELSE NULL END,
-         finished_at=now(),lease_until=NULL WHERE environment_id=$1 AND state IN ('queued','running')`, [environmentId],
-    );
-    await connection.query(
-      `UPDATE environment_processes SET cancel_requested=true,
-         state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-         phase=CASE WHEN phase='dispatched' THEN phase ELSE 'settled' END,
-         error=CASE WHEN phase='dispatched' THEN 'environment_stopped' ELSE NULL END,
-         finished_at=now(),lease_until=NULL WHERE environment_id=$1 AND state IN ('queued','running')`, [environmentId],
-    );
+    const error = { code: 'environment_stopped', message: 'The execution environment has stopped.' };
+    for (const queue of this.queues) await queue.cancel(environmentId, error, connection, 'environment_id', error);
   }
 
   async recover() {
-    await this.resources.db.pool.query(
-      `UPDATE execution_tasks SET state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'queued' END,
-       error=CASE WHEN phase='dispatched' THEN 'execution_interrupted' ELSE NULL END,
-       phase=CASE WHEN phase='dispatched' THEN phase ELSE 'queued' END,
-       finished_at=CASE WHEN phase='dispatched' THEN now() ELSE NULL END,lease_until=NULL
-       WHERE state='running' AND lease_until<now()`,
-    );
+    await this.queue.recover();
     await this.resources.db.pool.query(
       `UPDATE execution_tasks SET state='failed',phase='settled',error='intent_expired',finished_at=now()
        WHERE state='queued' AND (request->'intent'->>'expiresAt')::timestamptz<=now()`,

@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 const VerifiedRelease = z.object({ commit: z.string().regex(/^[a-f0-9]{40}$/),
   cliVersion: z.string().regex(/^\d+\.\d+\.\d+$/), cliSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  agentSha256: z.string().regex(/^[a-f0-9]{64}$/),
   verifiedAt: z.iso.datetime() });
 
 export async function verifiedRelease(directory: string) {

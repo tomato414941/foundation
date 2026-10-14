@@ -13,6 +13,7 @@ import { CreatedProcess, ProcessView } from '../shared/process.js';
 import { CommandProcess } from '../runtime/command.js';
 import { ProcessBroker, ProcessExecutor } from '../runtime/process.js';
 import { HttpBroker } from '../runtime/broker.js';
+import { Execution } from '../shared/executions.js';
 
 async function processFixture(t: TestContext) {
   const f = await flowFixture();
@@ -51,6 +52,35 @@ test('APIキーでコマンド、作業ディレクトリ、環境変数と標�
   assert.equal(finished.result!.signal, null);
   assert.equal(finished.result!.stderr, 'diagnostic');
   assert.deepEqual(JSON.parse(finished.result!.stdout), { cwd: subdirectory, value: 'specified value', input: 'provided input' });
+});
+
+test('コマンドの実行を処理の完了まで追跡し、履歴から結果と実行先を取得する', async t => {
+  const f = await processFixture(t);
+  const execution = await f.callerApi.json('/api/executions', { method: 'POST', body: { operations: [{
+    name: 'process.start', input: { environmentId: f.environmentId,
+      command: { command: ['node', '-e', 'console.log("tracked")'] } },
+  }] } }, Execution);
+  assert.equal(execution.state, 'running'); assert.equal(execution.wait, 'execution');
+  assert.equal(execution.steps[0]!.runs[0]!.kind, 'process');
+  await f.worker.tick();
+  const completed = await f.callerApi.json('/api/executions/' + execution.id, {}, Execution);
+  assert.equal(completed.state, 'succeeded');
+  const process = ProcessView.parse(completed.results[0]);
+  assert.equal(process.result!.stdout, 'tracked\n'); assert.equal(process.environmentId, f.environmentId);
+});
+
+test('開始前に終了した実行主体がリースの更新後にコマンドを実行し、結果を確定する', async t => {
+  const f = await processFixture(t);
+  const started = await f.create({ command: ['node', '-e', 'console.log("resumed")'] });
+  const claim = await f.broker.claim(f.environmentId);
+  await f.journal.write('process_' + started.id, { id: started.id, lease: claim!.lease,
+    delivered: false, completion: null, phase: 'prepared' });
+  await f.db.pool.query("UPDATE environment_processes SET lease_until=now()-interval '1 second' WHERE id=$1", [started.id]);
+  await f.context.processes.recover();
+  assert.equal((await f.get(started.id)).state, 'queued');
+  await f.worker.reconcile(); await f.worker.tick();
+  assert.equal((await f.get(started.id)).state, 'succeeded');
+  assert.equal((await f.get(started.id)).result!.stdout, 'resumed\n');
 });
 
 test('同じ実行IDで再送したコマンドを一度実行し、環境のファイルを次のコマンドで読む', async t => {

@@ -413,6 +413,27 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
         expect(page.locator("main")).to_contain_text("{}")
 
+    def test_関数を譲渡した後に画面で保存し直し新しい所有者の実行設定を案内する(self):
+        page, principal = self.passkey_account("Function transfer owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/functions/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Received function")
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Received function", exact=True)).to_be_visible()
+        function_id = page.url.rsplit("/", 1)[1]
+        created = page.request.post(ORIGIN + "/api/principals", data={"name": "Function recipient", "ownerId": principal["id"]}, headers={"origin": ORIGIN})
+        self.assertTrue(created.ok, created.text())
+        recipient = created.json()
+        passed = page.request.post(ORIGIN + "/api/resources/" + function_id + "/transfer", data={"to": recipient["id"]}, headers={"origin": ORIGIN})
+        self.assertTrue(passed.ok, passed.text())
+        page.goto(f"{ORIGIN}/p/{recipient['id']}/functions/{function_id}")
+        expect(page.locator("main")).to_contain_text("この所有者で関数を保存し直してください")
+        page.screenshot(path=str(ARTIFACTS / "function-transfer-approval-ja.png"), full_page=True)
+        page.get_by_role("link", name="編集", exact=True).last.click()
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("heading", name="Received function", exact=True)).to_be_visible()
+        expect(page.locator("main")).to_contain_text("実行先が未設定です")
+
     def test_固定した関数を共有して秘密を使う処理の結果を受け取る(self):
         page, principal = self.passkey_account("Function owner")
         environment = self.executor(page, principal).rsplit("/", 1)[1]
@@ -479,7 +500,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
         page.get_by_role("button", name="Save", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
-        expect(page.locator("main")).to_contain_text("Approve execution settings for the updated program")
+        expect(page.locator("main")).to_contain_text("Approve execution settings for the current function")
         self.configure_function(page, english=True)
         page.screenshot(path=str(ARTIFACTS / "function-settings-mobile-en.png"), full_page=True)
         print("Rendered execution settings (English): " + page.locator("main").inner_text(), flush=True)
@@ -995,7 +1016,7 @@ class BrowserTests(unittest.TestCase):
                 page.get_by_role("textbox", name="名前", exact=True).fill(name)
                 for label, value in fields:
                     page.get_by_label(label, exact=True).fill(value)
-                page.wait_for_load_state("networkidle")
+                expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
                 print("Rendered OpenAI connection: " + page.locator("main").inner_text(), flush=True)
                 page.screenshot(path=str(ARTIFACTS / ("openai-" + method + "-input-ja.png")), full_page=True)
                 page.get_by_role("button", name="接続する", exact=True).click()
@@ -1320,7 +1341,7 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(paid.ok, paid.text())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
         expect(page.get_by_role("heading", name="実行環境を作成", exact=True)).to_be_visible()
-        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "environment-create-unlimited-desktop-ja.png"), full_page=True)
         page.get_by_role("textbox", name="名前", exact=True).fill("Medium environment")
         page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True).check()

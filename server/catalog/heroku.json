@@ -29,7 +29,8 @@
           ],
           "separator": " ",
           "docs": "https://devcenter.heroku.com/articles/oauth#scopes"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://devcenter.heroku.com/articles/platform-api-reference",
       "console": "https://dashboard.heroku.com/account/applications"

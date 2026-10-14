@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CompactEncrypt, compactDecrypt, importJWK } from 'jose';
@@ -11,10 +11,12 @@ export interface Journal {
   read<T>(id: string): Promise<T | null>;
   write(id: string, value: unknown): Promise<void>;
   keys(prefix: string): Promise<string[]>;
+  pending(prefix: string): Promise<string[]>;
 }
 
 const JournalId = z.string().regex(/^(run|process|invocation|function|connect|refresh|checkpoint|identity|environment|flow)_[A-Za-z0-9_-]{1,100}$/);
 export class FileJournal implements Journal {
+  private indexing?: Promise<void>;
   constructor(readonly directory: string, readonly origin: string,
     readonly binding: BoundKeys, readonly privateKeys: IdentityKeys) {}
 
@@ -45,7 +47,7 @@ export class FileJournal implements Journal {
       throw error;
     }
   }
-  async write(id: string, value: unknown) {
+  private async writeEntry(id: string, value: unknown) {
     const context = this.context(id), record = { context, value };
     const signature = await sign(record, this.privateKeys.signing, 'journal');
     const bytes = encode(canonical({ ...record, signature }));
@@ -55,6 +57,44 @@ export class FileJournal implements Journal {
     }).encrypt(await importJWK(this.binding.encryption, 'ECDH-ES+A256KW'));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await secureWrite(join(this.directory, id + '.json'), canonical(envelope), true);
+  }
+  private delivery(id: string) { return /^(run|process|invocation|refresh)_/.test(id); }
+  private delivered(value: unknown) {
+    return !!value && typeof value === 'object' && 'delivered' in value && value.delivered === true;
+  }
+  private async markPending(id: string) {
+    await mkdir(join(this.directory, 'pending'), { recursive: true, mode: 0o700 });
+    await secureWrite(join(this.directory, 'pending', JournalId.parse(id)), '', true);
+  }
+  private index() {
+    return this.indexing ??= (async () => {
+      const checkpoint = 'checkpoint_pending_index';
+      if (await this.read(checkpoint)) return;
+      // Index existing durable records once; the records remain the source of truth for replay protection.
+      for (const id of await this.keys('')) {
+        if (!this.delivery(id)) continue;
+        const record = await this.read(id);
+        if (record && !this.delivered(record)) await this.markPending(id);
+      }
+      await this.writeEntry(checkpoint, { version: 1 });
+    })();
+  }
+  async write(id: string, value: unknown) {
+    await this.index();
+    const delivered = this.delivered(value);
+    if (this.delivery(id) && !delivered) await this.markPending(id);
+    await this.writeEntry(id, value);
+    if (this.delivery(id) && delivered) await rm(join(this.directory, 'pending', id), { force: true });
+  }
+  async pending(prefix: string) {
+    await this.index();
+    let entries;
+    try { entries = await readdir(join(this.directory, 'pending'), { withFileTypes: true }); }
+    catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+      throw error;
+    }
+    return entries.filter(entry => entry.isFile() && entry.name.startsWith(prefix)).map(entry => JournalId.parse(entry.name));
   }
   async keys(prefix: string) {
     let files;

@@ -8,13 +8,15 @@ import type { ConnectionFieldsProps } from './connection-fields';
 import { servicePreparation } from './service-preparations';
 
 export function OAuthConnectionHelp({ method, connecting = true }: { method?: CatalogConnectionMethod; connecting?: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (method?.kind !== 'oauth') return null;
   const direct = !connectionMethod(method).browserAuthorization, setup = servicePreparation(method);
   return <>
     {(direct || !connecting && setup.instructions.length > 0) && <Notice tone="info">
       {direct && <p>{t('clientCredentialsHelp')}</p>}
-      {setup.instructions.map(instruction => <p key={instruction} className="mt-2">{t(instruction)}</p>)}
+      {setup.instructions.map((instruction, index) => <p key={index} className="mt-2">
+        {typeof instruction === 'string' ? instruction : instruction[i18n.resolvedLanguage === 'ja' ? 'ja' : 'en']}
+      </p>)}
       {setup.docs && method.docs && <ExternalLink href={method.docs}>{t('docs')}</ExternalLink>}
     </Notice>}
   </>;

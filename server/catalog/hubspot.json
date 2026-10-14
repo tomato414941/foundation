@@ -33,7 +33,8 @@
           ],
           "separator": " ",
           "docs": "https://developers.hubspot.com/docs/apps/legacy-apps/authentication/scopes"
-        }
+        },
+        "browserTokenExchange": "unavailable"
       },
       "docs": "https://developers.hubspot.com/docs/api-reference/overview",
       "console": "https://app.hubspot.com/developer"

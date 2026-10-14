@@ -34,7 +34,8 @@
           ],
           "separator": ",",
           "docs": "https://linear.app/developers/oauth-2-0-authentication"
-        }
+        },
+        "browserTokenExchange": "available"
       },
       "docs": "https://linear.app/developers/graphql",
       "console": "https://linear.app/settings/api"

@@ -74,7 +74,7 @@ export class Executor {
 
   async reconcile() {
     const pending: string[] = [];
-    for (const key of await this.journal.keys('run_')) {
+    for (const key of await this.journal.pending('run_')) {
       try {
       const record = await this.journal.read<RunRecord>(key);
       if (!record || record.delivered) continue;

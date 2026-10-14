@@ -1,4 +1,4 @@
-import type { Database } from './database.js';
+import type { Database } from '../database.js';
 
 export async function migrateRequests(db: Database) {
   await db.transaction(async connection => {
