@@ -4,7 +4,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', '002-ssh-environments'];
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {
@@ -23,16 +23,11 @@ export class Database {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
       const installed = await this.one<{ principals: string | null; migrations: string | null }>(
         "SELECT to_regclass('principals') AS principals,to_regclass('schema_migrations') AS migrations", [], client);
-      if (!installed?.migrations || !await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [SchemaMigration], client)) {
-        const schema = await readFile(new URL(installed?.principals ? './migrations/001-foundation.sql' : './schema.sql', import.meta.url), 'utf8');
-        await client.query(schema);
-        const names = installed?.principals ? [SchemaMigration] : RequiredMigrations;
-        for (const name of names) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
-      }
-      if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', ['002-ssh-environments'], client)) {
-        await client.query(await readFile(new URL('./migrations/002-ssh-environments.sql', import.meta.url), 'utf8'));
-        await client.query('INSERT INTO schema_migrations(name) VALUES($1)', ['002-ssh-environments']);
-      }
+      if (installed?.migrations && await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [SchemaMigration], client)) return;
+      const schema = await readFile(new URL(installed?.principals ? './migrations/001-foundation.sql' : './schema.sql', import.meta.url), 'utf8');
+      await client.query(schema);
+      const names = installed?.principals ? [SchemaMigration] : RequiredMigrations;
+      for (const name of names) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
     });
   }
   async assertReady() {
