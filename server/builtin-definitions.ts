@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Execution, RevokeConnection, RunOperation, ValueSave } from '../shared/executions.js';
+import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, FunctionConfigure, Execution, RevokeConnection, RunOperation, ValueSave } from '../shared/executions.js';
 import { CreateProcess, CreatedProcess, ProcessView } from '../shared/process.js';
 import { SSHUpdate, SSHView } from '../shared/ssh.js';
 import { canonical, hash } from '../shared/authority.js';
@@ -23,7 +23,7 @@ import type { Custody } from './custody.js';
 import type { Delegation } from './delegation.js';
 import type { Functions } from './functions.js';
 import type { Invocations } from './invocations.js';
-import { FunctionWrite, Invocation as FunctionInvocation, InvocationInput } from '../shared/function-api.js';
+import { FunctionWrite, FunctionSettingsWrite, Invocation as FunctionInvocation, InvocationInput } from '../shared/function-api.js';
 import { DomainError, fail } from './errors.js';
 import { OperationFailed, DefinitionRegistry } from './definitions.js';
 import type { Queryable } from './database.js';
@@ -293,8 +293,11 @@ export function builtinDefinitions(services: Services) {
       if (input.resourceId && input.resourceId !== write.functionId || write.publication.ownerId !== input.ownerId ||
         canonical(write.publication.definition) !== canonical(input.definition) || write.publication.revision !== (input.resourceId ? (input.version ?? 0) + 1 : 1))
         fail(409, 'operation_changed', 'Publish the function definition approved by this operation.');
-      return functions.save(who, input, write, custody, delegation);
+      return functions.save(who, input, write, custody);
     } });
+  definitions.define('function.configure', FunctionConfigure, ['関数の実行設定を保存する', 'Save function execution settings'], keyholder,
+    { execution: 'keyholder', configure: [], complete: (who, input, proof) =>
+      functions.configure(who, input, FunctionSettingsWrite.parse(proof), custody, delegation) });
   const invokeFunction = InvocationInput.extend({ functionId: C.Id, functionVersion: z.number().int().positive().optional() });
   const reviewedFunction = async (input: Record<string, C.JsonValue>) => {
     const row = await resources.get(C.Id.parse(input.functionId));

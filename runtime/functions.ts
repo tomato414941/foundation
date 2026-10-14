@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
 import { hash, sign } from '../shared/authority.js';
-import { Invocation, ClaimedInvocation, InvocationCompletion, verifyFunction } from '../shared/function-api.js';
+import { Invocation, ClaimedInvocation, InvocationCompletion, verifyFunction, verifyFunctionSettings } from '../shared/function-api.js';
 import type { Completion } from '../shared/function-api.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { ContentTypes, Operations, grantActive, grantExpiration } from '../shared/custody.js';
@@ -67,7 +67,7 @@ export class FunctionExecutor {
     signal.throwIfAborted();
     const claim = await this.broker.claim(this.executor.environment.manifest.id);
     if (!claim) return false;
-    const { request, publication, sources, lease } = claim, digest = await hash(request);
+    const { request, publication, settings, sources, lease } = claim, digest = await hash(request);
     const key = 'invocation_' + request.id;
     let record = await this.journal.read<Record>(key);
     if (record && record.digest !== digest) throw new Error('An invocation ID was reused for different input.');
@@ -90,10 +90,14 @@ export class FunctionExecutor {
     }, this.renewalMilliseconds);
     heartbeat.unref();
     try {
-      await verifyFunction(publication, this.executor.binding);
-      if (publication.functionId !== request.functionId || publication.definition.environmentId !== this.executor.environment.manifest.id ||
+      await verifyFunction(publication);
+      await verifyFunctionSettings(settings, this.executor.binding);
+      if (publication.functionId !== request.functionId ||
+        settings.functionId !== request.functionId || settings.ownerId !== publication.ownerId ||
+        settings.definitionDigest !== request.definitionDigest || await hash(settings) !== request.settingsDigest ||
+        settings.environmentId !== this.executor.environment.manifest.id || request.environmentId !== settings.environmentId ||
         await hash(publication.definition) !== request.definitionDigest || Date.parse(request.expiresAt) <= Date.now() ||
-        !grantActive(publication.definition.inputAccess) || grantExpiration(publication.definition.inputAccess) < Date.parse(request.expiresAt))
+        !grantActive(settings.inputAccess) || grantExpiration(settings.inputAccess) < Date.parse(request.expiresAt))
         throw new Error('Run the current approved function in its configured environment.');
       const checkpointKey = 'function_' + publication.functionId;
       const checkpoint = await this.journal.read<{ revision: number; digest: string }>(checkpointKey);
@@ -102,11 +106,17 @@ export class FunctionExecutor {
         (publication.revision === checkpoint.revision && checkpoint.digest !== publicationDigest)))
         throw new Error('The function definition is older than this executor has already observed.');
       await this.journal.write(checkpointKey, { revision: publication.revision, digest: publicationDigest });
+      const settingsKey = 'checkpoint_function_settings_' + publication.functionId;
+      const observed = await this.journal.read<{ revision: number; digest: string }>(settingsKey);
+      if (observed && (settings.revision < observed.revision ||
+        settings.revision === observed.revision && request.settingsDigest !== observed.digest))
+        throw new Error('The execution settings are older than this executor has already observed.');
+      await this.journal.write(settingsKey, { revision: settings.revision, digest: request.settingsDigest });
       const operation = FunctionOperation.parse({ kind: 'function', functionId: request.functionId,
         definition: publication.definition, arguments: request.arguments, outputs: request.outputs });
       const intent: ExecutionIntent = { format: 2, id: request.id, origin: this.executor.environment.manifest.origin,
         ownerId: request.ownerId, actor: request.actor ?? this.executor.binding,
-        executor: this.executor.binding, environmentId: publication.definition.environmentId,
+        executor: this.executor.binding, environmentId: settings.environmentId,
         environmentDigest: await hash(this.executor.environment.manifest), operation: Operations.function,
         operationDigest: await hash(operation), functionId: request.functionId, functionDigest: request.definitionDigest,
         sources: await Promise.all(sources.map(async (content: CustodyContent) => ({ id: content.policy.id,

@@ -3,11 +3,11 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
-import { Id, IdParams, Json, JsonObject, PageQuery, FunctionResource, listOf } from '../shared/contracts.js';
+import { Id, IdParams, Json, JsonObject, PageQuery, FunctionResource, FunctionExecutionSettings, listOf } from '../shared/contracts.js';
 import { KeyBinding } from '../shared/authority.js';
-import { CreateFunction, UpdateFunction, Invocation, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
+import { CreateFunction, UpdateFunction, FunctionSettingsWrite, Invocation, InvocationCompletion, ClaimedInvocation } from '../shared/function-api.js';
 import type { Actor } from './authorization.js';
-import { FunctionSave } from '../shared/executions.js';
+import { FunctionSave, FunctionConfigure } from '../shared/executions.js';
 import { ProtectedRead } from '../shared/protocol.js';
 
 export async function routesFunctions(app: ApiApp, context: Context) {
@@ -50,10 +50,21 @@ export async function routesFunctions(app: ApiApp, context: Context) {
   });
   app.get('/api/functions/:id/authorizations', { schema: { params: IdParams, response: { 200: listOf(ProtectedRead) } } },
     request => functions.authorizations(actor(request), request.params.id, custody));
+  app.get('/api/functions/:id/execution-settings', { schema: { params: IdParams, response: { 200: FunctionExecutionSettings } } },
+    request => functions.settings(actor(request), request.params.id));
+  app.put('/api/functions/:id/execution-settings', { bodyLimit: 40 * 1024 * 1024, schema: { params: IdParams,
+    body: FunctionConfigure.omit({ functionId: true }).extend({ authorization: FunctionSettingsWrite }).strict(),
+    response: { 200: FunctionExecutionSettings } } }, async request => {
+    const who = actor(request), { authorization: proof, ...input } = request.body;
+    const execution = await executions.start(who, [{ name: 'function.configure',
+      input: JsonObject.parse({ functionId: request.params.id, ...input }) }]);
+    await executions.complete(who, execution.id, 0, Json.parse(proof));
+    return functions.settings(who, request.params.id);
+  });
   app.get('/api/functions/:id/output-recipient', { schema: { params: IdParams,
     response: { 200: z.object({ executor: KeyBinding }) } } }, async request => {
     const current = await functions.execution(actor(request), request.params.id, custody, delegation);
-    return { executor: current.publication.executor };
+    return { executor: current.settings.executor! };
   });
   app.get('/api/runtime/principals/:id/functions', { schema: { params: IdParams, querystring: PageQuery,
     response: { 200: listOf(Invocation) } } }, request => invocations.list(actor(request), request.params.id, request.query.limit, request.query.after));

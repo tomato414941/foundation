@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Command, HttpRequest, Id, JsonObject, Name } from '../../shared/contracts.js';
+import { Command, FunctionInputAccess, HttpRequest, Id, JsonObject, Name } from '../../shared/contracts.js';
 import { FunctionSave, Execution } from '../../shared/executions.js';
 import { Task } from '../../shared/runtime-protocol.js';
 import type { CustodyClient } from '../../shared/client.js';
@@ -19,7 +19,7 @@ const Operation = z.discriminatedUnion('kind', [
 ]);
 export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
   const server = new McpServer({ name: 'foundation-mcp-server', version: packageInfo.version }, {
-    instructions: 'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_execution_result to read the result. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_save_function with local keys to publish a definition and approve its protected inputs. Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected caller programs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/definitions lists user operations. Prepare operations with POST /api/executions and operations containing name, input, and optional input fields, with an optional responderId. It returns an execution ID and continuation URL; protected values are entered directly in that screen. Requests deliver executions when a handoff is needed. Use foundation_execution_result to verify and decrypt protected execution results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
+    instructions: 'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_execution_result to read the result. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_save_function with local keys to publish an environment-independent definition, then foundation_configure_function to select its execution environment and approve protected inputs. Use foundation_schema to discover the common Foundation API and foundation_api to manage resources and start commands through /api/environments/{id}/processes. Inspect or cancel a process through /api/processes/{id}. For protected caller programs, foundation_run signs and encrypts a request for an explicitly selected, previously trusted executor. Reference variable and connection IDs in protected bindings or command inputs. GET /api/definitions lists user operations. Prepare operations with POST /api/executions and operations containing name, input, and optional input fields, with an optional responderId. It returns an execution ID and continuation URL; protected values are entered directly in that screen. Requests deliver executions when a handoff is needed. Use foundation_execution_result to verify and decrypt protected execution results; uncertain means inspect the destination before issuing another operation. Fingerprint trust is established separately through foundation trust or the browser, not by a model tool.',
   });
   registerMetadataTools(server, {
     schema: () => client.json('/api/openapi.json'),
@@ -40,7 +40,7 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
   });
   server.registerTool('foundation_save_function', {
     title: 'Save a reusable function',
-    description: 'Save a fixed program, its arguments and result format, and its execution environment. Command programs read arguments as JSON from stdin and write their result to stdout in temporary working storage. Approves the exact function for its protected inputs using local encryption keys. Share its execute permission to allow calls without direct input access. Reference variable or connection IDs; never supply their plaintext.',
+    description: 'Save a reusable program, its arguments and result format independently of an execution environment. Command programs read arguments as JSON from stdin and write their result to stdout in temporary working storage. Configure its execution environment separately with foundation_configure_function before invoking it. Reference variable or connection IDs; never supply their plaintext.',
     inputSchema: FunctionSave.extend({ response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
@@ -48,6 +48,14 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     const result = await new FunctionClient(client, custody()).save(destination);
     return { id: result.id, name: result.name, version: result.version };
   }, input.response_format));
+  server.registerTool('foundation_configure_function', {
+    title: 'Configure function execution',
+    description: 'Select the execution environment and approve access to the exact function inputs using local encryption keys. Requires permission to update the function and use the selected environment. Set environmentId to null to clear the settings and revoke input access. Changing execution settings preserves the function definition and its version.',
+    inputSchema: z.object({ functionId: Id, environmentId: Id.nullable(),
+      inputAccess: FunctionInputAccess.default({ expiresAt: null }), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  }, input => mcpCall(() => new FunctionClient(client, custody()).configure(input.functionId,
+    { environmentId: input.environmentId, inputAccess: input.inputAccess }), input.response_format));
   server.registerTool('foundation_run', {
     title: 'Run on an explicitly trusted executor',
     description: 'Sign and encrypt one HTTP request or command for an explicitly selected, trusted executor. Requires environment permission and caller-program input grants. Use foundation_invoke_function for saved functions. Use save to map HTTP result JSON pointers to encrypted variable names. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',

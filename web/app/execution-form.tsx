@@ -18,7 +18,8 @@ import { custodyClient } from './custody';
 import { connectionInitialValues } from './connection-form';
 
 export async function loadExecutionForm(invocation: DefinitionCall) {
-  const ownerId = String(invocation.input.ownerId);
+  const fn = invocation.name === 'function.configure' ? await api('/functions/' + invocation.input.functionId, {}, Resource) : null;
+  const ownerId = fn?.ownerId ?? String(invocation.input.ownerId);
   const usesMethod = invocation.name === 'connection.connect' || invocation.name === 'app.save';
   const authorizing = invocation.name === 'connection.authorize', reconnecting = invocation.name === 'connection.connect' && !!invocation.input.connectionId;
   const [methods, owned, shared, owner, connection, users] = await Promise.all([
@@ -35,7 +36,7 @@ export async function loadExecutionForm(invocation: DefinitionCall) {
       api('/identities/' + String(id), {}, Principal.pick({ id: true, name: true, publicKey: true })))) : [],
   ]);
   const method = methods.items.find(item => item.id === invocation.input.methodId);
-  const environments = ['run.execute', 'function.save', 'connection.revoke'].includes(invocation.name) ||
+  const environments = ['run.execute', 'function.configure', 'connection.revoke'].includes(invocation.name) ||
     Array.isArray(invocation.input.environmentIds) && invocation.input.environmentIds.length ? await availableEnvironments(ownerId) : [];
   const preparedFields = invocation.input.fields as Record<string, string> | undefined;
   const apps = [...new Map([...owned.items, ...shared.items].filter(item => item.kind === 'app' &&
@@ -43,7 +44,7 @@ export async function loadExecutionForm(invocation: DefinitionCall) {
     Object.entries(preparedFields ?? {}).every(([name, value]) => !value || item.data.fields[name] === value))
     .map(item => [item.id, item])).values()];
   const initial = reconnecting && connection ? connectionInitialValues(ConnectionMaterial.parse(JSON.parse(decode(await (await custodyClient()).reveal(connection.id))))) : undefined;
-  return { invocation, environments, method, apps, owner, connection, users, initial };
+  return { invocation, environments, method, apps, owner, connection, users, initial, fn };
 }
 export type ExecutionFormData = Awaited<ReturnType<typeof loadExecutionForm>>;
 
@@ -71,15 +72,14 @@ export function executionSubmission(data: ExecutionFormData, form: FormData): { 
       material: { value: formText(form, 'value'), clientSecret: formText(form, 'clientSecret') || undefined,
         fields: connectionFields(form) } };
   }
-  if (name === 'function.save' || name === 'connection.authorize') return { input, material: {} };
+  if (name === 'function.save' || name === 'function.configure' || name === 'connection.authorize') return { input, material: {} };
   return { input: { ...input, environmentId: input.environmentId ?? formText(form, 'environmentId') }, material: {} };
 }
 
 export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
   const { t } = useTranslation(), { name, input } = data.invocation;
-  const definition = name === 'function.save' ? input.definition as { environmentId: string } : null;
-  const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId || definition?.environmentId;
-  const usesEnvironment = ['run.execute', 'function.save', 'connection.revoke'].includes(name) ||
+  const fixedEnvironment = typeof input.environmentId === 'string' && input.environmentId;
+  const usesEnvironment = ['run.execute', 'connection.revoke'].includes(name) || name === 'function.configure' && !!input.environmentId ||
     Array.isArray(input.environmentIds) && input.environmentIds.length > 0;
   const existing: ResourceView | null = data.connection;
   return <div className="flex min-w-0 flex-col gap-6">
@@ -93,6 +93,11 @@ export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
     {data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
     {name === 'connection.revoke' && <Detail label={t('connectionTarget')}>{String(input.connectionId)}</Detail>}
     {name === 'function.save' && <JsonView value={input.definition} />}
+    {name === 'function.configure' && <>
+      <Detail label={t('singular.function')}>{data.fn?.name}</Detail>
+      {!input.environmentId && <Detail label={t('executionDestination')}>{t('none')}</Detail>}
+      <JsonView value={input.inputAccess} />
+    </>}
     {name === 'run.execute' && <JsonView value={input.operation} />}
     {name === 'variable.save' && <TextareaField name="value" label={t('value')} autoComplete="off" rows={5} required />}
     {(name === 'connection.connect' || name === 'app.save') && <>

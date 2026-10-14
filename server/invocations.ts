@@ -10,7 +10,7 @@ import { canonical, hash, verify } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Invocation, InvocationInput, InvocationRequest } from '../shared/function-api.js';
-import type { Completion, InvocationView, Publication } from '../shared/function-api.js';
+import type { Completion, InvocationView, Publication, SettingsApproval } from '../shared/function-api.js';
 import { functionArguments } from '../shared/functions.js';
 import { ContentTypes, functionOperations, grantExpiration, verifyPolicyApproval } from '../shared/custody.js';
 import { pointerParts } from '../shared/values.js';
@@ -18,7 +18,7 @@ import { pointerParts } from '../shared/values.js';
 interface InvocationRow {
   id: string; function_id: string; function_owner_id: string; owner_id: string; actor_id: string;
   executor_id: string; environment_id: string; executor: BoundKeys; actor: Actor;
-  input_digest: string; request: z.infer<typeof InvocationRequest>; publication: Publication;
+  input_digest: string; request: z.infer<typeof InvocationRequest>; publication: Publication; settings: SettingsApproval;
   state: InvocationView['state']; completion: Completion | null; error: InvocationView['error'];
   phase: 'queued' | 'claimed' | 'dispatched' | 'settled'; cancel_requested: boolean; lease_token: string | null;
   created_at: Date; started_at: Date | null; finished_at: Date | null;
@@ -39,7 +39,8 @@ export class Invocations {
     if (Date.parse(row.request.expiresAt) <= Date.now()) fail(409, 'invocation_expired', 'This invocation has expired.');
     const current = await this.functions.execution(row.actor, row.function_id, this.custody, this.delegation);
     if (await hash(current.definition) !== row.request.definitionDigest ||
-      canonical(current.publication.executor) !== canonical(row.executor) || current.row.owner_id !== row.function_owner_id)
+      await hash(current.settings) !== row.request.settingsDigest ||
+      canonical(current.settings.executor) !== canonical(row.executor) || current.row.owner_id !== row.function_owner_id)
       fail(409, 'function_changed', 'The function changed before this invocation started.');
     return current;
   }
@@ -56,8 +57,9 @@ export class Invocations {
         return this.view(previous);
       }
       await this.resources.authorization.requirePrincipal(actor, ownerId, 'execute', connection);
-      const current = await this.functions.execution(actor, functionId, this.custody, this.delegation);
-      const environmentId = current.definition.environmentId;
+      await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [functionId]);
+      const current = await this.functions.execution(actor, functionId, this.custody, this.delegation, connection);
+      const environmentId = current.settings.environmentId!;
       await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [environmentId]);
       const environment = await this.delegation.environment(environmentId, connection);
       if (!environment.heartbeat_at || Date.now() - environment.heartbeat_at.getTime() > 90_000)
@@ -72,27 +74,27 @@ export class Invocations {
         const approval = await verifyPolicyApproval(output.approval), policy = approval.policy;
         if (!binding || policy.origin !== this.functions.origin || policy.ownerId !== ownerId || policy.contentType !== ContentTypes.value ||
           canonical(policy.authorities.find(value => value.id === approval.authorityId)) !== canonical(binding.binding) ||
-          !policy.producers.some(value => value.runId === id && canonical(value.executor) === canonical(current.publication.executor) &&
+          !policy.producers.some(value => value.runId === id && canonical(value.executor) === canonical(current.settings.executor) &&
             Date.parse(value.expiresAt) > Date.now()))
           fail(400, 'invalid_output_authorization', 'Approve each encrypted output for this invocation.');
       }
       const definitionDigest = await hash(current.definition);
-      const expiresAt = new Date(Math.min(Date.now() + 3_600_000, grantExpiration(current.definition.inputAccess), ...current.sources.map(source =>
+      const expiresAt = new Date(Math.min(Date.now() + 3_600_000, grantExpiration(current.settings.inputAccess), ...current.sources.map(source =>
         Math.max(...source.policy.grants.filter(grant => 'function' in grant && grant.function.id === functionId &&
-          grant.function.digest === definitionDigest && canonical(grant.executor) === canonical(current.publication.executor) &&
+          grant.function.digest === definitionDigest && canonical(grant.executor) === canonical(current.settings.executor) &&
           functionOperations(source.policy.contentType).every(operation => grant.operations.includes(operation)))
           .map(grant => grantExpiration(grant)))))).toISOString();
       const request = InvocationRequest.parse({ id, functionId, functionVersion: current.row.version,
         ownerId, actorId: actor.id, actor: binding?.binding ?? null, arguments: arguments_, outputs: input.outputs,
-        definitionDigest, createdAt: new Date().toISOString(), expiresAt });
+        definitionDigest, settingsDigest: await hash(current.settings), environmentId, createdAt: new Date().toISOString(), expiresAt });
       const active = await this.resources.db.one<{ count: string }>(
         "SELECT count(*) FROM function_invocations WHERE environment_id=$1 AND state IN ('queued','running')", [environmentId], connection);
       if (Number(active?.count) >= 20) fail(429, 'invocation_limit', 'Wait for an existing invocation to finish.');
       const row = required(await this.resources.db.one<InvocationRow>(
         `INSERT INTO function_invocations(id,function_id,function_owner_id,owner_id,actor_id,executor_id,environment_id,
-          executor,actor,input_digest,request,publication,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'queued') RETURNING *`,
+          executor,actor,input_digest,request,publication,settings,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued') RETURNING *`,
         [id, functionId, current.row.owner_id, ownerId, actor.id, environment.executor_id, environmentId,
-          JSON.stringify(current.publication.executor), JSON.stringify(actor), inputDigest, JSON.stringify(request), JSON.stringify(current.publication)], connection));
+          JSON.stringify(current.settings.executor), JSON.stringify(actor), inputDigest, JSON.stringify(request), JSON.stringify(current.publication), JSON.stringify(current.settings)], connection));
       await this.resources.audit.record(current.row.owner_id, actor.id, 'function.invoke', id, { functionId }, connection);
       return this.view(row);
     });
@@ -119,7 +121,7 @@ export class Invocations {
     if (!row) return null;
     try {
       const current = await this.validate(row);
-      return { lease, request: row.request, publication: row.publication, sources: current.sources };
+      return { lease, request: row.request, publication: row.publication, settings: row.settings, sources: current.sources };
     } catch {
       await this.resources.db.pool.query(
         `UPDATE function_invocations SET state='failed',phase='settled',error=$3,finished_at=now(),lease_until=NULL

@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS resource_references (
   PRIMARY KEY(resource_id,referenced_id),
   CHECK (resource_id <> referenced_id)
 );
+CREATE TABLE IF NOT EXISTS function_settings (
+  function_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+  environment_id uuid REFERENCES resources(id) ON DELETE SET NULL,
+  version integer NOT NULL CHECK (version > 0),
+  approval jsonb NOT NULL
+);
+-- Definitions survive environment removal; existing definitions require a new publication.
+DELETE FROM resource_references ref USING resources fn, resources env
+  WHERE ref.resource_id=fn.id AND ref.referenced_id=env.id AND fn.kind='function' AND env.kind='environment';
+UPDATE resources SET data=data-'environmentId'-'inputAccess'-'publication',version=version+1,updated_at=now()
+  WHERE kind='function' AND data ? 'environmentId';
 CREATE TABLE IF NOT EXISTS runs (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
@@ -310,6 +321,7 @@ CREATE TABLE IF NOT EXISTS function_invocations (
   input_digest text NOT NULL,
   request jsonb NOT NULL,
   publication jsonb NOT NULL,
+  settings jsonb,
   state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
   completion jsonb,
   error jsonb,
@@ -323,6 +335,11 @@ CREATE TABLE IF NOT EXISTS function_invocations (
 );
 CREATE INDEX IF NOT EXISTS invocation_queue ON function_invocations(environment_id,state,created_at);
 CREATE INDEX IF NOT EXISTS invocation_owner ON function_invocations(owner_id,id);
+ALTER TABLE function_invocations ADD COLUMN IF NOT EXISTS settings jsonb;
+UPDATE function_invocations SET state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'failed' END,
+  phase='settled',finished_at=now(),lease_until=NULL,
+  error='{"code":"function_not_approved","message":"The owner must approve the function execution settings before another invocation."}'::jsonb
+  WHERE settings IS NULL AND state IN ('queued','running');
 CREATE TABLE IF NOT EXISTS connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

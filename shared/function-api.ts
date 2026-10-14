@@ -1,28 +1,45 @@
 import { z } from 'zod';
-import { FunctionDefinition, Id, Json, JsonObject, Name, Time } from './contracts.js';
-import { KeyBinding, Signature, canonical, sign, validateBinding, verify } from './authority.js';
+import { FunctionDefinition, FunctionInputAccess, Id, Json, JsonObject, Name, Time } from './contracts.js';
+import { Fingerprint, KeyBinding, Signature, canonical, sign, validateBinding, verify } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import { ProtectedContent } from './custody.js';
 import { OutputDestination, TaskState } from './runtime-protocol.js';
 
 export const FunctionPublication = z.object({
-  format: z.literal(1), functionId: Id, ownerId: Id, revision: z.number().int().positive(),
-  definition: FunctionDefinition, author: KeyBinding, executor: KeyBinding, createdAt: Time,
+  format: z.literal(2), functionId: Id, ownerId: Id, revision: z.number().int().positive(),
+  definition: FunctionDefinition, author: KeyBinding, createdAt: Time,
   signature: Signature,
 }).strict();
 export type Publication = z.infer<typeof FunctionPublication>;
 export async function publishFunction(value: Omit<Publication, 'signature'>, keys: KeyMaterial) {
   return FunctionPublication.parse({ ...value, signature: await sign(value, keys.signing, 'function-publication') });
 }
-export async function verifyFunction(input: Publication, executor?: BoundKeys) {
+export async function verifyFunction(input: Publication) {
   const publication = FunctionPublication.parse(input), { signature, ...value } = publication;
   await validateBinding(value.author);
   await verify(value, signature, value.author.signing, 'function-publication');
-  if (executor && canonical(value.executor) !== canonical(executor))
-    throw new Error('This function is approved for another executor.');
   return publication;
 }
-export const FunctionWrite = z.object({ functionId: Id, publication: FunctionPublication,
+export const FunctionWrite = z.object({ functionId: Id, publication: FunctionPublication }).strict();
+export const FunctionSettingsApproval = z.object({
+  format: z.literal(1), functionId: Id, ownerId: Id, definitionDigest: Fingerprint,
+  revision: z.number().int().positive(), environmentId: Id.nullable(), inputAccess: FunctionInputAccess,
+  author: KeyBinding, executor: KeyBinding.nullable(), createdAt: Time, signature: Signature,
+}).strict().refine(value => (value.environmentId === null) === (value.executor === null),
+  { message: 'Approve the executor of the selected environment.' });
+export type SettingsApproval = z.infer<typeof FunctionSettingsApproval>;
+export async function approveFunctionSettings(value: Omit<SettingsApproval, 'signature'>, keys: KeyMaterial) {
+  return FunctionSettingsApproval.parse({ ...value, signature: await sign(value, keys.signing, 'function-settings') });
+}
+export async function verifyFunctionSettings(input: SettingsApproval, executor?: BoundKeys) {
+  const approval = FunctionSettingsApproval.parse(input), { signature, ...value } = approval;
+  await validateBinding(value.author);
+  await verify(value, signature, value.author.signing, 'function-settings');
+  if (executor && canonical(value.executor) !== canonical(executor))
+    throw new Error('This function is approved for another executor.');
+  return approval;
+}
+export const FunctionSettingsWrite = z.object({ approval: FunctionSettingsApproval,
   contents: z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict()),
 }).strict();
 export const CreateFunction = z.object({ name: Name, definition: FunctionDefinition, authorization: FunctionWrite }).strict();
@@ -41,7 +58,7 @@ export type InvocationView = z.infer<typeof Invocation>;
 export const InvocationRequest = z.object({
   id: Id, functionId: Id, functionVersion: z.number().int().positive(), ownerId: Id, actorId: Id,
   actor: KeyBinding.nullable(), arguments: JsonObject, outputs: InvocationInput.shape.outputs,
-  definitionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/), createdAt: Time, expiresAt: Time,
+  definitionDigest: Fingerprint, settingsDigest: Fingerprint, environmentId: Id, createdAt: Time, expiresAt: Time,
 }).strict();
 export const InvocationCompletion = z.object({
   id: Id, requestDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -50,5 +67,5 @@ export const InvocationCompletion = z.object({
 }).strict();
 export type Completion = z.infer<typeof InvocationCompletion>;
 export const ClaimedInvocation = z.object({ lease: Id, request: InvocationRequest,
-  publication: FunctionPublication, sources: z.array(ProtectedContent).max(100),
+  publication: FunctionPublication, settings: FunctionSettingsApproval, sources: z.array(ProtectedContent).max(100),
 }).strict().nullable();

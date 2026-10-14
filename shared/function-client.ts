@@ -1,13 +1,13 @@
 import { FUNCTION_RUNTIME_VERSION } from './runtime-protocol.js';
 import { z } from 'zod';
-import { FunctionDefinition, FunctionResource, Id, JsonObject, listOf } from './contracts.js';
+import { FunctionDefinition, FunctionExecutionSettings, FunctionResource, Id, JsonObject, listOf } from './contracts.js';
 import type { FunctionSpec, JsonValue } from './contracts.js';
 import { KeyBinding, canonical, hash } from './authority.js';
 import { AccessPolicy, functionOperations, protect, reveal } from './custody.js';
-import { FunctionWrite, publishFunction } from './function-api.js';
+import { FunctionWrite, FunctionSettingsWrite, approveFunctionSettings, publishFunction } from './function-api.js';
 import type { CustodyClient, JsonApi } from './client.js';
 import { ProtectedRead } from './protocol.js';
-import { FunctionSave, Execution } from './executions.js';
+import { FunctionSave, FunctionConfigure, Execution } from './executions.js';
 import { functionSources } from './functions.js';
 
 export class InvocationSubmissionError extends Error {
@@ -25,21 +25,32 @@ export class FunctionClient {
     const client = this.custody, definition = FunctionDefinition.parse(input.definition);
     if (definition.program.kind === 'http' && definition.result !== 'json')
       throw new Error('HTTP functions return a JSON response containing status, headers, and body.');
-    if (definition.inputAccess.expiresAt !== null && Date.parse(definition.inputAccess.expiresAt) <= Date.now())
-      throw new Error('Choose a future expiration for this function’s input access.');
-    const environment = await client.environment(definition.environmentId);
-    if (environment.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
-      throw new Error('Update this execution environment to the current Foundation CLI.');
     const functionId = input.resourceId ?? crypto.randomUUID();
-    const sources = await client.sourceContents(functionSources(definition).map(source => source.id));
+    const publication = await publishFunction({ format: 2, functionId, ownerId: input.ownerId,
+      revision: input.resourceId ? (input.version ?? 0) + 1 : 1, definition, author: client.binding,
+      createdAt: new Date().toISOString() }, client.keys);
+    return FunctionWrite.parse({ functionId, publication });
+  }
+  settings(id: string) {
+    return this.api.json('/api/functions/' + Id.parse(id) + '/execution-settings', {}, FunctionExecutionSettings);
+  }
+  async prepareSettings(input: z.infer<typeof FunctionConfigure>) {
+    if (!this.custody) throw new Error('Use your encryption keys to approve function execution settings.');
+    const client = this.custody, fn = await this.get(input.functionId);
+    if (fn.version !== input.functionVersion) throw new Error('Reload this function before configuring its execution.');
+    const definition = FunctionDefinition.parse(fn.data), functionId = fn.id;
+    if (input.inputAccess.expiresAt !== null && Date.parse(input.inputAccess.expiresAt) <= Date.now())
+      throw new Error('Choose a future expiration for this function’s input access.');
+    const environment = input.environmentId ? await client.environment(input.environmentId) : null;
+    if (environment && environment.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
+      throw new Error('Update this execution environment to the current Foundation CLI.');
+    const sources = environment ? await client.sourceContents(functionSources(definition).map(source => source.id)) : [];
     const current = new Set(sources.map(source => source.policy.id));
-    if (input.resourceId) {
-      const previous = await this.api.json('/api/functions/' + functionId + '/authorizations', {}, listOf(ProtectedRead));
-      for (const item of previous.items) if (!current.has(item.content.policy.id)) {
-        await client.observe(item.content); sources.push(item.content);
-      }
+    const previous = await this.api.json('/api/functions/' + functionId + '/authorizations', {}, listOf(ProtectedRead));
+    for (const item of previous.items) if (!current.has(item.content.policy.id)) {
+      await client.observe(item.content); sources.push(item.content);
     }
-    const contents: z.infer<typeof FunctionWrite>['contents'] = {};
+    const contents: z.infer<typeof FunctionSettingsWrite>['contents'] = {};
     const reference = { id: functionId, digest: await hash(definition) };
     for (const source of sources) {
       const previous = await client.read(source.policy.id);
@@ -47,19 +58,19 @@ export class FunctionClient {
         throw new Error('An authority of each input must approve its use by this function.');
       const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1,
         grants: [...previous.content.policy.grants.filter(grant => !('function' in grant) || grant.function.id !== functionId),
-          ...(current.has(source.policy.id) ? [{ function: reference, executor: environment.manifest.executor,
-            operations: functionOperations(source.policy.contentType), expiresAt: definition.inputAccess.expiresAt }] : [])] });
+          ...(current.has(source.policy.id) ? [{ function: reference, executor: environment!.manifest.executor,
+            operations: functionOperations(source.policy.contentType), expiresAt: input.inputAccess.expiresAt }] : [])] });
       contents[source.policy.id] = { version: previous.version, content: await protect(
         await reveal(previous.content, client.binding, client.keys.encryption), policy,
         previous.content.materialRevision + 1, client.binding, client.keys, previous.content.metadata, previous.content) };
     }
-    const publication = await publishFunction({ format: 1, functionId, ownerId: input.ownerId,
-      revision: input.resourceId ? (input.version ?? 0) + 1 : 1, definition, author: client.binding,
-      executor: environment.manifest.executor, createdAt: new Date().toISOString() }, client.keys);
-    const authorization = FunctionWrite.parse({ functionId, publication, contents });
-    return authorization;
+    const approval = await approveFunctionSettings({ format: 1, functionId, ownerId: fn.ownerId,
+      definitionDigest: reference.digest, revision: input.version + 1, environmentId: input.environmentId,
+      executor: environment?.manifest.executor ?? null, inputAccess: input.inputAccess,
+      author: client.binding, createdAt: new Date().toISOString() }, client.keys);
+    return FunctionSettingsWrite.parse({ approval, contents });
   }
-  async remember(authorization: z.infer<typeof FunctionWrite>) {
+  async remember(authorization: z.infer<typeof FunctionSettingsWrite>) {
     if (!this.custody) return;
     for (const { content } of Object.values(authorization.contents)) await this.custody.trust.rememberContent(content);
   }
@@ -71,8 +82,19 @@ export class FunctionClient {
     const authorization = await this.prepare(prepared);
     const completed = await this.api.json('/api/executions/' + execution.id + '/complete', { method: 'POST',
       body: { index: execution.index, proof: authorization } }, Execution);
-    await this.remember(authorization);
     return FunctionResource.parse(completed.results[execution.index]);
+  }
+  async configure(id: string, settings: { environmentId: string | null; inputAccess?: { expiresAt: string | null } },
+    expected?: { functionVersion: number; version: number }) {
+    const fn = await this.get(id), current = expected ?? { functionVersion: fn.version, version: (await this.settings(id)).version };
+    const input = FunctionConfigure.parse({ functionId: fn.id, ...current, ...settings });
+    const execution = await this.api.json('/api/executions', { method: 'POST',
+      body: { operations: [{ name: 'function.configure', input: JsonObject.parse(input) }] } }, Execution);
+    const authorization = await this.prepareSettings(input);
+    await this.api.json('/api/executions/' + execution.id + '/complete', { method: 'POST',
+      body: { index: execution.index, proof: authorization } }, Execution);
+    await this.remember(authorization);
+    return this.settings(id);
   }
   async invoke(id: string, arguments_: Record<string, JsonValue> = {}, options: {
     id?: string; ownerId?: string; save?: Record<string, string>;

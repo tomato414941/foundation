@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
-import { Resource, EnvironmentDeletion } from '../../../shared/contracts';
+import { Resource, EnvironmentDeletion, FunctionExecutionSettings } from '../../../shared/contracts';
 import { decode } from '../../../shared/encryption';
 import { api, ApiFailure, actionResult, formText } from '../api';
 import { authenticate, decryptVariable } from '../keys';
@@ -26,7 +26,9 @@ import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
-import { executionClient } from '../custody';
+import { executionClient, functionClient } from '../custody';
+import { FunctionSettings } from '../function-settings';
+import { inputAccessFromForm } from '../function-access';
 import { availableEnvironments, EnvironmentChoice, environmentState } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
@@ -43,8 +45,10 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   });
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
-  return { resource, environments: resource.kind === 'connection' && resource.data.revocable
-    ? await availableEnvironments(resource.ownerId) : [] };
+  const functionSettings = resource.kind === 'function' && resource.permissions.includes('read')
+    ? await api('/functions/' + resource.id + '/execution-settings', { signal: request.signal }, FunctionExecutionSettings) : null;
+  return { resource, functionSettings, environments: resource.kind === 'connection' && resource.data.revocable ||
+    resource.kind === 'function' && resource.permissions.includes('update') ? await availableEnvironments(resource.ownerId) : [] };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -56,6 +60,13 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       return { sshSaved: true };
     }
     const intent = formText(form, 'intent');
+    if (intent === 'functionConfigure' || intent === 'functionUnconfigure') {
+      await (await functionClient(true)).configure(params.id!, {
+        environmentId: intent === 'functionConfigure' ? formText(form, 'environmentId') : null,
+        inputAccess: intent === 'functionConfigure' ? inputAccessFromForm(form) : { expiresAt: null },
+      }, { functionVersion: Number(formText(form, 'functionVersion')), version: Number(formText(form, 'settingsVersion')) });
+      return { functionConfigured: true };
+    }
     if (intent === 'stop' || intent === 'start') {
       await api(`/resources/${params.id}/${intent}`, { method: 'POST', body: {} });
       return { ok: true };
@@ -79,7 +90,7 @@ function downloadBytes(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function ResourceDetail() {
-  const { resource: item, environments } = useLoaderData<typeof clientLoader>();
+  const { resource: item, environments, functionSettings } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
   const { t } = useTranslation();
@@ -269,8 +280,6 @@ export default function ResourceDetail() {
       {item.kind === 'function' && (item.data.description || can('execute')) && (
         <Panel>
           {item.data.description && <p className="leading-relaxed">{item.data.description}</p>}
-          <Detail label={t('functionInputAccess')}>{item.data.inputAccess.expiresAt
-            ? <DateText value={item.data.inputAccess.expiresAt} /> : t('functionInputContinuous')}</Detail>
           {can('execute') && (
             <Button variant="default" asChild>
               <Link to="run">{t('execute')}</Link>
@@ -278,6 +287,8 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
+      {item.kind === 'function' && functionSettings && <FunctionSettings settings={functionSettings}
+        environments={environments} functionVersion={item.version} canUpdate={can('update')} busy={navigation.state !== 'idle'} />}
       {item.kind === 'method' && can('use') && (
         <Button variant="ghost" asChild>
           <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
@@ -287,7 +298,7 @@ export default function ResourceDetail() {
       {item.kind !== 'environment' && can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
-            {environments.length > 0 && (
+            {item.kind === 'connection' && environments.length > 0 && (
               <><input type="hidden" name="intent" value="disconnect" />
                 <EnvironmentChoice items={environments} /></>
             )}

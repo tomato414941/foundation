@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, Invocation, Execution, RevokeConnection, RunOperation, ValueSave, WaitingOperation } from './executions.js';
+import { AppSave, AuthorizeConnection, ConnectService, FunctionSave, FunctionConfigure, Invocation, Execution, RevokeConnection, RunOperation, ValueSave, WaitingOperation } from './executions.js';
 import type { DefinitionCall, ExecutionView } from './executions.js';
 import { CatalogMethod, Id, Json, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
@@ -108,10 +108,12 @@ export class ExecutionClient {
           commit: async write => Resource.parse((await this.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
       return { kind: 'saved', resource, executionId: id };
     }
-    if (name === 'function.save') {
-      const client = new FunctionClient(this.custody.api, this.custody), authorization = await client.prepare(FunctionSave.parse(input));
+    if (name === 'function.save' || name === 'function.configure') {
+      const client = new FunctionClient(this.custody.api, this.custody);
+      const authorization = name === 'function.save' ? await client.prepare(FunctionSave.parse(input))
+        : await client.prepareSettings(FunctionConfigure.parse(input));
       const completed = await this.complete(id, plan.index, Json.parse(authorization));
-      await client.remember(authorization);
+      if ('contents' in authorization) await client.remember(authorization);
       return { kind: 'saved', resource: Resource.parse(completed.results[plan.index]), executionId: id };
     }
     if (name === 'variable.save' || name === 'app.save') {

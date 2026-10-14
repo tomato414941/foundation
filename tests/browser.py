@@ -105,6 +105,22 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("option", name=option, exact=True).click()
         expect(page.get_by_role("listbox")).to_be_hidden()
 
+    def configure_function(self, page, expires_at=None, english=False):
+        environment_label = "environment" if english else "実行環境"
+        summary_label = "Configure environment and input access" if english else "実行先と利用許可を設定"
+        details = page.locator("details").filter(has=page.get_by_text(summary_label, exact=True))
+        expect(details).to_be_visible()
+        if details.get_attribute("open") is None:
+            details.locator("summary").click()
+        self.select(page, environment_label, "Browser executor")
+        self.select(page, "Input access" if english else "入力の利用許可",
+                    ("Set an expiration" if english else "期限を指定") if expires_at else
+                    ("Allow until revoked" if english else "継続して許可"))
+        if expires_at:
+            page.get_by_label("Input access expires" if english else "入力利用の有効期限", exact=True).fill(expires_at)
+        page.get_by_role("button", name="Approve and save execution settings" if english else "実行設定を承認して保存", exact=True).click()
+        expect(page.locator("main")).to_contain_text("Execution settings approved" if english else "実行設定を承認済みです", timeout=15000)
+
     def application(self, page, principal, method_id, client_id, client_secret, fields=(), name="Connection application"):
         page.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method={method_id}")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
@@ -342,13 +358,44 @@ class BrowserTests(unittest.TestCase):
         reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-mobile-en.png"), full_page=True)
         print("Rendered execution detail (English): " + reader.locator("main").inner_text(), flush=True)
 
+    def test_実行環境がなくても関数を作り環境削除後も同じ関数を別環境で実行する(self):
+        page, principal = self.passkey_account("Independent function owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/functions/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Independent function")
+        page.screenshot(path=str(ARTIFACTS / "function-without-environment-ja.png"), full_page=True)
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Independent function", exact=True)).to_be_visible(timeout=15000)
+        expect(page.locator("main")).to_contain_text("実行先が未設定です")
+        function_path = page.url
+        before = page.request.get(ORIGIN + "/api/functions/" + function_path.rsplit("/", 1)[1]).json()
+        environment_path = self.executor(page, principal)
+        page.goto(function_path)
+        self.configure_function(page)
+        page.goto(environment_path)
+        page.get_by_role("button", name="削除", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
+        page.wait_for_url("**/environments?deleted=1", timeout=20000)
+        page.goto(function_path)
+        expect(page.get_by_role("heading", name="Independent function", exact=True)).to_be_visible()
+        expect(page.locator("main")).to_contain_text("実行先が未設定です")
+        after = page.request.get(ORIGIN + "/api/functions/" + before["id"]).json()
+        self.assertEqual(after, before)
+        self.executor(page, principal)
+        page.goto(function_path)
+        self.configure_function(page)
+        page.goto(function_path + "/run")
+        page.get_by_role("button", name="実行", exact=True).click()
+        page.wait_for_url("**/executions/*")
+        expect(page.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
+        expect(page.locator("main")).to_contain_text("{}")
+
     def test_固定した関数を共有して秘密を使う処理の結果を受け取る(self):
         page, principal = self.passkey_account("Function owner")
         environment = self.executor(page, principal).rsplit("/", 1)[1]
         source = self.variable(page, principal, name="Function token", value="private-function-token").rsplit("/", 1)[1]
         page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("Reusable function")
-        self.select(page, "実行環境", "Browser executor")
         code = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,amount:args.amount,enabled:args.enabled,payload:args.payload,configured:!!process.env.TOKEN}));});'
         page.get_by_role("textbox", name="プログラムと引数（JSON配列）", exact=True).fill(json.dumps(["node", "-e", code]))
         page.get_by_role("textbox", name="接続・変数の入力（JSON）", exact=True).fill(json.dumps([{"name": "TOKEN", "source": {"id": source}}]))
@@ -358,15 +405,15 @@ class BrowserTests(unittest.TestCase):
             {"name": "enabled", "label": "Enabled", "type": "boolean", "default": True},
             {"name": "payload", "label": "Payload", "type": "json", "default": {}},
         ]))
-        expect(page.get_by_role("combobox", name="入力の利用許可", exact=True)).to_contain_text("継続して許可")
-        self.select(page, "入力の利用許可", "期限を指定")
-        page.get_by_label("入力利用の有効期限", exact=True).fill("2099-01-02T03:04")
         page.screenshot(path=str(ARTIFACTS / "function-editor-desktop-ja.png"), full_page=True)
         print("Rendered function editor: " + page.locator("main").inner_text(), flush=True)
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
         function_path = page.url
         function_id = function_path.rsplit("/", 1)[1]
+        self.configure_function(page, expires_at="2099-01-02T03:04")
+        page.screenshot(path=str(ARTIFACTS / "function-settings-desktop-ja.png"), full_page=True)
+        print("Rendered execution settings: " + page.locator("main").inner_text(), flush=True)
         expect(page.locator("main")).to_contain_text("2099")
         reader, recipient = self.passkey_account("Function caller")
         reader.evaluate("""() => new Promise((resolve, reject) => {
@@ -404,14 +451,15 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "言語", "English")
         page.set_viewport_size({"width": 390, "height": 844})
         expect(page.get_by_role("textbox", name="Program and arguments (JSON array)", exact=True)).to_have_value(json.dumps(["node", "-e", code], ensure_ascii=False, indent=2))
-        expect(page.get_by_role("combobox", name="Input access", exact=True)).to_contain_text("Set an expiration")
-        expect(page.get_by_label("Input access expires", exact=True)).to_have_value("2099-01-02T03:04")
         page.screenshot(path=str(ARTIFACTS / "function-editor-mobile-en.png"), full_page=True)
         print("Rendered function editor (English): " + page.locator("main").inner_text(), flush=True)
-        self.select(page, "Input access", "Allow until revoked")
         page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
         page.get_by_role("button", name="Save", exact=True).click()
         expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
+        expect(page.locator("main")).to_contain_text("Approve execution settings for the updated program")
+        self.configure_function(page, english=True)
+        page.screenshot(path=str(ARTIFACTS / "function-settings-mobile-en.png"), full_page=True)
+        print("Rendered execution settings (English): " + page.locator("main").inner_text(), flush=True)
         expect(page.locator("main")).to_contain_text("Allow until revoked")
         page.get_by_role("button", name="Delete", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
@@ -425,7 +473,6 @@ class BrowserTests(unittest.TestCase):
         self.executor(page, principal)
         page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("HTTP function")
-        self.select(page, "実行環境", "Browser executor")
         self.select(page, "処理", "HTTPリクエスト")
         page.get_by_label("URL", exact=True).fill("https://service.example/submit")
         self.select(page, "メソッド", "POST")
@@ -436,6 +483,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
         function_path = page.url
+        self.configure_function(page)
         page.goto(function_path + "/run")
         page.get_by_role("button", name="実行", exact=True).click()
         page.wait_for_url("**/executions/*")
@@ -447,12 +495,12 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "言語", "English")
         page.set_viewport_size({"width": 390, "height": 844})
         expect(page.get_by_role("combobox", name="Response body format", exact=True)).to_contain_text("Text")
-        expect(page.get_by_role("combobox", name="Input access", exact=True)).to_contain_text("Allow until revoked")
         page.screenshot(path=str(ARTIFACTS / "function-http-editor-mobile-en.png"), full_page=True)
         print("Rendered HTTP function editor (English): " + page.locator("main").inner_text(), flush=True)
         self.select(page, "Response body format", "JSON")
         page.get_by_role("button", name="Save", exact=True).click()
         expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
+        self.configure_function(page, english=True)
         page.goto(function_path + "/run")
         page.get_by_role("button", name="Run", exact=True).click()
         page.wait_for_url("**/executions/*")
@@ -476,7 +524,6 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(connection["data"]["http"]["authentication"]["kind"], "bearer")
         page.goto(root + "/functions/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("Webhook function")
-        self.select(page, "実行環境", "Browser executor")
         self.select(page, "処理", "HTTPリクエスト")
         self.select(page, "接続", "My webhook")
         self.select(page, "メソッド", "POST")
@@ -498,6 +545,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(json.loads(page.get_by_role("textbox", name="本文", exact=True).input_value()), {"message": "Hello"})
         page.get_by_role("button", name="保存", exact=True).click()
         expect(page.get_by_role("heading", name="Webhook function", exact=True)).to_be_visible(timeout=15000)
+        self.configure_function(page)
         page.goto(function_path + "/run")
         page.get_by_role("button", name="実行", exact=True).click()
         page.wait_for_url("**/executions/*")

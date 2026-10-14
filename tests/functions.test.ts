@@ -18,14 +18,15 @@ import { decode, encode } from '../shared/encryption.js';
 import { functionArguments, functionProgram } from '../shared/functions.js';
 
 const script = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,configured:!!process.env.TOKEN}));});';
-const definition = (environmentId: string, sourceId?: string, command = script) => FunctionDefinition.parse({
-  environmentId, program: { kind: 'command', command: ['node', '-e', command],
+const definition = (sourceId?: string, command = script) => FunctionDefinition.parse({
+  program: { kind: 'command', command: ['node', '-e', command],
     inputs: sourceId ? [{ name: 'TOKEN', source: { id: sourceId } }] : [], timeoutSeconds: 5 },
   parameters: [{ name: 'message', label: 'Message', default: 'Hello' }], result: 'json',
 });
-async function save(f: Awaited<ReturnType<typeof flowFixture>>, spec: FunctionSpec) {
+async function save(f: Awaited<ReturnType<typeof flowFixture>>, spec: FunctionSpec, inputAccess = { expiresAt: null as string | null }) {
   const result = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Processor ' + crypto.randomUUID(), definition: spec });
   if (result.kind !== 'function') throw new Error('Expected a function.');
+  await f.functions.configure(result.id, { environmentId: f.environment.manifest.id, inputAccess });
   return { ...result, data: FunctionDefinition.parse(result.data) };
 }
 async function caller(f: Awaited<ReturnType<typeof flowFixture>>) {
@@ -36,7 +37,7 @@ async function caller(f: Awaited<ReturnType<typeof flowFixture>>) {
 }
 
 test('引数の必須項目と既定値を検証し、宣言した引数だけを固定処理へ渡す', () => {
-  const spec = definition(crypto.randomUUID());
+  const spec = definition();
   assert.deepEqual(functionArguments(spec, {}), { message: 'Hello' });
   assert.throws(() => functionArguments(spec, { other: 'x' }));
   assert.throws(() => functionArguments(spec, { message: '' }));
@@ -49,7 +50,7 @@ test('引数の必須項目と既定値を検証し、宣言した引数だけ�
 });
 
 test('数値・真偽値・JSONの型と既定値を保って関数の引数を検証する', () => {
-  const spec = FunctionDefinition.parse({ environmentId: crypto.randomUUID(),
+  const spec = FunctionDefinition.parse({
     program: { kind: 'command', command: ['node', '-e', ''] }, parameters: [
       { name: 'count', label: 'Count', type: 'number', default: 0 },
       { name: 'enabled', label: 'Enabled', type: 'boolean', default: false },
@@ -66,11 +67,11 @@ test('数値・真偽値・JSONの型と既定値を保って関数の引数を�
 
 test('呼び出し権限だけを持つ利用者がAPIトークンで関数を実行し、秘密を開示せず結果を受け取る', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  const fn = await save(f, definition(f.resource.id));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const functions = new FunctionClient(f.api(f.stranger.token));
   const view = await functions.get(fn.id);
-  assert.deepEqual(view.data, { description: '', parameters: fn.data.parameters, result: 'json', inputAccess: { expiresAt: null } });
+  assert.deepEqual(view.data, { description: '', parameters: fn.data.parameters, result: 'json' });
   assert.deepEqual(view.permissions, ['execute']);
   const { client } = await caller(f);
   await assert.rejects(client.read(f.resource.id));
@@ -90,7 +91,7 @@ test('呼び出し権限だけを持つ利用者がAPIトークンで関数を�
 
 test('コードを読む権限と呼び出す権限を別々に渡し、管理APIから関数を更新して削除する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id));
+  const fn = await save(f, definition());
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'reader', objectId: fn.id });
   const functions = new FunctionClient(f.api(f.stranger.token));
   assert.deepEqual((await functions.get(fn.id)).data, fn.data);
@@ -106,7 +107,7 @@ test('コードを読む権限と呼び出す権限を別々に渡し、管理AP
 
 test('JSONの引数の型を保ち、宣言と一致しない入力を受付時に検証する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify(JSON.parse(text))));'] },
     parameters: [{ name: 'count', label: 'Count', type: 'number' }, { name: 'enabled', label: 'Enabled', type: 'boolean' },
       { name: 'payload', label: 'Payload', type: 'json' }], result: 'json' }));
@@ -119,7 +120,7 @@ test('JSONの引数の型を保ち、宣言と一致しない入力を受付時�
 
 test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型のまま設定する', async t => {
   const f = await flowFixture(request => jsonResponse(JSON.parse(String(request.body)))); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/items{?count}', method: 'POST',
       json: { count: '{{count}}', enabled: '{{enabled}}', payload: '{{payload}}', caption: 'Count {{count}}', constructor: '{{constructor}}' } } },
     parameters: [{ name: 'count', label: 'Count', type: 'number' }, { name: 'enabled', label: 'Enabled', type: 'boolean' },
@@ -133,12 +134,14 @@ test('HTTP関数のJSON本文に数値・真偽値・JSONの引数をその型�
 
 test('承認された定義だけを実行し、変更後の関数を再承認して呼び出す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  const fn = await save(f, definition(f.resource.id));
   const queued = await f.functions.invoke(fn.id);
-  const changed = definition(f.environment.manifest.id, f.resource.id, 'console.log(JSON.stringify({changed:true}))');
+  const changed = definition(f.resource.id, 'console.log(JSON.stringify({changed:true}))');
   await f.functions.save({ ownerId: fn.ownerId, name: fn.name, resourceId: fn.id, version: fn.version, definition: changed });
   assert.equal(await f.functionExecutor.tick(), false);
   assert.equal((await f.functions.result(queued.id)).state, 'failed');
+  await assert.rejects(f.functions.invoke(fn.id), { code: 'function_not_approved' });
+  await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   const invocation = await f.functions.invoke(fn.id);
   await f.functionExecutor.tick();
   assert.deepEqual((await f.functions.result(invocation.id)).results[0], { changed: true });
@@ -146,7 +149,7 @@ test('承認された定義だけを実行し、変更後の関数を再承認�
 
 test('共有許可を取り消した関数の待機中の呼び出しを開始前に止める', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id));
+  const fn = await save(f, definition());
   const line = { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id };
   await f.relations.draw(f.owner.actor, line);
   const functions = new FunctionClient(f.api(f.stranger.token)), invocation = await functions.invoke(fn.id);
@@ -157,13 +160,14 @@ test('共有許可を取り消した関数の待機中の呼び出しを開始�
 
 test('入力の利用許可の期限を確認し、所有者が再承認した関数を呼び出す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  const fn = await save(f, definition(f.resource.id));
   const previous = await f.client.read(f.resource.id);
   await f.client.save(f.resource.name, await f.client.reveal(f.resource.id), { ...previous.content.policy,
     revision: previous.content.policy.revision + 1, grants: previous.content.policy.grants.map(grant =>
       'function' in grant && grant.function.id === fn.id ? { ...grant, expiresAt: new Date(Date.now() - 1000).toISOString() } : grant) }, { previous });
   await assert.rejects(f.functions.invoke(fn.id), error => (error as { code: string }).code === 'function_not_approved');
   await f.functions.save({ ownerId: fn.ownerId, name: fn.name, resourceId: fn.id, version: fn.version, definition: fn.data });
+  await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   const invocation = await f.functions.invoke(fn.id);
   await f.functionExecutor.tick();
   assert.equal((await f.functions.result(invocation.id)).state, 'succeeded');
@@ -171,7 +175,7 @@ test('入力の利用許可の期限を確認し、所有者が再承認した�
 
 test('共有された関数の結果を呼び出す人の暗号化された変数へ保存する', async t => {
   const f = await flowFixture(() => jsonResponse({ count: 7 })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/items{?query}',
       bindings: [{ pointer: '/headers/authorization', parts: ['Bearer ', { id: f.resource.id }] }] } },
     parameters: [{ name: 'query', label: 'Query' }], result: 'json' }));
@@ -189,7 +193,7 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
 
 test('HTTP送信の応答が失われた場合は結果不明を返し、同じ呼び出しIDで状態を確認する', async t => {
   const f = await flowFixture(() => { throw new DomainError(502, 'service_unavailable', 'Response lost'); }); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const id = crypto.randomUUID(), call = await f.functions.invoke(fn.id, {}, { id });
   await f.functionExecutor.tick();
@@ -203,7 +207,7 @@ test('HTTP送信の応答が失われた場合は結果不明を返し、同じ�
 
 test('HTTP関数の成功応答をステータス・ヘッダー・本文として返し、受付済みの応答を確認する', async t => {
   const f = await flowFixture(() => ({ status: 202, headers: { 'content-type': 'application/json', 'x-request-id': 'accepted' }, body: encode('{"queued":true}') })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
   const result = await f.functions.result(call.id);
@@ -214,7 +218,7 @@ test('HTTP関数の成功応答をステータス・ヘッダー・本文とし�
 test('HTTP関数の転送やエラー応答を失敗として返し、応答のステータスを知らせる', async t => {
   let status = 302;
   const f = await flowFixture(() => ({ status, headers: {}, body: encode('response') })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', responseFormat: 'text', request: { url: 'https://service.example/action', method: 'POST' } } }));
   for (status of [302, 401, 500]) {
     const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
@@ -228,12 +232,12 @@ test('HTTP関数の転送やエラー応答を失敗として返し、応答の�
 test('HTTPのテキスト本文と本文のない成功応答を指定した形式で返す', async t => {
   let status = 200;
   const f = await flowFixture(() => ({ status, headers: {}, body: encode(status === 200 ? 'plain text' : '') })); t.after(f.close);
-  const text = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const text = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', responseFormat: 'text', request: { url: 'https://service.example/action' } } }));
   let call = await f.functions.invoke(text.id); await f.functionExecutor.tick();
   assert.deepEqual((await f.functions.result(call.id)).results[0], { status: 200, headers: {}, body: 'plain text' });
   status = 204;
-  const empty = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const empty = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action' } } }));
   call = await f.functions.invoke(empty.id); await f.functionExecutor.tick();
   assert.deepEqual((await f.functions.result(call.id)).results[0], { status: 204, headers: {}, body: null });
@@ -243,7 +247,7 @@ test('関数のJSON結果の数値・真偽値・文字列をその型のまま�
   const f = await flowFixture(); t.after(f.close);
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
   const input = await f.client.save('Limit', encode('1'), policy);
-  const fn = await save(f, definition(f.environment.manifest.id, input.id,
+  const fn = await save(f, definition(input.id,
     'console.log(JSON.stringify({count:Number(process.env.TOKEN),ok:true,label:"item1"}))'));
   const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
   const result = await f.functions.result(call.id);
@@ -253,7 +257,7 @@ test('関数のJSON結果の数値・真偽値・文字列をその型のまま�
 
 test('関数の非公開の出力を元の値のまま暗号化して保存し、保存先を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id,
+  const fn = await save(f, definition(f.resource.id,
     'console.log(JSON.stringify({credential:process.env.TOKEN}))'));
   const call = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Private credential' } });
   await f.functionExecutor.tick();
@@ -265,7 +269,7 @@ test('関数の非公開の出力を元の値のまま暗号化して保存し�
 
 test('継続許可された関数の入力を30日後も使い、所有者が撤回した許可を確認する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id));
+  const fn = await save(f, definition(f.resource.id));
   const previous = await f.client.read(f.resource.id), content = previous.content;
   const intent = { ...f.intent, operation: Operations.function, functionId: fn.id, functionDigest: await hash(fn.data),
     sources: [{ id: content.policy.id, policyDigest: await hash(content.policy), materialRevision: content.materialRevision }] };
@@ -278,8 +282,8 @@ test('継続許可された関数の入力を30日後も使い、所有者が撤
 test('関数の入力に指定した利用期限を適用し、期限切れの呼び出しを止める', async t => {
   const f = await flowFixture(); t.after(f.close);
   const expiresAt = new Date(Date.now() + 40 * 86_400_000).toISOString();
-  const spec = definition(f.environment.manifest.id, f.resource.id); spec.inputAccess.expiresAt = expiresAt;
-  const fn = await save(f, spec), content = (await f.client.read(f.resource.id)).content;
+  const spec = definition(f.resource.id);
+  const fn = await save(f, spec, { expiresAt }), content = (await f.client.read(f.resource.id)).content;
   const grant = content.policy.grants.find(grant => 'function' in grant && grant.function.id === fn.id);
   assert.equal(grant?.expiresAt, expiresAt);
   const call = await f.functions.invoke(fn.id); await f.functionExecutor.tick();
@@ -291,7 +295,7 @@ test('関数の入力に指定した利用期限を適用し、期限切れの�
 
 test('関数で生成した秘密を暗号化して保存し、呼び出す人へ保存先のIDを返す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, undefined,
+  const fn = await save(f, definition(undefined,
     'console.log(JSON.stringify({credential:require("crypto").randomBytes(16).toString("hex")}))'));
   const invocation = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Generated credential' } });
   await f.functionExecutor.tick();
@@ -305,7 +309,7 @@ test('関数で生成した秘密を暗号化して保存し、呼び出す人�
 test('処理の終了コードと結果の形式を検証し、失敗の理由を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   for (const [command, code, timeout] of [['process.stderr.write("problem");process.exit(3)', 'function_failed', 5], ['console.log("invalid JSON")', 'invalid_function_result', 5], ['setInterval(()=>{},1000)', 'function_timeout', 1]] as const) {
-    const spec = definition(f.environment.manifest.id, undefined, command);
+    const spec = definition(undefined, command);
     if (spec.program.kind === 'command') spec.program.timeoutSeconds = timeout;
     const fn = await save(f, spec), invocation = await f.functions.invoke(fn.id);
     await f.functionExecutor.tick();
@@ -317,11 +321,12 @@ test('処理の終了コードと結果の形式を検証し、失敗の理由�
 test('関数の入力を更新して新しい値を使い、呼び出しごとに作業ファイルを用意する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const program = 'const fs=require("fs");const count=(fs.existsSync("counter")?Number(fs.readFileSync("counter")):0)+1;fs.writeFileSync("counter",String(count));console.log(JSON.stringify({count,length:process.env.TOKEN.length}));';
-  const fn = await save(f, definition(f.environment.manifest.id, f.resource.id, program));
+  const fn = await save(f, definition(f.resource.id, program));
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
   const newSource = await f.client.save('New input', encode('new-private-token-value'), policy);
   await f.functions.save({ ownerId: fn.ownerId, resourceId: fn.id, version: fn.version, name: fn.name,
-    definition: definition(f.environment.manifest.id, newSource.id, program) });
+    definition: definition(newSource.id, program) });
+  await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   for (let index = 0; index < 2; index++) {
     const invocation = await f.functions.invoke(fn.id);
     await f.functionExecutor.tick();
@@ -332,7 +337,7 @@ test('関数の入力を更新して新しい値を使い、呼び出しごと�
 
 test('同じ呼び出しIDで再試行しても処理を一度だけ実行する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const id = crypto.randomUUID(), first = await f.functions.invoke(fn.id, {}, { id });
   assert.equal((await f.functions.invoke(fn.id, {}, { id })).id, first.id);
@@ -344,7 +349,7 @@ test('同じ呼び出しIDで再試行しても処理を一度だけ実行する
 
 test('受付後に通信が途切れても呼び出しIDから確認し、同じ処理を再実行せず再試行する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const api = f.api(f.owner.token);
   const functions = new FunctionClient({ async json(path, options, schema) {
@@ -364,7 +369,7 @@ test('受付後に通信が途切れても呼び出しIDから確認し、同じ
 
 test('所有者の署名で承認したプログラムを確認してから秘密を使う処理を開始する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST',
       bindings: [{ pointer: '/headers/authorization', parts: [{ id: f.resource.id }] }] } } }));
   const invocation = await f.functions.invoke(fn.id);
@@ -388,7 +393,7 @@ test('所有者の署名で承認したプログラムを確認してから秘�
 
 test('結果の送信が途切れても保存した署名付きの結果を再送し、処理を一度だけ実行する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const invocation = await f.functions.invoke(fn.id);
   class LostResponseBroker extends FunctionBroker {
@@ -409,7 +414,7 @@ test('結果の送信が途切れても保存した署名付きの結果を再�
 
 test('開始前に期限が切れた処理を別のリースで引き受け、古いリースでの実行を拒否する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
   const expired = (await broker.claim(f.environment.manifest.id))!;
@@ -424,7 +429,7 @@ test('開始前に期限が切れた処理を別のリースで引き受け、�
 
 test('開始後に実行主体が停止した処理は結果不明として返し、自動でやり直さない', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const invocation = await f.functions.invoke(fn.id), claim = (await f.functionExecutor.broker.claim(f.environment.manifest.id))!;
   await f.functionExecutor.broker.dispatch(invocation.id, claim.lease);
@@ -441,7 +446,7 @@ test('開始後に実行主体が停止した処理は結果不明として返�
 
 test('呼び出しに対応する実行主体の署名を検証して結果を保存する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id));
+  const fn = await save(f, definition());
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
   const claim = (await broker.claim(f.environment.manifest.id))!;
   await broker.dispatch(invocation.id, claim.lease);
@@ -456,7 +461,7 @@ test('呼び出しに対応する実行主体の署名を検証して結果を�
 
 test('開始前の中止と実行開始が競合しても中止を確定し、次の呼び出しを実行する', async t => {
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const invocation = await f.functions.invoke(fn.id);
   class CancelledBroker extends FunctionBroker {
@@ -475,7 +480,7 @@ test('開始前の中止と実行開始が競合しても中止を確定し、�
 
 test('待機中に期限が切れた呼び出しと削除された関数の呼び出しを失敗として確定する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id));
+  const fn = await save(f, definition());
   const expired = await f.functions.invoke(fn.id);
   await f.db.pool.query("UPDATE function_invocations SET request=jsonb_set(request,'{expiresAt}',to_jsonb($2::text)) WHERE id=$1",
     [expired.id, new Date(Date.now() - 1000).toISOString()]);
@@ -490,7 +495,7 @@ test('待機中に期限が切れた呼び出しと削除された関数の呼�
 
 test('中止の応答が途切れた場合は結果不明として確定し、遅れて届いた署名付き結果を受け取る', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id));
+  const fn = await save(f, definition());
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
   const claim = (await broker.claim(f.environment.manifest.id))!;
   await broker.dispatch(invocation.id, claim.lease);
@@ -510,7 +515,7 @@ test('中止の応答が途切れた場合は結果不明として確定し、�
 
 test('待機中の呼び出しを中止し、実行中の処理も中止して最終状態を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const fn = await save(f, definition(f.environment.manifest.id, undefined, 'setInterval(()=>{},1000)'));
+  const fn = await save(f, definition(undefined, 'setInterval(()=>{},1000)'));
   const queued = await f.functions.invoke(fn.id);
   assert.equal((await f.functions.cancel(queued.id)).state, 'cancelled');
   const active = await f.functions.invoke(fn.id);
@@ -549,7 +554,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   await f.context.custody.put(f.owner.actor, { name: 'Function connection',
     content: await protect(encode(canonical(material)), connectionPolicy, 1, f.owner.binding, f.owner.keys, await connectionMetadata(material)),
     labels: { methodName: 'Function OAuth', account: 'Account' } });
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id, result: 'json',
+  const fn = await save(f, FunctionDefinition.parse({  result: 'json',
     program: { kind: 'command', command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN}))'],
       inputs: [{ name: 'TOKEN', source: { id: connectionId, output: 'ACCESS_TOKEN' } }], timeoutSeconds: 5 } }));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
@@ -570,7 +575,7 @@ test('Pythonの処理へ引数とファイル・JSONの入力を渡し、テキ�
   const f = await flowFixture(); t.after(f.close);
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
   const factor = await f.client.save('Factor', encode('{"factor":3}'), policy);
-  const fn = await save(f, FunctionDefinition.parse({ environmentId: f.environment.manifest.id, result: 'text',
+  const fn = await save(f, FunctionDefinition.parse({  result: 'text',
     parameters: [{ name: 'number', label: 'Number' }], program: { kind: 'command',
       command: ['python3', '-c', 'import json,os,sys; args=json.load(sys.stdin); product=int(args["number"])*int(os.environ["FACTOR"]); length=len(open(os.environ["INPUT"],"rb").read()); print(f"Product {product}, file bytes {length}")'],
       inputs: [{ name: 'FACTOR', source: { id: factor.id }, format: 'json', pointer: '/factor' },

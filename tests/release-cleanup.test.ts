@@ -11,9 +11,10 @@ import { JournalTrust } from '../runtime/trust.js';
 
 test('本番確認用の関数履歴とプリンシパルを片付け、利用者の関数履歴を保つ', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const definition = (environmentId: string) => ({ environmentId, program: { kind: 'http' as const,
+  const definition = () => ({ program: { kind: 'http' as const,
     request: { method: 'GET' as const, url: 'https://api.example.com/check' } }, parameters: [], result: 'json' as const });
-  const existing = await f.functions.save({ ownerId: f.owner.actor.id, name: 'User function', definition: definition(f.environment.manifest.id) });
+  const existing = await f.functions.save({ ownerId: f.owner.actor.id, name: 'User function', definition: definition() });
+  await f.functions.configure(existing.id, { environmentId: f.environment.manifest.id });
   const history = await f.functions.invoke(existing.id);
   const owner = await f.personWithKeys('Disposable verification owner'), executor = await f.personWithKeys('Disposable verification executor');
   await f.relations.draw(owner.actor, { subjectId: executor.actor.id, relation: 'agent', objectId: owner.actor.id });
@@ -25,7 +26,8 @@ test('本番確認用の関数履歴とプリンシパルを片付け、利用�
   await trust.rememberBinding(executor.binding);
   const api = f.api(owner.token), custody = new CustodyClient(api, f.config.origin, owner.binding, owner.keys, trust);
   const functions = new FunctionClient(api, custody);
-  const temporary = await functions.save({ ownerId: owner.actor.id, name: 'Verification function', definition: definition(environment.manifest.id) });
+  const temporary = await functions.save({ ownerId: owner.actor.id, name: 'Verification function', definition: definition() });
+  await functions.configure(temporary.id, { environmentId: environment.manifest.id });
   const verification = await functions.invoke(temporary.id);
   assert.equal((await functions.result(verification.id)).state, 'running');
   await functions.cancel(verification.id);

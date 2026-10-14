@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Command, DisplayedOperation, FunctionDefinition, HttpRequest, Id, Invocation, Json, JsonObject, Name, Operation, OperationTitle, Principal, Proposal } from './contracts.js';
+import { Command, DisplayedOperation, FunctionDefinition, FunctionInputAccess, HttpRequest, Id, Invocation, Json, JsonObject, Name, Operation, OperationTitle, Principal, Proposal } from './contracts.js';
 
 export { Invocation } from './contracts.js';
 export type DefinitionCall = z.infer<typeof Invocation>;
@@ -12,6 +12,9 @@ export const AppSave = destination.extend({ methodId: z.string().min(1).max(200)
   fields: z.record(z.string(), z.string()).optional(), clientSecret: z.literal('').optional() });
 export const FunctionSave = z.object({ ownerId: Id, name: Name, definition: FunctionDefinition,
   resourceId: Id.optional(), version: z.number().int().positive().optional() }).strict();
+export const FunctionConfigure = z.object({ functionId: Id, functionVersion: z.number().int().positive(),
+  version: z.number().int().nonnegative(), environmentId: Id.nullable(),
+  inputAccess: FunctionInputAccess.default({ expiresAt: null }) }).strict();
 export const RevokeConnection = z.object({ ownerId: Id, connectionId: Id, environmentId: Id }).strict();
 export const AuthorizeConnection = z.object({ ownerId: Id, connectionId: Id, version: z.number().int().positive(),
   users: z.array(Id).max(32), expiresAt: z.iso.datetime().optional() }).strict();

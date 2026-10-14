@@ -75,6 +75,9 @@ Usage: foundation <command> [options]
   function show ID                    Read a function's interface or permitted definition
   function create --body JSON         Approve and save a function definition
   function update ID --body JSON      Approve and replace a function definition
+  function settings ID                Read function execution settings
+  function configure ID --environment ID Approve the execution environment and input access
+  function unconfigure ID             Clear execution settings and revoke input access
   function invoke ID [--arguments JSON] Invoke a function (--id ID for retries, --wait for result)
   function result ID                  Read an execution (--wait to wait for completion)
   function cancel ID                  Cancel a function execution
@@ -599,7 +602,7 @@ async function main(argv: string[]) {
     return execute(await localInputs(client, inputs), commandArguments);
   }
   if (command === 'function') {
-    const action = requireArgument(args.positionals[0], 'Choose list, show, create, update, invoke, result, cancel, or delete.');
+    const action = requireArgument(args.positionals[0], 'Choose list, show, create, update, settings, configure, unconfigure, invoke, result, cancel, or delete.');
     const functions = new FunctionClient(client);
     if (action === 'list') { await output(await client.json('/api/functions?limit=100'), args); return 0; }
     if (action === 'create' || action === 'update') {
@@ -612,6 +615,13 @@ async function main(argv: string[]) {
     }
     const id = Id.parse(requireArgument(args.positionals[1], 'Supply a function or execution ID.'));
     if (action === 'show') { await output(await functions.get(id), args); return 0; }
+    if (action === 'settings') { await output(await functions.settings(id), args); return 0; }
+    if (action === 'configure' || action === 'unconfigure') {
+      const environmentId = action === 'configure' ? Id.parse(requireArgument(args.values.environment, 'Choose an execution environment with --environment ID.')) : null;
+      const inputAccess = z.object({ expiresAt: z.iso.datetime().nullable().default(null) }).strict().parse(await json(args.values.body, {}));
+      await output(await new FunctionClient(client, privateClient(client).custody).configure(id, { environmentId, inputAccess }), args);
+      return 0;
+    }
     if (action === 'delete') { await functions.remove(id); return 0; }
     if (action === 'cancel') { await output(await functions.cancel(id), args); return 0; }
     if (action === 'invoke' || action === 'result') {
@@ -625,7 +635,7 @@ async function main(argv: string[]) {
       await output(result, args);
       return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
     }
-    throw new Error('Choose list, show, create, update, invoke, result, cancel, or delete.');
+    throw new Error('Choose list, show, create, update, settings, configure, unconfigure, invoke, result, cancel, or delete.');
   }
   if (command === 'run') {
     const modes = [args.values.request, commandArguments.length ? true : false].filter(Boolean);

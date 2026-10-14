@@ -392,9 +392,7 @@ export const FunctionProgram = z.discriminatedUnion('kind', [
 export const FunctionDefinition = z
   .object({
     description: z.string().max(2000).default(''),
-    environmentId: Id,
     program: FunctionProgram,
-    inputAccess: z.object({ expiresAt: Time.nullable().default(null) }).strict().default({ expiresAt: null }),
     parameters: z
       .array(
         z.object({
@@ -411,6 +409,12 @@ export const FunctionDefinition = z
   })
   .strict();
 export type FunctionSpec = z.infer<typeof FunctionDefinition>;
+export const FunctionInputAccess = z.object({ expiresAt: Time.nullable().default(null) }).strict();
+export const FunctionExecutionSettings = z.object({
+  version: z.number().int().nonnegative(), environmentId: Id.nullable(),
+  inputAccess: FunctionInputAccess,
+  state: z.enum(['unconfigured', 'configured', 'approval_required', 'unavailable', 'expired']),
+}).strict();
 
 const resourceBase = {
   id: Id,
@@ -521,8 +525,8 @@ export const EnvironmentResource = z.object({
 export const FunctionResource = z.object({
   ...resourceBase,
   kind: z.literal('function'),
-  data: FunctionDefinition.omit({ environmentId: true, program: true }).extend({
-    environmentId: Id.optional(), program: FunctionProgram.optional(),
+  data: FunctionDefinition.omit({ program: true }).extend({
+    program: FunctionProgram.optional(),
   }),
 });
 // The public keys a principal verified, as one list it signs. Its devices read the list from the signature.

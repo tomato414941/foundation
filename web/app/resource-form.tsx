@@ -25,7 +25,6 @@ import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
 import { connectionSubmission } from './execution-form';
-import { FunctionAccessFields, inputAccessFromForm } from './function-access';
 import { httpConnections, httpRequestFromForm, RequestFields } from './http-request';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
@@ -75,7 +74,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     kind === 'connection'
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
-    ['variable', 'app', 'function'].includes(kind) ? availableEnvironments(params.owner!) : [],
+    ['variable', 'app'].includes(kind) ? availableEnvironments(params.owner!) : [],
     kind === 'function' ? httpConnections(params.owner!, request.signal) : [],
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
@@ -213,14 +212,12 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     } else if (kind === 'function') {
       const definition = {
         description: formText(form, 'description'),
-        environmentId: formText(form, 'environmentId'),
         program: formText(form, 'programKind') === 'command' ? {
           kind: 'command', command: jsonField(form, 'command', []),
           inputs: jsonField(form, 'inputs', []), timeoutSeconds: Number(formText(form, 'timeoutSeconds')),
         } : { kind: 'http', responseFormat: formText(form, 'responseFormat'), request: httpRequestFromForm(form) },
         parameters: jsonField(form, 'parameters', []),
         result: formText(form, 'programKind') === 'http' ? 'json' : formText(form, 'result'),
-        inputAccess: inputAccessFromForm(form),
       };
       const saved = await (await functionClient(true)).save({
         ownerId: owner, name, definition: FunctionDefinition.parse(definition),
@@ -510,8 +507,6 @@ export default function ResourceForm() {
                       defaultValue={spec?.description ?? ''}
                       rows={2}
                     />
-                    <EnvironmentChoice items={data.environments} selected={spec ? [spec.environmentId] : []} />
-                    <FunctionAccessFields access={spec?.inputAccess} />
                     <SelectField name="programKind" label={t('functionProgram')} value={programKind} onValueChange={value => setProgramKind(value as 'command' | 'http')}>
                       <SelectItem value="command">{t('command')}</SelectItem>
                       <SelectItem value="http">{t('http')}</SelectItem>

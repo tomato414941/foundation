@@ -191,7 +191,7 @@ export class Executor {
         { policy: source.policy.revision, material: source.materialRevision });
     }
     if (operation.kind === 'function' && (operation.functionId !== intent.functionId ||
-      await hash(operation.definition) !== intent.functionDigest || operation.definition.environmentId !== intent.environmentId ||
+      await hash(operation.definition) !== intent.functionDigest ||
       !this.environment.manifest.capabilities.includes(Operations[operation.definition.program.kind])))
       throw new Error('Run the exact function authorized by this intent.');
     if (operation.kind !== 'function' && (intent.functionId || intent.functionDigest)) throw new Error('Use function authorization only for a saved function.');

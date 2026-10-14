@@ -467,25 +467,37 @@ test('CLIで秘密を参照する関数を保存し、指定した引数で実�
   const initialized = await c.run(['init', '--name', 'Function principal', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const environmentId = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
   const kept = await c.run(['keep', 'Function input', '--stdin'], 'private-function-input');
   assert.equal(kept.code, 0, kept.stderr);
   const sourceId = JSON.parse(kept.stdout).id;
   const saved = await c.run(['function', 'create', '--body', '@-'], JSON.stringify({
-    name: 'CLI function', definition: { environmentId, parameters: [{ name: 'message', label: 'Message' }],
+    name: 'CLI function', definition: { parameters: [{ name: 'message', label: 'Message' }],
       program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN})));'],
         inputs: [{ name: 'TOKEN', source: { id: sourceId } }], timeoutSeconds: 5 }, result: 'json' },
   }));
   assert.equal(saved.code, 0, saved.stderr);
   const functionId = JSON.parse(saved.stdout).id;
+  const initialSettings = await c.run(['function', 'settings', functionId]);
+  assert.equal(initialSettings.code, 0, initialSettings.stderr);
+  assert.equal(JSON.parse(initialSettings.stdout).state, 'unconfigured');
+  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const configured = await c.run(['function', 'configure', functionId, '--environment', environmentId]);
+  assert.equal(configured.code, 0, configured.stderr);
+  assert.equal(JSON.parse(configured.stdout).state, 'configured');
   const started = await c.run(['function', 'invoke', functionId, '--arguments', '{"message":"CLI invocation"}']);
   assert.equal(started.code, 0, started.stderr);
   const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
   assert.equal(executed.code, 0, executed.stderr);
   const result = await c.run(['function', 'result', JSON.parse(started.stdout).id, '--wait', '--timeout', '5']);
-  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.deepEqual(JSON.parse(result.stdout).results[0], { message: 'CLI invocation', configured: true });
+  const cleared = await c.run(['function', 'unconfigure', functionId]);
+  assert.equal(cleared.code, 0, cleared.stderr);
+  assert.equal(JSON.parse(cleared.stdout).state, 'unconfigured');
+  const shown = await c.run(['function', 'show', functionId]);
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.deepEqual(JSON.parse(shown.stdout), JSON.parse(saved.stdout));
 });
 
 test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {

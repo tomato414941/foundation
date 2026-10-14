@@ -337,9 +337,11 @@ test('異なるプリンシパルが準備したOVH接続を操作のURLから�
 test('共通の操作から関数を公開して実行し、関数の終了後に準備済みの操作をバックグラウンドで続ける', async t => {
   const f = await flowFixture(() => jsonResponse({ message: 'function result' })); t.after(f.close);
   const publication = await f.operations.execute({ name: 'function.save', input: { ownerId: f.owner.actor.id,
-    name: 'Operation function', definition: { environmentId: f.environment.manifest.id,
+    name: 'Operation function', definition: {
       program: { kind: 'http', request: { url: 'https://api.example.com/function', method: 'GET' } }, parameters: [], result: 'json', description: '' } } });
   if (!('kind' in publication) || publication.kind !== 'saved') throw new Error('Expected a published function.');
+  await f.operations.execute({ name: 'function.configure', input: { functionId: publication.resource.id,
+    functionVersion: publication.resource.version, version: 0, environmentId: f.environment.manifest.id, inputAccess: { expiresAt: null } } });
   const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'function.invoke', input: { functionId: publication.resource.id, arguments: {} } },
     { name: 'principal.rename', input: { id: f.owner.actor.id, name: 'Background completion' } },

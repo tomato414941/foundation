@@ -68,10 +68,11 @@ test('別の端末から同じ接続を選び、認証値を手入力せずHTTP�
 test('関数の実行権限だけを持つ利用者がHTTP接続を使った処理の結果を受け取る', async t => {
   const f = await flowFixture(() => jsonResponse({ accepted: true })); t.after(f.close);
   const connection = await f.saveConnection({ methodId: 'http:bearer', fields: { url: endpoint, token: 'function-private-token' } });
-  const definition = FunctionDefinition.parse({ environmentId: f.environment.manifest.id,
+  const definition = FunctionDefinition.parse({
     program: { kind: 'http', request: { connectionId: connection.id, method: 'POST', json: { message: '{{message}}', enabled: '{{enabled}}' } } },
     parameters: [{ name: 'message', label: 'Message' }, { name: 'enabled', label: 'Enabled', type: 'boolean' }] });
   const fn = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Send message', definition });
+  await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const functions = new FunctionClient(f.api(f.stranger.token));
   const invocation = await functions.invoke(fn.id, { message: 'Hello', enabled: false });

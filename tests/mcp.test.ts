@@ -46,10 +46,11 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
   assert.equal((await call('foundation_resume_execution', { id: run.id })).id, run.id);
   assert.equal(await f.executor.tick(), false);
   const fn = await call('foundation_save_function', { ownerId: f.owner.actor.id, name: 'MCP function',
-    definition: { environmentId: f.environment.manifest.id, result: 'json',
+    definition: { result: 'json',
       parameters: [{ name: 'message', label: 'Message' }], program: { kind: 'command',
         command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN})));'],
         inputs: [{ name: 'TOKEN', source: { id: f.resource.id } }], timeoutSeconds: 5 } } });
+  await call('foundation_configure_function', { functionId: fn.id, environmentId: f.environment.manifest.id });
   const invocation = await call('foundation_invoke_function', { functionId: fn.id, arguments: { message: 'From MCP' } });
   await f.functionExecutor.tick();
   const functionResult = await call('foundation_execution_result', { id: (invocation.body as { id: string }).id });
@@ -63,9 +64,10 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
 test('URL接続のMCPで共有された関数を見つけ、APIトークンだけで呼び出して結果を読む', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Shared MCP function', definition: FunctionDefinition.parse({
-    environmentId: f.environment.manifest.id, program: { kind: 'command',
+    program: { kind: 'command',
       command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN}))'],
       inputs: [{ name: 'TOKEN', source: { id: f.resource.id } }] }, result: 'json' }) });
+  await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const origin = await f.app.listen({ host: '127.0.0.1', port: 0 });
   const client = new McpClient({ name: 'remote-function-caller', version: '1' });
@@ -80,7 +82,7 @@ test('URL接続のMCPで共有された関数を見つけ、APIトークンだ�
   };
   const available = await call('foundation_functions');
   const found = (available.body as { items: Array<{ id: string; data: unknown }> }).items.find(item => item.id === fn.id)!;
-  assert.deepEqual(found.data, { description: '', parameters: [], result: 'json', inputAccess: { expiresAt: null } });
+  assert.deepEqual(found.data, { description: '', parameters: [], result: 'json' });
   const invoked = await call('foundation_invoke_function', { functionId: fn.id });
   const id = (invoked.body as { id: string }).id;
   await f.functionExecutor.tick();

@@ -82,20 +82,20 @@ try {
   const input = await owner.custody.save('Release input', encode(secret), await owner.custody.policy(owner.id, ContentTypes.value));
   resources.push(input.id);
   const definition = {
-    environmentId: environment, description: '', program: { kind: 'command', command: ['node', '-e',
+    description: '', program: { kind: 'command', command: ['node', '-e',
       'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>console.log(JSON.stringify({arguments:JSON.parse(s),configured:!!process.env.TOKEN,output:require("crypto").randomBytes(24).toString("hex")})));'],
       inputs: [{ name: 'TOKEN', source: { id: input.id } }], timeoutSeconds: 90 },
     parameters: [{ name: 'count', label: 'Count', type: 'number', required: true }, { name: 'enabled', label: 'Enabled', type: 'boolean', required: true }], result: 'json',
   };
   const fn = await owner.functions.save({ ownerId: owner.id, name: 'Release function', definition });
   resources.push(fn.id);
+  await owner.functions.configure(fn.id, { environmentId: environment });
   await owner.client.json('/api/relations', { method: 'POST', body: { subjectId: caller.id, relation: 'runner', objectId: fn.id } });
   await assert.rejects(caller.custody.read(input.id));
   const arguments_ = { count: 0, enabled: false };
   const publicFunctions = new FunctionClient(caller.client);
   const interface_ = await publicFunctions.get(fn.id);
-  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'inputAccess', 'parameters', 'result']);
-  assert.deepEqual(interface_.data.inputAccess, { expiresAt: null });
+  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'parameters', 'result']);
   mcp = new McpClient({ name: 'Foundation release verification', version: '1.0.0' });
   await mcp.connect(new StreamableHTTPClientTransport(new URL('/api/mcp', config.origin), {
     requestInit: { headers: { authorization: 'Bearer ' + caller.client.identity.token } },
