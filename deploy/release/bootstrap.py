@@ -71,7 +71,7 @@ def main():
     configure_role(role, trust, "release", policy)
     images = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ec2:RunInstances",
         "Resource": "arn:aws:ec2:ap-northeast-1::image/*", "Condition": {
-            "StringEquals": {"aws:ResourceTag/foundation:managed": "environment-image", "ec2:Owner": account}}}]}
+            "StringEquals": {"ec2:Owner": "099720109477"}}}]}
     network = {"vpc": "vpc-0f12d46647d1fcaee", "acl": "acl-0d084e53022e1e0b6",
                "defaultAcl": "acl-0de9d5d8e8412432e", "route": "rtb-09a152847dd762389"}
     script = "import {runnerPolicy} from './deploy/environment/permissions.ts';" + \
