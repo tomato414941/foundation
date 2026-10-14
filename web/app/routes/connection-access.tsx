@@ -4,6 +4,7 @@ import type { Route } from './+types/connection-access';
 import { Principal, Resource, listOf } from '../../../shared/contracts';
 import { actionResult, api, formText } from '../api';
 import { custodyClient, executionClient } from '../custody';
+import { requireKeys } from '../keys';
 import { CheckboxField } from '../form-fields';
 import { Detail, ErrorNotice, Page, Panel, SaveBar } from '../components';
 
@@ -23,7 +24,9 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
-    const form = await request.formData(), client = await executionClient();
+    const form = await request.formData();
+    await requireKeys();
+    const client = await executionClient();
     const execution = await client.start({ name: 'connection.authorize', input: { ownerId: params.owner!,
       connectionId: params.id!, version: Number(formText(form, 'version')), users: form.getAll('users').map(String) } });
     await client.continue(execution.id);

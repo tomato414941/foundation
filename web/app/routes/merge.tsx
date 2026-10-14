@@ -8,6 +8,7 @@ import type { CustodyContent } from '../../../shared/custody';
 import type { BoundKeys } from '../../../shared/authority';
 import { actionResult, api, signedIn } from '../api';
 import { custodyClient } from '../custody';
+import { requireKeys } from '../keys';
 import { ErrorNotice, Page, Panel } from '../components';
 import { ResourceTable } from '../resource-table';
 type MergePlan = {
@@ -27,6 +28,7 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 export async function clientAction({ params }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const plan = await api<MergePlan>('/account/merge/' + params.id);
+    await requireKeys();
     const client = await custodyClient(), previous = await custodyClient(plan.from.id);
     await previous.trust.rememberBinding(client.binding);
     await client.trust.rememberBinding(previous.binding);

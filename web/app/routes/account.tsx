@@ -6,7 +6,7 @@ import { Form, Link, useActionData, useLoaderData, useNavigate, useRevalidator }
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/account';
 import { actionResult, api, formText, signedIn } from '../api';
-import { authenticate, getKey, mergeWithPasskey } from '../keys';
+import { getKey, mergeWithPasskey, openKeys } from '../keys';
 import { Copy, Detail, ErrorNotice, Page, Panel, useTask } from '../components';
 import i18n from '../i18n';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -59,9 +59,8 @@ export default function Account() {
             loading={task.busy}
             onClick={() =>
               task.run(async () => {
-                const auth = await authenticate(principal.id);
-                setUnlocked(auth.encrypted);
-                if (!auth.encrypted) throw new Error('key unavailable');
+                await openKeys(principal.id);
+                setUnlocked(true);
                 await revalidator.revalidate();
               })
             }

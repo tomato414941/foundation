@@ -102,6 +102,36 @@ test('JWEで保護した暗号鍵を保存し、不正な更新があっても�
   assert.deepEqual(await unwrap(stored!.private_wrap, prf, owner.actor.id), owner.keys.privateKey);
 });
 
+test('プリンシパルを指定したパスキー認証では秘密鍵を取り出せるパスキーだけを候補にし、候補がなければ理由を返す', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person(), holding = randomUUID(), other = randomUUID();
+  const options = (payload: Record<string, string>) => app.inject({ method: 'POST', url: '/api/auth/passkeys/options',
+    payload: { intent: 'authenticate', principalId: owner.actor.id, ...payload } });
+  const offered = async (payload: Record<string, string> = {}) => {
+    const response = await options(payload);
+    assert.equal(response.statusCode, 200, response.body);
+    return (response.json().options.allowCredentials as Array<{ id: string }>).map(item => item.id);
+  };
+  const refused = async () => { const response = await options({}); assert.equal(response.statusCode, 409); return response.json().error.code; };
+  assert.equal(await refused(), 'passkey_required');
+  await f.db.pool.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'passkey','Other','otherPasskey')",
+    [other, owner.actor.id]);
+  assert.equal(await refused(), 'wrapped_key_required');
+  const wrappedKey = await wrap(owner.keys.privateKey, crypto.getRandomValues(new Uint8Array(32)), owner.actor.id);
+  await f.db.pool.query(
+    "INSERT INTO credentials(id,principal_id,kind,name,identifier,private_wrap) VALUES($1,$2,'passkey','Holding','holdingPasskey',$3)",
+    [holding, owner.actor.id, wrappedKey]);
+  assert.deepEqual(await offered(), ['holdingPasskey']);
+  assert.deepEqual(await offered({ credentialId: other }), ['otherPasskey']);
+  assert.equal((await options({ credentialId: randomUUID() })).statusCode, 404);
+});
+
 test('キーにも暗号鍵の包みを置き、そのキーで入ったセッションが包みを受け取る', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),

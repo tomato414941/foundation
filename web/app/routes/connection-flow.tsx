@@ -4,6 +4,7 @@ import type { Route } from './+types/connection-flow';
 import { Resource } from '../../../shared/contracts';
 import { api, actionResult, formText, signedIn } from '../api';
 import { connectionClient } from '../custody';
+import { requireKeys } from '../keys';
 import { ErrorNotice, Notice, Page, usePolling } from '../components';
 import { resourcePath } from '../navigation';
 import { ConnectionProgress } from '../connection-progress';
@@ -18,9 +19,11 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
-    const form = await request.formData(), client = await connectionClient();
-    if (formText(form, 'intent') === 'cancel') await client.cancel(params.id);
-    else await client.accept(params.id);
+    const form = await request.formData();
+    if (formText(form, 'intent') === 'cancel') {
+      await requireKeys();
+      await (await connectionClient()).cancel(params.id);
+    }
     return { ok: true };
   });
 }

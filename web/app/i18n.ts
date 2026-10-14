@@ -290,7 +290,7 @@ const words: Record<string, [string, string]> = {
     'The encryption key could not be opened. Authenticate with another registered passkey.',
   ],
   keyReady: ['この端末で暗号化された値を開けます。', 'Encrypted values are unlocked on this device.'],
-  'errors.encryption_key_changed': ['暗号鍵が更新されました。画面を再読み込みし、パスキーでロックを解除してください。', 'The encryption key changed. Reload the page and unlock with a passkey.'],
+  'errors.encryption_key_changed': ['公開鍵が変わったため、この秘密鍵は使えません。', 'The public key changed, so this private key cannot be used.'],
   share: ['共有', 'Share'],
   transfer: ['所有者を変更', 'Transfer ownership'],
   recipient: ['共有相手のプリンシパルID', 'Recipient principal ID'],
@@ -475,7 +475,10 @@ const words: Record<string, [string, string]> = {
   ],
   resealingItem: ['{{name}}：{{reason}}', '{{name}}: {{reason}}'],
   resealed: ['開ける相手の変更を、{{count}}件の項目に反映しました。', 'Updated who may open {{count}} items.'],
-  approvalKeyLocked: ['承認するには、この端末でパスキーを使ってロックを解除してください。', 'Unlock with your passkey on this device to approve.'],
+  resealingSkipped: [
+    '関係は変更しましたが、この端末で秘密鍵を使えなかったため、開ける相手の変更をまだ項目に反映できていません。秘密鍵を使える端末で次に Foundation を開いたときに反映します。',
+    'The relationship changed, but the private key could not be used on this device, so the change in who may open the items has not reached them yet. It does the next time Foundation opens on a device that can use the private key.',
+  ],
   approvalUnverified: ['{{name}}の公開鍵をまだ検証していません。{{name}}が表示したリンクから、この依頼を開き直してください。', 'The public key of {{name}} is not verified yet. Open this request again from the link {{name}} showed.'],
   http: ['HTTPリクエスト', 'HTTP request'],
   url: ['URL', 'URL'],
@@ -683,8 +686,16 @@ const words: Record<string, [string, string]> = {
     'Unlock the encryption key with your passkey.',
   ],
   'errors.key_unsupported': [
-    'このパスキーは暗号化に対応していません。別のパスキーをお使いください。',
-    'This passkey does not support encryption. Use another passkey.',
+    'このパスキーかブラウザでは、秘密鍵を取り出せません。',
+    'This passkey or browser cannot retrieve the private key.',
+  ],
+  'errors.passkey_required': [
+    'パスキーが登録されていないため、秘密鍵を取り出せません。',
+    'No passkey is registered, so the private key cannot be retrieved.',
+  ],
+  'errors.wrapped_key_required': [
+    '秘密鍵を取り出せるパスキーがありません。',
+    'No passkey can retrieve the private key.',
   ],
   'errors.email_unavailable': ['現在メール認証を利用できません。', 'Email sign-in is currently unavailable.'],
   'errors.rate_limit': ['しばらく待ってから、もう一度お試しください。', 'Wait a moment and try again.'],
@@ -693,13 +704,9 @@ const words: Record<string, [string, string]> = {
     'Could not connect. Check your internet connection.',
   ],
   'errors.invalid_json': ['JSONの形式を確認してください。', 'Check the JSON format.'],
-  'errors.key_unreadable': [
-    'この端末で解いた鍵の形式を読めませんでした。',
-    'The key unlocked on this device could not be read.',
-  ],
   'errors.key_unavailable': [
-    '登録済みの別のパスキーで認証してください。',
-    'Authenticate with another registered passkey.',
+    'パスキーから秘密鍵を取り出せませんでした。',
+    'The private key could not be retrieved with the passkey.',
   ],
   'errors.passkey_cancelled': [
     'パスキーでの認証をキャンセルしました。',
