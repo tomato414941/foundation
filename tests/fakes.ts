@@ -63,6 +63,12 @@ export class MemoryRunner implements Runner {
     return id;
   }
   async removeVolume(id: string) { this.volumes.delete(id); }
+  async resume(id: string) {
+    const machine = this.machines.get(id);
+    if (!machine) throw new Error('Missing environment');
+    machine.state = 'running';
+    return { volumeId: 'vol_' + id.replaceAll('-', ''), host: id + '.restarted.ssh.foundation.test' };
+  }
   async stop(id: string) {
     const machine = this.machines.get(id);
     if (machine) machine.state = 'stopped';

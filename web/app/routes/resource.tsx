@@ -2,7 +2,7 @@ import { Button } from '../components/ui/button';
 import { InputField, TextareaField } from '../form-fields';
 import { Notice } from '../components';
 import { useState } from 'react';
-import { Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
+import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
 import { Resource, EnvironmentDeletion } from '../../../shared/contracts';
@@ -55,8 +55,9 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         body: { ...settings, revision: Number(formText(form, 'sshRevision')) } });
       return { sshSaved: true };
     }
-    if (formText(form, 'intent') === 'stop') {
-      await api(`/resources/${params.id}/stop`, { method: 'POST', body: {} });
+    const intent = formText(form, 'intent');
+    if (intent === 'stop' || intent === 'start') {
+      await api(`/resources/${params.id}/${intent}`, { method: 'POST', body: {} });
       return { ok: true };
     }
     if (formText(form, 'intent') === 'disconnect') {
@@ -114,6 +115,12 @@ export default function ResourceDetail() {
       actions={
         <>
           {status && <State value={status} />}
+          {environment?.data.driver === 'managed' && !environment.data.deletion &&
+            ['stopped', 'failed'].includes(environment.data.state) && can('update') && <Form method="post">
+              <Button type="submit" name="intent" value="start" loading={navigation.state !== 'idle'}>
+                {t(navigation.state !== 'idle' ? 'state.starting' : 'start')}
+              </Button>
+            </Form>}
           {environment && !environment.data.deletion && ['starting', 'running'].includes(environment.data.state) && can('delete') && (
             <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
               <input type="hidden" name="intent" value="stop" />
@@ -239,14 +246,15 @@ export default function ResourceDetail() {
       {item.kind === 'environment' && (
         <>
           {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
-          {!item.data.deletion && ['stopped', 'failed'].includes(item.data.state) && (
-            <p className="leading-relaxed text-muted-foreground">{t('stoppedHelp')}</p>
-          )}
+          {!item.data.deletion && item.data.stopReason && item.data.stopReason !== 'manual' &&
+            <Notice tone="info">{t('environmentStop.' + item.data.stopReason)}</Notice>}
           {item.data.driver !== 'attached' && <Panel title={t('settings')}>
             <Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
             <Detail label={t('size')}>{t(item.data.size)}</Detail>
-            <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
-            <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail>
+            <Detail label={t('environmentLifetime')}>{[
+              item.data.lifetime.maxSeconds === null ? '' : t('environmentMaximumSummary', { minutes: item.data.lifetime.maxSeconds / 60 }),
+              item.data.lifetime.idleSeconds === null ? '' : t('environmentIdleSummary', { minutes: item.data.lifetime.idleSeconds / 60 }),
+            ].filter(Boolean).join(' / ') || t('none')}</Detail>
           </Panel>}
           <EnvironmentSSH item={item} canUpdate={can('update')} busy={navigation.state !== 'idle'}
             saved={Boolean(result && 'sshSaved' in result && result.sshSaved)} />

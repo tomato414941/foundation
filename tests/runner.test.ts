@@ -106,6 +106,12 @@ class Provider {
     if (name === 'StopInstancesCommand' || name === 'TerminateInstancesCommand') {
       this.instances.find(row => row.InstanceId === input.InstanceIds[0]).State.Name = name === 'StopInstancesCommand' ? 'stopping' : 'shutting-down'; return {};
     }
+    if (name === 'StartInstancesCommand') {
+      const instance = this.instances.find(row => row.InstanceId === input.InstanceIds[0]);
+      instance.State.Name = 'running';
+      instance.PublicIpAddress = '203.0.113.' + ++this.id;
+      return {};
+    }
     if (name === 'DescribeVolumesCommand') return { Volumes: input.VolumeIds ? this.volumes.filter(row => input.VolumeIds.includes(row.VolumeId)) : this.matching(this.volumes, input) };
     if (name === 'DeleteVolumeCommand') {
       assert.equal(this.volumes.find(row => row.VolumeId === input.VolumeId).State, 'available');
@@ -185,4 +191,20 @@ test('内部通信を許す設定を検知して起動を拒否し、管理対�
   provider.instances.push({ InstanceId: 'i-platform', VpcId: 'vpc-other', State: { Name: 'running' }, Tags: [] });
   await assert.rejects(runner.stop('i-platform'), { code: 'runner_resource' });
   assert.equal(provider.instances[0].State.Name, 'running');
+});
+
+test('停止したVMを同じディスクとネットワークで起動し、新しいSSHアドレスを返す', async t => {
+  const { provider, runner } = await setup(t), id = randomUUID();
+  let originalHost = '';
+  const machine = await runner.start(id, EnvironmentInput.parse({}), bootstrap,
+    async (_machine, _volume, host) => { originalHost = host; }, 0);
+  const volumeId = await runner.findVolume(id), subnet = provider.instances[0].SubnetId;
+  await runner.stop(machine);
+  const restarted = await runner.resume(machine);
+  assert.equal(restarted.volumeId, volumeId);
+  assert.notEqual(restarted.host, originalHost);
+  assert.equal(provider.instances[0].State.Name, 'running');
+  assert.equal(provider.instances[0].SubnetId, subnet);
+  assert.equal(await runner.find(id), machine);
+  assert.deepEqual(await runner.resume(machine), restarted);
 });

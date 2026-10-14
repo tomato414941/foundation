@@ -159,6 +159,10 @@ export function builtinDefinitions(services: Services) {
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
     body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
+  definitions.define('environment.start', idInput, ['実行環境を起動する', 'Start an environment'], async (who, input) =>
+    resources.view(who, await environments.start(who, await resources.get(input.id))));
+  bind({ name: 'environment.start', method: 'POST', path: '/api/resources/:id/start', schema: { params: C.IdParams,
+    body: z.object({}).strict(), response: { 200: C.Resource } }, input: params => params });
   definitions.define('environment.stop', idInput, ['実行環境を止める', 'Stop an environment'], async (who, input) =>
     resources.view(who, await environments.stop(who, await resources.get(input.id))));
   bind({ name: 'environment.stop', method: 'POST', path: '/api/resources/:id/stop', schema: { params: C.IdParams,

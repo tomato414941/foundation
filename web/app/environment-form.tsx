@@ -3,22 +3,18 @@ import type { ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { Resource, listOf } from '../../shared/contracts';
 import type { EnvironmentOptions, Payment, Usage } from '../../shared/contracts';
 import type { z } from 'zod';
-import { api } from './api';
 import { Notice, Panel, SaveBar } from './components';
-import { InputField } from './form-fields';
+import { CheckboxField, InputField } from './form-fields';
 import { Button } from './components/ui/button';
 import { SSHKeyInput } from './ssh-key-input';
 import type { SSHKeyEntry } from './ssh-key-input';
 
-const computeWeights = { small: 1, medium: 2, large: 4 };
-
-function Setting({ title, summary, children }: { title: string; summary?: string; children: ReactNode }) {
+function Setting({ title, summary, inline = false, children }: { title: string; summary?: string; inline?: boolean; children: ReactNode }) {
   return <details className="group border-t border-border pt-1" onInvalidCapture={event => { event.currentTarget.open = true; }}>
     <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-      <span className="grid min-w-0 gap-1">
+      <span className={inline ? 'flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-4 gap-y-1' : 'grid min-w-0 gap-1'}>
         <span className="text-sm font-medium">{title}</span>
         {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
       </span>
@@ -28,26 +24,10 @@ function Setting({ title, summary, children }: { title: string; summary?: string
   </details>;
 }
 
-export async function environmentReservations(ownerId: string, signal: AbortSignal) {
-  let reserved = 0, after: string | null = null;
-  do {
-    const query = new URLSearchParams({ kind: 'environment', limit: '200' });
-    if (after) query.set('after', after);
-    const page = await api(`/principals/${ownerId}/resources?${query}`, { signal }, listOf(Resource));
-    for (const item of page.items) if (item.kind === 'environment' && item.data.driver !== 'attached' &&
-      ['starting', 'running', 'stopping'].includes(item.data.state)) {
-      reserved += item.data.lifetime.maxSeconds * computeWeights[item.data.size];
-    }
-    after = page.next;
-  } while (after);
-  return reserved;
-}
-
-export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canManageBilling, canManagePayment,
+export function EnvironmentForm({ owner, usage, payment, canManageBilling, canManagePayment,
   ssh, available, back, busy }: {
   owner: { id: string };
   usage: z.infer<typeof Usage> | null;
-  reservedSeconds: number;
   payment: z.infer<typeof Payment> | null;
   canManageBilling: boolean;
   canManagePayment: boolean;
@@ -61,16 +41,15 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
   const [image, setImage] = useState('');
   const [idle, setIdle] = useState('60');
   const [maximum, setMaximum] = useState('60');
+  const [idleEnabled, setIdleEnabled] = useState(false);
+  const [maximumEnabled, setMaximumEnabled] = useState(false);
   const [keys, setKeys] = useState<SSHKeyEntry[]>([]);
   const [readingKeys, setReadingKeys] = useState(false);
   const idleMinutes = Number(idle), maximumMinutes = Number(maximum);
-  const validMinutes = (value: number) => Number.isInteger(value) && value >= 1 && value <= 1440;
-  const invalidRange = !validMinutes(idleMinutes) || !validMinutes(maximumMinutes);
-  const idleTooLong = !invalidRange && idleMinutes > maximumMinutes;
-  const required = validMinutes(maximumMinutes) ? maximumMinutes * 60 * computeWeights[size] : null;
-  const remaining = usage ? Math.max(0, usage.computeLimit - usage.computeSeconds - reservedSeconds) : null;
-  const shortfall = required === null || remaining === null ? 0 : Math.max(0, required - remaining);
-  const insufficient = shortfall > 0;
+  const validMinutes = (value: number) => Number.isInteger(value) && value >= 1 && value * 60 <= 2147483647;
+  const invalidRange = idleEnabled && !validMinutes(idleMinutes) || maximumEnabled && !validMinutes(maximumMinutes);
+  const remaining = usage ? Math.max(0, usage.computeLimit - usage.computeSeconds) : null;
+  const insufficient = remaining !== null && remaining < { small: 1, medium: 2, large: 4 }[size];
   const paymentRequired = Boolean(payment?.required && !payment.active);
   const minutes = (seconds: number) => new Intl.NumberFormat(i18n.language).format(Math.floor(seconds / 60));
   const authorizedKeys = keys.map(key => key.value.trim()).filter(Boolean);
@@ -102,18 +81,27 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
           pattern={'[a-zA-Z0-9.\\/:_\\-]+@sha256:[a-f0-9]{64}'}
           hint={t('environmentImageHelp')} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
       </Setting>
-      <Setting title={t('environmentLifetime')} summary={invalidRange ? t('environmentLifetimeRange') :
-        t('environmentLifetimeSummary', { idle, maximum })}>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <InputField type="number" name="idle" label={t('idle')} value={idle}
-            onChange={event => setIdle(event.target.value)} required min={1} max={1440}
-            aria-invalid={idleTooLong || undefined} />
-          <InputField type="number" name="maximum" label={t('maximum')} value={maximum}
-            onChange={event => setMaximum(event.target.value)} required min={1} max={1440} />
+      <Setting title={t('environmentLifetime')} inline summary={[
+        maximumEnabled ? t('environmentMaximumSummary', { minutes: maximum }) : '',
+        idleEnabled ? t('environmentIdleSummary', { minutes: idle }) : '',
+      ].filter(Boolean).join(' / ') || t('none')}>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid content-start gap-3">
+            <CheckboxField label={t('environmentMaximumEnabled')} checked={maximumEnabled}
+              onCheckedChange={value => setMaximumEnabled(value === true)} />
+            {maximumEnabled && <InputField type="number" name="maximum" label={t('maximum')} value={maximum}
+              onChange={event => setMaximum(event.target.value)} required min={1} max={Math.floor(2147483647 / 60)} />}
+          </div>
+          <div className="grid content-start gap-3">
+            <CheckboxField label={t('environmentIdleEnabled')} checked={idleEnabled}
+              onCheckedChange={value => setIdleEnabled(value === true)} />
+            {idleEnabled && <InputField type="number" name="idle" label={t('idle')} value={idle}
+              onChange={event => setIdle(event.target.value)} required min={1} max={Math.floor(2147483647 / 60)} />}
+          </div>
         </div>
       </Setting>
-      {(invalidRange || idleTooLong) && <p role="alert" className="text-sm text-destructive">
-        {t(invalidRange ? 'environmentLifetimeRange' : 'environmentIdleTooLong')}
+      {invalidRange && <p role="alert" className="text-sm text-destructive">
+        {t('environmentLifetimeRange')}
       </p>}
       {ssh && <Setting title={t('environmentSSH')}
         summary={keyCount ? t('environmentSSHKeyCount', { count: keyCount }) : undefined}>
@@ -121,14 +109,13 @@ export function EnvironmentForm({ owner, usage, reservedSeconds, payment, canMan
       </Setting>}
     </Panel>
     <SaveBar back={back} label="create" busy={busy} fixedOnMobile
-      disabled={!available || paymentRequired || insufficient || invalidRange || idleTooLong || readingKeys}
+      disabled={!available || paymentRequired || insufficient || invalidRange || readingKeys}
       summary={<div className="grid gap-2">
         <div aria-live="polite" className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
-          <span className="font-medium">{t('environmentRequiredQuota', { minutes: required === null ? '—' : minutes(required) })}</span>
           {remaining !== null && <span className="text-muted-foreground">{t('environmentRemainingQuota', { minutes: minutes(remaining) })}</span>}
         </div>
         {insufficient && <p role="alert" className="text-xs leading-relaxed text-destructive">
-          {t('environmentQuotaInsufficient', { minutes: new Intl.NumberFormat(i18n.language).format(Math.ceil(shortfall / 60)) })}
+          {t('environmentQuotaExhausted')}
         </p>}
         {paymentRequired && <Notice action={canManagePayment && payment?.payer ?
           <Button asChild variant="ghost"><Link to={`/p/${payment.payer.id}/settings/billing`}>{t('addPayment')}</Link></Button> : undefined}>

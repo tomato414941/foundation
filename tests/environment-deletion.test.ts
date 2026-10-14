@@ -74,6 +74,7 @@ for (const phase of ['stop', 'terminate', 'removeVolume', 'removeNetwork'] as co
   `${{stop:'停止',terminate:'VM削除',removeVolume:'ディスク削除',removeNetwork:'ネットワーク削除'}[phase]}の失敗理由を保存し、再試行で削除を完了して使用量を一度記録する`, async t => {
     const s = await setup(t), { c, f, owner, row, runner } = s;
     await register(s);
+    await f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb((date_trunc('second',now())-interval '2 seconds')::text)) WHERE id=$1", [row.id]);
     let failOnce = true;
     const original = runner[phase].bind(runner);
     t.mock.method(runner, phase, async (id: string) => {
@@ -92,8 +93,8 @@ for (const phase of ['stop', 'terminate', 'removeVolume', 'removeNetwork'] as co
     assert.equal(runner.machines.size, 0);
     assert.equal(runner.volumes.size, 0);
     assert.equal(runner.networks.size, 0);
-    const usage = await f.db.all("SELECT * FROM billing_events WHERE reference=$1", ['environment:' + row.id]);
-    assert.equal(usage.length, 1);
+    const usage = await restarted.billing.usage(owner.actor.id);
+    assert.ok(usage.computeSeconds >= 2 && usage.computeSeconds < 10, String(usage.computeSeconds));
   });
 
 test('起動処理中に削除を受け付け、起動の完了後に同じ環境を停止して削除する', async t => {

@@ -16,7 +16,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
-import { EnvironmentForm, environmentReservations } from './environment-form';
+import { EnvironmentForm } from './environment-form';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
@@ -53,7 +53,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connections,
     shared,
     environments,
-    reservedSeconds,
   ] = await Promise.all([
     id ? api((kind === 'function' ? '/functions/' : '/resources/') + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
@@ -75,7 +74,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
     ['variable', 'app', 'function'].includes(kind) ? availableEnvironments(params.owner!) : [],
-    kind === 'environment' ? environmentReservations(params.owner!, request.signal) : 0,
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -140,7 +138,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connection,
     appMaterial,
     environments,
-    reservedSeconds,
     selectedExecutors,
     content,
     binary,
@@ -205,8 +202,8 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         image: formText(form, 'image') || undefined,
         size: formText(form, 'size'),
         lifetime: {
-          idleSeconds: Number(formText(form, 'idle')) * 60,
-          maxSeconds: Number(formText(form, 'maximum')) * 60,
+          idleSeconds: formText(form, 'idle') ? Number(formText(form, 'idle')) * 60 : null,
+          maxSeconds: formText(form, 'maximum') ? Number(formText(form, 'maximum')) * 60 : null,
         },
         ...(form.has('sshKeys') ? { ssh: sshSettings(form) } : {}),
       };
@@ -533,7 +530,7 @@ export default function ResourceForm() {
                   initial={data.connection} newConnection={data.kind === 'connection' && !existing}
                   />
                 {data.kind === 'environment' && (
-                  <EnvironmentForm owner={principal} usage={data.usage} reservedSeconds={data.reservedSeconds}
+                  <EnvironmentForm owner={principal} usage={data.usage}
                     payment={data.payment} canManageBilling={principal.permissions.includes('manage_billing')}
                     canManagePayment={sessionData.principals.some(item => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'))}
                     ssh={sessionData.features.ssh} available={!unavailable} back={back} busy={navigation.state === 'submitting'} />

@@ -61,6 +61,7 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
   await c.delegation.register(actor, registration);
   assert.equal((await c.resources.get(row.id)).data.state, 'running');
   assert.equal((await c.delegation.environment(row.id)).registration.signature, registration.signature);
+  await f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb((date_trunc('second',now())-interval '2 seconds')::text)) WHERE id=$1", [row.id]);
   await c.environments.stop(owner.actor, await c.resources.get(row.id));
   assert.equal(await c.authentication.authenticate(token), null);
   await f.db.pool.query("UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1", [row.id]);
@@ -189,8 +190,7 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
     );
   };
   const first = await start(0, 120);
-  await assert.rejects(start(1, 120), { code: 'compute_capacity' });
-  const second = await start(1, 60);
+  const second = await start(1, 120);
   await assert.rejects(start(0, 60), { code: 'environment_capacity' });
   while (await c.environments.tick()) {}
   await c.environments.stop(owners[0]!.actor, await c.resources.get(first.id));
@@ -198,6 +198,8 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
   await f.db.pool.query('UPDATE environment_jobs SET retry_at=now()');
   while (await c.environments.tick()) {}
   assert.equal((await start(1, 120)).data.state, 'starting');
+  await c.billing.record(owners[0]!.actor.id, 'compute', 180, 'used-compute');
+  await assert.rejects(start(0, 60), { code: 'compute_capacity' });
 });
 
 test('支払い登録が必要な環境では、支払いの準備が整ってからファイル保存を許可する', async (t) => {

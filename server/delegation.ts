@@ -84,9 +84,11 @@ export class Delegation {
       if (old) {
         if (old.executor_id !== actor.id || old.registration.manifest.ownerId !== manifest.ownerId)
           fail(403, 'forbidden', 'This execution environment belongs to another identity.');
-        if (old.stopped_at) fail(409, 'environment_stopped', 'Create a new environment after this one has been stopped.');
-        if (canonical(old.registration) === canonical(environment)) return this.resources.get(manifest.id, connection);
-        if (manifest.revision !== old.registration.manifest.revision + 1)
+        if (old.stopped_at && reserved?.data.state !== 'starting')
+          fail(409, 'environment_stopped', 'Start the environment before registering it.');
+        const same = canonical(old.registration) === canonical(environment);
+        if (same && !old.stopped_at && reserved?.data.state !== 'starting') return this.resources.get(manifest.id, connection);
+        if (!same && manifest.revision !== old.registration.manifest.revision + 1)
           fail(409, 'changed', 'Use the next environment revision.');
       } else {
         if (!reserved && !(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
@@ -102,7 +104,7 @@ export class Delegation {
         capabilities: manifest.capabilities.map(operationName), isolation: manifest.isolation,
         manifestDigest: await hash(manifest),
         ...(manifest.awsPrincipal ? { awsPrincipal: manifest.awsPrincipal } : {}),
-        size: metadata.size ?? 'small', lifetime: metadata.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
+        size: metadata.size ?? 'small', lifetime: metadata.lifetime ?? { idleSeconds: null, maxSeconds: null },
         state: 'running', startedAt: metadata.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
       };
       const row = previous
@@ -110,7 +112,7 @@ export class Delegation {
         : await this.resources.insert(manifest.ownerId, 'environment', manifest.name, data, { id: manifest.id }, connection);
       await connection.query(
         `INSERT INTO executor_environments(resource_id,executor_id,registration,heartbeat_at) VALUES($1,$2,$3,now())
-         ON CONFLICT(resource_id) DO UPDATE SET registration=EXCLUDED.registration,heartbeat_at=now()`,
+         ON CONFLICT(resource_id) DO UPDATE SET registration=EXCLUDED.registration,heartbeat_at=now(),stopped_at=NULL`,
         [manifest.id, actor.id, JSON.stringify(environment)],
       );
       await this.resources.audit.record(manifest.ownerId, actor.id, 'environment.register', manifest.id,

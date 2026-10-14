@@ -23,7 +23,7 @@ export function runnerPolicy(region: string, account: string, network: { vpc: st
     allow('ec2:ReplaceNetworkAclAssociation', [arn('network-acl', network.acl), arn('network-acl', network.defaultAcl)]),
     allow(['ec2:AssociateRouteTable', 'ec2:ReplaceNetworkAclAssociation', 'ec2:DeleteSubnet'], arn('subnet'), managed(['environment'])),
     allow(['ec2:AuthorizeSecurityGroupIngress', 'ec2:DeleteSecurityGroup'], arn('security-group'), managed(['environment'])),
-    allow(['ec2:StopInstances', 'ec2:TerminateInstances'], arn('instance'), managed(['environment'])),
+    allow(['ec2:StartInstances', 'ec2:StopInstances', 'ec2:TerminateInstances'], arn('instance'), managed(['environment'])),
     allow('ec2:DeleteVolume', arn('volume'), managed(['environment'])),
   ] };
 }
@@ -38,7 +38,7 @@ export function builderPolicy(region: string, account: string, bucket: string, v
     allow(['CreateSubnet', 'CreateSecurityGroup', 'CreateRouteTable', 'CreateNetworkAcl', 'ModifyVpcAttribute',
       'AttachInternetGateway', 'CreateRoute', 'CreateNetworkAclEntry', 'AssociateRouteTable', 'ReplaceNetworkAclAssociation']
       .map(name => 'ec2:' + name), '*', managed(['environment-network'])),
-    allow(['AssociateRouteTable', 'ReplaceNetworkAclAssociation', 'AuthorizeSecurityGroupIngress', 'StopInstances', 'TerminateInstances',
+    allow(['AssociateRouteTable', 'ReplaceNetworkAclAssociation', 'AuthorizeSecurityGroupIngress', 'StartInstances', 'StopInstances', 'TerminateInstances',
       'DeleteVolume', 'DeleteSubnet', 'DeleteSecurityGroup', 'CreateImage'].map(name => 'ec2:' + name), '*', managed(['environment'])),
     allow(['ec2:DeregisterImage', 'ec2:DeleteSnapshot'], '*', managed(['environment-image'])),
     ...(vpc ? [allow('ec2:ReplaceNetworkAclAssociation', arn('network-acl'),

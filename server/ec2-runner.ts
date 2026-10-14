@@ -2,7 +2,7 @@ import {
   EC2Client, DescribeVpcsCommand, DescribeNetworkAclsCommand, DescribeRouteTablesCommand,
   DescribeSubnetsCommand, CreateSubnetCommand, AssociateRouteTableCommand, ReplaceNetworkAclAssociationCommand,
   DescribeSecurityGroupsCommand, CreateSecurityGroupCommand, AuthorizeSecurityGroupIngressCommand,
-  DescribeImagesCommand, DescribeInstancesCommand, RunInstancesCommand, StopInstancesCommand,
+  DescribeImagesCommand, DescribeInstancesCommand, RunInstancesCommand, StartInstancesCommand, StopInstancesCommand,
   TerminateInstancesCommand, DescribeVolumesCommand, DeleteVolumeCommand, DeleteSubnetCommand, DeleteSecurityGroupCommand,
 } from '@aws-sdk/client-ec2';
 import type { Instance, Tag, Filter } from '@aws-sdk/client-ec2';
@@ -210,6 +210,29 @@ export class EC2Runner implements Runner {
       if (!volume || !ready?.PublicIpAddress) fail(502, 'runner_response', 'The environment disk or SSH address could not be identified.');
       await created(machine, volume, ready.PublicIpAddress);
       return machine;
+    });
+  }
+  async resume(machineId: string) {
+    return this.call(async () => {
+      await this.network();
+      let machine = await this.instance(machineId);
+      if (machine?.State?.Name === 'stopping')
+        machine = await this.wait(() => this.instance(machineId), value => value?.State?.Name !== 'stopping');
+      if (!machine?.SubnetId || !['stopped', 'pending', 'running'].includes(machine.State?.Name ?? ''))
+        fail(409, 'environment_unavailable', 'The environment instance is no longer available.');
+      await this.connectSubnet(machine.SubnetId);
+      if (machine.State?.Name === 'stopped') {
+        try { await this.client.send(new StartInstancesCommand({ InstanceIds: [machineId] })); }
+        catch (error) {
+          const current = await this.instance(machineId);
+          if (!['pending', 'running'].includes(current?.State?.Name ?? '')) throw error;
+        }
+      }
+      const ready = await this.wait(() => this.instance(machineId), value => value?.State?.Name === 'running' && Boolean(value.PublicIpAddress));
+      const volumeId = ready?.BlockDeviceMappings?.find(item => item.DeviceName === ready.RootDeviceName)?.Ebs?.VolumeId;
+      if (!volumeId || !ready?.PublicIpAddress)
+        fail(502, 'runner_response', 'The environment disk or SSH address could not be identified.');
+      return { volumeId, host: ready.PublicIpAddress };
     });
   }
   async stop(machineId: string) {

@@ -33,6 +33,8 @@ const ovhApprovals = new Map<string, { redirection: string; consumerKey: string;
 const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
+  private suspended = new Map<string, { agent: Executor; functions: FunctionExecutor | undefined;
+    ssh: NonNullable<ReturnType<typeof sshAgents.get>> }>();
   private async beforeDelete(id: string, phase: 'stop' | 'volume') {
     const key = phase === 'stop' ? id : [...deletions.keys()].find(key => 'vol_' + key.replaceAll('-', '') === id);
     const plan = key ? deletions.get(key) : null;
@@ -132,7 +134,25 @@ class BrowserRunner extends MemoryRunner {
     functionAgents.set(id, new FunctionExecutor(agents.get(id)!, new FunctionBroker(client), journal));
     return machine;
   }
-  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); disconnected.delete(id); await super.stop(id); }
+  override async stop(id: string) {
+    await this.beforeDelete(id, 'stop');
+    const agent = agents.get(id), ssh = sshAgents.get(id);
+    if (agent && ssh) this.suspended.set(id, { agent, ssh, functions: functionAgents.get(id) });
+    agents.delete(id); functionAgents.delete(id); sshAgents.delete(id); disconnected.delete(id);
+    await super.stop(id);
+  }
+  override async resume(id: string) {
+    const result = await super.resume(id), saved = this.suspended.get(id);
+    if (saved) {
+      await saved.ssh.client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: saved.agent.environment });
+      agents.set(id, saved.agent);
+      sshAgents.set(id, saved.ssh);
+      if (saved.functions) functionAgents.set(id, saved.functions);
+      this.suspended.delete(id);
+    }
+    return result;
+  }
+  override async terminate(id: string) { this.suspended.delete(id); await super.terminate(id); }
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 

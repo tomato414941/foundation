@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS environment_jobs (
 ALTER TABLE environment_jobs DROP COLUMN IF EXISTS ssh_port;
 ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS provider text CHECK (provider='ec2');
 ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS network_slot integer CHECK (network_slot BETWEEN 0 AND 4091);
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS metered_at timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS environment_network_slot ON environment_jobs(network_slot) WHERE network_slot IS NOT NULL;
 CREATE TABLE IF NOT EXISTS environment_deletions (
   resource_id uuid PRIMARY KEY,
@@ -214,6 +215,7 @@ CREATE TABLE IF NOT EXISTS billing_events (
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz
 );
+CREATE INDEX IF NOT EXISTS billing_events_usage ON billing_events(meter,created_at,principal_id);
 CREATE TABLE IF NOT EXISTS payment_webhooks (
   id text PRIMARY KEY,
   received_at timestamptz NOT NULL DEFAULT now()

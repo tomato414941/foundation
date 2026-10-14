@@ -402,21 +402,22 @@ const resourceBase = {
   permissions: z.array(Action),
 };
 export const EnvironmentState = z.enum(['starting', 'running', 'stopping', 'stopped', 'failed']);
+export const EnvironmentStopReason = z.enum(['manual', 'idle', 'timeout', 'quota', 'capacity', 'payment']);
 export const EnvironmentDeletion = z.object({
   state: z.enum(['pending', 'failed', 'complete']),
   error: z.string().nullable(),
 });
 export const Lifetime = z
   .object({
-    idleSeconds: z.number().int().min(60).max(86400).default(3600),
-    maxSeconds: z.number().int().min(60).max(86400).default(3600),
+    idleSeconds: z.number().int().min(60).max(2147483647).nullable().default(null),
+    maxSeconds: z.number().int().min(60).max(2147483647).nullable().default(null),
   })
   .strict();
 export const EnvironmentInput = z
   .object({
     image: z.string().min(1).max(300).optional(),
     size: z.enum(['small', 'medium', 'large']).default('small'),
-    lifetime: Lifetime.default({ idleSeconds: 3600, maxSeconds: 3600 }),
+    lifetime: Lifetime.default({ idleSeconds: null, maxSeconds: null }),
     ssh: SSHSettings.optional(),
   })
   .strict();
@@ -492,6 +493,7 @@ export const EnvironmentResource = z.object({
     deletion: EnvironmentDeletion.optional(),
     startedAt: Time.nullable(),
     stoppedAt: Time.nullable(),
+    stopReason: EnvironmentStopReason.nullable().default(null),
     lastActiveAt: Time,
     error: z.string().nullable(),
   }),

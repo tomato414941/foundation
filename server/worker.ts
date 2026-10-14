@@ -36,6 +36,7 @@ export class Worker {
     if (!this.stopped) return;
     this.stopped = false;
     for (let index = 0; index < 2; index++) this.schedule(() => this.context.environments.tick(), 1000);
+    this.schedule(() => this.context.environments.tick(true), 1000);
     this.schedule(() => this.context.delegation.recover(), 15_000);
     this.schedule(() => this.context.processes.recover(), 15_000);
     this.schedule(() => this.context.invocations.recover(), 15_000);

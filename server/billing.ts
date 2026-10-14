@@ -215,20 +215,62 @@ export class Billing {
       [principalId],
       connection,
     );
-    const compute = await this.db.one<{ seconds: string }>(
-      "SELECT coalesce(sum(amount),0) seconds FROM billing_events WHERE principal_id=$1 AND meter='compute' AND created_at>=date_trunc('month',now())",
-      [principalId],
-      connection,
-    );
     return {
       storageBytes: Number(storage?.bytes ?? 0),
       storageLimit: Number(limits?.storage_bytes ?? 1_073_741_824),
-      computeSeconds: Number(compute?.seconds ?? 0),
+      computeSeconds: await this.computeUsage(principalId, connection),
       computeLimit: Number(limits?.compute_seconds ?? 3600),
       month: new Date().toISOString().slice(0, 7),
     };
   }
+  async computeUsage(principalId: string | null, connection: Queryable = this.db.pool) {
+    const usage = await this.db.one<{ seconds: string }>(
+      `WITH month AS (SELECT date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS start)
+       SELECT
+         (SELECT coalesce(sum(amount),0) FROM billing_events,month
+          WHERE meter='compute' AND ($1::uuid IS NULL OR principal_id=$1) AND created_at>=month.start)
+         + (SELECT coalesce(sum(greatest(0,floor(extract(epoch FROM
+             (date_trunc('second',now())-greatest(coalesce(j.metered_at,
+               date_trunc('second',(r.data->>'startedAt')::timestamptz)),month.start)))))
+             * CASE r.data->>'size' WHEN 'large' THEN 4 WHEN 'medium' THEN 2 ELSE 1 END),0)
+            FROM resources r JOIN environment_jobs j ON j.resource_id=r.id CROSS JOIN month
+            WHERE ($1::uuid IS NULL OR r.owner_id=$1) AND r.data->>'driver'='managed'
+              AND r.data->>'state' IN ('starting','running','stopping') AND r.data->>'startedAt' IS NOT NULL) AS seconds`,
+      [principalId], connection);
+    return Number(usage?.seconds ?? 0);
+  }
+  async lockCompute(connection: Queryable) {
+    await connection.query("SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':compute_usage'))");
+  }
+  async measureCompute(connection: Queryable = this.db.pool, environmentId?: string): Promise<void> {
+    if (connection === this.db.pool)
+      return this.db.transaction(transaction => this.measureCompute(transaction, environmentId));
+    await this.lockCompute(connection);
+    const rows = await this.db.all<{ id: string; owner_id: string; size: string; since: Date; until: Date }>(
+      `SELECT r.id,r.owner_id,r.data->>'size' AS size,
+         coalesce(j.metered_at,date_trunc('second',(r.data->>'startedAt')::timestamptz)) AS since,
+         date_trunc('second',clock_timestamp()) AS until
+       FROM resources r JOIN environment_jobs j ON j.resource_id=r.id
+       WHERE r.data->>'driver'='managed' AND r.data->>'state' IN ('starting','running','stopping')
+         AND r.data->>'startedAt' IS NOT NULL
+         AND (r.id=$1 OR coalesce(j.metered_at,(r.data->>'startedAt')::timestamptz)<=now()-interval '1 minute')
+       ORDER BY r.id FOR UPDATE OF j`, [environmentId ?? null], connection);
+    for (const row of rows) {
+      let from = row.since.getTime();
+      const until = row.until.getTime(), weight = row.size === 'large' ? 4 : row.size === 'medium' ? 2 : 1;
+      while (from < until) {
+        const date = new Date(from);
+        const to = Math.min(until, Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+        await this.record(row.owner_id, 'compute', (to - from) / 1000 * weight,
+          `environment:${row.id}:${from}:${to}`, connection, new Date(to - 1));
+        from = to;
+      }
+      if (until > row.since.getTime()) await connection.query(
+        'UPDATE environment_jobs SET metered_at=$2 WHERE resource_id=$1', [row.id, row.until]);
+    }
+  }
   async reserve(principalId: string, kind: 'storage' | 'compute', amount: number, connection: Queryable) {
+    if (kind === 'compute') await this.lockCompute(connection);
     if (this.config.FOUNDATION_BILLING_MODE === 'included') {
       await connection.query('SELECT pg_advisory_xact_lock(736023746)');
       await this.reserveIncluded(kind, amount, connection);
@@ -239,13 +281,8 @@ export class Billing {
     if (kind === 'storage' && usage.storageBytes + amount > usage.storageLimit)
       fail(409, 'storage_limit', 'Increase the storage limit or remove unused files.');
     if (kind === 'compute') {
-      const reserved = await this.db.one<{ seconds: string }>(
-        `SELECT coalesce(sum((data->'lifetime'->>'maxSeconds')::bigint * CASE data->>'size' WHEN 'large' THEN 4 WHEN 'medium' THEN 2 ELSE 1 END),0) seconds FROM resources WHERE owner_id=$1 AND kind='environment' AND data->>'state' IN ('starting','running','stopping')`,
-        [principalId],
-        connection,
-      );
-      if (usage.computeSeconds + Number(reserved?.seconds ?? 0) + amount > usage.computeLimit)
-        fail(409, 'compute_limit', 'Increase the monthly compute limit or shorten the environment lifetime.');
+      if (usage.computeSeconds + amount > usage.computeLimit)
+        fail(409, 'compute_limit', 'The monthly compute limit has been reached.');
     }
   }
   private async reserveIncluded(kind: 'storage' | 'compute', amount: number, connection: Queryable) {
@@ -259,22 +296,14 @@ export class Billing {
         fail(409, 'storage_capacity', 'The available storage capacity has been reached.');
     }
     if (kind === 'compute') {
-      const active = await this.db.one<{ count: string; seconds: string }>(
-        `SELECT count(*) count,coalesce(sum((data->'lifetime'->>'maxSeconds')::bigint * CASE data->>'size' WHEN 'large' THEN 4 WHEN 'medium' THEN 2 ELSE 1 END),0) seconds FROM resources WHERE kind='environment' AND data->>'state' IN ('starting','running','stopping')`,
+      const active = await this.db.one<{ count: string }>(
+        `SELECT count(*) count FROM resources WHERE kind='environment' AND data->>'driver'='managed' AND data->>'state' IN ('starting','running','stopping')`,
         [],
         connection,
       );
       if (Number(active?.count ?? 0) >= this.config.FOUNDATION_INCLUDED_ENVIRONMENTS)
         fail(409, 'environment_capacity', 'All available environments are currently in use.');
-      const used = await this.db.one<{ seconds: string }>(
-        "SELECT coalesce(sum(amount),0) seconds FROM billing_events WHERE meter='compute' AND created_at>=date_trunc('month',now())",
-        [],
-        connection,
-      );
-      if (
-        Number(used?.seconds ?? 0) + Number(active?.seconds ?? 0) + amount >
-        this.config.FOUNDATION_INCLUDED_COMPUTE_SECONDS
-      )
+      if (await this.computeUsage(null, connection) + amount > this.config.FOUNDATION_INCLUDED_COMPUTE_SECONDS)
         fail(409, 'compute_capacity', 'The available monthly compute capacity has been reached.');
     }
   }
@@ -350,12 +379,13 @@ export class Billing {
     amount: number,
     reference: string,
     connection: Queryable = this.db.pool,
+    measuredAt = new Date(),
   ) {
     if (!Number.isSafeInteger(amount) || amount < 0)
       throw new Error('Usage must be a nonnegative safe integer.');
     await connection.query(
-      'INSERT INTO billing_events(id,reference,payer_id,principal_id,meter,amount) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(reference) DO NOTHING',
-      [randomUUID(), reference, await this.payer(principalId, connection), principalId, meter, amount],
+      'INSERT INTO billing_events(id,reference,payer_id,principal_id,meter,amount,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(reference) DO NOTHING',
+      [randomUUID(), reference, await this.payer(principalId, connection), principalId, meter, amount, measuredAt],
     );
   }
   async report() {
