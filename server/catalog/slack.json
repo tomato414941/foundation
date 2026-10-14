@@ -20,10 +20,9 @@
         "fields": [],
         "outputs": {
           "SLACK_BOT_TOKEN": "/accessToken",
-          "SLACK_TEAM_ID": "/account",
           "SLACK_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID.",
+        "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>).",
         "okPointer": "/ok",
         "scopes": {
           "default": [],

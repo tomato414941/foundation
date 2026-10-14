@@ -29,8 +29,6 @@
         ],
         "outputs": {
           "EBAY_ACCESS_TOKEN": "/accessToken",
-          "EBAY_ACCOUNT_ID": "/account",
-          "EBAY_USERNAME": "/accountName",
           "EBAY_OAUTH_EXPIRES_AT": "/expiresAt"
         },
         "adapter": "ebay",

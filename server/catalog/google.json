@@ -26,7 +26,6 @@
         "outputs": {
           "GOOGLE_OAUTH_ACCESS_TOKEN": "/accessToken",
           "CLOUDSDK_AUTH_ACCESS_TOKEN": "/accessToken",
-          "GOOGLE_ACCOUNT_EMAIL": "/accountName",
           "GOOGLE_OAUTH_EXPIRES_AT": "/expiresAt"
         },
         "adapter": "google",

@@ -405,6 +405,25 @@ test('GitHubのJSON応答からトークンを取得し、そのトークンだ�
   await oauth.revoke(spec, githubApp, token);
 });
 
+test('Notionの認可応答に含まれるワークスペースIDを出力する', async () => {
+  const spec = await builtin('notion');
+  const provider = new Provider((request) => {
+    assert.equal(request.url, spec.tokenUrl);
+    checkBasic(request);
+    return response({
+      access_token: 'notion-access',
+      token_type: 'bearer',
+      refresh_token: null,
+      bot_id: 'bot-1',
+      workspace_id: 'workspace-1',
+      workspace_name: 'Workspace',
+    });
+  });
+  const oauth = new OAuth(provider);
+  const token = await oauth.exchange(spec, app, authorization('notion-code'), verifier, redirect, []);
+  assert.equal(oauth.outputs(spec, app, token).NOTION_WORKSPACE_ID, 'workspace-1');
+});
+
 test('Salesforceのトークンを取得し、アプリ認証不要の失効要求を送信する', async () => {
   const spec = await builtin('salesforce');
   const provider = new Provider((request) => {
