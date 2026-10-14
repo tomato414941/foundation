@@ -15,6 +15,7 @@ export interface PrincipalRow {
   name: string;
   public_key: PublicEncryptionKey | null;
   owner_id: string | null;
+  retired_at: Date | null;
   created_at: Date;
 }
 export class Principals {
@@ -72,7 +73,7 @@ export class Principals {
   // Every principal the actor may read: itself, those it acts as or for, and those it was let read.
   async accessible(actor: Actor) {
     const rows = await this.db.all<PrincipalRow>(
-      'SELECT * FROM principals WHERE id=ANY($1::uuid[]) ORDER BY created_at,id',
+      'SELECT * FROM principals WHERE id=ANY($1::uuid[]) AND retired_at IS NULL ORDER BY created_at,id',
       [await this.authorization.find(actor.id, 'principal', 'read')],
     );
     return this.views(actor, rows);

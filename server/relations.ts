@@ -215,11 +215,7 @@ export class Relations {
     if ('kind' in item) {
       const row = await this.resources.get(id);
       await this.db.transaction(async (connection) => {
-        const changed = await connection.query(
-          'UPDATE resources SET owner_id=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
-          [row.id, row.version, to],
-        );
-        if (!changed.rowCount) fail(409, 'changed', 'Reload this item before transferring it.');
+        await this.resources.changeOwner(row, to, connection);
         await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);
         await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id, ...agreed(actor) }, connection);
         await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to, ...agreed(actor) }, connection);

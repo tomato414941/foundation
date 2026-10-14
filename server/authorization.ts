@@ -155,7 +155,7 @@ export class Authorization {
   }
   async active(actor: Actor, connection: Queryable = this.db.pool) {
     const exists = await this.db.one<{ active: boolean }>(
-      `SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1)
+      `SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1 AND retired_at IS NULL)
       AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c LEFT JOIN resources e ON e.id=c.environment_id WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now()) AND (c.environment_id IS NULL OR e.data->>'state' IN ('starting','running'))))
       AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now()))
       AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM executions WHERE id=$4 AND actor_id=$1 AND response='accepted' AND (state='running' OR state='waiting' AND wait='input') AND expires_at>now())) AS active`,

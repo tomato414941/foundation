@@ -135,6 +135,7 @@ export class Accounts {
       proof = await this.proof(actor, id),
       from = await c.principals.get(proof.from),
       to = await c.principals.get(actor.id);
+    await c.authorization.active({ id: from.id });
     if (
       await c.db.one(
         `SELECT 1 FROM principals WHERE id=ANY($1::uuid[]) AND owner_id IS NOT NULL
@@ -171,7 +172,10 @@ export class Accounts {
     if (externalKeys) fail(409, 'rekey_required', 'Ask other resource owners to replace the previous account keys before merging.');
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [from.id]);
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
-    if (await c.db.one("SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain') LIMIT 1", [from.id]))
+    if (await c.db.one(`SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain')
+      UNION ALL SELECT 1 FROM environment_processes WHERE (owner_id=$1 OR actor_id=$1 OR executor_id=$1) AND state IN ('queued','running','uncertain')
+      UNION ALL SELECT 1 FROM function_invocations WHERE (owner_id=$1 OR actor_id=$1 OR function_owner_id=$1 OR executor_id=$1) AND state IN ('queued','running','uncertain')
+      UNION ALL SELECT 1 FROM executor_environments WHERE executor_id=$1 AND stopped_at IS NULL LIMIT 1`, [from.id]))
       fail(409, 'execution_active', 'Resolve active executions before merging accounts.');
     for (const row of rows.filter(row => isProtected(row.kind))) {
       const update = contents[row.id];
@@ -196,8 +200,11 @@ export class Accounts {
         [from.id, to.id],
       ]);
       for (const row of rows) {
-        // The other account's list of verified public keys is signed with that account's keys, so it is removed with it.
-        if (row.kind === 'keyring') continue;
+        // Trust decisions signed by the source account do not become the target account's decisions.
+        if (row.kind === 'keyring') {
+          await connection.query('DELETE FROM resources WHERE id=$1', [row.id]);
+          continue;
+        }
         let name = row.name;
         if (
           await c.db.one(
@@ -212,10 +219,7 @@ export class Accounts {
           await c.custody.put({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id },
             { ...contents[row.id]!, name }, connection);
         } else {
-          const changed = await connection.query(
-            'UPDATE resources SET owner_id=$3,name=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
-            [row.id, row.version, to.id, name]);
-          if (!changed.rowCount) fail(409, 'changed', 'An item changed while merging. Start again.');
+          await c.resources.changeOwner(row, to.id, connection, name);
         }
       }
       for (const result of results)
@@ -238,7 +242,7 @@ export class Accounts {
           );
       }
       await connection.query(
-        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running','failed') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,creator_id=CASE WHEN creator_id=$1 THEN $2 ELSE creator_id END,responder_id=CASE WHEN responder_id=$1 THEN $2 ELSE responder_id END,actor_id=CASE WHEN actor_id=$1 THEN $2 ELSE actor_id END WHERE creator_id=$1 OR responder_id=$1 OR actor_id=$1",
+        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,owner_id=CASE WHEN owner_id=$1 THEN $2 ELSE owner_id END WHERE owner_id=$1 OR creator_id=$1 OR responder_id=$1 OR actor_id=$1",
         [from.id, to.id],
       );
       await connection.query(
@@ -256,10 +260,14 @@ export class Accounts {
         to.id,
       ]);
       await connection.query('UPDATE execution_tasks SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE execution_tasks SET actor_id=$2 WHERE actor_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE environment_processes SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE function_invocations SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE function_invocations SET function_owner_id=$2 WHERE function_owner_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE environment_deletions SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       await connection.query('UPDATE audit_log SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE audit_log SET actor_id=$2 WHERE actor_id=$1', [from.id, to.id]);
-      await connection.query('DELETE FROM principals WHERE id=$1', [from.id]);
+      // Keep the source identity for signed records and immutable authorship, without allowing it to act again.
+      await connection.query('DELETE FROM challenges WHERE principal_id=$1', [from.id]);
+      await connection.query('UPDATE principals SET retired_at=now() WHERE id=$1', [from.id]);
       await c.audit.record(to.id, to.id, 'principal.merge', to.id, { from: from.id }, connection);
     });
     return c.principals.view(actor, await c.principals.get(to.id));

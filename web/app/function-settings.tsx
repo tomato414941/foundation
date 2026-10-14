@@ -1,4 +1,4 @@
-import { Form } from 'react-router';
+import { Form, Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { z } from 'zod';
 import type { FunctionExecutionSettings, ResourceView } from '../../shared/contracts';
@@ -20,7 +20,8 @@ export function FunctionSettings({ settings, environments, functionVersion, canU
     {settings.environmentId && <Detail label={t('functionInputAccess')}>
       {settings.inputAccess.expiresAt ? <DateText value={settings.inputAccess.expiresAt} /> : t('functionInputContinuous')}
     </Detail>}
-    {canUpdate && <details open={settings.state !== 'configured'}>
+    {canUpdate && settings.state === 'publication_required' && <Button asChild><Link to="edit">{t('edit')}</Link></Button>}
+    {canUpdate && settings.state !== 'publication_required' && <details open={settings.state !== 'configured'}>
       <summary className="cursor-pointer py-3 text-sm font-medium">{t('functionConfigure')}</summary>
       <Form method="post" className="grid gap-5 pt-3" key={settings.version}>
         <input type="hidden" name="functionVersion" value={functionVersion} />

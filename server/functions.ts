@@ -1,6 +1,6 @@
 import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION } from '../shared/runtime-protocol.js';
 import type { Actor } from './authorization.js';
-import type { Resources } from './resources.js';
+import type { Resources, ResourceRow } from './resources.js';
 import type { Custody } from './custody.js';
 import type { Delegation } from './delegation.js';
 import { publicUrl } from './transport.js';
@@ -20,7 +20,29 @@ import type { z } from 'zod';
 interface SettingsRow { function_id: string; environment_id: string | null; version: number; approval: SettingsApproval; }
 
 export class Functions {
-  constructor(readonly resources: Resources, readonly origin: string) {}
+  constructor(readonly resources: Resources, readonly origin: string) {
+    resources.ownership.set('function', row => {
+      const { publication, ...definition } = row.data;
+      return definition;
+    });
+  }
+  private definition(row: ResourceRow) {
+    const { publication, ...definition } = row.data;
+    return FunctionDefinition.parse(definition);
+  }
+  private async publication(row: ResourceRow) {
+    if (!row.data.publication) return null;
+    try {
+      const value = await verifyFunction(row.data.publication as unknown as z.infer<typeof FunctionWrite>['publication']);
+      return value.functionId === row.id && value.ownerId === row.owner_id &&
+        canonical(value.definition) === canonical(this.definition(row)) ? value : null;
+    } catch { return null; }
+  }
+  private async approved(row: ResourceRow, settings: SettingsRow) {
+    const approval = settings.approval;
+    return approval.functionId === row.id && approval.ownerId === row.owner_id && approval.revision === settings.version &&
+      approval.environmentId === settings.environment_id && approval.definitionDigest === await hash(this.definition(row));
+  }
   references(spec: FunctionSpec): string[] {
     return functionSources(spec).map(source => source.id);
   }
@@ -133,12 +155,12 @@ export class Functions {
     const row = await this.resources.get(id);
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
     await this.resources.authorization.requireResource(actor, row, 'read');
-    const settings = await this.settingsRow(id), { publication, ...definition } = row.data;
-    let state: z.infer<typeof FunctionExecutionSettings>['state'] = 'unconfigured';
-    if (settings?.environment_id) {
+    const settings = await this.settingsRow(id), publication = await this.publication(row);
+    let state: z.infer<typeof FunctionExecutionSettings>['state'] = publication ? 'unconfigured' : 'publication_required';
+    if (publication && settings?.environment_id) {
       const environment = await this.resources.db.one<{ stopped_at: Date | null }>(
         'SELECT stopped_at FROM executor_environments WHERE resource_id=$1', [settings.environment_id]);
-      state = !publication || settings.approval.definitionDigest !== await hash(FunctionDefinition.parse(definition)) ? 'approval_required'
+      state = !await this.approved(row, settings) ? 'approval_required'
         : !grantActive(settings.approval.inputAccess) ? 'expired'
           : !environment || environment.stopped_at ? 'unavailable' : 'configured';
     }
@@ -155,7 +177,7 @@ export class Functions {
       const previous = await this.settingsRow(row.id, connection);
       if (row.version !== input.functionVersion || (previous?.version ?? 0) !== input.version)
         fail(409, 'changed', 'Reload this function and its execution settings before saving.');
-      const { publication, ...definition } = row.data, spec = FunctionDefinition.parse(definition);
+      const publication = await this.publication(row), spec = this.definition(row);
       const approval = await verifyFunctionSettings(proof.approval);
       await custody.bindings.requireCurrent(approval.author, connection);
       if (approval.author.principalId !== actor.id || approval.functionId !== row.id || approval.ownerId !== row.owner_id ||
@@ -165,6 +187,7 @@ export class Functions {
       if (!grantActive(approval.inputAccess)) fail(400, 'invalid_input', 'Choose a future expiration for input access.');
       if (input.environmentId) {
         if (!publication) fail(409, 'function_not_published', 'Save the function to approve its current definition.');
+        await this.validateFunction({ id: row.owner_id }, spec);
         await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [input.environmentId]);
         const environment = await delegation.environment(input.environmentId, connection);
         for (const who of [actor, { id: row.owner_id }])
@@ -217,23 +240,16 @@ export class Functions {
     const row = await this.resources.get(id, connection);
     if (row.kind !== 'function') fail(400, 'wrong_kind', 'Choose a saved function.');
     await this.resources.authorization.requireResource(actor, row, 'execute');
-    const { publication: storedPublication, ...storedDefinition } = row.data;
-    const definition = FunctionDefinition.parse(storedDefinition), configured = await this.settingsRow(id, connection);
+    const definition = this.definition(row), configured = await this.settingsRow(id, connection);
+    const publication = await this.publication(row);
+    if (!publication) fail(409, 'function_not_published', 'Save this function to approve its current definition.');
     if (!configured?.environment_id) fail(409, 'function_not_configured', 'The owner must configure this function’s execution environment.');
     const settings = await verifyFunctionSettings(configured.approval);
-    if (settings.functionId !== row.id || settings.ownerId !== row.owner_id || settings.revision !== configured.version ||
-      settings.environmentId !== configured.environment_id || settings.definitionDigest !== await hash(definition) || !grantActive(settings.inputAccess))
+    if (!await this.approved(row, configured) || !grantActive(settings.inputAccess))
       fail(409, 'function_not_approved', 'The owner must approve this function’s execution settings again.');
     const environment = await delegation.environment(configured.environment_id, connection);
     if (environment.registration.manifest.functionVersion !== FUNCTION_RUNTIME_VERSION)
       fail(409, 'function_runtime_required', 'Update this execution environment to the current Foundation CLI.');
-    if (!storedPublication) fail(409, 'function_not_published', 'Save this function to approve its current definition.');
-    let publication: z.infer<typeof FunctionWrite>['publication'];
-    try { publication = await verifyFunction(storedPublication as unknown as z.infer<typeof FunctionWrite>['publication']); }
-    catch { fail(409, 'function_not_published', 'Save this function to approve its current definition.'); }
-    if (canonical(publication.definition) !== canonical(definition) || publication.functionId !== row.id ||
-      publication.ownerId !== row.owner_id)
-      fail(409, 'function_changed', 'Save this function to approve its current definition.');
     if (environment.stopped_at) fail(409, 'environment_stopped', 'This function’s environment has stopped.');
     if (canonical(settings.executor) !== canonical(environment.registration.manifest.executor))
       fail(409, 'function_not_approved', 'The owner must approve this execution environment again.');

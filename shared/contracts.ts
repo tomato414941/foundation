@@ -413,7 +413,7 @@ export const FunctionInputAccess = z.object({ expiresAt: Time.nullable().default
 export const FunctionExecutionSettings = z.object({
   version: z.number().int().nonnegative(), environmentId: Id.nullable(),
   inputAccess: FunctionInputAccess,
-  state: z.enum(['unconfigured', 'configured', 'approval_required', 'unavailable', 'expired']),
+  state: z.enum(['publication_required', 'unconfigured', 'configured', 'approval_required', 'unavailable', 'expired']),
 }).strict();
 
 const resourceBase = {

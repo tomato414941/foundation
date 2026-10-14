@@ -105,6 +105,24 @@ test('コードを読む権限と呼び出す権限を別々に渡し、管理AP
   await assert.rejects(functions.get(fn.id), error => (error as { status: number }).status === 404);
 });
 
+test('関数を譲り受けた所有者が処理を保存して実行設定を承認し、自分の関数として実行する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition());
+  for (const relation of ['reader', 'runner']) await f.relations.draw(f.owner.actor, {
+    subjectId: f.stranger.actor.id, relation, objectId: f.environment.manifest.id });
+  await f.context.relations.transfer({ ...f.owner.actor, agreedBy: f.stranger.actor.id }, fn.id, f.stranger.actor.id);
+  const { functions } = await caller(f), received = await functions.get(fn.id);
+  assert.equal(received.ownerId, f.stranger.actor.id);
+  assert.equal((await functions.settings(fn.id)).state, 'publication_required');
+  await assert.rejects(functions.configure(fn.id, { environmentId: f.environment.manifest.id }), { code: 'function_not_published' });
+  await functions.save({ ownerId: received.ownerId, resourceId: received.id, version: received.version,
+    name: received.name, definition: FunctionDefinition.parse(received.data) });
+  assert.equal((await functions.configure(fn.id, { environmentId: f.environment.manifest.id })).state, 'configured');
+  const invoked = await functions.invoke(fn.id, { message: 'Received' });
+  await f.functionExecutor.tick();
+  assert.equal((await functions.result(invoked.id)).state, 'succeeded');
+});
+
 test('JSONの引数の型を保ち、宣言と一致しない入力を受付時に検証する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, FunctionDefinition.parse({

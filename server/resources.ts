@@ -29,6 +29,7 @@ export interface ResourceRow extends ResourceIdentity {
   updated_at: Date;
 }
 export class Resources {
+  readonly ownership = new Map<ResourceKindName, (row: ResourceRow) => Record<string, JsonValue>>();
   connectionServices?: (actor: Actor, methodId: string) => Promise<Array<{ id: string; name: string }>>;
   constructor(
     readonly db: Database,
@@ -106,6 +107,15 @@ export class Resources {
     );
     if (!result) fail(409, 'changed', 'This item changed. Reload it before saving.');
     return result;
+  }
+  async changeOwner(row: ResourceRow, ownerId: string, connection: Queryable, name = row.name) {
+    const data = row.owner_id === ownerId ? row.data : this.ownership.get(row.kind)?.(row) ?? row.data;
+    const changed = await this.db.one<ResourceRow>(
+      `UPDATE resources SET owner_id=$3,name=$4,data=$5,version=version+1,updated_at=now()
+       WHERE id=$1 AND version=$2 RETURNING *`,
+      [row.id, row.version, ownerId, Name.parse(name), JSON.stringify(data)], connection);
+    if (!changed) fail(409, 'changed', 'Reload this item before changing its owner.');
+    return changed;
   }
   async view(actor: Actor, row: ResourceRow, permissions?: ActionName[]): Promise<ResourceView> {
     permissions ??= await this.authorization.actions(actor, row);

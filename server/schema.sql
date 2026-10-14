@@ -8,9 +8,11 @@ CREATE TABLE IF NOT EXISTS principals (
   public_key jsonb,
   -- Whom this principal belongs to, if anyone. Its owner acts as it; one who owns principals is not removed.
   owner_id uuid REFERENCES principals(id) ON DELETE RESTRICT CHECK (owner_id <> id),
+  retired_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS principals_owner ON principals(owner_id) WHERE owner_id IS NOT NULL;
+ALTER TABLE principals ADD COLUMN IF NOT EXISTS retired_at timestamptz;
 CREATE TABLE IF NOT EXISTS credentials (
   id uuid PRIMARY KEY,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
