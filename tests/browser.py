@@ -1486,18 +1486,18 @@ class BrowserTests(unittest.TestCase):
             self.assertTrue(response.ok, response.text())
             self.assertEqual(response.json()["authorizedKeys"], [public_keys[1], public_keys[0]])
 
-    def test_ファイルを保存して実行環境を起動して停止する(self):
+    def test_ストレージにオブジェクトを保存して実行環境を起動して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(response.ok, response.text())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/files/new")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/storage/new")
         page.locator('input[name="file"]').set_input_files({"name": "report.txt", "mimeType": "text/plain", "buffer": b"browser file"})
         page.get_by_role("button", name="アップロード", exact=True).click()
         expect(page.get_by_role("heading", name="report.txt", exact=True)).to_be_visible()
         breadcrumb = page.get_by_role("navigation", name="現在の位置", exact=True)
         expect(breadcrumb.get_by_text("report.txt", exact=True)).to_be_visible()
-        breadcrumb.get_by_role("link", name="ファイル", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/files")
+        breadcrumb.get_by_role("link", name="ストレージ", exact=True).click()
+        page.wait_for_url(f"**/p/{principal['id']}/storage")
         page.get_by_role("link", name="report.txt", exact=True).click()
         with page.expect_download() as download:
             page.get_by_role("link", name="ダウンロード", exact=True).click()

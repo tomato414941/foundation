@@ -61,7 +61,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       : null,
     kind === 'connection' ? ownedItems('app') : null,
     session(request),
-    ['file', 'environment'].includes(kind)
+    ['object', 'environment'].includes(kind)
       ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
       : null,
     kind === 'environment'
@@ -178,7 +178,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);
     }
-    if (kind === 'file') {
+    if (kind === 'object') {
       const file = form.get('file');
       if (!(file instanceof File) || !file.name) throw new ApiFailure('invalid_input');
       const item = await upload(
@@ -252,7 +252,7 @@ export default function ResourceForm() {
   const existing = data.resource;
   const back = existing
     ? resourcePath(existing)
-    : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', file: 'files', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
+    : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'storage', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
   const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || connectionMethod(item).requiresApp);
   const preferred = (methods: CatalogConnectionMethod[]) =>
     methods.find(method => method.id === 'http:bearer') ??
@@ -317,16 +317,16 @@ export default function ResourceForm() {
   const unavailable =
     data.kind === 'environment'
       ? !sessionData.features.environments
-      : data.kind === 'file'
-        ? !sessionData.features.files
+      : data.kind === 'object'
+        ? !sessionData.features.storage
         : false;
   const nameField = (
     <InputField
       name="name"
       label={t('name')}
       defaultValue={existing?.name ?? ''}
-      required={!['environment', 'connection', 'file'].includes(data.kind) || data.kind === 'connection' && !service}
-      hint={data.kind === 'file' && fileName ? fileName : undefined}
+      required={!['environment', 'connection', 'object'].includes(data.kind) || data.kind === 'connection' && !service}
+      hint={data.kind === 'object' && fileName ? fileName : undefined}
       maxLength={200}
     />
   );
@@ -407,7 +407,7 @@ export default function ResourceForm() {
                     <InputField type="file" name="file" label={t('file')} />
                   </Panel>
                 )}
-                {data.kind === 'file' && (
+                {data.kind === 'object' && (
                   <InputField
                     type="file"
                     required
@@ -574,7 +574,7 @@ export default function ResourceForm() {
                     ? 'connect'
                     : existing
                       ? 'save'
-                      : data.kind === 'file'
+                      : data.kind === 'object'
                         ? 'upload'
                         : 'create'
                 }

@@ -48,7 +48,7 @@ export class Worker {
       await this.context.environments.enforcePayment();
       await this.context.billing.measureStorage();
       await this.context.billing.report();
-      await this.context.files.collect();
+      await this.context.objects.collect();
     }, 60_000);
     this.schedule(async () => {
       await this.context.db.pool.query('DELETE FROM challenges WHERE expires_at<now()');

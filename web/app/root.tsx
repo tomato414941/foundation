@@ -113,7 +113,7 @@ export default function App() {
       ['home', prefix, House],
       ['services', prefix + '/services', Link2],
       ['variables', prefix + '/variables', Variable],
-      ['files', prefix + '/files', Folder],
+      ['storage', prefix + '/storage', Folder],
       ['environments', prefix + '/environments', Terminal],
       ['functions', prefix + '/functions', Code2],
       ['principals', prefix + '/principals', Users],

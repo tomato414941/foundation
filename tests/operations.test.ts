@@ -375,8 +375,8 @@ test('期限を過ぎた操作の入力や実行を拒否し、完了した操�
 test('連続する操作で必要な相手ごとに同意を確認し、すでに済んだ移転を一度だけ反映する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const recipient = await f.person('Second recipient');
-  const first = await f.resources.insert(f.owner.actor.id, 'file', 'First handoff', { size: 0, contentType: 'text/plain' });
-  const second = await f.resources.insert(f.owner.actor.id, 'file', 'Second handoff', { size: 0, contentType: 'text/plain' });
+  const first = await f.resources.insert(f.owner.actor.id, 'object', 'First handoff', { size: 0, contentType: 'text/plain' });
+  const second = await f.resources.insert(f.owner.actor.id, 'object', 'Second handoff', { size: 0, contentType: 'text/plain' });
   const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
     { name: 'resource.transfer', input: { id: first.id, to: f.stranger.actor.id } },
     { name: 'resource.transfer', input: { id: second.id, to: recipient.actor.id } },

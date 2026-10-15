@@ -25,7 +25,7 @@ const config = await configuration();
 const context = await createContext(config);
 const directory = await mkdtemp(join(tmpdir(), 'foundation-release-smoke-'));
 const identities = [], resources = [];
-let environment, vm, agent, mcp, finished = false, filesVerified = false;
+let environment, vm, agent, mcp, finished = false, storageVerified = false;
 const check = async path => {
   const response = await fetch(config.origin + path, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
   assert.equal(response.status, 200, 'Public request failed: ' + path);
@@ -119,19 +119,19 @@ try {
     assert.notEqual(response.isError, true, 'The MCP operation failed.');
     return response.structuredContent.data;
   };
-  if (context.files.store.enabled) {
-    const content = 'Foundation release file verification';
-    const file = await caller.client.json('/api/principals/' + caller.id + '/files?name=release-check.txt&contentType=text/plain',
+  if (context.objects.store.enabled) {
+    const content = 'Foundation release storage verification';
+    const file = await caller.client.json('/api/principals/' + caller.id + '/objects?name=release-check.txt&contentType=text/plain',
       { method: 'POST', raw: encode(content) });
     resources.push(file.id);
-    assert.equal(file.kind, 'file');
-    const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + caller.id + '/resources?kind=file' });
-    assert.ok(listed.body.items.some(item => item.id === file.id && item.kind === 'file'));
-    const linked = await call('foundation_api', { method: 'POST', path: '/api/definitions/file.link/executions', body: { id: file.id } });
+    assert.equal(file.kind, 'object');
+    const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + caller.id + '/resources?kind=object' });
+    assert.ok(listed.body.items.some(item => item.id === file.id && item.kind === 'object'));
+    const linked = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.link/executions', body: { id: file.id } });
     assert.equal(linked.body.state, 'succeeded');
     const downloaded = await fetch(linked.body.results[0].url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     assert.equal(downloaded.status, 200); assert.equal(await downloaded.text(), content);
-    filesVerified = true;
+    storageVerified = true;
   }
   if (vm) {
     const started = await call('foundation_api', { method: 'POST', path: '/api/environments/' + vm + '/processes',
@@ -164,7 +164,7 @@ try {
   for (const id of resources.reverse()) {
     try {
       const row = await context.resources.get(id), actor = { id: row.owner_id };
-      if (row.kind === 'file') await context.files.remove(actor, row);
+      if (row.kind === 'object') await context.objects.remove(actor, row);
       else await context.resources.delete(actor, row);
     }
     catch (error) { failures.push(error); }
@@ -191,4 +191,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, files: filesVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, cleanup: true }));

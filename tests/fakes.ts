@@ -1,5 +1,5 @@
 import type { PaymentProvider, PaymentEvent } from '../server/billing.js';
-import type { FileStore } from '../server/files.js';
+import type { ObjectStore } from '../server/objects.js';
 import type { MachineSSH, Runner } from '../server/runner.js';
 import { OpenSSH } from '../server/ssh-client.js';
 import type { SSHClient, SSHDestination } from '../server/ssh-client.js';
@@ -25,25 +25,25 @@ export class MemoryPayments implements PaymentProvider {
     this.events.push(event);
   }
 }
-export class MemoryFiles implements FileStore {
+export class MemoryObjects implements ObjectStore {
   readonly enabled = true;
-  files = new Map<string, Uint8Array>();
+  objects = new Map<string, Uint8Array>();
   async put(id: string, body: Uint8Array) {
-    this.files.set(id, body.slice());
+    this.objects.set(id, body.slice());
   }
   async get(id: string) {
-    const value = this.files.get(id);
-    if (!value) throw new Error('Missing file');
+    const value = this.objects.get(id);
+    if (!value) throw new Error('Missing object');
     return value.slice();
   }
   async remove(id: string) {
-    this.files.delete(id);
+    this.objects.delete(id);
   }
   async link(id: string, _name: string, seconds: number) {
     return 'https://files.example/' + id + '?expires=' + seconds;
   }
   async publish(name: string, body: Uint8Array, _contentType: string, seconds: number) {
-    this.files.set('published/' + name, body.slice());
+    this.objects.set('published/' + name, body.slice());
     return 'https://files.example/published/' + name + '?expires=' + seconds;
   }
 }

@@ -49,7 +49,7 @@ definition principal {
   permission create_service = create + use
   permission create_method = create + use
   permission create_app = create + use
-  permission create_file = create + use
+  permission create_object = create + use
   permission create_environment = create + use
   permission create_function = create + use
   // Only those who act as it keep the list of public keys it verified, so that an agent cannot vouch for a key.
@@ -148,8 +148,8 @@ definition method {
   permission rename = update
 }
 
-// A file. An agent works with it as the owner does, short of deciding for it.
-definition file {
+// An object. An agent works with it as the owner does, short of deciding for it.
+definition object {
   relation owner: principal
   relation reader: principal
   relation editor: principal

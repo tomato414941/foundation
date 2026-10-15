@@ -184,7 +184,6 @@ const words: Record<string, [string, string]> = {
   services: ['接続', 'Connections'],
   variables: ['変数', 'Variables'],
   encryptedValues: ['暗号化された値', 'Encrypted values'],
-  files: ['ファイル', 'Files'],
   environments: ['実行環境', 'Environments'],
   functions: ['関数', 'Functions'],
   definitions: ['サービス定義', 'Service definitions'],
@@ -272,7 +271,8 @@ const words: Record<string, [string, string]> = {
   download: ['ダウンロード', 'Download'],
   upload: ['アップロード', 'Upload'],
   file: ['ファイル', 'File'],
-  replaceFile: ['ファイルを更新', 'Replace file'],
+  object: ['オブジェクト', 'Object'],
+  replaceObject: ['内容を更新', 'Replace content'],
   selectFile: ['ファイルを選択', 'Choose file'],
   bytes: ['{{count}} バイト', '{{count}} bytes'],
   deleteTitle: ['「{{name}}」を削除しますか？', 'Delete “{{name}}”?'],
@@ -316,8 +316,8 @@ const words: Record<string, [string, string]> = {
   link: ['ダウンロードリンク', 'Download link'],
   createLink: ['リンクを作成', 'Create link'],
   linkHelp: [
-    'リンクを知っている人は、有効期限までファイルをダウンロードできます。',
-    'Anyone with this link can download the file until it expires.',
+    'リンクを知っている人は、有効期限までオブジェクトをダウンロードできます。',
+    'Anyone with this link can download the object until it expires.',
   ],
   service: ['サービス', 'Service'],
   serviceTarget: ['接続先', 'Connection target'],
@@ -580,13 +580,13 @@ const words: Record<string, [string, string]> = {
   storageLimit: ['ストレージ上限（MB）', 'Storage limit (MB)'],
   computeLimit: ['実行時間の上限（分／月）', 'Compute limit (minutes / month)'],
   limitsHelp: [
-    '上限に達すると、新しいファイルの保存や環境の起動ができなくなります。',
+    '上限に達すると、新しいオブジェクトの保存や環境の起動ができなくなります。',
     'New uploads and environments are blocked when a limit is reached.',
   ],
   returnUrl: ['完了後のURL', 'Completion URL'],
   refreshUrl: ['やり直し用のURL', 'Retry URL'],
   export: ['データをエクスポート', 'Export data'],
-  exportHelp: ['暗号化されたデータとファイルをダウンロードします。', 'Download encrypted data and files.'],
+  exportHelp: ['暗号化されたデータとオブジェクトをダウンロードします。', 'Download encrypted data and objects.'],
   merge: ['アカウントを統合', 'Merge accounts'],
   mergeHelp: [
     '統合する別のアカウントで認証してください。データを現在のアカウントへ移します。',
@@ -730,7 +730,7 @@ const words: Record<string, [string, string]> = {
 Object.assign(words, {
   'singular.connection': ['接続', 'connection'],
   'singular.variable': ['変数', 'variable'],
-  'singular.file': ['ファイル', 'file'],
+  'singular.object': ['オブジェクト', 'object'],
   'singular.environment': ['実行環境', 'environment'],
   'singular.function': ['関数', 'function'],
   'singular.service': ['サービス定義', 'service definition'],
@@ -750,8 +750,8 @@ const errors: Array<[string[], string, string]> = [
   ],
   [
     ['storage_limit'],
-    'ストレージの上限に達しました。ファイルを削除するか、上限を変更してください。',
-    'The storage limit has been reached. Delete files or change the limit.',
+    'ストレージの上限に達しました。オブジェクトを削除するか、上限を変更してください。',
+    'The storage limit has been reached. Delete objects or change the limit.',
   ],
   [
     ['compute_limit'],
@@ -925,9 +925,9 @@ const errors: Array<[string[], string, string]> = [
     'Could not connect to the environment. Please try again.',
   ],
   [
-    ['body_limit', 'file_limit'],
-    'データが大きすぎます。ファイルは25 MB以下にしてください。',
-    'The data is too large. Files must be 25 MB or smaller.',
+    ['body_limit', 'object_limit'],
+    'データが大きすぎます。オブジェクトは25 MB以下にしてください。',
+    'The data is too large. Objects must be 25 MB or smaller.',
   ],
   [
     ['run_limit', 'request_limit', 'credential_limit'],

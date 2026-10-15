@@ -55,7 +55,7 @@ export const ResourceKind = z.enum([
   'service',
   'method',
   'app',
-  'file',
+  'object',
   'environment',
   'function',
   'keyring',
@@ -503,9 +503,9 @@ export const AppResource = z.object({
   data: z.object({ ...custodyMetadata, methodId: z.string(), clientId: z.string(),
     fields: z.record(z.string(), z.string()).default({}), generation: Id.optional() }),
 });
-export const FileResource = z.object({
+export const ObjectResource = z.object({
   ...resourceBase,
-  kind: z.literal('file'),
+  kind: z.literal('object'),
   data: z.object({ size: z.number().int().nonnegative(), contentType: z.string() }),
 });
 export const EnvironmentResource = z.object({
@@ -547,7 +547,7 @@ export const Resource = z.discriminatedUnion('kind', [
   ServiceResource,
   MethodResource,
   AppResource,
-  FileResource,
+  ObjectResource,
   EnvironmentResource,
   FunctionResource,
   KeyringResource,
@@ -556,7 +556,7 @@ export type ResourceView = z.infer<typeof Resource>;
 export type VariableView = z.infer<typeof VariableResource>;
 export type ConnectionView = z.infer<typeof ConnectionResource>;
 export type EnvironmentView = z.infer<typeof EnvironmentResource>;
-export type FileView = z.infer<typeof FileResource>;
+export type ObjectView = z.infer<typeof ObjectResource>;
 export const NewResource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
   z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),

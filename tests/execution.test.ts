@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
-import { MemoryPayments, MemoryFiles, MemoryRunner } from './fakes.js';
-import { ApprovalRequest, EnvironmentInput, FileResource } from '../shared/contracts.js';
+import { MemoryPayments, MemoryObjects, MemoryRunner } from './fakes.js';
+import { ApprovalRequest, EnvironmentInput, ObjectResource } from '../shared/contracts.js';
 import { buildApp } from '../server/app.js';
 import { signEnvironment } from '../shared/runtime-protocol.js';
 import { Operations } from '../shared/custody.js';
@@ -58,9 +58,9 @@ test('SSHでVMの起動を確認し、停止時に使用量を記録する', asy
   assert.equal(runner.volumes.size, 0);
 });
 
-test('ファイルを更新し、同時編集と保存容量の超過を拒否して現在の内容を保持する', async (t) => {
+test('オブジェクトを更新し、同時編集と保存容量の超過を拒否して現在の内容を保持する', async (t) => {
   const f = await fixture(),
-    storage = new MemoryFiles(),
+    storage = new MemoryObjects(),
     c = await createContext(f.config, {
       db: f.db,
       mailer: f.mailer,
@@ -74,14 +74,14 @@ test('ファイルを更新し、同時編集と保存容量の超過を拒否�
     [owner.actor.id, 'customer-' + owner.actor.id],
   );
   await c.billing.limits(owner.actor, owner.actor.id, 10, 3600);
-  const first = await c.files.upload(
+  const first = await c.objects.upload(
     owner.actor,
     owner.actor.id,
     'note.txt',
     Buffer.from('one'),
     'text/plain',
   );
-  const updated = await c.files.upload(
+  const updated = await c.objects.upload(
     owner.actor,
     owner.actor.id,
     'note.txt',
@@ -90,13 +90,13 @@ test('ファイルを更新し、同時編集と保存容量の超過を拒否�
     first,
   );
   await assert.rejects(
-    () => c.files.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('old'), 'text/plain', first),
+    () => c.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('old'), 'text/plain', first),
     { code: 'changed' },
   );
-  assert.equal(Buffer.from(await c.files.content(owner.actor, updated)).toString(), 'two');
+  assert.equal(Buffer.from(await c.objects.content(owner.actor, updated)).toString(), 'two');
   await assert.rejects(
     () =>
-      c.files.upload(
+      c.objects.upload(
         owner.actor,
         owner.actor.id,
         'large.txt',
@@ -105,31 +105,31 @@ test('ファイルを更新し、同時編集と保存容量の超過を拒否�
       ),
     { code: 'storage_limit' },
   );
-  await c.files.remove(owner.actor, updated);
-  assert.equal(storage.files.size, 0);
+  await c.objects.remove(owner.actor, updated);
+  assert.equal(storage.objects.size, 0);
 });
 
 test('通常のファイルアップロードと依頼からの更新を同じ利用者の権限と保存処理で行う', async t => {
   const f = await fixture(), c = await createContext(f.config, { db: f.db, mailer: f.mailer,
-    payments: new MemoryPayments(), storage: new MemoryFiles() });
+    payments: new MemoryPayments(), storage: new MemoryObjects() });
   const app = await buildApp(c); t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('File owner'), sender = await f.person('Sender');
   await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')", [owner.actor.id, 'file-customer']);
   const headers = { authorization: 'Bearer ' + owner.token };
-  const created = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/files?name=note.txt&contentType=text/plain',
+  const created = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/objects?name=note.txt&contentType=text/plain',
     headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: Buffer.from('one') });
   assert.equal(created.statusCode, 201, created.body);
-  const file = FileResource.parse(created.json());
-  const listed = await app.inject({ url: '/api/principals/' + owner.actor.id + '/resources?kind=file', headers });
+  const file = ObjectResource.parse(created.json());
+  const listed = await app.inject({ url: '/api/principals/' + owner.actor.id + '/resources?kind=object', headers });
   assert.equal(listed.statusCode, 200, listed.body);
   assert.deepEqual(listed.json().items.map((item: { id: string }) => item.id), [file.id]);
   const session = await app.inject({ url: '/api/session', headers });
-  assert.equal(session.json().features.files, true);
+  assert.equal(session.json().features.storage, true);
   const link = await app.inject({ method: 'POST', url: '/api/resources/' + file.id + '/link', headers, payload: {} });
   assert.equal(link.statusCode, 200, link.body);
   assert.equal(link.json().url, 'https://files.example/' + (await c.resources.get(file.id)).private_data + '?expires=900');
   const asked = await app.inject({ method: 'POST', url: '/api/requests', headers: { authorization: 'Bearer ' + sender.token },
-    payload: { to: owner.actor.id, operations: [{ name: 'file.update', input: { id: file.id, version: file.version,
+    payload: { to: owner.actor.id, operations: [{ name: 'object.update', input: { id: file.id, version: file.version,
       contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } }] } });
   assert.equal(asked.statusCode, 201, asked.body);
   const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
@@ -152,12 +152,12 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
       FOUNDATION_INCLUDED_COMPUTE_SECONDS: 180,
       FOUNDATION_INCLUDED_ENVIRONMENTS: 2,
     },
-    { db: f.db, storage: new MemoryFiles(), runner: new MemoryRunner() },
+    { db: f.db, storage: new MemoryObjects(), runner: new MemoryRunner() },
   );
   const owners = [await f.person('First'), await f.person('Second')];
   assert.equal((await c.billing.payment(owners[0]!.actor, owners[0]!.actor.id)).required, false);
   const files = await Promise.allSettled(
-    owners.map(({ actor }) => c.files.upload(actor, actor.id, 'note.txt', Buffer.from('abc'), 'text/plain')),
+    owners.map(({ actor }) => c.objects.upload(actor, actor.id, 'note.txt', Buffer.from('abc'), 'text/plain')),
   );
   assert.equal(files.filter((result) => result.status === 'fulfilled').length, 1);
   const rejected = files.find((result) => result.status === 'rejected');
@@ -165,11 +165,11 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
   assert.equal(rejected.reason.code, 'storage_capacity');
   for (const [index, result] of files.entries()) {
     if (result.status === 'fulfilled') {
-      assert.equal(Buffer.from(await c.files.content(owners[index]!.actor, result.value)).toString(), 'abc');
-      await c.files.remove(owners[index]!.actor, result.value);
+      assert.equal(Buffer.from(await c.objects.content(owners[index]!.actor, result.value)).toString(), 'abc');
+      await c.objects.remove(owners[index]!.actor, result.value);
     }
   }
-  await c.files.upload(owners[1]!.actor, owners[1]!.actor.id, 'all.txt', Buffer.from('abcde'), 'text/plain');
+  await c.objects.upload(owners[1]!.actor, owners[1]!.actor.id, 'all.txt', Buffer.from('abcde'), 'text/plain');
   const start = (index: number, seconds: number) => {
     const actor = owners[index]!.actor;
     return c.environments.create(
@@ -191,20 +191,20 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
   await assert.rejects(start(0, 60), { code: 'compute_capacity' });
 });
 
-test('支払い登録が必要な環境では、支払いの準備が整ってからファイル保存を許可する', async (t) => {
+test('支払い登録が必要な環境では、支払いの準備が整ってからオブジェクト保存を許可する', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person(),
-    storage = new MemoryFiles(),
+    storage = new MemoryObjects(),
     unconfigured = await createContext(f.config, { db: f.db, storage });
   assert.equal((await unconfigured.billing.payment(owner.actor, owner.actor.id)).required, true);
   await assert.rejects(
-    unconfigured.files.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
+    unconfigured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
     { code: 'payments_unavailable' },
   );
   const configured = await createContext(f.config, { db: f.db, storage, payments: new MemoryPayments() });
   await assert.rejects(
-    configured.files.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
+    configured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
     { code: 'payment_required' },
   );
 });

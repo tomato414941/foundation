@@ -8,7 +8,7 @@ import { createLocalMcp } from '../cli/src/mcp.js';
 import { Client } from '../cli/src/client.js';
 import { flowFixture } from './flow-support.js';
 import { fixture } from './support.js';
-import { MemoryFiles } from './fakes.js';
+import { MemoryObjects } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 
@@ -95,9 +95,9 @@ test('URL接続のMCPで共有された関数を見つけ、APIトークンだ�
   assert.deepEqual(JSON.parse(result.text as string)[0], { configured: true });
 });
 
-test('MCPからファイルのAPIを調べ、ファイルを保存して一覧とダウンロードリンクを取得する', async t => {
+test('MCPからオブジェクトのAPIを調べ、オブジェクトを保存して一覧とダウンロードリンクを取得する', async t => {
   const f = await fixture({ FOUNDATION_BILLING_MODE: 'included' });
-  const context = await createContext(f.config, { db: f.db, storage: new MemoryFiles() }), app = await buildApp(context);
+  const context = await createContext(f.config, { db: f.db, storage: new MemoryObjects() }), app = await buildApp(context);
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('File owner'), origin = await app.listen({ host: '127.0.0.1', port: 0 });
   const client = new McpClient({ name: 'file-client', version: '1' });
@@ -111,16 +111,16 @@ test('MCPからファイルのAPIを調べ、ファイルを保存して一覧�
     return result.structuredContent!.data as Record<string, unknown>;
   };
   const schema = await call('foundation_schema', {});
-  assert.ok((schema.paths as string[]).includes('/api/principals/{id}/files'));
-  const saved = await call('foundation_api', { method: 'POST', path: '/api/definitions/file.create/executions', body: {
+  assert.ok((schema.paths as string[]).includes('/api/principals/{id}/objects'));
+  const saved = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.create/executions', body: {
     ownerId: owner.actor.id, name: 'mcp.txt', contentType: 'text/plain', bytes: Buffer.from('From MCP').toString('base64url'),
   } });
   const execution = saved.body as { state: string; results: Array<{ id: string; kind: string }> };
-  assert.equal(execution.state, 'succeeded'); assert.equal(execution.results[0]!.kind, 'file');
+  assert.equal(execution.state, 'succeeded'); assert.equal(execution.results[0]!.kind, 'object');
   const file = execution.results[0]!;
-  const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + owner.actor.id + '/resources?kind=file' });
+  const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + owner.actor.id + '/resources?kind=object' });
   assert.equal((listed.body as { items: Array<{ id: string }> }).items[0]?.id, file.id);
-  const link = await call('foundation_api', { method: 'POST', path: '/api/definitions/file.link/executions', body: { id: file.id } });
+  const link = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.link/executions', body: { id: file.id } });
   const linked = link.body as { state: string; results: Array<{ url: string }> };
   assert.equal(linked.state, 'succeeded'); assert.ok(linked.results[0]?.url.startsWith('https://files.example/'));
 });

@@ -14,8 +14,8 @@ test('代理は持ち主の物を使い、変え、名前を変えられるが�
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
   await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id });
-  const file = await f.resources.insert(owner.actor.id, 'file', 'report.txt', { size: 0, contentType: 'text/plain' });
-  const other = await f.resources.insert(owner.actor.id, 'file', 'notes.txt', { size: 0, contentType: 'text/plain' });
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const other = await f.resources.insert(owner.actor.id, 'object', 'notes.txt', { size: 0, contentType: 'text/plain' });
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'use'), true);
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'update'), true);
   assert.equal(await f.authorization.holds(ai.actor.id, file, 'share'), false);
@@ -265,7 +265,7 @@ test('持ち主を移すと、受け取る側でも作れる人ならその場�
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('Owner'), other = await f.person('Other');
   const team = await f.principals.create('Team', null, owner.actor.id), bot = await f.principals.create('Bot', null, owner.actor.id);
-  const file = await f.resources.insert(owner.actor.id, 'file', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
   assert.equal((await call(owner, '/api/resources/' + file.id + '/transfer', { to: team.id })).statusCode, 200);
   assert.equal((await f.resources.get(file.id)).owner_id, team.id);
   await assert.rejects(f.relations.transfer(other.actor, file.id, other.actor.id), { code: 'forbidden' });
@@ -287,7 +287,7 @@ test('承認までに頼んだ人が譲る権限を失っていると、承認�
   const f = await fixture(), { app, call } = await served(f);
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('Owner'), helper = await f.person('Helper'), other = await f.person('Other');
-  const file = await f.resources.insert(owner.actor.id, 'file', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
   const role = { subjectId: helper.actor.id, relation: 'transferrer', objectId: file.id };
   await f.relations.draw(owner.actor, role);
   const asked = await call(helper, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
@@ -301,7 +301,7 @@ test('開始した鍵が取り消されると、その権限による所有者�
   const f = await fixture(), { app, call } = await served(f);
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('Owner'), other = await f.person('Other');
-  const file = await f.resources.insert(owner.actor.id, 'file', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
   const second = await f.authentication.issueKey(owner.actor.id, 'Second key');
   const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
   assert.equal(asked.statusCode, 202, asked.body);
