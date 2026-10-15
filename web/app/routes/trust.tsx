@@ -8,7 +8,7 @@ import { getIdentity, requireKeys, resealNow } from '../keys';
 import { ResealingNotice } from '../resealing-notice';
 import { InputField } from '../form-fields';
 import { Button } from '../components/ui/button';
-import { Copy, DateText, Detail, ErrorNotice, Notice, Page, Panel, SaveBar } from '../components';
+import { Copy, Detail, ErrorNotice, Fingerprint, Notice, Page, Panel, SaveBar } from '../components';
 
 const nameOf = (id: string) => api<{ name: string }>('/identities/' + id).then(identity => identity.name, () => null);
 
@@ -20,14 +20,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (recipient && linked) sessionStorage.setItem('foundation.fingerprint.principal.' + recipient, linked);
   const id = (await signedIn(request)).principal!.id;
   const recipientFingerprint = recipient ? sessionStorage.getItem('foundation.fingerprint.principal.' + recipient) ?? '' : '';
-  // Without the private key in this browser, the page leaves out what only the private key can show; verifying asks
-  // for a passkey.
-  if (!(await getIdentity(id))) return { id, fingerprint: null, recipient, recipientFingerprint, verified: null };
-  const client = await custodyClient();
-  const verified = await Promise.all([...(await client.keyring()).values()].map(async ({ binding, verifiedAt }) => ({
-    id: binding.principalId, name: await nameOf(binding.principalId), fingerprint: await fingerprint(binding), verifiedAt })));
-  return { id, fingerprint: await fingerprint(client.binding), recipient, recipientFingerprint,
-    verified: verified.sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt)) };
+  // Without the private key in this browser, the page leaves out the fingerprint; verifying asks for a passkey.
+  const identity = await getIdentity(id);
+  return { id, fingerprint: identity ? await fingerprint(identity.binding) : null, recipient, recipientFingerprint };
 }
 export async function clientAction({ request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -40,15 +35,6 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     const outcome = await resealNow(client.binding.principalId);
     return { verified: (await nameOf(principalId)) ?? principalId, resealed: outcome?.done ?? 0 };
   });
-}
-// Shown in groups of four for comparing by eye; copying keeps it whole.
-function Fingerprint({ value }: { value: string }) {
-  const [algorithm, digest = ''] = value.split(':');
-  return <>
-    <span className="font-mono">{algorithm}:{digest.match(/.{4}/g)?.map((group, index) =>
-      <span key={index} className="ml-1.5 inline-block">{group}</span>)}</span>
-    <Copy value={value} />
-  </>;
 }
 export default function Trust() {
   const { t } = useTranslation(), data = useLoaderData<typeof clientLoader>(), result = useActionData<typeof clientAction>();
@@ -73,15 +59,5 @@ export default function Trust() {
         defaultValue={data.recipientFingerprint} />
       <SaveBar back="/account" label="trustIdentity" />
     </div></Form>}
-    {data.verified && <Panel title={t('verifiedIdentities')}>
-      {data.verified.length ? <ul className="divide-y divide-border">
-        {data.verified.map(item => <li key={item.id} className="flex flex-col gap-2 py-4 first:pt-0 last:pb-0">
-          <div className="font-medium wrap-anywhere">{item.name ?? item.id}</div>
-          <Detail label={t('id')}>{item.id}<Copy value={item.id} /></Detail>
-          <Detail label={t('fingerprint')}><Fingerprint value={item.fingerprint} /></Detail>
-          <Detail label={t('verifiedAt')}><DateText value={item.verifiedAt} /></Detail>
-        </li>)}
-      </ul> : <p className="leading-relaxed text-muted-foreground">{t('noVerifiedIdentities')}</p>}
-    </Panel>}
   </Page>;
 }

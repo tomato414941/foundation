@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Form, Link, useActionData, useNavigate, useRevalidator, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/credential-new';
-import { actionResult, api, formText } from '../api';
+import { actionResult, api, formText, safeReturn } from '../api';
 import { issueKey, registerPasskey } from '../keys';
 import { Principal } from '../../../shared/contracts';
 import { Copy, ErrorNotice, Page, Panel, SaveBar, useTask } from '../components';
@@ -23,7 +23,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         body: {
           email: formText(form, 'email'),
           principalId: params.owner,
-          returnTo: `/p/${params.owner}/settings/credentials`,
+          returnTo: safeReturn(new URL(request.url).searchParams.get('returnTo'), `/p/${params.owner}/settings/credentials`),
           locale: i18n.language === 'en' ? 'en' : 'ja',
         },
       });
@@ -46,7 +46,7 @@ export default function CredentialNew() {
   const task = useTask();
   const navigate = useNavigate();
   const revalidator = useRevalidator();
-  const back = `/p/${principal.id}/settings/credentials`;
+  const back = safeReturn(search.get('returnTo'), `/p/${principal.id}/settings/credentials`);
   return (
     <Page title={t(preset === 'key' ? 'issueKey' : preset === 'email' ? 'addEmail' : preset === 'passkey' ? 'addPasskey' : 'add')} narrow>
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />

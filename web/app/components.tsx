@@ -190,6 +190,16 @@ export function Detail({ label, children }: { label: string; children: ReactNode
   );
 }
 
+// Shown in groups of four for comparing by eye; copying keeps it whole.
+export function Fingerprint({ value }: { value: string }) {
+  const [algorithm, digest = ''] = value.split(':');
+  return <>
+    <span className="font-mono">{algorithm}:{digest.match(/.{4}/g)?.map((group, index) =>
+      <span key={index} className="ml-1.5 inline-block">{group}</span>)}</span>
+    <Copy value={value} />
+  </>;
+}
+
 export function JsonView({ value }: { value: unknown }) {
   return (
     <pre className="m-0 max-h-[480px] overflow-auto rounded-lg border bg-background/60 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere">
