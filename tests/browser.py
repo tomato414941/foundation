@@ -634,7 +634,7 @@ class BrowserTests(unittest.TestCase):
         with page.expect_download() as download:
             page.get_by_role("button", name="ダウンロード", exact=True).click()
         self.assertEqual(Path(download.value.path()).read_text(), "updated-value")
-        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.get_by_role("button", name="サインアウト", exact=True).click()
         page.wait_for_url("**/signin")
         page.get_by_role("button", name="パスキーでサインイン", exact=True).click()
         page.wait_for_url("**/p/**")
@@ -712,7 +712,7 @@ class BrowserTests(unittest.TestCase):
         cdp, authenticator_id = self.authenticators[page]
         original_credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator_id})["credentials"][0]["credentialId"]
         path = self.variable(page, principal, "Existing variable", "Saved variable value")
-        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.get_by_role("button", name="サインアウト", exact=True).click()
         page.wait_for_url("**/signin")
         page.get_by_role("button", name="パスキーでサインイン", exact=True).click()
         page.wait_for_url("**/p/**")
@@ -747,7 +747,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url("**/account")
         expect(page.get_by_role("listitem").filter(has_text="Additional passkey")).to_contain_text("秘密鍵を取り出せる")
         cdp.send("WebAuthn.removeCredential", {"authenticatorId": authenticator_id, "credentialId": original_credential})
-        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.get_by_role("button", name="サインアウト", exact=True).click()
         page.wait_for_url("**/signin")
         page.get_by_role("button", name="パスキーでサインイン", exact=True).click()
         page.wait_for_url("**/p/**")
