@@ -161,7 +161,7 @@ class BrowserTests(unittest.TestCase):
         page.goto(ORIGIN + "/account/trust")
         page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(principal_id)
         page.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
-        page.get_by_role("button", name="相手の公開鍵を検証", exact=True).click()
+        page.get_by_role("button", name="公開鍵の検証", exact=True).click()
         expect(page.get_by_text(re.compile(r"の公開鍵を検証しました。$"))).to_be_visible()
         expect(page.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True)).to_be_hidden()
         page.screenshot(path=str(ARTIFACTS / "identity-verified-ja.png"), full_page=True)
