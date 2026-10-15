@@ -201,7 +201,7 @@ const words: Record<string, [string, string]> = {
   shared: ['共有された項目', 'Shared with me'],
   settings: ['設定', 'Settings'],
   account: ['アカウント', 'Account'],
-  signinMethods: ['ログイン方法', 'Sign-in methods'],
+  signinMethods: ['サインイン方法', 'Sign-in methods'],
   apiKeys: ['APIキー', 'API keys'],
   noApiKeys: ['まだAPIキーはありません。', 'No API keys yet.'],
   passkeyHolds: ['秘密鍵を取り出せる', 'Holds the private key'],
