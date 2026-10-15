@@ -531,6 +531,12 @@ const words: Record<string, [string, string]> = {
   deviceAsk: ['{{name}} がサインインしようとしています。', '{{name}} is asking to sign in.'],
   deviceAs: ['サインインするプリンシパル', 'Sign in as'],
   allow: ['許可', 'Allow'],
+  oauthTitle: ['アプリの接続', 'Connect an app'],
+  oauthAsk: ['{{name}}（{{host}}）が、Foundation を使おうとしています。', '{{name}} ({{host}}) wants to use Foundation.'],
+  oauthAs: ['使わせるプリンシパル', 'Use as'],
+  oauthScope: ['許可すると、このアプリはこのプリンシパルとして、Foundation のサーバーで行う操作を90日間実行できます。秘密の値は開けません。アカウントの鍵の一覧からいつでも取り消せます。', 'If you allow it, this app can run Foundation server operations as this principal for 90 days. It cannot open secret values. You can revoke it anytime from the account keys.'],
+  oauthInvalid: ['この接続の依頼は正しくありません。アプリから接続し直してください。', 'This connection request is not valid. Connect again from the app.'],
+  deny: ['拒否', 'Deny'],
   deviceDone: ['{{name}} をサインインさせました。端末に戻ってください。', '{{name}} is signed in. Return to the device.'],
   codeHelp: [
     '依頼した端末に表示されているコードを入力してください。',

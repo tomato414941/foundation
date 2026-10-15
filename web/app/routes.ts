@@ -11,6 +11,7 @@ export default [
   route('requests/:id', 'routes/request.tsx'),
   route('executions/:id', 'routes/execution.tsx'),
   route('devices/:id', 'routes/device.tsx'),
+  route('oauth/authorize', 'routes/oauth-authorize.tsx'),
   route('services', 'routes/service-return.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
   route('connections/aws/complete', 'routes/aws-role-complete.tsx'),

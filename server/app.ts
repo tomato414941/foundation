@@ -30,6 +30,7 @@ import { routesExecutions } from './routes-executions.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
+import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
 
 for (const [id, schema] of Object.entries({ AccessPolicy, PolicyApproval, ProtectedContent, RunIntent,
@@ -127,7 +128,11 @@ export async function buildApp(context: Context) {
     request.actor =
       (!bearer ? await authentication.authenticate(request.cookies.foundation_request) : null) ??
       (await authentication.authenticate(bearer?.slice(7) ?? request.cookies.foundation_session));
-    if (bearer && !request.actor) fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
+    if (bearer && !request.actor) {
+      if (request.url.split('?')[0] === '/api/mcp')
+        reply.header('www-authenticate', 'Bearer error="invalid_token", resource_metadata="' + config.origin + '/.well-known/oauth-protected-resource/api/mcp"');
+      fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
+    }
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
       const ownRequest = '/api/requests/' + request.actor.requestId;
@@ -455,7 +460,8 @@ export async function buildApp(context: Context) {
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);
   await routesAccounts(app, context);
-  await routesMcp(app);
+  await routesOAuthServer(app, context);
+  await routesMcp(app, config.origin);
   await web(app);
   return app;
 }

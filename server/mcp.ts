@@ -1,26 +1,32 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { DEFAULT_NEGOTIATED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import { Json } from '../shared/contracts.js';
 import { fail } from './errors.js';
 import { registerMetadataTools } from '../runtime/mcp-metadata.js';
 
-export async function routesMcp(app: ApiApp) {
+export async function routesMcp(app: ApiApp, origin: string) {
+  // Without a token, point the client to the OAuth metadata so it can ask the owner to sign in.
+  const challenge = 'Bearer resource_metadata="' + origin + '/.well-known/oauth-protected-resource/api/mcp"';
+  for (const method of ['GET', 'DELETE'] as const)
+    app.route({ method, url: '/api/mcp', schema: { hide: true }, handler: (_request, reply) =>
+      reply.code(405).header('allow', 'POST').send({ error: { code: 'method_not_allowed', message: 'Send MCP requests with POST.' } }) });
   app.post('/api/mcp', { schema: { body: Json, hide: true } }, async (request, reply) => {
+    if (!request.actor)
+      return reply.code(401).header('www-authenticate', challenge)
+        .send({ error: { code: 'unauthenticated', message: 'Sign in to continue.' } });
     actor(request);
     const body = request.body;
     if (!body || typeof body !== 'object' || Array.isArray(body))
       fail(400, 'invalid_rpc', 'Send one MCP JSON-RPC request.');
     const params =
       body.params && typeof body.params === 'object' && !Array.isArray(body.params) ? body.params : {};
-    if (
-      body.method === 'initialize'
-        ? params.protocolVersion !== LATEST_PROTOCOL_VERSION
-        : request.headers['mcp-protocol-version'] !== LATEST_PROTOCOL_VERSION
-    )
-      fail(400, 'unsupported_protocol', 'Use MCP ' + LATEST_PROTOCOL_VERSION + '.');
+    const version = body.method === 'initialize' ? params.protocolVersion
+      : request.headers['mcp-protocol-version'] ?? DEFAULT_NEGOTIATED_PROTOCOL_VERSION;
+    if (typeof version !== 'string' || !SUPPORTED_PROTOCOL_VERSIONS.includes(version))
+      fail(400, 'unsupported_protocol', 'Use MCP ' + SUPPORTED_PROTOCOL_VERSIONS.join(', ') + '.');
     const server = new McpServer(
       { name: 'Foundation', version: '1.0.0' },
       {
