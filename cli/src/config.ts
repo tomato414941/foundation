@@ -38,21 +38,42 @@ export function origin(value = process.env.FOUNDATION_ORIGIN || 'https://foundat
     throw new Error('Use an HTTPS origin, or HTTP on localhost.');
   return url.origin;
 }
-export async function readIdentity(override?: string): Promise<IdentityConfig> {
-  let saved: IdentityConfig | undefined;
+async function readIdentities(): Promise<z.infer<typeof Identities> | undefined> {
   try {
     const path = configPath(),
       stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('The identity must be a regular file.');
     if (process.platform !== 'win32' && stat.mode & 0o077) await chmod(path, 0o600);
-    const file = Identities.parse(JSON.parse(await readFile(path, 'utf8')));
-    saved = file.identities.find((item) => item.principalId === file.current);
+    return Identities.parse(JSON.parse(await readFile(path, 'utf8')));
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-      throw new Error('The saved identity could not be read. Check its contents and permissions.');
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw new Error('The saved identity could not be read. Check its contents and permissions.');
   }
+}
+// The saved identities with the current one marked, for listing and switching.
+export async function listIdentities() {
+  const file = await readIdentities();
+  return (file?.identities ?? []).map(item => ({ ...item, current: item.principalId === file!.current }));
+}
+// Make a saved identity the default for commands that do not choose one.
+export async function useIdentity(principalId: string) {
+  const file = await readIdentities();
+  if (!file?.identities.some(item => item.principalId === principalId))
+    throw new Error('No saved identity has principal ' + principalId + '. Run foundation identity list.');
+  await secureWrite(configPath(), JSON.stringify({ ...file, current: principalId }, null, 2) + '\n', true);
+}
+// A command acts as the principal it names (--principal, then FOUNDATION_PRINCIPAL_ID), otherwise as the current one.
+export async function readIdentity(override?: string, principal?: string): Promise<IdentityConfig> {
+  const environmentToken = process.env.FOUNDATION_TOKEN,
+    chosen = principal || (environmentToken ? undefined : process.env.FOUNDATION_PRINCIPAL_ID);
+  const file = await readIdentities();
+  let saved: IdentityConfig | undefined;
+  if (file) {
+    saved = file.identities.find((item) => item.principalId === (chosen ?? file.current));
+    if (chosen && !saved && !environmentToken)
+      throw new Error('No saved identity has principal ' + chosen + '. Run foundation identity list.');
+  } else if (chosen && !environmentToken) throw new Error('Run foundation login to sign in on this machine.');
   const destination = origin(override || process.env.FOUNDATION_ORIGIN || saved?.origin);
-  const environmentToken = process.env.FOUNDATION_TOKEN;
   if (environmentToken) {
     if (override && process.env.FOUNDATION_ORIGIN && destination !== origin(process.env.FOUNDATION_ORIGIN))
       throw new Error('The environment identity belongs to a different origin.');

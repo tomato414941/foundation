@@ -28,7 +28,7 @@ import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBi
 import { Task } from '../../shared/runtime-protocol.js';
 import type { TaskView } from '../../shared/runtime-protocol.js';
 import { Client, ApiError } from './client.js';
-import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
+import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { launchAgent } from './agent-launcher.js';
@@ -49,6 +49,8 @@ Usage: foundation <command> [options]
   login --key TOKEN [--origin URL]      Sign in with a key issued in a browser
   init --name NAME [--origin URL]       Register this machine as a new principal
   status                               Show this machine and its accessible principals
+  identity list                        List the identities saved on this machine
+  identity use ID                      Make a saved identity the default
   request-access [--to ID] [--wait]     Ask a person to make this machine their agent
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   definition list                      List processing definitions and their inputs
@@ -90,6 +92,7 @@ Usage: foundation <command> [options]
 
 Options:
   --owner ID             Choose the principal that owns a new item or run
+  --principal ID         Act as this saved identity for one command
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
   --name NAME            How this machine appears when it signs in (default: host name)
   --origin URL           Choose a server when signing in or registering
@@ -121,6 +124,8 @@ exec masks input values in stdout and stderr. read deliberately reveals content.
 Ctrl+C while waiting stops the wait; use the API to cancel the remote operation.
 
 Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
+It can hold several identities. A command acts as --principal, then
+FOUNDATION_PRINCIPAL_ID, then the default chosen with identity use.
 Environment identity: FOUNDATION_ORIGIN, FOUNDATION_TOKEN,
 FOUNDATION_PRINCIPAL_ID, FOUNDATION_PRIVATE_KEYS, FOUNDATION_KEY_BINDING.
 The last two values are base64url-encoded JSON; omit both for metadata-only access.
@@ -132,6 +137,7 @@ const options = {
   key: textOption,
   origin: textOption,
   owner: textOption,
+  principal: textOption,
   to: textOption,
   message: textOption,
   body: textOption,
@@ -356,6 +362,21 @@ async function initialize(args: Arguments) {
   }, SignedBinding);
   print({ principal: registered.principal, origin: base, identity: path, fingerprint: await fingerprint(binding) });
 }
+async function identity(args: Arguments) {
+  const action = args.positionals[0];
+  if (action === 'use') {
+    const principalId = Id.parse(requireArgument(args.positionals[1], 'Supply a principal ID.'));
+    await useIdentity(principalId);
+    print({ current: principalId, identity: configPath() });
+    return;
+  }
+  if (action !== 'list') throw new Error('Use foundation identity list or foundation identity use ID.');
+  const items = await Promise.all((await listIdentities()).map(async ({ current, ...saved }) => {
+    const session = await new Client(saved).session().catch(() => null);
+    return { principalId: saved.principalId, name: session?.principal?.name ?? null, origin: saved.origin, current };
+  }));
+  await output(items, args);
+}
 async function waitFor<T>(fetcher: () => Promise<T>, state: (value: T) => string, timeout: number) {
   const deadline = Date.now() + timeout * 1000;
   while (true) {
@@ -425,7 +446,11 @@ async function main(argv: string[]) {
     await login(args);
     return 0;
   }
-  const client = new Client(await readIdentity(args.values.origin));
+  if (command === 'identity') {
+    await identity(args);
+    return 0;
+  }
+  const client = new Client(await readIdentity(args.values.origin, args.values.principal));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);

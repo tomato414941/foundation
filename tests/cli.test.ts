@@ -35,10 +35,10 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}, bun
     'FOUNDATION_KEY_BINDING',
   ])
     delete environment[key];
-  async function run(args: string[], input?: string) {
+  async function run(args: string[], input?: string, extraEnvironment: Record<string, string> = {}) {
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult, reject) => {
       const child = spawn(process.execPath, [resolve(bundleDirectory, 'cli.mjs'), ...args], {
-        env: environment,
+        env: { ...environment, ...extraEnvironment },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stdout = '',
@@ -227,6 +227,27 @@ test('CLIで登録して変数を保存し、コマンドへ渡して出力を�
   const exportedResource = (await readFile(exported, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     .find(item => item.type === 'resource');
   assert.equal(exportedResource.custody.policy.id, resource.id);
+});
+
+test('CLIは保存した複数の身元から既定の身元を切り替え、コマンドごとに指定した身元で実行する', async t => {
+  const c = await cliFixture();
+  t.after(c.close);
+  const first = JSON.parse((await c.run(['init', '--name', 'first-agent'])).stdout).principal,
+    second = JSON.parse((await c.run(['init', '--name', 'second-agent'])).stdout).principal;
+  const principalOf = async (args: string[], environment: Record<string, string> = {}) =>
+    JSON.parse((await c.run(['status', ...args], undefined, environment)).stdout).principal.id;
+  const listed = JSON.parse((await c.run(['identity', 'list'])).stdout);
+  assert.deepEqual(listed.map((item: { name: string; current: boolean }) => [item.name, item.current]),
+    [['first-agent', false], ['second-agent', true]]);
+  assert.equal(await principalOf([]), second.id);
+  assert.equal(await principalOf(['--principal', first.id]), first.id);
+  assert.equal(await principalOf([], { FOUNDATION_PRINCIPAL_ID: first.id }), first.id);
+  assert.equal((await c.run(['identity', 'use', first.id])).code, 0);
+  assert.equal(await principalOf([]), first.id);
+  assert.equal(await principalOf(['--principal', second.id]), second.id);
+  const unknown = await c.run(['status', '--principal', randomUUID()]);
+  assert.notEqual(unknown.code, 0);
+  assert.match(unknown.stderr, /No saved identity has principal/);
 });
 
 test('CLIの確認コードを承認し、同じAPIから所有者のリソースを利用する', async (t) => {
