@@ -8,7 +8,7 @@ import * as C from '../shared/contracts.js';
 
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
-  const { resources, authorization, catalog, objects, environments, billing } = context;
+  const { resources, authorization, catalog, files, environments, billing } = context;
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,
@@ -24,7 +24,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   // The account owner makes the role in their own console, from a template Foundation hands over as a one-hour link.
   app.get('/api/aws/role-template', { schema: { response: { 200: z.object({ url: z.string() }) } } }, async (request) => {
     actor(request);
-    return { url: await objects.store.publish('aws-connection.yaml', roleTemplate(), 'text/plain', 3600) };
+    return { url: await files.store.publish('aws-connection.yaml', roleTemplate(), 'text/plain', 3600) };
   });
   app.get(
     '/api/connections/:id/method',
@@ -150,7 +150,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   );
   app.get('/api/resources/:id/content', { schema: { params: C.IdParams } }, async (request, reply) => {
     const row = await resources.get(request.params.id),
-      bytes = await objects.content(actor(request), row);
+      bytes = await files.content(actor(request), row);
     return reply
       .header('content-type', 'application/octet-stream')
       .header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(row.name))

@@ -35,8 +35,8 @@ export class Accounts {
           if (content) entry.custody = content.content;
           else entry.encryptedStorage = { sealed: row.sealed, privateData: row.private_data };
         }
-        if (row.kind === 'object')
-          entry.content = Buffer.from(await c.objects.store.get(row.private_data!)).toString('base64');
+        if (row.kind === 'file')
+          entry.content = Buffer.from(await c.files.store.get(row.private_data!)).toString('base64');
         if (row.kind === 'function') {
           entry.publication = row.data.publication ?? null;
           entry.executionSettings = await c.db.one('SELECT version,environment_id AS "environmentId",approval FROM function_settings WHERE function_id=$1', [row.id]) ?? null;
@@ -89,7 +89,7 @@ export class Accounts {
       )
     )
       fail(409, 'environment_active', 'Stop all environments before deleting this principal.');
-    // The database keeps object cleanup jobs after the owning resource is removed.
+    // The database keeps file cleanup jobs after the owning resource is removed.
     await c.db.transaction(async (connection) => {
       await connection.query(
         'DELETE FROM resource_references WHERE resource_id IN (SELECT id FROM resources WHERE owner_id=$1)',

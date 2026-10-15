@@ -100,7 +100,7 @@ export async function upload(
     ...(existing ? { version: String(existing.version) } : { name }),
   });
   const response = await fetch(
-    existing ? `/api/resources/${existing.id}/content?${query}` : `/api/principals/${owner}/objects?${query}`,
+    existing ? `/api/resources/${existing.id}/content?${query}` : `/api/principals/${owner}/files?${query}`,
     {
       method: existing ? 'PUT' : 'POST',
       headers: { 'content-type': 'application/octet-stream' },

@@ -7,6 +7,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createLocalMcp } from '../cli/src/mcp.js';
 import { Client } from '../cli/src/client.js';
 import { flowFixture } from './flow-support.js';
+import { fixture } from './support.js';
+import { MemoryFiles } from './fakes.js';
+import { createContext } from '../server/context.js';
+import { buildApp } from '../server/app.js';
 
 test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先へ依頼して検証済み結果を読む', async t => {
   const f = await flowFixture(); t.after(f.close);
@@ -89,4 +93,34 @@ test('URL接続のMCPで共有された関数を見つけ、APIトークンだ�
   const result = await call('foundation_execution_result', { id });
   assert.equal(result.state, 'succeeded');
   assert.deepEqual(JSON.parse(result.text as string)[0], { configured: true });
+});
+
+test('MCPからファイルのAPIを調べ、ファイルを保存して一覧とダウンロードリンクを取得する', async t => {
+  const f = await fixture({ FOUNDATION_BILLING_MODE: 'included' });
+  const context = await createContext(f.config, { db: f.db, storage: new MemoryFiles() }), app = await buildApp(context);
+  t.after(async () => { await app.close(); await f.close(); });
+  const owner = await f.person('File owner'), origin = await app.listen({ host: '127.0.0.1', port: 0 });
+  const client = new McpClient({ name: 'file-client', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(origin + '/api/mcp'), {
+    requestInit: { headers: { authorization: 'Bearer ' + owner.token } },
+  }));
+  t.after(() => client.close());
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return result.structuredContent!.data as Record<string, unknown>;
+  };
+  const schema = await call('foundation_schema', {});
+  assert.ok((schema.paths as string[]).includes('/api/principals/{id}/files'));
+  const saved = await call('foundation_api', { method: 'POST', path: '/api/definitions/file.create/executions', body: {
+    ownerId: owner.actor.id, name: 'mcp.txt', contentType: 'text/plain', bytes: Buffer.from('From MCP').toString('base64url'),
+  } });
+  const execution = saved.body as { state: string; results: Array<{ id: string; kind: string }> };
+  assert.equal(execution.state, 'succeeded'); assert.equal(execution.results[0]!.kind, 'file');
+  const file = execution.results[0]!;
+  const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + owner.actor.id + '/resources?kind=file' });
+  assert.equal((listed.body as { items: Array<{ id: string }> }).items[0]?.id, file.id);
+  const link = await call('foundation_api', { method: 'POST', path: '/api/definitions/file.link/executions', body: { id: file.id } });
+  const linked = link.body as { state: string; results: Array<{ url: string }> };
+  assert.equal(linked.state, 'succeeded'); assert.ok(linked.results[0]?.url.startsWith('https://files.example/'));
 });

@@ -5,7 +5,7 @@ export const Features = z.object({
   email: z.boolean(),
   environments: z.boolean(),
   ssh: z.boolean(),
-  objects: z.boolean(),
+  files: z.boolean(),
   payments: z.boolean(),
 });
 export const Session = z.object({

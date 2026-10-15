@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
-import { MemoryObjects } from './fakes.js';
+import { MemoryFiles } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
@@ -326,14 +326,14 @@ test('APIの入力を検証し、公開したOpenAPIに呼び出し方法を示�
 });
 
 test('AWSのIAMロールを作るテンプレートを置き場に出し、一時的なリンクで渡す', async (t) => {
-  const f = await fixture(), storage = new MemoryObjects();
+  const f = await fixture(), storage = new MemoryFiles();
   const context = await createContext(f.config, { db: f.db, mailer: f.mailer, storage }), app = await buildApp(context);
   t.after(async () => { await app.close(); await f.close(); });
   const person = await f.person();
   assert.equal((await app.inject({ url: '/api/aws/role-template' })).statusCode, 401);
   const response = await app.inject({ url: '/api/aws/role-template', headers: { authorization: 'Bearer ' + person.token } });
   assert.equal(response.statusCode, 200, response.body);
-  assert.equal(response.json().url, 'https://objects.example/published/aws-connection.yaml?expires=3600');
+  assert.equal(response.json().url, 'https://files.example/published/aws-connection.yaml?expires=3600');
   const template = new TextDecoder().decode(storage.files.get('published/aws-connection.yaml'));
   assert.match(template, /AWS::IAM::Role/);
   assert.match(template, /sts:ExternalId/);

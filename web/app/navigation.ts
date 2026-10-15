@@ -2,7 +2,7 @@ import type { ResourceKindName, ResourceView } from '../../shared/contracts';
 export const sections = {
   services: 'connection',
   variables: 'variable',
-  objects: 'object',
+  files: 'file',
   environments: 'environment',
   functions: 'function',
   definitions: 'service',

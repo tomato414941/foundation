@@ -22,10 +22,10 @@ function storage() {
 
 test('選んだ権限と実行環境の身元と戻り先をAWSの作成画面へ引き継ぐ', async t => {
   for (const permission of ['ReadOnlyAccess', 'AdministratorAccess'] as const) await t.test(permission, () => {
-    const input = { ...setup(), permission }, url = new URL(awsRoleCreateUrl('https://objects.example/template?signature=a&expires=3600', input));
+    const input = { ...setup(), permission }, url = new URL(awsRoleCreateUrl('https://files.example/template?signature=a&expires=3600', input));
     const parameters = new URLSearchParams(url.hash.split('?')[1]);
     assert.equal(url.searchParams.get('region'), input.region);
-    assert.equal(parameters.get('templateURL'), 'https://objects.example/template?signature=a&expires=3600');
+    assert.equal(parameters.get('templateURL'), 'https://files.example/template?signature=a&expires=3600');
     assert.equal(parameters.get('param_PrincipalArn'), input.principalArn);
     assert.equal(parameters.get('param_ExternalId'), input.externalId);
     assert.equal(parameters.get('param_Policies'), 'arn:aws:iam::aws:policy/' + permission);

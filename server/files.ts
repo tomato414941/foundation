@@ -7,7 +7,7 @@ import type { Billing } from './billing.js';
 import type { Configuration } from './config.js';
 import { fail } from './errors.js';
 
-export interface ObjectStore {
+export interface FileStore {
   readonly enabled: boolean;
   put(id: string, body: Uint8Array, contentType: string): Promise<void>;
   get(id: string): Promise<Uint8Array>;
@@ -16,7 +16,7 @@ export interface ObjectStore {
   // A file Foundation itself hands out, such as a template, as a link that works for a while.
   publish(name: string, body: Uint8Array, contentType: string, seconds: number): Promise<string>;
 }
-export class S3Objects implements ObjectStore {
+export class S3Files implements FileStore {
   readonly client: S3Client;
   readonly enabled: boolean;
   constructor(readonly config: Configuration) {
@@ -24,7 +24,7 @@ export class S3Objects implements ObjectStore {
     this.enabled = Boolean(config.FOUNDATION_BUCKET);
   }
   private key(id: string) {
-    if (!this.enabled) fail(503, 'storage_unavailable', 'Object storage is not configured.');
+    if (!this.enabled) fail(503, 'storage_unavailable', 'File storage is not configured.');
     return { Bucket: this.config.FOUNDATION_BUCKET, Key: 'objects/' + id };
   }
   async put(id: string, body: Uint8Array, contentType: string) {
@@ -56,7 +56,7 @@ export class S3Objects implements ObjectStore {
     );
   }
   async publish(name: string, body: Uint8Array, contentType: string, seconds: number) {
-    if (!this.enabled) fail(503, 'storage_unavailable', 'Object storage is not configured.');
+    if (!this.enabled) fail(503, 'storage_unavailable', 'File storage is not configured.');
     const target = { Bucket: this.config.FOUNDATION_BUCKET, Key: 'published/' + name };
     await this.client.send(
       new PutObjectCommand({ ...target, Body: body, ContentType: contentType, ServerSideEncryption: 'AES256' }),
@@ -64,11 +64,11 @@ export class S3Objects implements ObjectStore {
     return getSignedUrl(this.client, new GetObjectCommand(target), { expiresIn: seconds });
   }
 }
-export class Objects {
+export class Files {
   constructor(
     readonly resources: Resources,
     readonly billing: Billing,
-    readonly store: ObjectStore,
+    readonly store: FileStore,
   ) {}
   async upload(
     actor: Actor,
@@ -78,19 +78,19 @@ export class Objects {
     contentType: string,
     previous?: ResourceRow,
   ) {
-    if (!this.store.enabled) fail(503, 'storage_unavailable', 'Object storage is not configured.');
-    if (body.length > 25 * 1024 * 1024) fail(413, 'object_limit', 'Files can be up to 25 MiB.');
+    if (!this.store.enabled) fail(503, 'storage_unavailable', 'File storage is not configured.');
+    if (body.length > 25 * 1024 * 1024) fail(413, 'file_limit', 'Files can be up to 25 MiB.');
     if (!/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+(?:;[\x20-\x7e]+)?$/u.test(contentType) || contentType.length > 200)
       fail(400, 'invalid_content_type', 'Choose a valid file content type.');
     if (previous) {
-      if (previous.kind !== 'object' || previous.owner_id !== ownerId)
-        fail(400, 'wrong_kind', 'Choose an object.');
+      if (previous.kind !== 'file' || previous.owner_id !== ownerId)
+        fail(400, 'wrong_kind', 'Choose a file.');
       await this.resources.authorization.requireResource(actor, previous, 'update');
-    } else if (!(await this.resources.authorization.canCreate(actor, ownerId, 'object')))
+    } else if (!(await this.resources.authorization.canCreate(actor, ownerId, 'file')))
       fail(403, 'forbidden', 'You cannot upload files for this principal.');
     const id = previous?.id ?? randomUUID(),
       storageId = randomUUID();
-    await this.resources.db.pool.query('INSERT INTO object_blobs(id) VALUES($1)', [storageId]);
+    await this.resources.db.pool.query('INSERT INTO file_blobs(id) VALUES($1)', [storageId]);
     await this.store.put(storageId, body, contentType);
     let row: ResourceRow;
     try {
@@ -107,18 +107,18 @@ export class Objects {
           ? await this.resources.update(previous, { name, data, privateData: storageId }, connection)
           : await this.resources.insert(
               ownerId,
-              'object',
+              'file',
               name,
               data,
               { id, privateData: storageId },
               connection,
             );
-        await connection.query('UPDATE object_blobs SET resource_id=NULL WHERE resource_id=$1', [id]);
-        await connection.query('UPDATE object_blobs SET resource_id=$2 WHERE id=$1', [storageId, id]);
+        await connection.query('UPDATE file_blobs SET resource_id=NULL WHERE resource_id=$1', [id]);
+        await connection.query('UPDATE file_blobs SET resource_id=$2 WHERE id=$1', [storageId, id]);
         await this.resources.audit.record(
           ownerId,
           actor.id,
-          'object.upload',
+          'file.upload',
           id,
           { bytes: body.length },
           connection,
@@ -133,12 +133,12 @@ export class Objects {
     return row;
   }
   async content(actor: Actor, row: ResourceRow) {
-    if (row.kind !== 'object') fail(400, 'wrong_kind', 'This item is not an object.');
+    if (row.kind !== 'file') fail(400, 'wrong_kind', 'This item is not a file.');
     await this.resources.authorization.requireResource(actor, row, 'use');
     return this.store.get(row.private_data!);
   }
   async link(actor: Actor, row: ResourceRow, minutes = 15) {
-    if (row.kind !== 'object') fail(400, 'wrong_kind', 'This item is not an object.');
+    if (row.kind !== 'file') fail(400, 'wrong_kind', 'This item is not a file.');
     await this.resources.authorization.requireResource(actor, row, 'use');
     const url = await this.store.link(row.private_data!, row.name, minutes * 60);
     return { url, expiresAt: new Date(Date.now() + minutes * 60_000).toISOString() };
@@ -151,19 +151,19 @@ export class Objects {
   private async collectOne(id: string) {
     await this.resources.db.transaction(async (connection) => {
       const row = await this.resources.db.one(
-        'SELECT id FROM object_blobs WHERE id=$1 AND resource_id IS NULL FOR UPDATE',
+        'SELECT id FROM file_blobs WHERE id=$1 AND resource_id IS NULL FOR UPDATE',
         [id],
         connection,
       );
       if (!row) return;
       await this.store.remove(id);
-      await connection.query('DELETE FROM object_blobs WHERE id=$1', [id]);
+      await connection.query('DELETE FROM file_blobs WHERE id=$1', [id]);
     });
   }
   async collect() {
     if (!this.store.enabled) return;
     const rows = await this.resources.db.all<{ id: string }>(
-      "SELECT id FROM object_blobs WHERE resource_id IS NULL AND created_at<now()-interval '1 hour' LIMIT 50",
+      "SELECT id FROM file_blobs WHERE resource_id IS NULL AND created_at<now()-interval '1 hour' LIMIT 50",
     );
     for (const row of rows) await this.collectOne(row.id);
   }

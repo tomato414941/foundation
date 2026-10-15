@@ -16,8 +16,8 @@ import { Functions } from './functions.js';
 import { KeySharing } from './key-sharing.js';
 import { Billing, StripePayments } from './billing.js';
 import type { PaymentProvider } from './billing.js';
-import { Objects, S3Objects } from './objects.js';
-import type { ObjectStore } from './objects.js';
+import { Files, S3Files } from './files.js';
+import type { FileStore } from './files.js';
 import { EC2Runner } from './ec2-runner.js';
 import type { Runner } from './runner.js';
 import { Environments } from './environments.js';
@@ -45,7 +45,7 @@ export interface Dependencies {
   mailer?: Mailer;
   transport?: Transport;
   payments?: PaymentProvider;
-  storage?: ObjectStore;
+  storage?: FileStore;
   runner?: Runner;
   ssh?: SSHClient;
 }
@@ -84,7 +84,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const processes = new Processes(resources, delegation);
   const invocations = new Invocations(functions, custody, delegation);
   principals.keySharing = new KeySharing(custody);
-  const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
+  const files = new Files(resources, billing, deps.storage ?? new S3Files(config)),
     environments = new Environments(
       resources,
       billing,
@@ -98,7 +98,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
-    objects, billing, processes, integrations, custody, delegation, functions, invocations });
+    files, billing, processes, integrations, custody, delegation, functions, invocations });
   const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin);
   executions.runtime = {
     get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
@@ -151,7 +151,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     transport,
     functions,
     billing,
-    objects,
+    files,
     environments,
     integrations,
     requests,
@@ -169,13 +169,15 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     invocations,
   };
   if (options.migrate) {
-    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }] = await Promise.all([
+    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }, { migrateFiles }] = await Promise.all([
       import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'), import('./migrations/migrate-runs.js'),
+      import('./migrations/migrate-files.js'),
     ]);
     await migrateExecutions(db, vault);
     await migrateRequests(db);
     await migrateHistory(context);
     await migrateRuns(db, vault);
+    await migrateFiles(db, vault);
     await db.assertReady();
   }
   return context;

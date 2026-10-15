@@ -52,7 +52,7 @@ export function ResourceTable({
                 ? Link2
                 : item.kind === 'variable'
                   ? KeyRound
-                  : item.kind === 'object'
+                  : item.kind === 'file'
                     ? File
                     : item.kind === 'environment'
                       ? Terminal
@@ -90,7 +90,7 @@ export function ResourceTable({
                       )}
                       <div className="flex gap-2 text-xs text-muted-foreground sm:hidden">
                         {stateBadge}
-                        {item.kind === 'object' && <Bytes value={item.data.size} />}
+                        {item.kind === 'file' && <Bytes value={item.data.size} />}
                         {item.kind === 'variable' && <Bytes value={item.data.bytes} />}
                       </div>
                     </div>
@@ -101,7 +101,7 @@ export function ResourceTable({
                     t(sectionFor(item.kind))
                   ) : state ? (
                     stateBadge
-                  ) : item.kind === 'object' ? (
+                  ) : item.kind === 'file' ? (
                     <Bytes value={item.data.size} />
                   ) : item.kind === 'variable' ? (
                     <Bytes value={item.data.bytes} />

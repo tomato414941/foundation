@@ -184,7 +184,7 @@ const words: Record<string, [string, string]> = {
   services: ['接続', 'Connections'],
   variables: ['変数', 'Variables'],
   encryptedValues: ['暗号化された値', 'Encrypted values'],
-  objects: ['ファイル', 'Files'],
+  files: ['ファイル', 'Files'],
   environments: ['実行環境', 'Environments'],
   functions: ['関数', 'Functions'],
   definitions: ['サービス定義', 'Service definitions'],
@@ -724,7 +724,7 @@ const words: Record<string, [string, string]> = {
 Object.assign(words, {
   'singular.connection': ['接続', 'connection'],
   'singular.variable': ['変数', 'variable'],
-  'singular.object': ['ファイル', 'file'],
+  'singular.file': ['ファイル', 'file'],
   'singular.environment': ['実行環境', 'environment'],
   'singular.function': ['関数', 'function'],
   'singular.service': ['サービス定義', 'service definition'],
@@ -919,7 +919,7 @@ const errors: Array<[string[], string, string]> = [
     'Could not connect to the environment. Please try again.',
   ],
   [
-    ['body_limit', 'object_limit'],
+    ['body_limit', 'file_limit'],
     'データが大きすぎます。ファイルは25 MB以下にしてください。',
     'The data is too large. Files must be 25 MB or smaller.',
   ],

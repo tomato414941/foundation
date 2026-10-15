@@ -202,7 +202,7 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
-      {item.kind === 'object' && (
+      {item.kind === 'file' && (
         <Panel>
           <div className="flex min-w-0 flex-wrap items-center gap-4">
             <Button variant="default" asChild>
@@ -336,7 +336,7 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
           <Bytes value={item.data.bytes} />
         </Detail>
       )}
-      {item.kind === 'object' && (
+      {item.kind === 'file' && (
         <Detail label={t('size')}>
           <Bytes value={item.data.size} />
         </Detail>

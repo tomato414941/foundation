@@ -232,8 +232,8 @@ test('CLIで登録して変数を保存し、コマンドへ渡して出力を�
 test('CLIは保存した複数の身元から既定の身元を切り替え、コマンドごとに指定した身元で実行する', async t => {
   const c = await cliFixture();
   t.after(c.close);
-  const first = JSON.parse((await c.run(['init', '--name', 'first-agent'])).stdout).principal,
-    second = JSON.parse((await c.run(['init', '--name', 'second-agent'])).stdout).principal;
+  const first = JSON.parse((await c.run(['init', '--name', 'first-agent', '--origin', c.origin])).stdout).principal,
+    second = JSON.parse((await c.run(['init', '--name', 'second-agent', '--origin', c.origin])).stdout).principal;
   const principalOf = async (args: string[], environment: Record<string, string> = {}) =>
     JSON.parse((await c.run(['status', ...args], undefined, environment)).stdout).principal.id;
   const listed = JSON.parse((await c.run(['identity', 'list'])).stdout);

@@ -4,7 +4,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments'];
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments', '003-files'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {

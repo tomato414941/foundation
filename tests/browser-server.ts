@@ -1,6 +1,6 @@
 import { fixture } from './support.js';
 import { Operations } from '../shared/custody.js';
-import { MemoryObjects, MemoryPayments, MemoryRunner } from './fakes.js';
+import { MemoryFiles, MemoryPayments, MemoryRunner } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
@@ -144,7 +144,7 @@ const context = await createContext(
   {
     db: fixtureData.db,
     mailer: fixtureData.mailer,
-    storage: new MemoryObjects(),
+    storage: new MemoryFiles(),
     payments: new MemoryPayments(),
     runner: browserRunner, ssh: browserRunner.ssh,
     transport: {

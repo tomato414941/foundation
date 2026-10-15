@@ -51,7 +51,7 @@ export default function Workspace() {
   }).find(item => item?.id === detail);
   const sectionPath = `/p/${data.principal.id}/${section}`;
   const detailLabel = resource?.name ?? t(section === 'settings' ? detail ?? 'general'
-    : detail === 'new' ? section === 'services' ? 'connect' : section === 'objects' ? 'upload' : 'create' : 'details');
+    : detail === 'new' ? section === 'services' ? 'connect' : section === 'files' ? 'upload' : 'create' : 'details');
   return (
     <>
       <Breadcrumb aria-label={t('breadcrumb')} className="mx-auto mb-6 max-w-6xl">

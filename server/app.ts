@@ -189,7 +189,7 @@ export async function buildApp(context: Context) {
       email: context.mailer.enabled,
       environments: context.environments.runner.enabled,
       ssh: context.environments.sshEnabled,
-      objects: context.objects.store.enabled,
+      files: context.files.store.enabled,
       payments: context.billing.provider.enabled,
     },
   }));

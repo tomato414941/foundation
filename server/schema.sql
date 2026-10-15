@@ -50,7 +50,7 @@ CREATE TABLE challenges (
 CREATE TABLE resources (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function','keyring')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','file','environment','function','keyring')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,
@@ -74,7 +74,7 @@ CREATE UNIQUE INDEX relations_on_resource ON relations(resource_id, relation, su
 CREATE INDEX relations_subject ON relations(subject_id, relation);
 CREATE UNIQUE INDEX relations_payer ON relations(principal_id) WHERE relation = 'payer';
 CREATE UNIQUE INDEX resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
-CREATE TABLE object_blobs (
+CREATE TABLE file_blobs (
   id uuid PRIMARY KEY,
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now()

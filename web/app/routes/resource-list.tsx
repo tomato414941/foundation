@@ -29,8 +29,8 @@ export default function ResourceList() {
   const [search] = useSearchParams();
   const { section = 'services' } = useParams();
   const available =
-    section === 'objects'
-      ? session.features.objects
+    section === 'files'
+      ? session.features.files
       : section === 'environments'
         ? session.features.environments
         : true;
@@ -43,7 +43,7 @@ export default function ResourceList() {
           <Button asChild>
             <Link to="new">
               <Plus className="size-4" />
-              {t(section === 'services' ? 'connect' : section === 'objects' ? 'upload' : 'create')}
+              {t(section === 'services' ? 'connect' : section === 'files' ? 'upload' : 'create')}
             </Link>
           </Button>
         )
