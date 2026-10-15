@@ -12,6 +12,9 @@ import time
 from manifest import digest, update_environment, validate, write_json
 
 
+KEPT_IMAGES = 3
+
+
 class Deployment:
     def __init__(self, manifest, root="/opt/foundation", env="/etc/foundation/v1.env", schema_change=False, expected_current=None):
         self.manifest = validate(manifest)
@@ -56,6 +59,19 @@ class Deployment:
             return target
         finally:
             self.run("docker", "rm", "-v", container)
+
+    def prune_images(self):
+        # Keep the newest releases for a quick rollback and remove older images so the disk does not fill up.
+        repository = self.manifest["image"].split("@", 1)[0]
+        listed = self.run("docker", "images", "--no-trunc", "--format", "{{.ID}}", repository).decode().split()
+        current = self.run("docker", "image", "inspect", "--format", "{{.Id}}", self.manifest["image"]).decode().strip()
+        kept = [current] + [image for image in dict.fromkeys(listed) if image != current][:KEPT_IMAGES - 1]
+        for image in dict.fromkeys(listed):
+            if image in kept: continue
+            try:
+                self.run("docker", "image", "rm", image)
+            except subprocess.CalledProcessError:
+                pass
 
     def verify(self):
         output = self.run("docker", "exec", "foundation-v1-foundation-1", "node", "/app/deploy/release/smoke.mjs")
@@ -125,6 +141,10 @@ class Deployment:
                 print(json.dumps({"migrationFailed": True, "backup": str(self.directory / "database.dump"),
                                   "automaticDatabaseRestore": False}), flush=True)
             raise
+        try:
+            self.prune_images()
+        except Exception as error:
+            print(json.dumps({"imagePruneFailed": str(error)}), flush=True)
 
 
 def main():

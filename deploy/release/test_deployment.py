@@ -12,10 +12,17 @@ class SimulatedDeployment(Deployment):
     def __init__(self, *args, fail=False, old_schema=None, running_commit=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fail, self.old_schema = fail, old_schema or b"schema"
-        self.applied = []
+        self.applied, self.removed = [], []
+        self.images = ["sha256:new", "sha256:previous", "sha256:older", "sha256:oldest", "sha256:ancient"]
         self.running_commit = running_commit or self.manifest["commit"]
 
     def run(self, *command, **kwargs):
+        if command[:2] == ("docker", "images"):
+            return "\n".join(self.images).encode()
+        if command[:3] == ("docker", "image", "inspect") and "{{.Id}}" in command:
+            return b"sha256:new"
+        if command[:3] == ("docker", "image", "rm"):
+            self.removed.append(command[3]); return b""
         if command[:3] == ("docker", "image", "inspect"):
             return json.dumps({"org.opencontainers.image.revision": self.manifest["commit"]}).encode()
         if command[:2] == ("docker", "inspect"):
@@ -68,6 +75,17 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn(self.manifest["image"], self.env.read_text())
         self.assertTrue(json.loads((deployment.directory / "state.json").read_text())["verified"])
         self.assertEqual((deployment.directory / "previous.env").read_text(), self.original)
+
+    def test_keeps_the_newest_three_images_and_removes_older_ones_after_deploying(self):
+        deployment = self.deployment()
+        deployment.execute()
+        self.assertEqual(deployment.removed, ["sha256:oldest", "sha256:ancient"])
+
+    def test_keeps_every_image_when_verification_fails(self):
+        deployment = self.deployment(fail=True)
+        with self.assertRaises(RuntimeError):
+            deployment.execute()
+        self.assertEqual(deployment.removed, [])
 
     def test_restores_previous_image_and_configuration_after_verification_failure(self):
         deployment = self.deployment(fail=True)
