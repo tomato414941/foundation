@@ -23,6 +23,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
     concurrency:
       group: foundation-tests-${{ github.ref }}
       cancel-in-progress: true
@@ -37,6 +40,21 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Authenticate public image pulls
+        id: images
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::052438773980:role/foundation-github-images
+          role-session-name: foundation-images-${{ github.run_id }}
+          aws-region: us-east-1
+          output-credentials: true
+          output-env-credentials: false
+      - name: Sign in to the public image registry
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.images.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.images.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.images.outputs.aws-session-token }}
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
       - name: Install test dependencies
         run: |
           sudo apt-get update
@@ -61,6 +79,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.mode != 'publish-only'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +100,21 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Authenticate public image pulls
+        id: images
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::052438773980:role/foundation-github-images
+          role-session-name: foundation-images-${{ github.run_id }}
+          aws-region: us-east-1
+          output-credentials: true
+          output-env-credentials: false
+      - name: Sign in to the public image registry
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.images.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.images.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.images.outputs.aws-session-token }}
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
       - name: Build the browser test application
         run: |
           npm ci --include=dev --no-audit --no-fund
@@ -123,6 +159,21 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Authenticate public image pulls
+        id: images
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: arn:aws:iam::052438773980:role/foundation-github-images
+          role-session-name: foundation-images-${{ github.run_id }}
+          aws-region: us-east-1
+          output-credentials: true
+          output-env-credentials: false
+      - name: Sign in to the public image registry
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.images.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.images.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.images.outputs.aws-session-token }}
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
       - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
           role-to-assume: arn:aws:iam::052438773980:role/foundation-github-build

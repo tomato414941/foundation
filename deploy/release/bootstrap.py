@@ -21,6 +21,19 @@ def configure_role(name, trust, policy_name, policy):
     aws("iam", "put-role-policy", "--role-name", name, "--policy-name", policy_name, "--policy-document", json.dumps(policy))
 
 
+def configure_image_pull_role(account, subject_prefix):
+    if account != "052438773980":
+        raise RuntimeError("Configure the Foundation account only.")
+    trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {
+        "Federated": "arn:aws:iam::" + account + ":oidc-provider/token.actions.githubusercontent.com"},
+        "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {"StringEquals": {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+            "token.actions.githubusercontent.com:sub": subject_prefix + ":ref:refs/heads/main"}}}]}
+    policy = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow",
+        "Action": ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"], "Resource": "*"}]}
+    configure_role("foundation-github-images", trust, "pull-public-images", policy)
+
+
 def configure_build_role(account, subject_prefix):
     if account != "052438773980":
         raise RuntimeError("Configure the Foundation account only.")
@@ -51,6 +64,7 @@ def main():
     subject = json.loads(subprocess.check_output(["gh", "api", "repos/tomato414941/foundation/actions/oidc/customization/sub"], text=True))
     if not subject.get("use_default") or not subject.get("sub_claim_prefix"):
         raise RuntimeError("Review the repository's custom OIDC subject before configuring its deployment role.")
+    configure_image_pull_role(account, subject["sub_claim_prefix"])
     configure_build_role(account, subject["sub_claim_prefix"])
     trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Federated": provider},
         "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {"StringEquals": {
