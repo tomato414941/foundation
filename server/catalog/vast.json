@@ -1,0 +1,30 @@
+{
+  "id": "vast",
+  "name": "Vast.ai",
+  "api": "https://cloud.vast.ai/api/v0",
+  "docs": "https://docs.vast.ai/",
+  "console": "https://cloud.vast.ai/manage-keys/",
+  "methods": {
+    "token": {
+      "name": "Vast.ai · Enter API key",
+      "kind": "token",
+      "docs": "https://docs.vast.ai/guides/reference/api-keys",
+      "console": "https://cloud.vast.ai/manage-keys/",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "note": "Create a key in Keys → API Keys with the permissions you need. Instance management permissions are required to create, stop, or delete GPU instances."
+          }
+        ],
+        "console": "https://cloud.vast.ai/manage-keys/",
+        "outputs": {
+          "VAST_API_KEY": "/token"
+        },
+        "hint": "Use VAST_API_KEY with the Vast.ai CLI or SDK, or as a Bearer token for the REST API. The key's permissions determine the available operations."
+      }
+    }
+  }
+}

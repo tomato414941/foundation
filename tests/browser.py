@@ -1006,9 +1006,9 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="追加", exact=True).click()
         expect(page.get_by_text("Automation は Browser account の代理", exact=True)).to_be_visible()
 
-    def test_VultrとRunPodのAPIキー接続を画面から作成する(self):
+    def test_クラウドのAPIキー接続を画面から作成する(self):
         page, principal = self.passkey_account("Compute account")
-        for service in ["Vultr", "RunPod"]:
+        for service in ["Vultr", "RunPod", "Vast.ai"]:
             with self.subTest(service=service):
                 page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
                 self.select(page, "サービス", service)

@@ -99,6 +99,9 @@ export const serviceLabels: Record<string, string> = {
   'runpod.token.token.label': 'APIキー',
   'runpod.token.token.note':
     '「Credentials → API Keys」でキーを作成し、必要なAPIとエンドポイントへの権限を選んでください。リソースの変更には書き込み権限が必要です。S3ストレージには別のS3 APIキーを使います。',
+  'vast.token.token.label': 'APIキー',
+  'vast.token.token.note':
+    'Vast.aiの「Keys → API Keys」で作成したキーを入力してください。GPUインスタンスの作成・停止・削除には管理権限が必要です。',
   'sakura.token.token.label': 'APIキー',
   'sakura.token.token.note':
     'さくらのVPSのAPIキーを入力してください。さくらのクラウドのAPIキーとは異なります。',

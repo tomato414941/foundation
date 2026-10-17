@@ -14,6 +14,7 @@ test('クラウドの接続を暗号化して保存し、選んだ接続のキ�
   for (const [serviceId, methodKey, output, url] of [
     ['vultr', 'token', 'VULTR_API_KEY', 'https://api.vultr.com/v2/instances'],
     ['runpod', 'token', 'RUNPOD_API_KEY', 'https://api.runpod.io/v2/pods'],
+    ['vast', 'token', 'VAST_API_KEY', 'https://cloud.vast.ai/api/v0/instances/'],
     ['hetzner', 'cloud-api-token', 'HCLOUD_TOKEN', 'https://api.hetzner.cloud/v1/servers'],
   ] as const) await t.test(serviceId, async t => {
     const token = serviceId + '-test-api-key';
