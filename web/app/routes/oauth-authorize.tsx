@@ -49,7 +49,7 @@ export default function OAuthAuthorizePage() {
     window.location.assign(target.href);
   };
   return (
-    <Page title={t('oauthTitle')} narrow>
+    <Page title={t('oauthAsk', { name: client.name, host: client.host })} narrow>
       <ErrorNotice error={task.error} />
       <Panel>
         <form
@@ -65,7 +65,6 @@ export default function OAuthAuthorizePage() {
           }}
         >
           <div className="flex min-w-0 flex-col gap-6">
-            <p>{t('oauthAsk', { name: client.name, host: client.host })}</p>
             <SelectField name="principalId" label={t('oauthAs')} value={principalId} onValueChange={setPrincipalId}>
               {candidates.map((item) => (
                 <SelectItem key={item.id} value={item.id}>
@@ -73,7 +72,6 @@ export default function OAuthAuthorizePage() {
                 </SelectItem>
               ))}
             </SelectField>
-            <p className="text-sm text-muted-foreground">{t('oauthScope')}</p>
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <Button type="submit" loading={task.busy}>
                 {t('allow')}
