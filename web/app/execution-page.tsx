@@ -7,7 +7,7 @@ import type { ApprovalView, JsonValue } from '../../shared/contracts';
 import { Execution } from '../../shared/executions';
 import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { atPointer } from '../../shared/values';
-import { actionResult, api, ApiFailure, errorCode, formText, session } from './api';
+import { actionResult, api, ApiFailure, errorCode, formText, holdingKeys, session } from './api';
 import { connectionClient, custodyClient, executionClient } from './custody';
 import { getIdentity, requireKeys, resealNow } from './keys';
 import { ResealingNotice } from './resealing-notice';
@@ -97,6 +97,7 @@ export async function clientLoader({ params, request }: PageArgs) {
     history.replaceState(null, '', window.location.pathname);
   }
   const account = await session(request);
+  if (account.principal && !account.requestId) await holdingKeys(request, account.principal.id);
   let item: PageExecution;
   try { item = await readItem(params.id!, requestMode, request.signal); }
   catch (error) {

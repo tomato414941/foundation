@@ -6,8 +6,10 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
 import { importJWK } from 'jose';
-import type { PrincipalView, PublicEncryptionKey } from '../../shared/contracts';
-import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
+import type { JWK } from 'jose';
+import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
+import { base64url, decode, encode, hold, newEncryptionKey, open, unbase64url, unwrap, wrap } from '../../shared/encryption';
+import { Session } from '../../shared/session';
 import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure, session } from './api';
@@ -225,11 +227,6 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     return authenticate(result.principalId, result.credentialId, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
-// Wraps the principal's private key for another of its passkeys, by authenticating with that passkey.
-export async function handKey(principal: Pick<PrincipalView, 'id' | 'publicKey'>, credentialId: string) {
-  const { reason } = await authenticate(principal.id, credentialId, await privateKeys(principal));
-  if (reason) throw new ApiFailure(reason);
-}
 export async function issueKey(
   principal: Pick<PrincipalView, 'id' | 'publicKey'>,
   name: string,
@@ -255,6 +252,42 @@ export async function issueKey(
     });
   await keep(principal.id, keys);
   return { token: issued.token + '.' + base64url(unlock) };
+}
+// Another device that holds the private key lets this browser in, the way it lets in the CLI: it issues an API key
+// carrying the private key and seals the key's token to this browser's one-time public key.
+export type Receiving = { id: string; code: string; poll: string; url: string; expiresAt: string; privateKey: JWK };
+export async function startReceiving(name: string): Promise<Receiving> {
+  const device = await newEncryptionKey();
+  const started = await api<Omit<Receiving, 'privateKey'>>('/auth/devices', {
+    method: 'POST',
+    body: { name, publicKey: device.publicKey },
+  });
+  return { ...started, privateKey: device.privateKey };
+}
+// Keeps the private key once the other device answered, and removes the API key it issued for this, which nothing
+// else uses. Returns false while the other device has not answered.
+export async function receiveKeys(receiving: Receiving, principalId: string) {
+  const polled = await api<{ state: string; principalId: string | null; sealed: SealedContent | null }>(
+    `/auth/devices/${receiving.id}?poll=${encodeURIComponent(receiving.poll)}`,
+  );
+  if (polled.state !== 'approved' || !polled.sealed) return false;
+  if (polled.principalId !== principalId) throw new ApiFailure('another_principal');
+  const [token, unlock] = decode(await open(polled.sealed, receiving.privateKey, receiving.id, 'device:' + receiving.id))
+    .split('.') as [string, string];
+  const asKey = async (path: string, method = 'GET') => {
+    const response = await fetch('/api' + path, { method, credentials: 'omit', headers: { authorization: 'Bearer ' + token } });
+    if (!response.ok) throw new ApiFailure('key_unavailable', response.status);
+    return response.status === 204 ? null : response.json() as Promise<unknown>;
+  };
+  const current = Session.parse(await asKey('/session'));
+  if (!current.wrappedKey || !current.credentialId || current.principal?.id !== principalId)
+    throw new ApiFailure('key_unavailable');
+  const keys = PrivateKeys.safeParse(await unwrap(current.wrappedKey, unbase64url(unlock), principalId).catch(() => null));
+  if (!keys.success) throw new ApiFailure('key_unavailable');
+  if (!matchesPublicKey(keys.data, current.principal.publicKey)) throw new ApiFailure('encryption_key_changed');
+  await asKey(`/principals/${principalId}/credentials/${current.credentialId}`, 'DELETE');
+  await keep(principalId, keys.data);
+  return true;
 }
 export async function decryptVariable(id: string, principalId: string) {
   const { custodyClient } = await import('./custody');

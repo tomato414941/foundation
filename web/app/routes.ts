@@ -3,6 +3,7 @@ export default [
   index('routes/index.tsx'),
   route('signin', 'routes/signin.tsx'),
   route('signin/email', 'routes/email.tsx'),
+  route('keys', 'routes/keys.tsx'),
   route('account', 'routes/account.tsx'),
   route('account/trust', 'routes/trust.tsx'),
   route('account/merge/:id', 'routes/merge.tsx'),

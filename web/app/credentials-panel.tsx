@@ -1,18 +1,15 @@
-import { useEffect, useState } from 'react';
-import { Link, useRevalidator } from 'react-router';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
-import { Confirm, DateText, ErrorNotice, Notice, Panel, useTask } from './components';
-import { getKey, handKey, openKeys } from './keys';
+import { Confirm, DateText, Notice, Panel } from './components';
 import type { PrincipalView } from '../../shared/contracts';
 import type { z } from 'zod';
 import type { Credential } from '../../shared/contracts';
 
 type CredentialView = z.infer<typeof Credential>;
 
-// Every way into a principal, with whether it can open encrypted values. The state of this browser's key
-// sits above the list, since it decides what the buttons below can do.
+// Every way into a principal, with whether it can open encrypted values.
 export function CredentialsPanel({
   principal,
   items,
@@ -23,39 +20,11 @@ export function CredentialsPanel({
   currentId: string | null;
 }) {
   const { t } = useTranslation();
-  const [unlocked, setUnlocked] = useState(false);
-  const task = useTask();
-  const revalidator = useRevalidator();
-  useEffect(() => {
-    void getKey(principal.id, principal.publicKey).then((key) => setUnlocked(!!key));
-  }, [principal.id, principal.publicKey, items]);
   const kind = (item: CredentialView) =>
     t(item.kind === 'key' ? 'apiKey' : item.kind === 'email' ? 'email' : 'passkey');
   return (
     <Panel title={t('credentials')}>
-      <ErrorNotice error={task.error} />
-      {!principal.publicKey ? (
-        <Notice tone="info">{t('keyMissing')}</Notice>
-      ) : (
-        <div className="flex min-w-0 flex-wrap items-center gap-4">
-          <Notice tone={unlocked ? 'success' : 'info'}>{t(unlocked ? 'keyReady' : 'keyLocked')}</Notice>
-          {!unlocked && (
-            <Button
-              variant="outline"
-              loading={task.busy}
-              onClick={() =>
-                task.run(async () => {
-                  await openKeys(principal.id);
-                  setUnlocked(true);
-                  await revalidator.revalidate();
-                })
-              }
-            >
-              {t('unlock')}
-            </Button>
-          )}
-        </div>
-      )}
+      {!principal.publicKey && <Notice tone="info">{t('keyMissing')}</Notice>}
       <ul className="divide-y divide-border">
         {items.map((item) => {
           const current = item.id === currentId;
@@ -85,21 +54,6 @@ export function CredentialsPanel({
                   )}
                 </div>
               </div>
-              {item.kind === 'passkey' && !item.canOpen && unlocked && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={task.busy}
-                  onClick={() =>
-                    task.run(async () => {
-                      await handKey(principal, item.id);
-                      await revalidator.revalidate();
-                    })
-                  }
-                >
-                  {t('handKey')}
-                </Button>
-              )}
               {!current && (
                 <Confirm label={t('delete')} name={item.name}>
                   <input type="hidden" name="intent" value="credential" />

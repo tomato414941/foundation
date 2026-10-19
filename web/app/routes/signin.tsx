@@ -60,10 +60,9 @@ export default function Signin() {
               disabled={create && !name.trim()}
               onClick={() =>
                 task.run(async () => {
-                  const auth = create ? await registerPasskey(name) : await authenticate();
-                  window.location.assign(
-                    back === '/' && !auth.encrypted ? '/account?encryption=unavailable' : back,
-                  );
+                  if (create) await registerPasskey(name);
+                  else await authenticate();
+                  window.location.assign(back);
                 })
               }
               variant="default"

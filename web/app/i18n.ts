@@ -284,20 +284,19 @@ const words: Record<string, [string, string]> = {
   value: ['値', 'Value'],
   verifyEnvironment: ['この実行環境の公開鍵を検証', 'Verify this environment’s public key'],
   removeRevokedConnection: ['アクセス取消済みの接続を削除', 'Remove the revoked connection'],
-  keyLocked: [
-    '暗号化された値を開くには、パスキーで認証してください。',
-    'Authenticate with a passkey to open encrypted values.',
+  keysTitle: ['この端末の準備', 'Set up this device'],
+  keysDescription: ['変数や接続を使うには、この端末に秘密鍵が必要です。', 'This device needs your private key to use variables and connections.'],
+  keysCreateDescription: [
+    '変数や接続を使うには、パスキーを登録してください。秘密鍵を作り、パスキーに入れます。',
+    'Add a passkey to use variables and connections. A private key is created and kept in the passkey.',
   ],
-  unlock: ['パスキーでロック解除', 'Unlock with a passkey'],
-  keyUnsupported: [
-    'このパスキーは暗号化に対応していません。別のパスキーをお使いください。',
-    'This passkey does not support encryption. Use another passkey.',
-  ],
-  keyUnavailable: [
-    'このアカウントの暗号化キーを開けません。登録済みの別のパスキーで認証してください。',
-    'The encryption key could not be opened. Authenticate with another registered passkey.',
-  ],
-  keyReady: ['この端末で暗号化された値を開けます。', 'Encrypted values are unlocked on this device.'],
+  passkeyOpen: ['パスキーで開く', 'Open with a passkey'],
+  passkeyOpenHelp: ['パスキーから秘密鍵を取り出します。', 'Retrieve the private key from your passkey.'],
+  receiveKeys: ['別の端末から受け取る', 'Receive from another device'],
+  receiveKeysHelp: ['秘密鍵がある端末から、この端末に秘密鍵を渡します。', 'Pass the private key to this device from a device that has it.'],
+  receiveKeysSteps: ['秘密鍵がある端末で次のURLを開き、コードを入力してください。', 'On a device that has the private key, open this URL and enter the code.'],
+  receiveStart: ['始める', 'Start'],
+  thisBrowser: ['ブラウザ', 'Browser'],
   'errors.encryption_key_changed': ['公開鍵が変わったため、この秘密鍵は使えません。', 'The public key changed, so this private key cannot be used.'],
   share: ['共有', 'Share'],
   transfer: ['所有者を変更', 'Transfer ownership'],
@@ -561,7 +560,6 @@ const words: Record<string, [string, string]> = {
   inUse: ['使用中', 'In use'],
   canOpen: ['暗号化された値を開ける', 'Can open encrypted values'],
   cannotOpen: ['暗号化された値を開けない', 'Cannot open encrypted values'],
-  handKey: ['鍵を渡す', 'Hand over the key'],
   issueKey: ['キーを発行', 'Issue a key'],
   keyMissing: [
     'このプリンシパルにはまだ暗号鍵がありません。パスキーを追加するか、キーを発行すると作られます。',
@@ -694,9 +692,10 @@ const words: Record<string, [string, string]> = {
     '実行環境を停止してから続けてください。',
     'Stop the environment before continuing.',
   ],
-  'errors.key_locked': [
-    '暗号化キーを開けません。パスキーでロックを解除してください。',
-    'Unlock the encryption key with your passkey.',
+  'errors.key_locked': ['この端末に秘密鍵がありません。', 'This device does not have the private key.'],
+  'errors.another_principal': [
+    '別のプリンシパルとして許可されました。このアカウントとして許可してください。',
+    'It was allowed as another principal. Allow it as this account.',
   ],
   'errors.key_unsupported': [
     'このパスキーかブラウザでは、秘密鍵を取り出せません。',

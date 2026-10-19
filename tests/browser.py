@@ -77,8 +77,8 @@ class BrowserTests(unittest.TestCase):
             "automaticPresenceSimulation": True, "hasPrf": prf,
         }})["authenticatorId"]
 
-    def passkey_account(self, name="Browser account", prf=True):
-        page = self.page()
+    def passkey_account(self, name="Browser account", prf=True, mobile=False):
+        page = self.page(mobile=mobile)
         cdp = page.context.new_cdp_session(page)
         cdp.send("WebAuthn.enable")
         self.authenticators[page] = (cdp, self.authenticator(cdp, prf))
@@ -87,7 +87,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
         page.get_by_role("button", name="パスキーを作成", exact=True).click()
         if not prf:
-            page.wait_for_url("**/account?encryption=unavailable")
+            page.wait_for_url("**/keys?**")
             return page, page.request.get(ORIGIN + "/api/session").json()["principal"]
         page.wait_for_url("**/p/**")
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
@@ -109,6 +109,22 @@ class BrowserTests(unittest.TestCase):
             db.close();
         }""")
         page.reload()
+
+    def open_at_gate(self, page):
+        expect(page.get_by_role("heading", name="この端末の準備", exact=True)).to_be_visible()
+        with self.passkey_asked(page):
+            page.get_by_role("button", name="パスキーで開く", exact=True).click()
+        page.wait_for_url(lambda url: "/keys" not in url)
+
+    def receive_keys(self, owner, page):
+        page.wait_for_url("**/keys?**")
+        page.get_by_role("button", name="始める", exact=True).click()
+        url = page.get_by_text(re.compile(r"/devices/")).inner_text()
+        code = page.get_by_text(re.compile(r"^[A-Z0-9]{4}-[A-Z0-9]{4}$")).inner_text()
+        owner.goto(url)
+        owner.get_by_role("textbox", name="確認コード", exact=True).fill(code)
+        owner.get_by_role("button", name="許可", exact=True).click()
+        page.wait_for_url(lambda url: "/keys" not in url)
 
     def passkey_asked(self, page):
         return page.expect_response(lambda response: response.url.endswith("/auth/passkeys/verify"))
@@ -229,10 +245,10 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_text("公開鍵のフィンガープリントが一致しません。相手に現在のフィンガープリントを確認してください。", exact=True)).to_be_visible()
             self.forget_keys(owner)
             owner.goto(ORIGIN + "/account/trust?principal=" + agent["principal"]["id"] + "#fingerprint=" + agent["fingerprint"])
+            self.open_at_gate(owner)
             expect(owner.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True)).to_have_value(agent["fingerprint"])
             owner.goto(url)
-            with self.passkey_asked(owner):
-                owner.get_by_role("button", name="承認", exact=True).click()
+            owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
             expect(owner.get_by_text("開ける相手の変更を、1件の項目に反映しました。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-sealed-ja.png"), full_page=True)
@@ -468,16 +484,6 @@ class BrowserTests(unittest.TestCase):
         print("Rendered execution settings: " + page.locator("main").inner_text(), flush=True)
         expect(page.locator("main")).to_contain_text("2099")
         reader, recipient = self.passkey_account("Function caller")
-        reader.evaluate("""() => new Promise((resolve, reject) => {
-          const request = indexedDB.open('foundation-keys', 2);
-          request.onsuccess = () => {
-            const db = request.result, transaction = db.transaction('keys', 'readwrite');
-            transaction.objectStore('keys').clear();
-            transaction.oncomplete = () => { db.close(); resolve(); };
-            transaction.onerror = () => reject(transaction.error);
-          };
-          request.onerror = () => reject(request.error);
-        })""")
         granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "runner", "objectId": function_id}, headers={"origin": ORIGIN})
         self.assertTrue(granted.ok, granted.text())
         reader.goto(function_path + "/run")
@@ -643,49 +649,54 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("updated-value")
         page.screenshot(path=str(ARTIFACTS / "variable-desktop-ja.png"), full_page=True, caret="initial")
 
-    def test_秘密鍵のない端末で変数を作成して内容を表示するとその場でパスキーを求める(self):
+    def test_秘密鍵のない端末では最初にパスキーで開いてから変数を作成して表示する(self):
         page, principal = self.passkey_account("Prompted account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables/new")
         self.forget_keys(page)
-        with self.passkey_asked(page):
-            self.variable(page, principal, "Prompted variable", "prompted-value")
-        self.forget_keys(page)
-        with self.passkey_asked(page):
-            page.get_by_role("button", name="内容を表示", exact=True).click()
+        page.wait_for_url("**/keys?**")
+        page.screenshot(path=str(ARTIFACTS / "keys-desktop-ja.png"), full_page=True)
+        print("Rendered key gate: " + page.locator("main").inner_text(), flush=True)
+        self.open_at_gate(page)
+        page.wait_for_url("**/variables/new")
+        self.variable(page, principal, "Prompted variable", "prompted-value")
+        page.get_by_role("button", name="内容を表示", exact=True).click()
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("prompted-value")
 
-    def test_秘密鍵を取り出せないパスキーでは秘密鍵が必要な操作で理由を表示する(self):
+    def test_秘密鍵を取り出せないパスキーでは最初の画面で理由を表示する(self):
         page, principal = self.passkey_account("Passkey without PRF", prf=False)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/variables/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Unsaved variable")
-        page.get_by_role("textbox", name="値", exact=True).fill("unsaved-value")
-        page.get_by_role("button", name="作成", exact=True).click()
+        cdp, authenticator_id = self.authenticators[page]
+        cdp.send("WebAuthn.clearCredentials", {"authenticatorId": authenticator_id})
+        page.get_by_role("textbox", name="名前", exact=True).fill("Passkey without PRF")
+        page.get_by_role("button", name="パスキーを追加", exact=True).click()
         expect(page.get_by_text("このパスキーかブラウザでは、秘密鍵を取り出せません。", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "keys-create-desktop-ja.png"), full_page=True)
 
-    def test_再読み込みのあとに鍵を渡すと秘密鍵を持つパスキーで取り出して別のパスキーに渡す(self):
-        page, principal = self.passkey_account("Handing account")
-        cdp, first = self.authenticators[page]
-        self.authenticator(cdp, transport="usb")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials")
-        self.forget_keys(page)
-        page.reload()
-        with self.passkey_asked(page):
-            page.get_by_role("button", name="パスキーでロック解除", exact=True).click()
-        cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": first, "enabled": False})
-        page.get_by_role("link", name="パスキーを追加", exact=True).click()
-        page.get_by_role("textbox", name="名前", exact=True).fill("Second passkey")
-        page.get_by_role("button", name="追加", exact=True).click()
-        page.wait_for_url("**/settings/credentials")
-        cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": first, "enabled": True})
-        items = page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/credentials").json()["items"]
-        second = next(item for item in items if item["name"] == "Second passkey")
-        self.assertTrue(page.request.post(f"{ORIGIN}/__test/credentials/{second['id']}/unwrap", data={}).ok)
-        page.reload()
-        row = page.get_by_role("listitem").filter(has_text="Second passkey")
-        expect(row).to_contain_text("暗号化された値を開けない")
-        row.get_by_role("button", name="鍵を渡す", exact=True).click()
-        expect(row).to_contain_text("暗号化された値を開ける")
-        self.assertTrue(next(item for item in page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/credentials")
-            .json()["items"] if item["id"] == second["id"])["canOpen"])
+    def test_メールで入った端末に別の端末から秘密鍵を渡して変数を表示する(self):
+        owner, principal = self.passkey_account("Receiving account")
+        path = self.variable(owner, principal, "Received variable", "received-value")
+        address = "receive-" + uuid.uuid4().hex[:8] + "@example.com"
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials/new?kind=email")
+        owner.get_by_role("textbox", name="メールアドレス", exact=True).fill(address)
+        owner.get_by_role("button", name="サインインリンクを送信", exact=True).click()
+        expect(owner.get_by_role("alert")).to_contain_text(address)
+        owner.goto(owner.request.get(ORIGIN + "/__test/mail/" + address).json()["link"])
+        owner.get_by_role("button", name="メールを確認して続ける", exact=True).click()
+        owner.wait_for_url(lambda url: "/signin/email" not in url)
+        other = self.page()
+        other.goto(ORIGIN + "/signin")
+        other.get_by_role("textbox", name="メールアドレス", exact=True).fill(address)
+        other.get_by_role("button", name="サインインリンクを送信", exact=True).click()
+        expect(other.get_by_role("alert")).to_contain_text(address)
+        other.goto(other.request.get(ORIGIN + "/__test/mail/" + address).json()["link"])
+        other.get_by_role("button", name="メールを確認して続ける", exact=True).click()
+        other.wait_for_url("**/keys?**")
+        other.screenshot(path=str(ARTIFACTS / "keys-receive-desktop-ja.png"), full_page=True)
+        self.receive_keys(owner, other)
+        other.goto(path)
+        other.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(other.get_by_role("textbox", name="値", exact=True)).to_have_value("received-value")
+        items = owner.request.get(f"{ORIGIN}/api/principals/{principal['id']}/credentials").json()["items"]
+        self.assertEqual(sorted(item["kind"] for item in items), ["email", "passkey"])
 
     def test_相手の鍵で共有した変数を開き共有解除を反映する(self):
         owner, principal = self.passkey_account("Variable owner")
@@ -732,14 +743,11 @@ class BrowserTests(unittest.TestCase):
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
         page.set_viewport_size({"width": 1440, "height": 1050})
         self.authenticator(cdp, transport="usb")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials")
+        page.goto(ORIGIN + "/account")
         self.forget_keys(page)
-        page.reload()
-        with self.passkey_asked(page):
-            page.get_by_role("button", name="パスキーでロック解除", exact=True).click()
-        cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": authenticator_id, "enabled": False})
-        page.get_by_role("link", name="アカウント", exact=True).first.click()
+        self.open_at_gate(page)
         page.wait_for_url("**/account")
+        cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": authenticator_id, "enabled": False})
         page.get_by_role("link", name="パスキーを追加", exact=True).click()
         page.wait_for_url(re.compile(r"/credentials/new\?"))
         page.get_by_role("textbox", name="名前", exact=True).fill("Additional passkey")
@@ -860,7 +868,6 @@ class BrowserTests(unittest.TestCase):
     def test_ログイン方法の一覧に鍵の状態と使用中の印を示し発行したキーが鍵を持つ(self):
         page, principal = self.passkey_account("Credentials viewer")
         page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials")
-        expect(page.get_by_text("この端末で暗号化された値を開けます。", exact=True)).to_be_visible()
         row = page.get_by_role("listitem").filter(has_text="Credentials viewer")
         expect(row.get_by_text("使用中", exact=True)).to_be_visible()
         expect(row.get_by_text("暗号化された値を開ける", exact=False)).to_be_visible()
@@ -1326,6 +1333,7 @@ class BrowserTests(unittest.TestCase):
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        self.receive_keys(owner, page)
         expect(page.locator("summary").filter(has_text="自動停止")).to_contain_text("なし")
         expect(page.get_by_text("今月の残り 60分", exact=True)).to_be_visible()
         expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
@@ -1410,6 +1418,7 @@ class BrowserTests(unittest.TestCase):
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        self.receive_keys(owner, page)
         page.get_by_text("SSH接続", exact=True).click()
         page.get_by_role("button", name="公開鍵を追加", exact=True).click()
         keys = page.get_by_role("textbox", name="公開鍵 1", exact=True)
@@ -1553,6 +1562,7 @@ class BrowserTests(unittest.TestCase):
         page = self.page(webkit=True, mobile=True)
         page.context.add_cookies(owner.context.cookies())
         page.goto(path)
+        self.receive_keys(owner, page)
         page.get_by_role("link", name="実行環境の一覧へ戻る", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/environments")
         page.get_by_role("link", name="Mobile deletion environment", exact=True).click()
@@ -1701,7 +1711,7 @@ class BrowserTests(unittest.TestCase):
         projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Link project", [item["name"] for item in projects])
 
-    def test_モバイルでメール認証して英語表示へ切り替えフォームを操作する(self):
+    def test_モバイルでメール認証するとパスキーの登録を求め英語表示へ切り替える(self):
         page = self.page(webkit=True, mobile=True)
         address = "mobile-" + uuid.uuid4().hex[:8] + "@example.com"
         page.goto(ORIGIN + "/signin")
@@ -1711,7 +1721,16 @@ class BrowserTests(unittest.TestCase):
         link = page.request.get(ORIGIN + "/__test/mail/" + address).json()["link"]
         page.goto(link)
         page.get_by_role("button", name="メールを確認して続ける", exact=True).click()
-        page.wait_for_url("**/p/**")
+        page.wait_for_url("**/keys?**")
+        expect(page.get_by_role("button", name="パスキーを追加", exact=True)).to_be_visible()
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        self.select(page, "言語", "English")
+        expect(page.get_by_role("heading", name="Set up this device", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Sign out", exact=True).click()
+        page.wait_for_url("**/signin")
+
+    def test_モバイルで英語表示へ切り替えフォームを操作する(self):
+        page, _principal = self.passkey_account("Mobile account", mobile=True)
         self.select(page, "言語", "English")
         page.get_by_role("button", name="Open navigation", exact=True).click()
         expect(page.get_by_role("dialog")).to_be_visible()

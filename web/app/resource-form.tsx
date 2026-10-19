@@ -12,7 +12,7 @@ import { decode } from '../../shared/encryption';
 import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
-import { actionResult, api, ApiFailure, errorCode, formText, jsonField, session, upload } from './api';
+import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable, requireKeys } from './keys';
 import { executionClient, custodyClient, functionClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
@@ -80,40 +80,29 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
   let content = '',
-    binary = false,
-    locked = false;
+    binary = false;
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
   let connection: ReturnType<typeof connectionInitialValues> | undefined;
   let selectedExecutors: string[] = [];
-  if (kind === 'function') {
-    try { await custodyClient(); } catch (error) { if (errorCode(error) !== 'key_locked') throw error; locked = true; }
-  }
   if (resource && isProtected(resource.kind)) {
-    try {
-      const client = await custodyClient(), item = await client.read(resource.id);
-      selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
-        item.content.policy.grants.some(grant => 'actor' in grant && grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
-      if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
-      if (resource.kind === 'connection') {
-        const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
-        pinnedMethod = methods?.items.find(method => method.id === state.methodId) ?? { ...state.method, id: state.methodId, builtin: false, availability: 'ready', defaultName: state.method.name,
-          registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
-        connection = connectionInitialValues(state);
-      }
-    } catch (error) { if (errorCode(error) !== 'key_locked') throw error; locked = true; }
+    const client = await custodyClient(), item = await client.read(resource.id);
+    selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
+      item.content.policy.grants.some(grant => 'actor' in grant && grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
+    if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+    if (resource.kind === 'connection') {
+      const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+      pinnedMethod = methods?.items.find(method => method.id === state.methodId) ?? { ...state.method, id: state.methodId, builtin: false, availability: 'ready', defaultName: state.method.name,
+        registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
+      connection = connectionInitialValues(state);
+    }
   }
   if (resource?.kind === 'variable') {
+    const bytes = await decryptVariable(resource.id, sessionData.principal!.id);
     try {
-      const bytes = await decryptVariable(resource.id, sessionData.principal!.id);
-      try {
-        content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      } catch {
-        binary = true;
-      }
-    } catch (error) {
-      if (errorCode(error) !== 'key_locked') throw error;
-      locked = true;
+      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      binary = true;
     }
   }
   return {
@@ -145,7 +134,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     selectedExecutors,
     content,
     binary,
-    locked,
     serviceId: query.get('service'),
     methodId: query.get('method'),
     environmentId: query.get('environment'),
@@ -360,230 +348,205 @@ export default function ResourceForm() {
           {t('paymentRequired')}
         </Notice>
       )}
-      {data.locked ? (
-        <Notice
-          action={
-            <Button variant="ghost" asChild>
-              <Link to="/account">{t('unlock')}</Link>
-            </Button>
-          }
-          tone={'warning'}
-        >
-          {t('keyLocked')}
-        </Notice>
-      ) : (
-        <Form method="post" encType="multipart/form-data">
-          <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(12rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
-            <input type="hidden" name="version" value={existing?.version ?? ''} />
-            {existing?.kind === 'connection' && (
-              <input type="hidden" name="connectionId" value={existing.id} />
-            )}
-              <>
-                {data.kind !== 'environment' && nameField}
-                {data.kind === 'variable' && (
-                  <Panel>
-                    {!sessionData.principal?.publicKey && (
-                      <Notice
-                        action={
-                          <Button variant="ghost" asChild>
-                            <Link to="/account">{t('addPasskey')}</Link>
-                          </Button>
-                        }
-                        tone={'info'}
-                      >
-                        {t('keyLocked')}
-                      </Notice>
-                    )}
-                    {!data.binary && (
-                      <TextareaField
-                        name="value"
-                        label={t('value')}
-                        defaultValue={data.content}
-                        autoComplete="off"
-                        rows={5}
-                        spellCheck={false}
-                      />
-                    )}
-                    <InputField type="file" name="file" label={t('file')} />
-                  </Panel>
-                )}
-                {data.kind === 'object' && (
-                  <InputField
-                    type="file"
-                    required
-                    name="file"
-                    label={t('file')}
-                    onChange={(event) =>
-                      setFileName((event.target as HTMLInputElement).files?.[0]?.name ?? '')
-                    }
-                  />
-                )}
-                {['connection', 'app'].includes(data.kind) && (
-                  <Panel>
-                    <SelectField
-                      label={t('service')}
-                      value={serviceId || 'none'}
-                      disabled={!!existing && !(existing.kind === 'connection' && !existing.data.services.length)}
-                      onValueChange={(value) => {
-                        const selectedId = value === 'none' ? '' : value;
-                        setServiceId(selectedId);
-                        const next = data.catalog.find((item) => item.id === selectedId);
-                        const nextTarget = next?.targets?.find(target => target.methods.some(key =>
-                          eligibleMethods.some(method => method.id === next.methods[key]?.id)));
-                        setTargetId(nextTarget?.id ?? '');
-                        setMethodId(preferred(offered(next, nextTarget?.id))?.id ?? '');
-                      }}
-                    >
-                      <SelectItem value="none">{t('noService')}</SelectItem>
-                      {data.catalog
-                        .filter(
-                          (item) =>
-                            data.kind !== 'app' ||
-                            Object.values(item.methods).some((method) => connectionMethod(method).application !== 'none'),
-                        )
-                        .map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
-                            {item.name}
-                          </SelectItem>
-                        ))}
-                    </SelectField>
-                    {targets.length > 1 && <SelectField label={t('serviceTarget')}
-                      value={target?.id ?? ''} disabled={!!existing && data.kind !== 'connection'}
-                      onValueChange={value => {
-                        setTargetId(value);
-                        setMethodId(preferred(offered(service, value))?.id ?? '');
-                      }}>
-                      {targets.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-                    </SelectField>}
-                    <SelectField
-                      key={serviceId + ':' + (target?.id ?? '')}
-                      name="methodId"
-                      label={t('method')}
-                      value={methodId}
-                      disabled={!!existing && data.kind !== 'connection'}
-                      onValueChange={(value) => setMethodId(value)}
-                    >
-                      {(existing && data.kind === 'app' && method ? [method] : [...methods, ...(data.pinnedMethod && !methods.some(item => item.id === data.pinnedMethod?.id) ? [data.pinnedMethod] : [])]).map((item) => (
+      <Form method="post" encType="multipart/form-data">
+        <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(12rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
+          <input type="hidden" name="version" value={existing?.version ?? ''} />
+          {existing?.kind === 'connection' && (
+            <input type="hidden" name="connectionId" value={existing.id} />
+          )}
+            <>
+              {data.kind !== 'environment' && nameField}
+              {data.kind === 'variable' && (
+                <Panel>
+                  {!data.binary && (
+                    <TextareaField
+                      name="value"
+                      label={t('value')}
+                      defaultValue={data.content}
+                      autoComplete="off"
+                      rows={5}
+                      spellCheck={false}
+                    />
+                  )}
+                  <InputField type="file" name="file" label={t('file')} />
+                </Panel>
+              )}
+              {data.kind === 'object' && (
+                <InputField
+                  type="file"
+                  required
+                  name="file"
+                  label={t('file')}
+                  onChange={(event) =>
+                    setFileName((event.target as HTMLInputElement).files?.[0]?.name ?? '')
+                  }
+                />
+              )}
+              {['connection', 'app'].includes(data.kind) && (
+                <Panel>
+                  <SelectField
+                    label={t('service')}
+                    value={serviceId || 'none'}
+                    disabled={!!existing && !(existing.kind === 'connection' && !existing.data.services.length)}
+                    onValueChange={(value) => {
+                      const selectedId = value === 'none' ? '' : value;
+                      setServiceId(selectedId);
+                      const next = data.catalog.find((item) => item.id === selectedId);
+                      const nextTarget = next?.targets?.find(target => target.methods.some(key =>
+                        eligibleMethods.some(method => method.id === next.methods[key]?.id)));
+                      setTargetId(nextTarget?.id ?? '');
+                      setMethodId(preferred(offered(next, nextTarget?.id))?.id ?? '');
+                    }}
+                  >
+                    <SelectItem value="none">{t('noService')}</SelectItem>
+                    {data.catalog
+                      .filter(
+                        (item) =>
+                          data.kind !== 'app' ||
+                          Object.values(item.methods).some((method) => connectionMethod(method).application !== 'none'),
+                      )
+                      .map((item) => (
                         <SelectItem key={item.id} value={item.id}>
-                          {connectionMethodName(item.name, t, service?.name)}
+                          {item.name}
                         </SelectItem>
                       ))}
-                    </SelectField>
-                    {existing && <input type="hidden" name="methodId" value={methodId} />}
-                    <ConnectionMethodHelp method={method} connecting={data.kind === 'connection'} />
-                    {!existing && !!existingConnections.length && (
-                      <Notice tone={'info'}>
-                        <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
-                        {existingConnections.map((item) => (
-                          <Button key={item.id} variant="ghost" asChild>
-                            <Link to={resourcePath(item)}>{item.name}</Link>
-                          </Button>
-                        ))}
-                      </Notice>
-                    )}
-                    {methodUnavailable && (
-                      <Notice tone={'info'}>
-                        {t(
-                          method?.availability === 'app-required' ? 'appRequired' : 'methodUnavailable',
-                        )}
-                      </Notice>
-                    )}
-                    <ConnectionFields key={methodId} purpose={data.kind === 'app' ? 'app' : 'connection'}
-                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} reusableFields={data.connection?.reusableFields}
-                      appSetupUrl={method ? `/p/${principal.id}/apps/new?method=${encodeURIComponent(method.id)}&service=${encodeURIComponent(serviceId)}` : undefined} />
-                  </Panel>
-                )}
-                {executorChoice}
-                <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
-                  initial={data.connection} newConnection={data.kind === 'connection' && !existing}
+                  </SelectField>
+                  {targets.length > 1 && <SelectField label={t('serviceTarget')}
+                    value={target?.id ?? ''} disabled={!!existing && data.kind !== 'connection'}
+                    onValueChange={value => {
+                      setTargetId(value);
+                      setMethodId(preferred(offered(service, value))?.id ?? '');
+                    }}>
+                    {targets.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+                  </SelectField>}
+                  <SelectField
+                    key={serviceId + ':' + (target?.id ?? '')}
+                    name="methodId"
+                    label={t('method')}
+                    value={methodId}
+                    disabled={!!existing && data.kind !== 'connection'}
+                    onValueChange={(value) => setMethodId(value)}
+                  >
+                    {(existing && data.kind === 'app' && method ? [method] : [...methods, ...(data.pinnedMethod && !methods.some(item => item.id === data.pinnedMethod?.id) ? [data.pinnedMethod] : [])]).map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {connectionMethodName(item.name, t, service?.name)}
+                      </SelectItem>
+                    ))}
+                  </SelectField>
+                  {existing && <input type="hidden" name="methodId" value={methodId} />}
+                  <ConnectionMethodHelp method={method} connecting={data.kind === 'connection'} />
+                  {!existing && !!existingConnections.length && (
+                    <Notice tone={'info'}>
+                      <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
+                      {existingConnections.map((item) => (
+                        <Button key={item.id} variant="ghost" asChild>
+                          <Link to={resourcePath(item)}>{item.name}</Link>
+                        </Button>
+                      ))}
+                    </Notice>
+                  )}
+                  {methodUnavailable && (
+                    <Notice tone={'info'}>
+                      {t(
+                        method?.availability === 'app-required' ? 'appRequired' : 'methodUnavailable',
+                      )}
+                    </Notice>
+                  )}
+                  <ConnectionFields key={methodId} purpose={data.kind === 'app' ? 'app' : 'connection'}
+                    method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} reusableFields={data.connection?.reusableFields}
+                    appSetupUrl={method ? `/p/${principal.id}/apps/new?method=${encodeURIComponent(method.id)}&service=${encodeURIComponent(serviceId)}` : undefined} />
+                </Panel>
+              )}
+              {executorChoice}
+              <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
+                initial={data.connection} newConnection={data.kind === 'connection' && !existing}
+                />
+              {data.kind === 'environment' && (
+                <EnvironmentForm owner={principal} usage={data.usage}
+                  payment={data.payment} canManageBilling={principal.permissions.includes('manage_billing')}
+                  canManagePayment={sessionData.principals.some(item => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'))}
+                  ssh={sessionData.features.ssh} available={!unavailable} back={back} busy={navigation.state === 'submitting'} />
+              )}
+              {data.kind === 'function' && (
+                <>
+                  <TextareaField
+                    name="description"
+                    label={t('description')}
+                    defaultValue={spec?.description ?? ''}
+                    rows={2}
                   />
-                {data.kind === 'environment' && (
-                  <EnvironmentForm owner={principal} usage={data.usage}
-                    payment={data.payment} canManageBilling={principal.permissions.includes('manage_billing')}
-                    canManagePayment={sessionData.principals.some(item => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'))}
-                    ssh={sessionData.features.ssh} available={!unavailable} back={back} busy={navigation.state === 'submitting'} />
-                )}
-                {data.kind === 'function' && (
-                  <>
-                    <TextareaField
-                      name="description"
-                      label={t('description')}
-                      defaultValue={spec?.description ?? ''}
-                      rows={2}
-                    />
-                    <SelectField name="programKind" label={t('functionProgram')} value={programKind} onValueChange={value => setProgramKind(value as 'command' | 'http')}>
-                      <SelectItem value="command">{t('command')}</SelectItem>
-                      <SelectItem value="http">{t('http')}</SelectItem>
-                    </SelectField>
-                    {programKind === 'http' ? <Panel title={t('http')}>
-                      <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined}
-                        connections={data.httpConnections} />
-                      <SelectField name="responseFormat" label={t('functionResponseFormat')} defaultValue={spec?.program.kind === 'http' ? spec.program.responseFormat : 'json'}>
-                        <SelectItem value="json">JSON</SelectItem>
-                        <SelectItem value="text">{t('functionText')}</SelectItem>
-                      </SelectField>
-                      <p className="text-sm text-muted-foreground">{t('functionHttpResultHelp')}</p>
-                    </Panel> : <Panel title={t('command')}>
-                      <JsonField name="command" label={t('functionCommand')} value={spec?.program.kind === 'command' ? spec.program.command : ['node', '-e', 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.stringify(JSON.parse(input))));']} />
-                      <p className="text-sm text-muted-foreground">{t('functionArgumentsHelp')}</p>
-                      <JsonField name="inputs" label={t('functionInputs')} value={spec?.program.kind === 'command' ? spec.program.inputs : []} />
-                      <InputField name="timeoutSeconds" label={t('functionTimeout')} type="number" min={1} max={3600} required defaultValue={spec?.program.kind === 'command' ? spec.program.timeoutSeconds : 60} />
-                    </Panel>}
-                    <JsonField
-                      name="parameters"
-                      label={t('parameters')}
-                      value={spec?.parameters ?? []}
-                    />
-                    {programKind === 'command' && <SelectField name="result" label={t('functionResult')} defaultValue={spec?.result ?? 'json'}>
+                  <SelectField name="programKind" label={t('functionProgram')} value={programKind} onValueChange={value => setProgramKind(value as 'command' | 'http')}>
+                    <SelectItem value="command">{t('command')}</SelectItem>
+                    <SelectItem value="http">{t('http')}</SelectItem>
+                  </SelectField>
+                  {programKind === 'http' ? <Panel title={t('http')}>
+                    <RequestFields value={spec?.program.kind === 'http' ? spec.program.request : undefined}
+                      connections={data.httpConnections} />
+                    <SelectField name="responseFormat" label={t('functionResponseFormat')} defaultValue={spec?.program.kind === 'http' ? spec.program.responseFormat : 'json'}>
                       <SelectItem value="json">JSON</SelectItem>
                       <SelectItem value="text">{t('functionText')}</SelectItem>
-                    </SelectField>}
-                    <p className="text-sm text-muted-foreground">{t('functionResultDisclosure')}</p>
-                  </>
-                )}
-                {(data.kind === 'service' || data.kind === 'method') && (
+                    </SelectField>
+                    <p className="text-sm text-muted-foreground">{t('functionHttpResultHelp')}</p>
+                  </Panel> : <Panel title={t('command')}>
+                    <JsonField name="command" label={t('functionCommand')} value={spec?.program.kind === 'command' ? spec.program.command : ['node', '-e', 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.stringify(JSON.parse(input))));']} />
+                    <p className="text-sm text-muted-foreground">{t('functionArgumentsHelp')}</p>
+                    <JsonField name="inputs" label={t('functionInputs')} value={spec?.program.kind === 'command' ? spec.program.inputs : []} />
+                    <InputField name="timeoutSeconds" label={t('functionTimeout')} type="number" min={1} max={3600} required defaultValue={spec?.program.kind === 'command' ? spec.program.timeoutSeconds : 60} />
+                  </Panel>}
                   <JsonField
-                    name="definition"
-                    label={t('definition')}
-                    rows={15}
-                    value={
-                      existing?.kind === 'service' || existing?.kind === 'method'
-                        ? existing.data
-                        : data.kind === 'method'
-                          ? {
-                              kind: 'token',
-                              config: {
-                                fields: [
-                                  { name: 'token', label: 'API key', secret: true, required: true },
-                                ],
-                                outputs: { API_KEY: '/token' },
-                              },
-                            }
-                          : {
-                              methods: {},
-                            }
-                    }
+                    name="parameters"
+                    label={t('parameters')}
+                    value={spec?.parameters ?? []}
                   />
-                )}
-              </>
-            {data.kind !== 'environment' && !unavailable && !methodUnavailable && !appMissing && (
-              <SaveBar
-                back={back}
-                label={
-                  data.kind === 'connection'
-                    ? 'connect'
-                    : existing
-                      ? 'save'
-                      : data.kind === 'object'
-                        ? 'upload'
-                        : 'create'
-                }
-                busy={navigation.state === 'submitting'}
-              />
-            )}
-          </div>
-        </Form>
-      )}
+                  {programKind === 'command' && <SelectField name="result" label={t('functionResult')} defaultValue={spec?.result ?? 'json'}>
+                    <SelectItem value="json">JSON</SelectItem>
+                    <SelectItem value="text">{t('functionText')}</SelectItem>
+                  </SelectField>}
+                  <p className="text-sm text-muted-foreground">{t('functionResultDisclosure')}</p>
+                </>
+              )}
+              {(data.kind === 'service' || data.kind === 'method') && (
+                <JsonField
+                  name="definition"
+                  label={t('definition')}
+                  rows={15}
+                  value={
+                    existing?.kind === 'service' || existing?.kind === 'method'
+                      ? existing.data
+                      : data.kind === 'method'
+                        ? {
+                            kind: 'token',
+                            config: {
+                              fields: [
+                                { name: 'token', label: 'API key', secret: true, required: true },
+                              ],
+                              outputs: { API_KEY: '/token' },
+                            },
+                          }
+                        : {
+                            methods: {},
+                          }
+                  }
+                />
+              )}
+            </>
+          {data.kind !== 'environment' && !unavailable && !methodUnavailable && !appMissing && (
+            <SaveBar
+              back={back}
+              label={
+                data.kind === 'connection'
+                  ? 'connect'
+                  : existing
+                    ? 'save'
+                    : data.kind === 'object'
+                      ? 'upload'
+                      : 'create'
+              }
+              busy={navigation.state === 'submitting'}
+            />
+          )}
+        </div>
+      </Form>
     </Page>
   );
 }

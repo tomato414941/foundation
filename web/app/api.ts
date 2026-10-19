@@ -5,6 +5,7 @@ import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
 import { ClientFailure, SubmissionPending } from '../../shared/client';
 import { Execution } from '../../shared/executions';
+import { getIdentity } from './keys';
 
 export class ApiFailure extends Error {
   constructor(
@@ -48,14 +49,22 @@ export const Changed = z.union([Ok, Execution]);
 export async function session(request?: Request): Promise<SessionView> {
   return api('/session', { signal: request?.signal }, Session);
 }
+// Where to come back to. A link's fragment never reaches the loader, so the address bar's is kept when it is this page's.
+function here(request: Request) {
+  const url = new URL(request.url);
+  return encodeURIComponent(url.pathname + url.search + (location.pathname === url.pathname ? location.hash : ''));
+}
+// Every page past sign-in works with the private key, so a browser that does not hold it stops at one page first.
+// A request link's session answers only its own request without the private key, so it does not stop.
+export async function holdingKeys(request: Request, principalId: string) {
+  if (!(await getIdentity(principalId))) throw redirect('/keys?returnTo=' + here(request));
+}
 export async function signedIn(request: Request) {
   const data = await session(request);
-  if (!data.principal)
-    throw redirect(
-      '/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname + new URL(request.url).search),
-    );
+  if (!data.principal) throw redirect('/signin?returnTo=' + here(request));
   if (data.requestId && new URL(request.url).pathname !== '/requests/' + data.requestId)
     throw redirect('/requests/' + data.requestId);
+  if (!data.requestId) await holdingKeys(request, data.principal.id);
   return data;
 }
 export function safeReturn(value: string | null | undefined, fallback = '/') {

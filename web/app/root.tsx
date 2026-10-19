@@ -95,7 +95,8 @@ export default function App() {
   const task = useTask();
   const principal = data.principals.find((item) => item.id === owner) ?? data.principal;
   const prefix = '/p/' + (owner ?? data.principal?.id);
-  const authenticated = !!data.principal && !data.requestId;
+  // The page that sets up this device comes before everything else, so it shows nothing to go to.
+  const authenticated = !!data.principal && !data.requestId && location.pathname !== '/keys';
   useEffect(() => {
     const language = localStorage.getItem('foundation.language');
     if (language === 'en' || language === 'ja') void i18n.changeLanguage(language);
