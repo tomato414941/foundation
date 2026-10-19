@@ -23,58 +23,42 @@ export function registerMetadataTools(server: McpServer, gateway: {
   request(method: string, path: string, body?: unknown): Promise<unknown>;
   executionResult?(id: string): Promise<unknown>;
 }) {
-  server.registerTool('foundation_functions', {
-    title: 'Find callable functions', description: 'List functions available to this identity and their declared inputs. Execute permission exposes the calling interface; reading the program requires separate permission.',
-    inputSchema: z.object({ query: z.string().max(200).optional(), limit: z.number().int().min(1).max(100).default(20),
-      after: Id.optional(), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, input => mcpCall(() => {
-    const query = new URLSearchParams({ limit: String(input.limit), ...(input.query ? { query: input.query } : {}),
-      ...(input.after ? { after: input.after } : {}) });
-    return gateway.request('GET', '/api/functions?' + query);
-  }, input.response_format));
-  server.registerTool('foundation_invoke_function', {
-    title: 'Invoke a saved function', description: 'Call a function using only its ID and declared arguments. Requires execute permission on the function. Connections and variables stay inside the approved executor. Returns an execution ID; use foundation_execution_result to read its state and result. Reuse the same id and arguments after a transport failure to avoid starting another invocation.',
-    inputSchema: z.object({ functionId: Id, arguments: JsonObject.default({}), id: Id.optional(), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, input => mcpCall(async () => {
-    const id = input.id ?? crypto.randomUUID();
-    try { return await gateway.request('POST', '/api/functions/' + input.functionId + '/executions', { id, arguments: input.arguments }); }
-    catch (error) { throw new Error((error instanceof Error ? error.message : 'The invocation request failed.') +
-      ' Check execution ' + id + ' or retry with the same id and arguments.'); }
-  }, input.response_format));
-  server.registerTool('foundation_execution_result', {
-    title: 'Read an execution', description: 'Read an execution state, error, and result. Does not start or retry work. Large results are returned as JSON text with offset/limit and a next offset.',
-    inputSchema: z.object({ id: Id, offset: z.number().int().min(0).default(0),
-      limit: z.number().int().min(1).max(20000).default(20000), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, input => mcpCall(async () => {
-    const execution = gateway.executionResult ? await gateway.executionResult(input.id)
-      : (await gateway.request('GET', '/api/executions/' + input.id) as { body: unknown }).body;
-    const { results, ...metadata } = execution as Record<string, unknown>, serialized = JSON.stringify(results), text = serialized.slice(input.offset, input.offset + input.limit);
-    return { ...metadata, offset: input.offset, text, next: input.offset + text.length < serialized.length ? input.offset + text.length : null };
-  }, input.response_format));
-  server.registerTool('foundation_cancel_execution', {
-    title: 'Cancel a function invocation', description: 'Cancel a queued invocation or ask its executor to stop an active invocation. Cancellation cannot undo effects that already happened. Inspect the final invocation state before deciding to call again.',
-    inputSchema: z.object({ id: Id, response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, input => mcpCall(() => gateway.request('POST', '/api/executions/' + input.id + '/cancel', {}), input.response_format));
   server.registerTool('foundation_schema', {
     title: 'Inspect the Foundation API',
-    description: 'Inspect API paths or a named schema component. With no filter, lists available paths and component names. Use foundation_api with page limits and cursors for resource metadata.',
-    inputSchema: z.object({ path: z.string().startsWith('/api/').optional(), component: z.string().max(200).optional(),
+    description: 'Find the Foundation API for a request. Pass query with words from the request to list matching paths, methods, and summaries; pass path or component for details. With no filter, lists every path and component name.',
+    inputSchema: z.object({ query: z.string().max(200).optional(), path: z.string().startsWith('/api/').optional(), component: z.string().max(200).optional(),
       response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, input => mcpCall(async () => {
     const spec = z.object({ paths: z.record(z.string(), Json), components: z.object({ schemas: z.record(z.string(), Json).default({}) }).optional() })
       .parse(await gateway.schema());
     if (input.path) return spec.paths[input.path] ?? { error: 'Choose a path from foundation_schema.' };
+    if (input.query) {
+      const words = input.query.toLowerCase().split(/\s+/u).filter(Boolean);
+      return Object.entries(spec.paths).flatMap(([path, operations]) =>
+        Object.entries(operations as Record<string, { summary?: string; description?: string }>).map(([method, operation]) =>
+          ({ method: method.toUpperCase(), path, summary: operation?.summary ?? operation?.description ?? '' })))
+        .filter(entry => words.every(word => (entry.path + ' ' + entry.summary).toLowerCase().includes(word)));
+    }
     if (input.component) return spec.components?.schemas[input.component] ?? { error: 'Choose a component from foundation_schema.' };
     return { paths: Object.keys(spec.paths), components: Object.keys(spec.components?.schemas ?? {}) };
   }, input.response_format));
+  server.registerTool('foundation_read', {
+    title: 'Read from Foundation',
+    description: 'Read Foundation data as this principal with a GET request. Changes nothing. Find the path with foundation_schema.',
+    inputSchema: z.object({
+      path: z.string().startsWith('/api/').max(2048), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, input => mcpCall(async () => {
+    const url = new URL(input.path, 'https://foundation.invalid');
+    if (url.origin !== 'https://foundation.invalid' || !url.pathname.startsWith('/api/') ||
+      /^\/api\/mcp(?:\/|$)/u.test(url.pathname) || /[\\\u0000-\u001f]/u.test(input.path) || url.hash)
+      throw new Error('Choose a Foundation resource API path.');
+    return gateway.request('GET', url.pathname + url.search);
+  }, input.response_format));
   server.registerTool('foundation_api', {
-    title: 'Call the Foundation API',
-    description: 'Call Foundation resource, process, and approval APIs as this principal. Start a command with POST /api/environments/{id}/processes. Read state, exit status, and paginated stdout/stderr through GET /api/processes/{id}/output; use its next offset to read more. Inspect or cancel a process through /api/processes/{id}. Include limit/after on list paths. Use POST /api/executions with operations (name, input, optional input fields) and optional responderId to prepare work. Return its url to the principal supplying consent or private input. Protected variables and connections require client encryption in that continuation screen.',
+    title: 'Change Foundation',
+    description: 'Create, change, or delete Foundation data as this principal. Find the path and body with foundation_schema. When the response includes a URL for consent or secret input, give it to the user.',
     inputSchema: z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
       path: z.string().startsWith('/api/').max(2048), body: Json.optional(), response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -85,4 +69,40 @@ export function registerMetadataTools(server: McpServer, gateway: {
       throw new Error('Choose a Foundation resource API path.');
     return gateway.request(input.method, url.pathname + url.search, input.body);
   }, input.response_format));
+  server.registerTool('foundation_functions', {
+    title: 'Find callable functions', description: 'List saved functions this principal may run, with their declared inputs.',
+    inputSchema: z.object({ query: z.string().max(200).optional(), limit: z.number().int().min(1).max(100).default(20),
+      after: Id.optional(), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, input => mcpCall(() => {
+    const query = new URLSearchParams({ limit: String(input.limit), ...(input.query ? { query: input.query } : {}),
+      ...(input.after ? { after: input.after } : {}) });
+    return gateway.request('GET', '/api/functions?' + query);
+  }, input.response_format));
+  server.registerTool('foundation_invoke_function', {
+    title: 'Invoke a saved function', description: 'Run a saved function by its ID with its declared arguments. Returns an execution ID; read the result with foundation_execution_result.',
+    inputSchema: z.object({ functionId: Id, arguments: JsonObject.default({}), id: Id.optional(), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, input => mcpCall(async () => {
+    const id = input.id ?? crypto.randomUUID();
+    try { return await gateway.request('POST', '/api/functions/' + input.functionId + '/executions', { id, arguments: input.arguments }); }
+    catch (error) { throw new Error((error instanceof Error ? error.message : 'The invocation request failed.') +
+      ' Check execution ' + id + ' or retry with the same id and arguments.'); }
+  }, input.response_format));
+  server.registerTool('foundation_execution_result', {
+    title: 'Read an execution', description: 'Read the state, error, and result of an execution. Large results are returned in parts with a next offset.',
+    inputSchema: z.object({ id: Id, offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(20000).default(20000), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, input => mcpCall(async () => {
+    const execution = gateway.executionResult ? await gateway.executionResult(input.id)
+      : (await gateway.request('GET', '/api/executions/' + input.id) as { body: unknown }).body;
+    const { results, ...metadata } = execution as Record<string, unknown>, serialized = JSON.stringify(results), text = serialized.slice(input.offset, input.offset + input.limit);
+    return { ...metadata, offset: input.offset, text, next: input.offset + text.length < serialized.length ? input.offset + text.length : null };
+  }, input.response_format));
+  server.registerTool('foundation_cancel_execution', {
+    title: 'Cancel a function invocation', description: 'Ask Foundation to stop an execution. Effects that already happened are not undone.',
+    inputSchema: z.object({ id: Id, response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, input => mcpCall(() => gateway.request('POST', '/api/executions/' + input.id + '/cancel', {}), input.response_format));
 }

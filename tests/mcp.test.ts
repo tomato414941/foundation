@@ -40,6 +40,11 @@ test('MCPで利用可能なAPIを調べ、手元の鍵で選択した実行先�
   assert.ok(path.post);
   const metadata = await call('foundation_api', { method: 'GET', path: '/api/session' });
   assert.equal((metadata.body as { principal: { id: string } }).principal.id, f.owner.actor.id);
+  const found = await call('foundation_schema', { query: 'runtime runs' }) as unknown as { path: string; method: string }[];
+  assert.ok(found.some(entry => entry.path === '/api/runtime/runs' && entry.method === 'POST'));
+  assert.equal(listed.tools.find(tool => tool.name === 'foundation_read')!.annotations!.readOnlyHint, true);
+  const read = await call('foundation_read', { path: '/api/session' });
+  assert.equal((read.body as { principal: { id: string } }).principal.id, f.owner.actor.id);
   const run = await call('foundation_run', { environmentId: f.environment.manifest.id,
     operation: { kind: 'command', command: ['node', '-e', 'process.stdout.write("MCP result")'], inputs: [], timeoutSeconds: 5 } });
   assert.equal(run.state, 'running');

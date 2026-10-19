@@ -30,8 +30,7 @@ export async function routesMcp(app: ApiApp, origin: string) {
     const server = new McpServer(
       { name: 'Foundation', version: '1.0.0' },
       {
-        instructions:
-          'Use foundation_functions to find callable functions, foundation_invoke_function to invoke one with its declared arguments, and foundation_execution_result to read its result. Use foundation_cancel_execution to request cancellation. Function calls require execute permission; they do not require encryption keys or access to the program, environment, connections, or variables. Use foundation_schema to discover the Foundation API and foundation_api to call it as the authenticated principal. GET /api/definitions lists user operations and their inputs. POST /api/executions starts operations containing name, input, and optional input fields, with an optional responderId and message. It returns an execution ID, state, and browser continuation URL. Use that URL to collect missing inputs or consent directly in Foundation. POST /api/definitions/{name}/executions is a direct call to the same mechanism. Requests deliver these executions; they are optional. Protected inputs are entered and encrypted in the continuation screen; credentials must never be included in API request bodies. Start commands with POST /api/environments/{id}/processes, then inspect or cancel the returned process ID.',
+        instructions: 'Foundation holds what this principal owns and may use. To act on a request, search for the matching API with foundation_schema, read with foundation_read, and make changes with foundation_api. Run saved functions with foundation_invoke_function after finding them with foundation_functions. When Foundation returns a URL for consent or secret input, give it to the user. Never put secret values in requests.',
       },
     );
     registerMetadataTools(server, {
