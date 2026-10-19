@@ -12,7 +12,7 @@ import { fail } from './errors.js';
 export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
 
 // Passing a principal to a new owner seals what it holds, and what is held below it, for whoever then acts as it, all at
-// once with the transfer. Lines to members and agents take effect at once instead, and their devices seal the items
+// once with the transfer. Lines to members and delegates take effect at once instead, and their devices seal the items
 // again one by one afterwards.
 export class KeySharing {
   constructor(readonly custody: Custody) {}
@@ -35,7 +35,7 @@ export class KeySharing {
         [await resources.authorization.holders(principal(row.owner_id), permission, connection, change)], connection)).map(item => item.id));
       const after = await keyed('use'), required = await keyed('stands');
       if (!after.size) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
-      // The line seals each item for whoever acts as the owner and whoever it newly lets use it, leaving other agents as they are.
+      // The line seals each item for whoever acts as the owner and whoever it newly lets use it, leaving other delegates as they are.
       const readers: BoundKeys[] = await Promise.all([...after].filter(id => required.has(id) || !before.has(id))
         .map(async id => (await bindings.current(id, connection)).binding));
       const removed = (binding: BoundKeys) => before.has(binding.principalId) && (!after.has(binding.principalId) ||

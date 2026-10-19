@@ -82,7 +82,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
     const expected = [...new Set(users)].sort();
     const grants = policy.grants.filter(grant => 'actor' in grant);
     if (canonical(grants.map(grant => 'actor' in grant ? grant.actor.principalId : '').sort()) !== canonical(expected))
-      fail(409, 'operation_changed', 'Use the people and agents approved for this connection.');
+      fail(409, 'operation_changed', 'Use the principals approved for this connection.');
     for (const grant of grants) {
       if (!('actor' in grant) || canonical(grant.actor) !== canonical(grant.executor) ||
         canonical([...grant.operations].sort()) !== canonical([...permittedOperations(ContentTypes.tokenSet)].sort()) ||

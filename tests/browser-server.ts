@@ -39,7 +39,7 @@ class BrowserRunner extends MemoryRunner {
   async attach(ownerId: string, name: string) {
     const id = randomUUID(), principal = await fixtureData.person(name + ' principal');
     const { keys, binding, token } = principal;
-    await context.relations.draw({ id: ownerId }, { subjectId: principal.actor.id, relation: 'agent', objectId: ownerId });
+    await context.relations.draw({ id: ownerId }, { subjectId: principal.actor.id, relation: 'delegate', objectId: ownerId });
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
     const registration = await signEnvironment({ format: 3, id, origin, ownerId,
       name, executor: binding, operatorId: binding.principalId, driver: 'attached',

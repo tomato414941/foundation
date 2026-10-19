@@ -273,7 +273,7 @@ export class Executions {
   private bootstrap(actorId: string, operations: RequestedOperation[]) {
     const operation = operations[0], body = operation?.input;
     return operations.length === 1 && operation?.name === 'relation.draw' &&
-      (body?.subjectId === actorId || body?.subjectId === '$requester') && body.relation === 'agent' &&
+      (body?.subjectId === actorId || body?.subjectId === '$requester') && body.relation === 'delegate' &&
       body.objectId === '$approver' && Object.keys(body).length === 3 && operation.inputs.length === 0;
   }
   async create(actor: Actor, input: z.infer<typeof ExecutionInput>, invitation = false) {

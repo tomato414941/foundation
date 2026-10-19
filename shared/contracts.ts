@@ -124,7 +124,7 @@ export const Credential = z.object({
   // Whether this way in carries the principal's wrapped encryption key, so it can open encrypted values.
   canOpen: z.boolean(),
 });
-// A line: the subject is the relation of the object ("the AI is the agent of its person"). The object is a principal
+// A line: the subject is the relation of the object ("A is the delegate of B"). The object is a principal
 // or a thing; the relation is a role its type declares in the authorization schema.
 export const RelationName = z.string().regex(/^[a-z][a-z_]*[a-z]$/).max(64);
 export const RelationInput = z.object({ subjectId: Id, relation: RelationName, objectId: Id }).strict();

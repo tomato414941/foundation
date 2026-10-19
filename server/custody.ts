@@ -100,8 +100,8 @@ export class Custody {
 
   // Items this identity can seal again without anyone deciding anything: those still encrypted for executors whose
   // grants have expired and, where it acts as the owner, those whose readers no longer match who may open them: not
-  // yet sealed for everyone who uses what the owner holds, as for a new agent, or still sealed for one that may no
-  // longer open them, as for an agent whose line was erased. The server cannot do it, because only the item's readers
+  // yet sealed for everyone who uses what the owner holds, as for a new delegate, or still sealed for one that may no
+  // longer open them, as for a delegate whose line was erased. The server cannot do it, because only the item's readers
   // can open it. The list only says where to look, and each item is sealed again on its own.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
@@ -154,8 +154,8 @@ export class Custody {
   async required(ownerId: string, connection: Queryable = this.resources.db.pool) {
     return this.bound(await this.resources.required(ownerId, connection), connection);
   }
-  // Agents of the owner who are not among those who must open what it holds.
-  async agents(ownerId: string, connection: Queryable = this.resources.db.pool) {
+  // Delegates of the owner who are not among those who must open what it holds.
+  async delegates(ownerId: string, connection: Queryable = this.resources.db.pool) {
     const required = new Set((await this.resources.required(ownerId, connection)).map(principal => principal.id));
     return this.bound((await this.resources.recipients(ownerId, connection)).filter(principal => !required.has(principal.id)), connection);
   }

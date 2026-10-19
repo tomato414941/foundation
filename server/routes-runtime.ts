@@ -42,11 +42,11 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     await authorization.requirePrincipal(actor(request), request.params.id, 'read');
     return { items: await custody.required(request.params.id), next: null };
   });
-  app.get('/api/principals/:id/bound-agents', {
+  app.get('/api/principals/:id/bound-delegates', {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.BoundRecipient) } },
   }, async request => {
     await authorization.requirePrincipal(actor(request), request.params.id, 'read');
-    return { items: await custody.agents(request.params.id), next: null };
+    return { items: await custody.delegates(request.params.id), next: null };
   });
   app.get('/api/principals/:id/reprotection', {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.Reprotection) } },

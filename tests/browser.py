@@ -222,7 +222,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_text("実行環境での利用を許可する（任意）", exact=True).click()
         page.get_by_role("checkbox", name=name, exact=True).check()
 
-    def test_AIが出した指紋付きのリンクで承認するとAIの公開鍵を検証して代理にし持ち主の変数を開かせる(self):
+    def test_AIが出した指紋付きのリンクで承認するとAIの公開鍵を検証して委任先にし持ち主の変数を開かせる(self):
         owner, principal = self.passkey_account("Linked owner")
         variable_id = self.variable(owner, principal, "Linked variable", "linked-variable-value").rstrip("/").rsplit("/", 1)[1]
         with tempfile.TemporaryDirectory() as directory:
@@ -972,23 +972,28 @@ class BrowserTests(unittest.TestCase):
         successor.get_by_role("button", name="内容を表示", exact=True).click()
         expect(successor.get_by_role("textbox", name="値", exact=True)).to_have_value("team-variable-value")
 
-    def test_代理の線を引くと代理が持ち主の変数を開き線を外すと開けなくなる(self):
+    def test_委任先と委任元を表示し委任先が変数を開き解除後は開けなくなる(self):
         owner, principal = self.passkey_account("Key owner")
-        agent, delegate = self.passkey_account("Key agent")
+        agent, delegate = self.passkey_account("Key delegate")
         self.trust(owner, agent, delegate)
         self.trust(agent, owner, principal)
-        variable_path = self.variable(owner, principal, "Agent variable", "agent-variable-value")
+        variable_path = self.variable(owner, principal, "Delegate variable", "delegate-variable-value")
         owner.goto(f"{ORIGIN}/p/{principal['id']}/principals")
         owner.get_by_role("textbox", name="相手のプリンシパルID").fill(delegate["id"])
         owner.get_by_role("button", name="追加", exact=True).click()
-        line = owner.get_by_role("listitem").filter(has_text="Key agent は Key owner の代理")
+        line = owner.get_by_role("listitem").filter(has_text="Key delegate は Key owner の委任先")
         expect(line).to_be_visible()
         print("Rendered principals: " + owner.locator("main").inner_text(), flush=True)
+        owner.screenshot(path=str(ARTIFACTS / "delegate-ja.png"), full_page=True)
+        agent.goto(f"{ORIGIN}/p/{delegate['id']}/principals")
+        expect(agent.get_by_text("Key owner は Key delegate の委任元", exact=True)).to_be_visible()
+        print("Rendered delegator: " + agent.locator("main").inner_text(), flush=True)
+        agent.screenshot(path=str(ARTIFACTS / "delegator-ja.png"), full_page=True)
         agent.goto(variable_path)
         agent.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(agent.get_by_role("textbox", name="値", exact=True)).to_have_value("agent-variable-value")
+        expect(agent.get_by_role("textbox", name="値", exact=True)).to_have_value("delegate-variable-value")
         line.get_by_role("button", name="権限を解除", exact=True).click()
-        expect(owner.get_by_text("Key agent は Key owner の代理", exact=True)).to_be_hidden()
+        expect(owner.get_by_text("Key delegate は Key owner の委任先", exact=True)).to_be_hidden()
         agent.goto(variable_path)
         expect(agent.get_by_text("この操作を行う権限がありません。", exact=True)).to_be_visible()
         expect(agent.get_by_role("button", name="内容を表示", exact=True)).to_be_hidden()
@@ -1011,7 +1016,7 @@ class BrowserTests(unittest.TestCase):
         page.goto(f"{ORIGIN}/p/{principal['id']}/principals")
         page.get_by_role("textbox", name="相手のプリンシパルID").fill(child_id)
         page.get_by_role("button", name="追加", exact=True).click()
-        expect(page.get_by_text("Automation は Browser account の代理", exact=True)).to_be_visible()
+        expect(page.get_by_text("Automation は Browser account の委任先", exact=True)).to_be_visible()
 
     def test_クラウドのAPIキー接続を画面から作成する(self):
         page, principal = self.passkey_account("Compute account")
@@ -1227,7 +1232,7 @@ class BrowserTests(unittest.TestCase):
             owner.goto(ORIGIN + "/requests/" + permission_execution["requests"][0])
             expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
             expect(owner.get_by_text("dev-us の AI", exact=True).last).to_be_visible()
-            expect(owner.get_by_text("使用を許可する人・AI", exact=True)).to_be_visible()
+            expect(owner.get_by_text("利用を許可するプリンシパル", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
             owner.get_by_role("button", name="承認", exact=True).click()

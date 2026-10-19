@@ -45,7 +45,7 @@ export default function RequestNew() {
             value={[
               {
                 name: 'relation.draw',
-                input: { subjectId: '$requester', relation: 'agent', objectId: '$approver' },
+                input: { subjectId: '$requester', relation: 'delegate', objectId: '$approver' },
               },
             ]}
             rows={10}

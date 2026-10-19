@@ -14,9 +14,9 @@ import { ResealingNotice } from '../resealing-notice';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
-const relationships = ['agent', 'member', 'payer'];
+const relationships = ['delegate', 'member', 'payer'];
 // Lines that change who opens what the principal holds: once a line changes, this browser seals its items again.
-const sealing = ['agent', 'member'];
+const sealing = ['delegate', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
   const page = (side: 'object' | 'subject', after: string | null) =>
@@ -113,7 +113,9 @@ export default function Principals() {
           )}
           {data.from.items.map((entry) =>
             item('from:' + entry.objectId + entry.relation, entry.objectId, entry.objectName,
-              line(principal.name, entry.relation, entry.objectName), entry),
+              entry.relation === 'delegate'
+                ? line(entry.objectName, 'delegator', principal.name)
+                : line(principal.name, entry.relation, entry.objectName), entry),
           )}
         </ul>
         {empty && <p className="leading-relaxed text-muted-foreground">{t('empty')}</p>}
@@ -125,7 +127,7 @@ export default function Principals() {
           <Form method="post">
             <div className="flex min-w-0 flex-col gap-6">
               <InputField name="subjectId" label={t('subject')} required />
-              <SelectField name="relation" label={t('relation')} defaultValue="agent">
+              <SelectField name="relation" label={t('relation')} defaultValue="delegate">
                 {relationships.map((value) => (
                   <SelectItem key={value} value={value}>
                     {t(value)}

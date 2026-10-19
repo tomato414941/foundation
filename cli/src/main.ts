@@ -51,7 +51,7 @@ Usage: foundation <command> [options]
   status                               Show this machine and its accessible principals
   identity list                        List the identities saved on this machine
   identity use ID                      Make a saved identity the default
-  request-access [--to ID] [--wait]     Ask a person to make this machine their agent
+  request-access [--to ID] [--wait]     Ask another principal to delegate access to this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   definition list                      List processing definitions and their inputs
   execution start --body JSON          Prepare operations and return their continuation URL
@@ -721,7 +721,7 @@ async function main(argv: string[]) {
             operations: [
               {
                 name: 'relation.draw',
-                input: { subjectId: current.principal.id, relation: 'agent', objectId: '$approver' },
+                input: { subjectId: current.principal.id, relation: 'delegate', objectId: '$approver' },
               },
             ],
           }

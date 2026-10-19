@@ -27,7 +27,7 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
       operations: [
         {
           name: 'relation.draw',
-          input: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id },
+          input: { relation: 'delegate', objectId: '$approver', subjectId: device.actor.id },
         },
       ],
     },
@@ -191,8 +191,8 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     assert.equal(execution.statusCode, 200, execution.body);
     return Execution.parse(execution.json()).operations.map(operation => operation.title);
   };
-  assert.deepEqual(await ask([{ name: 'relation.draw', input: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id } }]),
-    [{ ja: 'アクセスを許可する', en: 'Allow access' }]);
+  assert.deepEqual(await ask([{ name: 'relation.draw', input: { relation: 'delegate', objectId: '$approver', subjectId: device.actor.id } }]),
+    [{ ja: '権限を委任する', en: 'Delegate access' }]);
   const target = '00000000-0000-4000-8000-000000000001';
   assert.deepEqual(await ask([
     { name: 'relation.draw', input: { relation: 'reader', objectId: target, subjectId: device.actor.id } },

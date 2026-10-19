@@ -169,9 +169,9 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     invocations,
   };
   if (options.migrate) {
-    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }, { migrateFiles }, { migrateStorage }] = await Promise.all([
+    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }, { migrateFiles }, { migrateStorage }, { migrateDelegates }] = await Promise.all([
       import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'), import('./migrations/migrate-runs.js'),
-      import('./migrations/migrate-files.js'), import('./migrations/migrate-storage.js'),
+      import('./migrations/migrate-files.js'), import('./migrations/migrate-storage.js'), import('./migrations/migrate-delegates.js'),
     ]);
     await migrateExecutions(db, vault);
     await migrateRequests(db);
@@ -179,6 +179,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     await migrateRuns(db, vault);
     await migrateFiles(db, vault);
     await migrateStorage(db, vault);
+    await migrateDelegates(db, vault);
     await db.assertReady();
   }
   return context;

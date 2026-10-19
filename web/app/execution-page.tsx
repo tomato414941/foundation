@@ -51,11 +51,11 @@ function configuration(invocation: DefinitionCall, input: DefinitionCall['input'
 }
 // Lines that change who opens what a principal holds: once approved, this browser seals those items again.
 const resealing = (item: PageExecution) => !item.proposal && item.operations.some(operation =>
-  ['relation.draw', 'relation.erase'].includes(operation.name) && ['agent', 'member'].includes(String(operation.input.relation)));
-// The principal a line awaiting approval lets open what the approver holds, as its agent or member.
+  ['relation.draw', 'relation.erase'].includes(operation.name) && ['delegate', 'member'].includes(String(operation.input.relation)));
+// The principal a line awaiting approval lets open what the approver holds, as its delegate or member.
 function lineSubject(item: PageExecution, approverId: string) {
   const operation = item.proposal ? undefined : item.operations.find(operation => operation.name === 'relation.draw' &&
-    ['agent', 'member'].includes(String(operation.input.relation)));
+    ['delegate', 'member'].includes(String(operation.input.relation)));
   const subject = operation ? substitute(operation.input.subjectId ?? null, approverId, item.from.id) : null;
   return typeof subject === 'string' && subject !== approverId ? subject : null;
 }

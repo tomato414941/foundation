@@ -7,12 +7,11 @@ import type { OperationServices } from '../builtin-definitions.js';
 import { idInput, withId, ok } from './support.js';
 
 const lineTitles: Record<string, readonly [readonly [string, string], readonly [string, string]]> = {
-  agent: [['代理にする', 'Make an agent'], ['代理を外す', 'Remove an agent']],
+  delegate: [['権限を委任する', 'Delegate access'], ['委任を解除する', 'Revoke delegation']],
   member: [['メンバーに加える', 'Add a member'], ['メンバーから外す', 'Remove a member']],
   payer: [['支払いを引き受ける', 'Pay for a principal'], ['支払いをやめる', 'Stop paying for a principal']],
 };
 function lineTitle(input: Record<string, C.JsonValue>, erase: boolean): readonly [string, string] {
-  if (!erase && input.relation === 'agent' && input.objectId === '$approver') return ['アクセスを許可する', 'Allow access'];
   return lineTitles[String(input.relation)]?.[erase ? 1 : 0] ??
     (erase ? ['権限を外す', 'Take back a permission'] : ['権限を渡す', 'Give a permission']);
 }

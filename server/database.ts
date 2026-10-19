@@ -4,7 +4,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments', '003-files', '004-storage', '005-ownership'];
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments', '003-files', '004-storage', '005-ownership', '006-delegates'];
 // The migrations written in SQL alone, applied in order.
 const SqlMigrations = ['002-ssh-environments', '005-ownership'];
 export class Database {

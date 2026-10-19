@@ -53,7 +53,7 @@ const cursor = (row: LineRow) =>
 // that gives something by a change agrees to it: what a line passes on is given by one who holds all of it, since
 // nothing gives more than it has, and what a payer or a new owner takes on is taken on by its side. A change made on
 // one side waits on the other as a request. A subject may always erase a line to itself. On what a key protects, the
-// lines are the signed policy's and change only with it. A line to a member or an agent takes effect at once: the
+// lines are the signed policy's and change only with it. A line to a member or a delegate takes effect at once: the
 // owner's devices seal its items again one by one afterwards, so an item that cannot change now holds nothing back,
 // and meanwhile the server gives an item only to those who may still open it.
 export class Relations {
@@ -181,7 +181,7 @@ export class Relations {
       await this.authorization.require(actor, object, 'share');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      const owners = !('kind' in object) && (line.relation === 'member' || line.relation === 'agent')
+      const owners = !('kind' in object) && (line.relation === 'member' || line.relation === 'delegate')
         ? await this.authorization.find(line.objectId, 'principal', 'stands', connection) : [];
       const users = async (id: string) => new Set(await this.authorization.holders(principal(id), 'use', connection));
       const before = await Promise.all(owners.map(users));

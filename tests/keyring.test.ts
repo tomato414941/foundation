@@ -16,7 +16,7 @@ test('一台で検証した公開鍵を、同じプリンシパルのほかの�
   const device = () => new CustodyClient(f.api(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys,
     new JournalTrust(new MemoryJournal()));
   const saved = await f.client.save('Token', encode('owner value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
-  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [ai.actor.id, f.owner.actor.id]);
+  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'delegate',$2)", [ai.actor.id, f.owner.actor.id]);
   assert.equal(await device().verifiedIdentity(ai.actor.id), false);
 
   await device().trustIdentity(ai.actor.id, await fingerprint(ai.binding));
@@ -52,11 +52,11 @@ test('サーバーが前に見たものより古い一覧を返すと、端末�
   await assert.rejects(device().verifiedIdentity(first.actor.id), { code: 'keyring_conflict' });
 });
 
-test('代理は持ち主の検証済みの公開鍵の一覧を読めても書き換えられず、続きの版番号でない一覧は保存しない', async (t) => {
+test('委任先は持ち主の検証済みの公開鍵の一覧を読めても書き換えられず、続きの版番号でない一覧は保存しない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
   const ai = await f.person('Agent'), stranger = await f.person('Stranger');
-  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'agent',$2)", [ai.actor.id, f.owner.actor.id]);
+  await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'delegate',$2)", [ai.actor.id, f.owner.actor.id]);
   await f.client.trustIdentity(stranger.actor.id, await fingerprint(stranger.binding));
   const path = '/api/principals/' + f.owner.actor.id + '/keyring';
   const { keyring } = await f.api(ai.token).json<{ keyring: { version: number } }>(path);
