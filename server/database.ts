@@ -4,7 +4,9 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments', '003-files', '004-storage'];
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', 'unified-execution-history', 'historical-server-runs', '002-ssh-environments', '003-files', '004-storage', '005-ownership'];
+// The migrations written in SQL alone, applied in order.
+const SqlMigrations = ['002-ssh-environments', '005-ownership'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {
@@ -29,10 +31,11 @@ export class Database {
         const names = installed?.principals ? [SchemaMigration] : RequiredMigrations;
         for (const name of names) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
       }
-      if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', ['002-ssh-environments'], client)) {
-        await client.query(await readFile(new URL('./migrations/002-ssh-environments.sql', import.meta.url), 'utf8'));
-        await client.query('INSERT INTO schema_migrations(name) VALUES($1)', ['002-ssh-environments']);
-      }
+      for (const name of SqlMigrations)
+        if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [name], client)) {
+          await client.query(await readFile(new URL(`./migrations/${name}.sql`, import.meta.url), 'utf8'));
+          await client.query('INSERT INTO schema_migrations(name) VALUES($1)', [name]);
+        }
     });
   }
   async assertReady() {

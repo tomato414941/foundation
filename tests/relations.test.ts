@@ -159,6 +159,73 @@ test('線を「主体は対象の関係」として、対象からも主体か�
   assert.equal((await app.inject({ url: '/api/relations', headers: { authorization: 'Bearer ' + owner.token } })).statusCode, 400);
 });
 
+// The lines a person may list, without the time each began.
+async function listed(app: Awaited<ReturnType<typeof buildApp>>, who: { token: string }, query: string) {
+  const response = await app.inject({ url: '/api/relations?' + query, headers: { authorization: 'Bearer ' + who.token } });
+  assert.equal(response.statusCode, 200, response.body);
+  return response.json().items.map(({ createdAt: _, ...line }: { createdAt: string }) => line);
+}
+
+test('持ち主を所有者の線として一覧し、その線は作ったときか譲ったときに始まり、外せず譲ることで変わる', async (t) => {
+  const f = await fixture(), { app } = await served(f);
+  t.after(async () => { await app.close(); await f.close(); });
+  const owner = await f.person('Owner');
+  const team = await f.principals.create('Team', null, owner.actor.id), bot = await f.principals.create('Bot', null, owner.actor.id);
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const owned = (id: string, name: string, objectType = 'principal') =>
+    ({ subjectId: owner.actor.id, subjectName: 'Owner', relation: 'owner', objectId: id, objectName: name, objectType });
+  assert.deepEqual(await listed(app, owner, 'subject=' + owner.actor.id),
+    [owned(team.id, 'Team'), owned(bot.id, 'Bot'), owned(file.id, 'report.txt', 'object')]);
+  assert.deepEqual(await listed(app, owner, 'object=' + file.id), [owned(file.id, 'report.txt', 'object')]);
+  const erased = await app.inject({ method: 'DELETE', url: '/api/relations', headers: { authorization: 'Bearer ' + owner.token },
+    payload: { subjectId: owner.actor.id, relation: 'owner', objectId: bot.id } });
+  assert.equal(erased.statusCode, 400, erased.body);
+  await f.relations.transfer(owner.actor, bot.id, team.id);
+  const passed = await app.inject({ url: '/api/relations?object=' + bot.id, headers: { authorization: 'Bearer ' + owner.token } });
+  const transferred = await f.db.one<{ created_at: Date }>(
+    "SELECT created_at FROM audit_log WHERE action='principal.transfer' AND owner_id=$1", [bot.id]);
+  assert.deepEqual(passed.json().items, [{ subjectId: team.id, subjectName: 'Team', relation: 'owner', objectId: bot.id,
+    objectName: 'Bot', objectType: 'principal', createdAt: transferred!.created_at.toISOString() }]);
+});
+
+test('線の一覧を、関係の種類と対象の種類で絞り込む', async (t) => {
+  const f = await fixture(), { app } = await served(f);
+  t.after(async () => { await app.close(); await f.close(); });
+  const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
+  await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'agent', objectId: owner.actor.id });
+  const team = await f.principals.create('Team', null, owner.actor.id);
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
+  await f.relations.draw(owner.actor, { subjectId: friend.actor.id, relation: 'reader', objectId: file.id });
+  assert.deepEqual(await listed(app, owner, `object=${owner.actor.id}&relation=agent`), [{ subjectId: ai.actor.id,
+    subjectName: 'Agent', relation: 'agent', objectId: owner.actor.id, objectName: 'Owner', objectType: 'principal' }]);
+  assert.deepEqual((await listed(app, owner, `subject=${owner.actor.id}&relation=owner&objectType=principal`))
+    .map((line: { objectId: string }) => line.objectId), [team.id]);
+  assert.deepEqual((await listed(app, owner, `subject=${owner.actor.id}&objectType=object`))
+    .map((line: { objectId: string }) => line.objectId), [file.id]);
+  assert.deepEqual((await listed(app, owner, `object=${file.id}&relation=reader`))
+    .map((line: { subjectId: string }) => line.subjectId), [friend.actor.id]);
+  const unknown = await app.inject({ url: `/api/relations?subject=${owner.actor.id}&objectType=folder`,
+    headers: { authorization: 'Bearer ' + owner.token } });
+  assert.equal(unknown.statusCode, 400);
+});
+
+test('共有を任されただけの人には、読めないものの所有者の線を見せず、読めるようになったものの線は見せる', async (t) => {
+  const f = await fixture(), { app } = await served(f);
+  t.after(async () => { await app.close(); await f.close(); });
+  const owner = await f.person('Owner'), helper = await f.person('Helper'), friend = await f.person('Friend');
+  await f.relations.draw(owner.actor, { subjectId: helper.actor.id, relation: 'sharer', objectId: owner.actor.id });
+  const team = await f.principals.create('Team', null, owner.actor.id);
+  const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const shared = await f.resources.insert(friend.actor.id, 'object', 'shared.txt', { size: 0, contentType: 'text/plain' });
+  await f.relations.draw(friend.actor, { subjectId: owner.actor.id, relation: 'reader', objectId: shared.id });
+  const objects = async (who: { token: string }) =>
+    (await listed(app, who, 'subject=' + owner.actor.id)).map((line: { objectId: string }) => line.objectId);
+  assert.deepEqual(await objects(owner), [team.id, file.id, shared.id]);
+  assert.deepEqual(await objects(helper), [shared.id]);
+  await f.relations.draw(owner.actor, { subjectId: helper.actor.id, relation: 'reader', objectId: file.id });
+  assert.deepEqual(await objects(helper), [file.id, shared.id]);
+});
+
 // The application over a fixture, and a way to call it as one of its people.
 async function served(f: Awaited<ReturnType<typeof fixture>>) {
   const app = await buildApp(await createContext(f.config, { db: f.db, mailer: f.mailer }));

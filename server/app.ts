@@ -422,7 +422,8 @@ export async function buildApp(context: Context) {
       return { ok: true as const };
     },
   );
-  // Lines read "subject is the relation of object": the lines drawn onto an object, or from a subject.
+  // Lines read "subject is the relation of object": the lines onto an object, or from a subject, with whom each thing
+  // belongs to.
   app.get(
     '/api/relations',
     { schema: { querystring: C.RelationQuery, response: { 200: C.listOf(C.Relation) } } },

@@ -9,9 +9,12 @@ CREATE TABLE principals (
   public_key jsonb,
   -- Whom this principal belongs to, if anyone. Its owner acts as it; one who owns principals is not removed.
   owner_id uuid REFERENCES principals(id) ON DELETE RESTRICT CHECK (owner_id <> id),
+  -- When it came to its owner, kept by stamp_owned_at.
+  owned_at timestamptz,
   retired_at timestamptz,
   merged_into uuid REFERENCES principals(id) ON DELETE SET NULL CHECK (merged_into <> id),
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT principals_owned_at CHECK ((owner_id IS NULL) = (owned_at IS NULL))
 );
 CREATE INDEX principals_owner ON principals(owner_id) WHERE owner_id IS NOT NULL;
 CREATE TABLE credentials (
@@ -50,6 +53,8 @@ CREATE TABLE challenges (
 CREATE TABLE resources (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  -- When it came to its owner, kept by stamp_owned_at.
+  owned_at timestamptz NOT NULL,
   kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function','keyring')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
@@ -60,6 +65,19 @@ CREATE TABLE resources (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX resources_owner ON resources(owner_id,kind,created_at,id);
+-- When each principal and thing came to its owner: when it was made there, taken on or passed on, kept as the owner
+-- changes, whichever way it changes. A principal without an owner has none.
+CREATE FUNCTION stamp_owned_at() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' OR NEW.owner_id IS DISTINCT FROM OLD.owner_id THEN
+    NEW.owned_at := CASE WHEN NEW.owner_id IS NULL THEN NULL ELSE now() END;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER principals_owned_at BEFORE INSERT OR UPDATE OF owner_id ON principals
+  FOR EACH ROW EXECUTE FUNCTION stamp_owned_at();
+CREATE TRIGGER resources_owned_at BEFORE INSERT OR UPDATE OF owner_id ON resources
+  FOR EACH ROW EXECUTE FUNCTION stamp_owned_at();
 CREATE TABLE relations (
   subject_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   relation text NOT NULL CHECK (relation ~ '^[a-z][a-z_]*[a-z]$'),

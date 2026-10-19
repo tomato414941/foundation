@@ -128,8 +128,9 @@ export const Credential = z.object({
 // or a thing; the relation is a role its type declares in the authorization schema.
 export const RelationName = z.string().regex(/^[a-z][a-z_]*[a-z]$/).max(64);
 export const RelationInput = z.object({ subjectId: Id, relation: RelationName, objectId: Id }).strict();
+export const ObjectType = z.enum(['principal', ...ResourceKind.options]);
 export const Relation = RelationInput.extend({
-  objectType: z.enum(['principal', ...ResourceKind.options]),
+  objectType: ObjectType,
   subjectName: Name,
   objectName: Name,
   createdAt: Time,
@@ -670,5 +671,10 @@ export const PageQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   after: z.string().optional(),
 });
-export const RelationQuery = PageQuery.extend({ object: Id.optional(), subject: Id.optional() })
-  .refine((query) => Boolean(query.object) !== Boolean(query.subject), 'Choose the object or the subject of the lines.');
+// The lines onto an object or from a subject, of one relation or onto one type of object if asked.
+export const RelationQuery = PageQuery.extend({
+  object: Id.optional(),
+  subject: Id.optional(),
+  relation: RelationName.optional(),
+  objectType: ObjectType.optional(),
+}).refine((query) => Boolean(query.object) !== Boolean(query.subject), 'Choose the object or the subject of the lines.');

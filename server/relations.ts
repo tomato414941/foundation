@@ -8,6 +8,7 @@ import type { Resources } from './resources.js';
 import type { Billing } from './billing.js';
 import type { KeyUpdates } from './key-sharing.js';
 import { Relation, RelationInput } from '../shared/contracts.js';
+import type { RelationQuery, ResourceKindName } from '../shared/contracts.js';
 import type { z } from 'zod';
 import { ProtectedKinds, isProtected } from '../shared/protected.js';
 import { fail } from './errors.js';
@@ -231,8 +232,10 @@ export class Relations {
       await this.audit.record(id, actor.id, 'principal.transfer', to, agreed(actor), connection);
     });
   }
-  // The lines drawn onto an object, or drawn from a subject, oldest first: for one who may share there.
-  async list(actor: Actor, query: { object?: string; subject?: string; limit: number; after?: string }) {
+  // The lines onto an object, or from a subject, oldest first, of one relation or onto one type of object if asked: for
+  // one who may share there. Whom each principal and thing belongs to is among them, since what an owner may do there
+  // comes of it, and is shown as the view of what is owned shows it: to one who may read that.
+  async list(actor: Actor, query: z.infer<typeof RelationQuery>) {
     if (query.object) await this.authorization.require(actor, await this.target(query.object), 'share');
     else await this.authorization.requirePrincipal(actor, query.subject!, 'share');
     let after: [string, string, string, string] | null = null;
@@ -242,19 +245,37 @@ export class Relations {
       fail(400, 'invalid_cursor', 'Start again from the first page.');
     }
     const rows = await this.db.all<LineRow>(
-      `SELECT r.subject_id,s.name subject_name,r.relation,coalesce(r.principal_id,r.resource_id) object_id,
-        coalesce(p.name,x.name) object_name,coalesce(x.kind,'principal') object_type,r.created_at
-      FROM relations r JOIN principals s ON s.id=r.subject_id
-      LEFT JOIN principals p ON p.id=r.principal_id LEFT JOIN resources x ON x.id=r.resource_id
-      WHERE ($1::uuid IS NULL OR coalesce(r.principal_id,r.resource_id)=$1) AND ($2::uuid IS NULL OR r.subject_id=$2)
-        AND ($3::timestamptz IS NULL OR (r.created_at,r.subject_id,r.relation,coalesce(r.principal_id,r.resource_id))
-          > ($3::timestamptz,$4::uuid,$5::text,$6::uuid))
-      ORDER BY r.created_at,r.subject_id,r.relation,coalesce(r.principal_id,r.resource_id) LIMIT $7`,
-      [query.object ?? null, query.subject ?? null, ...(after ?? [null, null, null, null]), query.limit + 1],
+      `SELECT l.subject_id,s.name subject_name,l.relation,coalesce(l.principal_id,l.resource_id) object_id,
+        coalesce(p.name,x.name) object_name,coalesce(x.kind,'principal') object_type,l.created_at
+      FROM (
+        SELECT subject_id,relation,principal_id,resource_id,created_at FROM relations
+        WHERE ($1::uuid IS NULL OR coalesce(principal_id,resource_id)=$1) AND ($2::uuid IS NULL OR subject_id=$2)
+          AND ($3::text IS NULL OR relation=$3)
+        UNION ALL
+        SELECT owner_id,'owner',id,NULL,owned_at FROM principals
+        WHERE owner_id IS NOT NULL AND ($1::uuid IS NULL OR id=$1) AND ($2::uuid IS NULL OR owner_id=$2)
+          AND ($3::text IS NULL OR $3='owner') AND ($4::text IS NULL OR $4='principal')
+        UNION ALL
+        SELECT owner_id,'owner',NULL,id,owned_at FROM resources
+        WHERE ($1::uuid IS NULL OR id=$1) AND ($2::uuid IS NULL OR owner_id=$2)
+          AND ($3::text IS NULL OR $3='owner') AND ($4::text IS NULL OR kind=$4)
+      ) l JOIN principals s ON s.id=l.subject_id
+      LEFT JOIN principals p ON p.id=l.principal_id LEFT JOIN resources x ON x.id=l.resource_id
+      WHERE ($4::text IS NULL OR coalesce(x.kind,'principal')=$4)
+        AND ($5::timestamptz IS NULL OR (l.created_at,l.subject_id,l.relation,coalesce(l.principal_id,l.resource_id))
+          > ($5::timestamptz,$6::uuid,$7::text,$8::uuid))
+      ORDER BY l.created_at,l.subject_id,l.relation,coalesce(l.principal_id,l.resource_id) LIMIT $9`,
+      [query.object ?? null, query.subject ?? null, query.relation ?? null, query.objectType ?? null,
+        ...(after ?? [null, null, null, null]), query.limit + 1],
     );
-    const selected = rows.slice(0, query.limit);
+    const selected = rows.slice(0, query.limit), owned = selected.filter((row) => row.relation === 'owner');
+    const readable = owned.length
+      ? await this.authorization.permissions(actor, owned.map((row): Target => row.object_type === 'principal'
+        ? principal(row.object_id)
+        : { id: row.object_id, owner_id: row.subject_id, kind: row.object_type as ResourceKindName }), () => ['read'])
+      : new Map<string, string[]>();
     return {
-      items: selected.map((row) =>
+      items: selected.filter((row) => row.relation !== 'owner' || readable.get(row.object_id)?.includes('read')).map((row) =>
         Relation.parse({
           subjectId: row.subject_id,
           subjectName: row.subject_name,
