@@ -47,7 +47,7 @@ export function actor(request: FastifyRequest): Actor {
   return request.actor;
 }
 export async function buildApp(context: Context) {
-  const { config, authentication, principals, authorization, relations } = context;
+  const { config, authentication, keyResets, principals, authorization, relations } = context;
   const app = Fastify({
     logger: {
       level: config.FOUNDATION_LOG_LEVEL,
@@ -188,6 +188,7 @@ export async function buildApp(context: Context) {
     credentialId: request.actor?.credentialId ?? null,
     wrappedKey: await authentication.wrapOf(request.actor),
     requestId: request.actor?.requestId ?? null,
+    keyReset: request.actor && !request.actor.requestId ? await keyResets.get(request.actor.id) : null,
     principals: request.actor && !request.actor.requestId ? await principals.accessible(request.actor) : [],
     server: { name: 'Foundation' },
     features: {
@@ -364,6 +365,29 @@ export async function buildApp(context: Context) {
         request.body.publicKey,
         request.body.wraps,
       );
+      return { ok: true as const };
+    },
+  );
+  // New keys for one who lost every copy of the private key. The request waits before a passkey holding the new keys
+  // completes it, and it can be cancelled meanwhile.
+  app.post(
+    '/api/principals/:id/key-reset',
+    { schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: S.KeyReset } } },
+    (request) => keyResets.request(actor(request), request.params.id),
+  );
+  app.delete(
+    '/api/principals/:id/key-reset',
+    { schema: { params: C.IdParams, response: { 200: C.Ok } } },
+    async (request) => {
+      await keyResets.cancel(actor(request), request.params.id);
+      return { ok: true as const };
+    },
+  );
+  app.post(
+    '/api/principals/:id/key-reset/complete',
+    { schema: { params: C.IdParams, body: S.KeyResetCompletion, response: { 200: C.Ok } } },
+    async (request) => {
+      await keyResets.complete(actor(request), request.params.id, request.body);
       return { ok: true as const };
     },
   );

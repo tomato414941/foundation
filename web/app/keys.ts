@@ -41,6 +41,20 @@ export async function getKey(id: string, publicKey?: PublicEncryptionKey | null)
   if (!identity || (publicKey && canonical(identity.binding.encryption) !== canonical(publicKey))) return null;
   return identity.keys.encryption;
 }
+// The private key this browser holds for the principal while it is still the principal's: one replaced by new keys is
+// forgotten here.
+export async function heldKeys(principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
+  const identity = await getIdentity(principal.id);
+  if (!identity) return null;
+  if (principal.publicKey && canonical(identity.binding.encryption) === canonical(principal.publicKey)) return identity;
+  await forget(principal.id);
+  return null;
+}
+async function forget(id: string) {
+  held.delete(id);
+  unlocked.delete(id);
+  await stored('keys', 'readwrite', store => store.delete('v2:' + id));
+}
 function matchesPublicKey(keys: IdentityKeys, publicKey: PublicEncryptionKey | null) {
   return publicKey && canonical(publicPart(keys.encryption)) === canonical(publicKey);
 }
@@ -226,6 +240,35 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
     return authenticate(result.principalId, result.credentialId, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
+}
+// Makes new keys once the request to make them is ready. A new passkey is registered first and the session signs in with
+// it; the private key it then keeps replaces the principal's, and the new keys are published as for one that had none.
+export async function resetKeys(name: string, principalId: string) {
+  const data = await api<{ challengeId: string; options: PublicKeyCredentialCreationOptionsJSON }>('/auth/passkeys/options', {
+    method: 'POST', body: { intent: 'register', name, principalId },
+  });
+  const credential = await startRegistration({
+    optionsJSON: { ...data.options, extensions: { ...data.options.extensions, prf: { eval: { first: seed } } } },
+  });
+  const registered = await api<Verified>('/auth/passkeys/verify', {
+    method: 'POST', body: { challengeId: data.challengeId, credential: verificationCredential(credential) },
+  });
+  let secret = prf(credential);
+  // Some passkeys give the secret only when signing in with them.
+  if (!secret && (credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled) {
+    const proof = await assertion(principalId, registered.credentialId);
+    await api('/auth/passkeys/verify', {
+      method: 'POST', body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
+    });
+    secret = proof.secret;
+  }
+  if (!secret) throw new ApiFailure('key_unsupported');
+  const keys = await newIdentityKeys();
+  await api(`/principals/${principalId}/key-reset/complete`, {
+    method: 'POST', body: { publicKey: publicPart(keys.encryption), wrappedKey: await wrap(keys, secret, principalId) },
+  });
+  await forget(principalId);
+  await keep(principalId, keys);
 }
 export async function issueKey(
   principal: Pick<PrincipalView, 'id' | 'publicKey'>,

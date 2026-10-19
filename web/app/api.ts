@@ -5,7 +5,8 @@ import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
 import { ClientFailure, SubmissionPending } from '../../shared/client';
 import { Execution } from '../../shared/executions';
-import { getIdentity } from './keys';
+import type { PrincipalView } from '../../shared/contracts';
+import { heldKeys } from './keys';
 
 export class ApiFailure extends Error {
   constructor(
@@ -54,17 +55,18 @@ function here(request: Request) {
   const url = new URL(request.url);
   return encodeURIComponent(url.pathname + url.search + (location.pathname === url.pathname ? location.hash : ''));
 }
-// Every page past sign-in works with the private key, so a browser that does not hold it stops at one page first.
-// A request link's session answers only its own request without the private key, so it does not stop.
-export async function holdingKeys(request: Request, principalId: string) {
-  if (!(await getIdentity(principalId))) throw redirect('/keys?returnTo=' + here(request));
+// Every page past sign-in works with the private key, so a browser that does not hold it, or holds one replaced by new
+// keys, stops at one page first. A request link's session answers only its own request without the private key, so it
+// does not stop.
+export async function holdingKeys(request: Request, principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
+  if (!(await heldKeys(principal))) throw redirect('/keys?returnTo=' + here(request));
 }
 export async function signedIn(request: Request) {
   const data = await session(request);
   if (!data.principal) throw redirect('/signin?returnTo=' + here(request));
   if (data.requestId && new URL(request.url).pathname !== '/requests/' + data.requestId)
     throw redirect('/requests/' + data.requestId);
-  if (!data.requestId) await holdingKeys(request, data.principal.id);
+  if (!data.requestId) await holdingKeys(request, data.principal);
   return data;
 }
 export function safeReturn(value: string | null | undefined, fallback = '/') {

@@ -85,19 +85,27 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   let pinnedMethod: CatalogConnectionMethod | null = null;
   let connection: ReturnType<typeof connectionInitialValues> | undefined;
   let selectedExecutors: string[] = [];
+  // Sealed only for keys since replaced, an item's value cannot be shown and is entered again; where it is used stays.
+  let replaced = false;
   if (resource && isProtected(resource.kind)) {
-    const client = await custodyClient(), item = await client.read(resource.id);
+    const client = await custodyClient(), item = await client.latest(resource.id);
+    replaced = item.replaced;
     selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
-      item.content.policy.grants.some(grant => 'actor' in grant && grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
-    if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
-    if (resource.kind === 'connection') {
+      item.content.policy.grants.some(grant => 'actor' in grant && grant.actor.principalId === client.binding.principalId &&
+        grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
+    if (resource.kind === 'app' && !replaced) appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+    if (resource.kind === 'connection' && replaced) {
+      const methodId = resource.data.methodId;
+      pinnedMethod = methods?.items.find(method => method.id === methodId) ?? null;
+    }
+    if (resource.kind === 'connection' && !replaced) {
       const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
       pinnedMethod = methods?.items.find(method => method.id === state.methodId) ?? { ...state.method, id: state.methodId, builtin: false, availability: 'ready', defaultName: state.method.name,
         registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
       connection = connectionInitialValues(state);
     }
   }
-  if (resource?.kind === 'variable') {
+  if (resource?.kind === 'variable' && !replaced) {
     const bytes = await decryptVariable(resource.id, sessionData.principal!.id);
     try {
       content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -134,6 +142,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     selectedExecutors,
     content,
     binary,
+    replaced,
     serviceId: query.get('service'),
     methodId: query.get('method'),
     environmentId: query.get('environment'),
@@ -156,7 +165,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const methodId = selected.id;
       const connectionId = formText(form, 'connectionId');
       let previous: ConnectionState | undefined;
-      if (connectionId && connectionNeedsMaterial(selected, form))
+      if (connectionId && connectionNeedsMaterial(selected, form) && !(await client.custody.latest(connectionId)).replaced)
         previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
       const prepared = connectionSubmission({ ownerId: owner, methodId,
         name: name || existing?.name || selected.defaultName,
@@ -331,6 +340,7 @@ export default function ResourceForm() {
       narrow
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      {data.replaced && <Notice tone="warning">{t(data.kind === 'connection' ? 'errors.key_replaced' : 'valueReplaced')}</Notice>}
       {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
       {data.kind !== 'environment' && data.payment?.required && !data.payment.active && (
         <Notice

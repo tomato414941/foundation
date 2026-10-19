@@ -97,7 +97,7 @@ export async function clientLoader({ params, request }: PageArgs) {
     history.replaceState(null, '', window.location.pathname);
   }
   const account = await session(request);
-  if (account.principal && !account.requestId) await holdingKeys(request, account.principal.id);
+  if (account.principal && !account.requestId) await holdingKeys(request, account.principal);
   let item: PageExecution;
   try { item = await readItem(params.id!, requestMode, request.signal); }
   catch (error) {

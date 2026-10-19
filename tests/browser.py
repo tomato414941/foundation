@@ -126,6 +126,25 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("button", name="許可", exact=True).click()
         page.wait_for_url(lambda url: "/keys" not in url)
 
+    def reset_keys(self, page, principal, screenshot=None):
+        cdp, authenticator_id = self.authenticators[page]
+        cdp.send("WebAuthn.clearCredentials", {"authenticatorId": authenticator_id})
+        self.forget_keys(page)
+        page.wait_for_url("**/keys?**")
+        page.get_by_role("button", name="作り直す", exact=True).click()
+        expect(page.get_by_text("申請から7日たつと作り直せます。", exact=False)).to_be_visible()
+        if screenshot:
+            page.screenshot(path=str(ARTIFACTS / screenshot), full_page=True)
+            print("Rendered key reset: " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("button", name="申請する", exact=True).click()
+        expect(page.get_by_text("作り直しを申請しました。", exact=True)).to_be_visible()
+        response = page.request.post(ORIGIN + "/__test/key-reset/" + principal["id"] + "/ready", data={})
+        self.assertTrue(response.ok, response.text())
+        page.reload()
+        page.get_by_role("textbox", name="名前", exact=True).fill("New passkey")
+        page.get_by_role("button", name="パスキーを登録して作り直す", exact=True).click()
+        page.wait_for_url(lambda url: "/keys" not in url)
+
     def passkey_asked(self, page):
         return page.expect_response(lambda response: response.url.endswith("/auth/passkeys/verify"))
 
@@ -670,6 +689,49 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="パスキーを追加", exact=True).click()
         expect(page.get_by_text("このパスキーかブラウザでは、秘密鍵を取り出せません。", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "keys-create-desktop-ja.png"), full_page=True)
+
+    def test_秘密鍵をなくしても申請から7日たつと作り直して変数の値を入れ直す(self):
+        page, principal = self.passkey_account("Reset account")
+        path = self.variable(page, principal, "Reset variable", "lost-value")
+        self.reset_keys(page, principal, "keys-reset-desktop-ja.png")
+        page.wait_for_url(path)
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_text("作り直す前の秘密鍵で暗号化されているため、開けません。値を入れ直すか、つなぎ直してください。", exact=True)).to_be_visible()
+        page.get_by_role("link", name="編集", exact=True).click()
+        expect(page.get_by_text("作り直す前の秘密鍵で暗号化されていたため、値を表示できません。新しい値を入力してください。", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "variable-replaced-desktop-ja.png"), full_page=True)
+        page.get_by_role("textbox", name="値", exact=True).fill("entered-again")
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("heading", name="Reset variable", exact=True)).to_be_visible()
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("entered-again")
+        items = page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/credentials").json()["items"]
+        self.assertEqual(sorted((item["kind"], item["canOpen"]) for item in items), [("passkey", False), ("passkey", True)])
+
+    def test_秘密鍵がある端末に作り直しの申請を表示して取り消す(self):
+        page, principal = self.passkey_account("Reset notice account")
+        response = page.request.post(f"{ORIGIN}/api/principals/{principal['id']}/key-reset", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        page.reload()
+        notice = page.get_by_text(re.compile(r"^公開鍵と秘密鍵の作り直しが申請されています。"))
+        expect(notice).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "reset-notice-desktop-ja.png"), full_page=True)
+        page.get_by_role("button", name="申請を取り消す", exact=True).click()
+        expect(notice).to_be_hidden()
+        self.assertIsNone(page.request.get(ORIGIN + "/api/session").json()["keyReset"])
+
+    def test_検証した相手が公開鍵を作り直すと検証し直しを求める(self):
+        owner, principal = self.passkey_account("Verifying owner")
+        friend, recipient = self.passkey_account("Resetting friend")
+        self.trust(owner, friend, recipient)
+        self.reset_keys(friend, recipient)
+        owner.goto(ORIGIN + "/account")
+        expect(owner.get_by_text("公開鍵が変わりました。もう一度検証してください。", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "verified-changed-desktop-ja.png"), full_page=True)
+        self.trust(owner, friend, recipient)
+        owner.goto(ORIGIN + "/account")
+        expect(owner.get_by_text(recipient["id"], exact=True)).to_be_visible()
+        expect(owner.get_by_text("公開鍵が変わりました。もう一度検証してください。", exact=True)).to_be_hidden()
 
     def test_メールで入った端末に別の端末から秘密鍵を渡して変数を表示する(self):
         owner, principal = self.passkey_account("Receiving account")

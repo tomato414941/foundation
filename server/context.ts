@@ -25,6 +25,7 @@ import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
 import { Devices } from './devices.js';
 import { Bindings } from './bindings.js';
+import { KeyResets } from './key-resets.js';
 import { Keyrings } from './keyrings.js';
 import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
@@ -71,7 +72,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
     relations = new Relations(db, authorization, audit, principals, resources, billing);
   const mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
-    authentication = new Authentication(db, principals, authorization, audit, mailer, config);
+    authentication = new Authentication(db, principals, authorization, audit, mailer, config),
+    keyResets = new KeyResets(db, authorization, audit);
   const catalog = await Catalog.load(resources, config),
     transport = deps.transport ?? new PublicTransport(config.origin),
     functions = new Functions(resources, config.origin);
@@ -146,6 +148,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     relations,
     mailer,
     authentication,
+    keyResets,
     resources,
     catalog,
     transport,

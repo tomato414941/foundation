@@ -17,8 +17,10 @@ import { resourcePath } from './navigation';
 import { Button } from './components/ui/button';
 import { DateText, Detail, ErrorNotice, JsonView, Notice } from './components';
 
+// An output sealed only for keys this account has since replaced is 'replaced': nothing opens it any more.
 type Output = { state: 'available'; value: JsonValue; kind: RunKindName } |
-  { state: 'locked' } | { state: 'notShared' } | { state: 'unrecorded' } | { state: 'unavailable'; error?: string } | { state: 'failed'; error: string };
+  { state: 'locked' } | { state: 'notShared' } | { state: 'replaced' } | { state: 'unrecorded' } | { state: 'unavailable'; error?: string } |
+  { state: 'failed'; error: string };
 export type StepDetails = {
   startedAt: string | null; finishedAt: string | null; environmentId: string | null;
   program: z.infer<typeof PrivateProgram>['operation'] | null;
@@ -58,7 +60,8 @@ export async function loadExecutionDetails(item: ExecutionView, canReadOutput: b
       const custody = await custodyClient();
       const readers = 'content' in task.receipt ? task.receipt.content.policy.readers : task.intent.resultRecipients;
       if (!readers.some(reader => canonical(reader) === canonical(custody.binding))) {
-        details.output = { state: 'notShared' }; return details;
+        details.output = { state: readers.some(reader => reader.principalId === custody.binding.principalId) ? 'replaced' : 'notShared' };
+        return details;
       }
       const result = await custody.result(task);
       details.output = result?.ok ? { state: 'available', value: result.result, kind: task.kind }
@@ -134,10 +137,12 @@ export function ExecutionOutput({ output, invocation }: { output: Output; invoca
   const { t } = useTranslation();
   if (output.state === 'locked') return <Notice>{t('executionOutputLocked')}</Notice>;
   if (output.state === 'notShared') return <Notice>{t('executionOutputNotShared')}</Notice>;
+  if (output.state === 'replaced') return <Notice>{t('executionOutputReplaced')}</Notice>;
   if (output.state === 'unrecorded') return <p className="text-muted-foreground">{t('executionNoRecordedOutput')}</p>;
   if (output.state === 'failed') return <ErrorNotice error={output.error} />;
   if (output.state === 'unavailable') return <Notice tone="warning">
-    {t(output.error === 'identity_untrusted' ? 'executionOutputUntrusted' : output.error === 'forbidden' ? 'executionOutputForbidden' : 'executionOutputUnreadable')}
+    {t(['identity_untrusted', 'identity_changed'].includes(output.error ?? '') ? 'executionOutputUntrusted'
+      : output.error === 'forbidden' ? 'executionOutputForbidden' : 'executionOutputUnreadable')}
   </Notice>;
   const command = output.kind === 'command' ? CommandResult.safeParse(output.value) : null;
   if (command?.success) return <div className="flex min-w-0 flex-col gap-4">

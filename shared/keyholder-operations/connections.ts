@@ -67,17 +67,19 @@ class ConnectionOperations {
     const prepared = await this.prepareFields(plan, material); if (prepared) return prepared;
     const id = plan.id, { input } = plan.invocation;
     const destination = AppSave.parse(input);
-    const previous = destination.resourceId ? await this.client.custody.read(destination.resourceId) : undefined;
+    const previous = destination.resourceId ? await this.client.custody.latest(destination.resourceId) : undefined;
     if (previous && previous.version !== destination.version) throw new Error('This item changed. Reload it before saving.');
     const environments = await Promise.all((destination.environmentIds ?? []).map(id => this.client.custody.environment(id)));
     const type = ContentTypes.clientCredential;
     if (previous && (previous.content.policy.contentType !== type || previous.content.policy.ownerId !== destination.ownerId))
       throw new Error('Choose the item prepared by this operation.');
-    const policy = previous && destination.environmentIds === undefined ? previous.content.policy
-      : await this.client.custody.policy(destination.ownerId, type, environments, { previous: previous?.content.policy });
+    const policy = previous && !previous.replaced && destination.environmentIds === undefined ? previous.content.policy
+      : await this.client.custody.policy(destination.ownerId, type, environments,
+        previous?.replaced ? { replacing: previous.content.policy } : { previous: previous?.content.policy });
     let bytes: Uint8Array, metadata: Record<string, JsonValue> | undefined;
     const application = AppSave.parse(input);
-    const old = previous ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(previous.content.policy.id)))) : null;
+    const old = previous && !previous.replaced
+      ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(previous.content.policy.id)))) : null;
     const method = await this.method(application.methodId);
     const fields = suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, application.fields ?? {}, material.fields ?? {});
     const same = old && old.methodId === application.methodId && old.clientId === application.clientId && canonical(old.fields) === canonical(fields);
@@ -125,16 +127,17 @@ class ConnectionOperations {
     }
     if (!connectionMethod(method).browserAuthorization) {
       if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
-      const previous = connection.connectionId ? await this.client.custody.read(connection.connectionId) : undefined;
+      const previous = connection.connectionId ? await this.client.custody.latest(connection.connectionId) : undefined;
       if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
         throw new Error('Choose a connection belonging to this owner.');
-      const old = previous ? ConnectionMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(connection.connectionId!)))) : undefined;
+      const old = previous && !previous.replaced
+        ? ConnectionMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(connection.connectionId!)))) : undefined;
       const app = registrationApplication({ methodId: connection.methodId, method, appId,
         app: appId ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(appId)))) : null });
       const state = registrationMaterial({ methodId: connection.methodId, method, appId: appId ?? null, app,
         fields: suppliedConnectionFields(connectionMethod(method).fields, connection.fields ?? {}, material.fields ?? {}),
         scopes: method.kind === 'oauth' ? selectScopes(method.config.scopes, connection.scopes) : [], aws: material.aws }, old);
-      const policy = await connectionPolicy(this.client.custody, connection.ownerId, previous?.content, connection.users);
+      const policy = await connectionPolicy(this.client.custody, connection.ownerId, previous, connection.users);
       const resource = await this.client.custody.save(connection.name ?? method.name, encode(canonical(state)), policy,
         { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
           commit: async write => {

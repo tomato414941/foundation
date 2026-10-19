@@ -51,16 +51,23 @@ export class CustodyClient {
     readonly keys: KeyMaterial, readonly trust: TrustStore) {}
 
   async trusted(binding: BoundKeys) {
-    if (!(await this.verifies(binding)))
+    if (!(await this.verifies(binding))) {
+      // Keys verified before and since replaced are told apart from keys never verified, to be verified again.
+      if (binding.principalId !== this.binding.principalId && await this.known(binding.principalId))
+        throw new ClientFailure('identity_changed', 'Identity ' + binding.principalId + ' replaced the keys verified before. Verify its current keys.');
       throw new ClientFailure('identity_untrusted', 'Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
+    }
     return binding;
   }
   // Whether this identity verified the keys: its own, those in its keyring, or those this device verified before
   // keyrings. A keyring's entry for a principal decides over what this device verified earlier.
   private async verifies(binding: BoundKeys) {
     if (binding.principalId === this.binding.principalId) return canonical(this.binding) === canonical(binding);
-    const known = (await this.keyring()).get(binding.principalId)?.binding ?? await this.trust.binding(binding.principalId);
+    const known = await this.known(binding.principalId);
     return !!known && canonical(known) === canonical(binding);
+  }
+  private async known(principalId: string) {
+    return (await this.keyring()).get(principalId)?.binding ?? await this.trust.binding(principalId);
   }
   // Whether this identity verified another's current keys: not until it does, and not again once they change.
   async verifiedIdentity(id: string) {
@@ -171,14 +178,27 @@ export class CustodyClient {
     for (const { name: _name, ...item } of delegates.items) {
       await verifyBinding(item);
       try { verified.push(await this.trusted(item.binding)); }
-      catch (error) { if (!(error instanceof ClientFailure && error.code === 'identity_untrusted')) throw error; }
+      catch (error) { if (!(error instanceof ClientFailure && ['identity_untrusted', 'identity_changed'].includes(error.code))) throw error; }
     }
     return [...items.map(item => item.binding), ...verified];
   }
   async read(id: string) {
-    const item = await this.api.json('/api/custody/' + Id.parse(id), {}, ProtectedRead);
-    await this.observe(item.content, id);
+    const item = await this.latest(id);
+    if (item.replaced)
+      throw new ClientFailure('key_replaced', 'This item is sealed only for keys this identity has since replaced. Enter its value again.');
     return item;
+  }
+  // The item as sealed now, to seal its next value: what this identity opens, or, sealed only for keys this identity has
+  // since replaced, the item to seal anew with its current keys. Nothing opens its earlier value any more.
+  async latest(id: string) {
+    const item = await this.api.json('/api/custody/' + Id.parse(id), {}, ProtectedRead);
+    if (this.replaces(item.content.policy)) return { ...item, replaced: true };
+    await this.observe(item.content, id);
+    return { ...item, replaced: false };
+  }
+  private replaces(policy: CustodyPolicy) {
+    return !policy.readers.some(reader => canonical(reader) === canonical(this.binding)) &&
+      policy.readers.some(reader => reader.principalId === this.binding.principalId);
   }
   async observe(input: CustodyContent, id = input.policy.id) {
     const content = await verifyContent(input);
@@ -192,8 +212,10 @@ export class CustodyClient {
         (content.policy.revision === observed.policy.revision && canonical(content.policy) !== canonical(observed.policy)) ||
         (content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
         throw new ClientFailure('content_conflict', 'The encrypted content is older than this device has already observed.');
+      // A signer that replaced its keys continues what it signed for with its current keys, verified here as above.
       if (content.policy.revision > observed.policy.revision &&
-        !continuesPolicy(observed.policy, content))
+        !continuesPolicy(observed.policy, content) && !observed.policy.authorities.some(authority =>
+          authority.principalId === author.principalId && authority.id !== author.id))
         throw new ClientFailure('content_conflict', 'An existing policy authority must approve the new recipients.');
     }
     await this.trust.rememberContent(content);
@@ -216,8 +238,10 @@ export class CustodyClient {
     }
     return updates;
   }
+  // The policy for an item: carried on from its previous one, or new. One sealed only for keys this identity has since
+  // replaced is sealed anew as the same item, at its next revision.
   async policy(ownerId: string, contentType: ContentTypeId, environments: RegisteredEnvironment[] = [],
-    options: { id?: string; previous?: CustodyPolicy; expiresAt?: string } = {}) {
+    options: { id?: string; previous?: CustodyPolicy; replacing?: CustodyPolicy; expiresAt?: string } = {}) {
     const readers = options.previous?.readers ?? [...new Map([...(await this.recipients(ownerId)), this.binding]
       .map(binding => [binding.id, binding])).values()];
     if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
@@ -231,8 +255,8 @@ export class CustodyClient {
         operations: [...permittedOperations(contentType)],
         origins: [], functionDigests: [], callerProgram: contentType !== ContentTypes.clientCredential, expiresAt });
     }
-    return AccessPolicy.parse({ format: 2, id: options.id ?? options.previous?.id ?? crypto.randomUUID(),
-      origin: this.origin, ownerId, contentType, revision: (options.previous?.revision ?? 0) + 1,
+    return AccessPolicy.parse({ format: 2, id: options.id ?? options.previous?.id ?? options.replacing?.id ?? crypto.randomUUID(),
+      origin: this.origin, ownerId, contentType, revision: (options.previous?.revision ?? options.replacing?.revision ?? 0) + 1,
       authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
@@ -241,8 +265,9 @@ export class CustodyClient {
     const previous = options.previous;
     if (previous && canonical(policy) === canonical({ ...previous.content.policy, revision: policy.revision }))
       policy = { ...policy, revision: previous.content.policy.revision };
+    // What only replaced keys signed for is not handed over: it is sealed anew, following on from its revisions.
     const content = await protect(bytes, policy, (previous?.content.materialRevision ?? 0) + 1,
-      this.binding, this.keys, options.metadata, previous?.content);
+      this.binding, this.keys, options.metadata, previous && !this.replaces(previous.content.policy) ? previous.content : undefined);
     const write = { name, content, ...(options.labels ? { labels: options.labels } : {}), ...(previous ? { version: previous.version } : {}) };
     const resource = options.commit ? await options.commit(write) : await this.api.json('/api/resources/' + policy.id + '/custody',
       { method: 'PUT', body: write }, Resource);
@@ -271,12 +296,24 @@ export class CustodyClient {
     const previous = await this.read(id);
     const { policy } = previous.content, now = Date.now(), removed = new Set(remove);
     const current = reason === 'recipients' ? await this.recipients(policy.ownerId) : [];
-    // A principal that has replaced its keys is sealed for with its current keys only.
-    const kept = (binding: BoundKeys) => !removed.has(binding.principalId) &&
-      !current.some(next => next.principalId === binding.principalId && next.id !== binding.id);
+    // A principal that has replaced its keys is sealed for with its current keys only, in each of its roles, once this
+    // device verified them: those who use what the owner holds as listed, and anyone else it is shared with as found.
+    const latest = new Map(current.map(binding => [binding.principalId, binding]));
+    const named = [...policy.readers, ...policy.authorities,
+      ...policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor])];
+    if (reason === 'recipients') for (const principalId of new Set(named.map(binding => binding.principalId))) {
+      if (principalId === this.binding.principalId || latest.has(principalId) || removed.has(principalId)) continue;
+      const found = await this.inspectIdentity(principalId).then(identity => identity.binding, () => null);
+      if (found && named.some(binding => binding.principalId === principalId && binding.id !== found.id))
+        latest.set(principalId, await this.trusted(found));
+    }
+    const replace = (binding: BoundKeys) => latest.get(binding.principalId) ?? binding;
+    const unique = (values: BoundKeys[]) => [...new Map(values.map(binding => [binding.id, binding])).values()];
+    const kept = (binding: BoundKeys) => !removed.has(binding.principalId);
     const grants = policy.grants.filter(grant => grantActive(grant, now) && kept(grant.executor) &&
-      (!('actor' in grant) || kept(grant.actor)));
-    const readers = policy.readers.filter(kept), authorities = policy.authorities.filter(kept);
+      (!('actor' in grant) || kept(grant.actor))).map(grant => 'actor' in grant
+      ? { ...grant, actor: replace(grant.actor), executor: replace(grant.executor) } : { ...grant, executor: replace(grant.executor) });
+    const readers = unique(policy.readers.filter(kept).map(replace)), authorities = unique(policy.authorities.filter(kept).map(replace));
     const added = current.filter(binding => !readers.some(reader => reader.id === binding.id));
     const next = { ...policy, revision: policy.revision + 1, grants, producers: [],
       readers: [...readers, ...added],
@@ -326,12 +363,12 @@ export class CustodyClient {
       const page = await this.api.json('/api/principals/' + ownerId + '/resources?' + query, {}, listOf(Resource));
       existing = page.items.find(item => item.name === name); after = page.next;
     } while (!existing && after);
-    const previous = existing ? (await this.read(existing.id)).content : undefined;
-    const policy: CustodyPolicy = previous ? { ...previous.policy, revision: previous.policy.revision + 1, producers: [] }
-      : await this.policy(ownerId, ContentTypes.value);
+    const latest = existing ? await this.latest(existing.id) : undefined, previous = latest?.content;
+    const policy: CustodyPolicy = previous && !latest.replaced ? { ...previous.policy, revision: previous.policy.revision + 1, producers: [] }
+      : await this.policy(ownerId, ContentTypes.value, [], { replacing: previous?.policy });
     policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
       materialRevision: (previous?.materialRevision ?? 0) + 1 }];
-    return { name, approval: await approvePolicy(policy, this.binding, this.keys, previous) };
+    return { name, approval: await approvePolicy(policy, this.binding, this.keys, latest?.replaced ? undefined : previous) };
   }
   async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
     options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;

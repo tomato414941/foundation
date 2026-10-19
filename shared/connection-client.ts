@@ -79,13 +79,13 @@ export class ConnectionClient {
       ...(!active.invocation.input.name ? { name: input.name } : {}) };
     if (Object.keys(values).length) await this.custody.api.json('/api/executions/' + input.execution.id + '/input',
       { method: 'PATCH', body: { index: input.execution.index, values } }, Execution);
-    const previous = input.connectionId ? await this.custody.read(input.connectionId) : undefined;
+    const previous = input.connectionId ? await this.custody.latest(input.connectionId) : undefined;
     if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId))
       throw new Error('Choose a connection belonging to this owner.');
     const appId = connectionMethod(input.method).requiresApp ? Id.parse(input.appId) : null;
     const savedApp = appId ? AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(appId)))) : null;
     const app = registrationApplication({ ...input, app: savedApp });
-    const policy = await connectionPolicy(this.custody, input.ownerId, previous?.content, input.users);
+    const policy = await connectionPolicy(this.custody, input.ownerId, previous, input.users);
     const execution = await this.custody.api.json('/api/executions/' + input.execution.id, {}, Execution);
     const id = crypto.randomUUID(), flow: ConnectionFlow = {
       id, ownerId: input.ownerId, name: input.name, registration: { methodId: input.methodId, method: input.method, appId, app,
@@ -220,7 +220,7 @@ export class ConnectionClient {
   async accept(id: string): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step !== 'commit' || !flow.material) throw new Error('Complete authorization before saving this connection.');
-    const previous = flow.previousPolicyDigest ? await this.custody.read(flow.policy.id) : undefined;
+    const previous = flow.previousPolicyDigest ? await this.custody.latest(flow.policy.id) : undefined;
     if (previous && await hash(previous.content.policy) !== flow.previousPolicyDigest)
       throw new Error('The connection recipients changed. Start again to approve the current recipients.');
     const commit = async (write: z.infer<typeof ProtectedWrite>) => {

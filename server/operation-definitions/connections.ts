@@ -9,6 +9,7 @@ import { ContentTypes, Operations, permittedOperations } from '../../shared/cust
 import type { CustodyPolicy } from '../../shared/custody.js';
 import type { Catalog } from '../catalog.js';
 import type { Custody } from '../custody.js';
+import { succeeds } from '../custody.js';
 import { DomainError, fail } from '../errors.js';
 import { OperationFailed, DefinitionRegistry } from '../definitions.js';
 import type { Queryable } from '../database.js';
@@ -142,8 +143,10 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
         if (input.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
           canonical([...selectScopes(method.config.scopes, input.scopes)].sort()) !== canonical([...z.array(z.string()).parse(write.content.metadata.scopes)].sort()))
           fail(409, 'operation_changed', 'Save the service permissions approved by this execution.');
+        // A connection sealed only for keys its signer has since replaced is connected anew, without its permissions.
+        const binding = (await custody.bindings.current(who.id)).binding;
         if (input.users) await approvedUsers(policy, input.users);
-        else if (canonical(policy.grants) !== canonical(previous?.policy.grants ?? []))
+        else if (canonical(policy.grants) !== canonical(previous && !succeeds(previous.policy, binding) ? previous.policy.grants : []))
           fail(409, 'operation_changed', 'Keep the approved connection permissions.');
         const row = await custody.put(who, write);
         return { kind: 'connected', id: row.id, metadata: write.content.metadata };

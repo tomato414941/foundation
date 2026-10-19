@@ -15,6 +15,7 @@ import { Resources } from '../server/resources.js';
 import type { Mailer } from '../server/mail.js';
 import { bindKeys, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { Bindings } from '../server/bindings.js';
+import { KeyResets } from '../server/key-resets.js';
 import { Custody } from '../server/custody.js';
 import { KeySharing } from '../server/key-sharing.js';
 import { Billing, StripePayments } from '../server/billing.js';
@@ -56,7 +57,8 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     billing = new Billing(db, authorization, audit, payments ?? new StripePayments(config), config),
     relations = new Relations(db, authorization, audit, principals, resources, billing);
   const mailer = new TestMailer(),
-    authentication = new Authentication(db, principals, authorization, audit, mailer, config);
+    authentication = new Authentication(db, principals, authorization, audit, mailer, config),
+    keyResets = new KeyResets(db, authorization, audit);
   const bindings = new Bindings(db, authorization, audit), custody = new Custody(resources, bindings, relations, config.origin);
   principals.keySharing = new KeySharing(custody);
   async function person(name = 'Owner') {
@@ -86,6 +88,7 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     relations,
     billing,
     authentication,
+    keyResets,
     resources,
     mailer,
     person,

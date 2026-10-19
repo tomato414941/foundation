@@ -40,6 +40,10 @@ const words: Record<string, [string, string]> = {
   executionHttpStatus: ['HTTPステータス', 'HTTP status'],
   executionOutputLocked: ['出力を見るには、パスキーでサインインしてください。', 'Sign in with a passkey to view the output.'],
   executionOutputNotShared: ['出力はこのアカウントに共有されていません。', 'The output has not been shared with this account.'],
+  executionOutputReplaced: [
+    '出力は作り直す前の秘密鍵で暗号化されているため、表示できません。',
+    'The output was encrypted with the earlier private key, so it cannot be shown.',
+  ],
   executionOutputUntrusted: ['出力を確認するには、共有元と実行環境の公開鍵を検証してください。', 'Verify the public keys of the sender and the executor before reading the output.'],
   executionOutputForbidden: ['この実行の出力を見る権限がありません。', 'You do not have permission to read this execution’s output.'],
   executionOutputUnreadable: ['出力を読み取れませんでした。ページを再読み込みしてください。', 'The output could not be read. Reload this page to try again.'],
@@ -297,6 +301,42 @@ const words: Record<string, [string, string]> = {
   receiveKeysSteps: ['秘密鍵がある端末で次のURLを開き、コードを入力してください。', 'On a device that has the private key, open this URL and enter the code.'],
   receiveStart: ['始める', 'Start'],
   thisBrowser: ['ブラウザ', 'Browser'],
+  resetKeys: ['公開鍵と秘密鍵を作り直す', 'Make new keys'],
+  resetKeysHelp: ['パスキーも、秘密鍵がある端末もないときに、新しく作ります。', 'When no passkey or device has the private key, make new ones.'],
+  resetStart: ['作り直す', 'Make new keys'],
+  resetIntro: ['作り直すと、次のようになります。', 'Making new keys means:'],
+  resetValues: [
+    '作り直す前の秘密鍵で暗号化した変数や接続は開けなくなります。変数は値を入れ直し、接続はつなぎ直してください。',
+    'Variables and connections encrypted with the earlier private key can no longer be opened. Enter variable values again and reconnect connections.',
+  ],
+  resetResults: ['過去の実行結果は見られなくなります。', 'Earlier results can no longer be viewed.'],
+  resetApiKeys: ['APIキーは発行し直してください。', 'Issue API keys again.'],
+  resetVerification: [
+    '検証した公開鍵は、もう一度検証してください。あなたの公開鍵を検証した人にも、検証し直してもらってください。',
+    'Verify public keys again, and ask those who verified your public key to verify it again.',
+  ],
+  resetDelay: [
+    '申請から7日たつと作り直せます。それまでは、パスキーか秘密鍵がある端末で取り消せます。',
+    'You can make them 7 days after the request. Until then, it can be cancelled with a passkey or on a device that has the private key.',
+  ],
+  requestReset: ['申請する', 'Request'],
+  resetRequested: ['作り直しを申請しました。', 'New keys were requested.'],
+  resetReadyAt: ['作り直せる日時', 'Available from'],
+  resetReady: [
+    '作り直せます。新しいパスキーを登録すると、新しい秘密鍵をそのパスキーに入れます。',
+    'You can make the new keys now. Register a new passkey to keep the new private key in it.',
+  ],
+  resetWithPasskey: ['パスキーを登録して作り直す', 'Register a passkey and make new keys'],
+  cancelReset: ['申請を取り消す', 'Cancel the request'],
+  resetPending: [
+    '公開鍵と秘密鍵の作り直しが申請されています。{{date}} から作り直せるようになります。心当たりがなければ、申請を取り消してください。',
+    'New keys were requested for your account and can be made from {{date}}. If you did not request them, cancel the request.',
+  ],
+  valueReplaced: [
+    '作り直す前の秘密鍵で暗号化されていたため、値を表示できません。新しい値を入力してください。',
+    'The value was encrypted with the earlier private key, so it cannot be shown. Enter a new value.',
+  ],
+  keyChanged: ['公開鍵が変わりました。もう一度検証してください。', 'The public key changed. Verify it again.'],
   'errors.encryption_key_changed': ['公開鍵が変わったため、この秘密鍵は使えません。', 'The public key changed, so this private key cannot be used.'],
   share: ['共有', 'Share'],
   transfer: ['所有者を変更', 'Transfer ownership'],
@@ -694,6 +734,19 @@ const words: Record<string, [string, string]> = {
     'Stop the environment before continuing.',
   ],
   'errors.key_locked': ['この端末に秘密鍵がありません。', 'This device does not have the private key.'],
+  'errors.key_reset_waiting': [
+    'まだ作り直せません。申請から7日たつまでお待ちください。',
+    'The new keys cannot be made yet. Wait until 7 days after the request.',
+  ],
+  'errors.key_replaced': [
+    '作り直す前の秘密鍵で暗号化されているため、開けません。値を入れ直すか、つなぎ直してください。',
+    'This was encrypted with the earlier private key, so it cannot be opened. Enter the value again or reconnect.',
+  ],
+  'errors.identity_changed': [
+    '相手の公開鍵が変わりました。「公開鍵の検証」で、もう一度検証してください。',
+    'The other party’s public key changed. Verify it again.',
+  ],
+  'errors.key_missing': ['まだ公開鍵がありません。パスキーを登録してください。', 'There is no public key yet. Register a passkey.'],
   'errors.another_principal': [
     '別のプリンシパルとして許可されました。このアカウントとして許可してください。',
     'It was allowed as another principal. Allow it as this account.',

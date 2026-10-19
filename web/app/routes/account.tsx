@@ -6,7 +6,7 @@ import { Form, Link, redirect, useActionData, useLoaderData, useNavigate } from 
 import { useTranslation } from 'react-i18next';
 import type { z } from 'zod';
 import type { Route } from './+types/account';
-import { fingerprint } from '../../../shared/authority';
+import { canonical, fingerprint } from '../../../shared/authority';
 import { Credential, Principal, listOf } from '../../../shared/contracts';
 import { actionResult, api, formText, signedIn } from '../api';
 import { custodyClient } from '../custody';
@@ -27,9 +27,13 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getIdentity(id),
   ]);
   // The fingerprint and the verified public keys need the private key in this browser; without it they are left out.
-  const verified = identity ? await Promise.all([...(await (await custodyClient(id)).keyring()).values()]
+  // A verified public key its holder has since replaced is verified again.
+  const client = identity ? await custodyClient(id) : null;
+  const verified = client ? await Promise.all([...(await client.keyring()).values()]
     .map(async ({ binding, verifiedAt }) => ({ id: binding.principalId, name: await nameOf(binding.principalId),
-      fingerprint: await fingerprint(binding), verifiedAt }))) : null;
+      fingerprint: await fingerprint(binding), verifiedAt,
+      changed: await client.inspectIdentity(binding.principalId)
+        .then(current => canonical(current.binding) !== canonical(binding), () => false) }))) : null;
   return { session, principal, credentials: credentials.items,
     fingerprint: identity ? await fingerprint(identity.binding) : null,
     verified: verified?.sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt)) ?? null };
@@ -127,6 +131,9 @@ export default function Account() {
             <Detail label={t('id')}>{item.id}<Copy value={item.id} /></Detail>
             <Detail label={t('fingerprint')}><Fingerprint value={item.fingerprint} /></Detail>
             <Detail label={t('verifiedAt')}><DateText value={item.verifiedAt} /></Detail>
+            {item.changed && <Notice tone="warning" action={<Button variant="outline" size="sm" asChild>
+              <Link to={'/account/trust?principal=' + item.id}>{t('trustIdentity')}</Link>
+            </Button>}>{t('keyChanged')}</Notice>}
           </li>)}
         </ul> : <p className="leading-relaxed text-muted-foreground">{t('noVerifiedIdentities')}</p>)}
         <div><Button variant="outline" asChild><Link to="/account/trust">{t('trustIdentity')}</Link></Button></div>

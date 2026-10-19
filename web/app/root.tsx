@@ -31,6 +31,7 @@ import {
   useNavigate,
   useNavigation,
   useParams,
+  useRevalidator,
   useRouteError,
 } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -38,7 +39,7 @@ import type { Route } from './+types/root';
 import i18n from './i18n';
 import { api, errorCode, session } from './api';
 import { clearKeys } from './keys';
-import { Busy, ErrorNotice, Page, useTask } from './components';
+import { Busy, ErrorNotice, Notice, Page, useTask } from './components';
 import { Button } from './components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from './components/ui/sheet';
@@ -90,6 +91,7 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const { owner } = useParams();
   const [drawer, setDrawer] = useState(false);
   const task = useTask();
@@ -303,6 +305,16 @@ export default function App() {
         </header>
         <main tabIndex={-1} className="min-w-0 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8">
           <ErrorNotice error={task.error} />
+          {/* Past the setup page the browser holds the private key, so whoever holds it sees a request for new keys and can stop it. */}
+          {authenticated && data.keyReset && <div className="mx-auto mb-6 w-full max-w-6xl">
+            <Notice tone="warning" action={<Button variant="outline" size="sm" loading={task.busy} onClick={() => task.run(async () => {
+              await api('/principals/' + data.principal!.id + '/key-reset', { method: 'DELETE' });
+              await revalidator.revalidate();
+            })}>{t('cancelReset')}</Button>}>
+              {t('resetPending', { date: new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' })
+                .format(new Date(data.keyReset.readyAt)) })}
+            </Notice>
+          </div>}
           <Outlet />
         </main>
       </div>

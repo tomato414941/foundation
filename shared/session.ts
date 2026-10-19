@@ -1,6 +1,8 @@
 import { z } from 'zod';
-import { Principal, Id, Name, Locale, PublicKey, WrappedKey } from './contracts.js';
+import { Principal, Id, Name, Locale, PublicKey, Time, WrappedKey } from './contracts.js';
 
+// A request to make new keys after every copy of the private key was lost, and when it can be completed.
+export const KeyReset = z.object({ requestedAt: Time, readyAt: Time }).strict();
 export const Features = z.object({
   email: z.boolean(),
   environments: z.boolean(),
@@ -13,6 +15,7 @@ export const Session = z.object({
   credentialId: Id.nullable(),
   wrappedKey: WrappedKey.nullable(),
   requestId: Id.nullable(),
+  keyReset: KeyReset.nullable(),
   server: z.object({ name: Name }),
   features: Features,
   principals: z.array(Principal),
@@ -44,3 +47,5 @@ export const PasskeyVerify = z
     wrappedKey: WrappedKey.optional(),
   })
   .strict();
+// The new keys, and the private key wrapped for the passkey this session signed in with.
+export const KeyResetCompletion = z.object({ publicKey: PublicKey, wrappedKey: WrappedKey }).strict();
