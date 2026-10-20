@@ -24,8 +24,8 @@ export class Requests {
     let row = await this.row(id);
     const execution = await this.executions.get(actor, row.execution_id);
     row = await this.row(id);
-    const [from, to, settings] = await Promise.all([this.executions.principals.get(row.from_id),
-      row.to_id ? this.executions.principals.get(row.to_id) : null,
+    const [from, to, settings] = await Promise.all([this.executions.principals.named(row.from_id),
+      row.to_id ? this.executions.principals.named(row.to_id) : null,
       this.db.one<{ settings: z.infer<typeof Settings> }>('SELECT settings FROM integration_settings WHERE principal_id=$1', [row.from_id])]);
     const returnUrl = settings?.settings.returnUrl ? new URL(settings.settings.returnUrl) : null;
     if (returnUrl) { returnUrl.searchParams.set('requestId', id); returnUrl.searchParams.set('state', row.state); }

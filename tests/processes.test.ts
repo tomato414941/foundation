@@ -14,6 +14,8 @@ import { CommandProcess } from '../runtime/command.js';
 import { ProcessBroker, ProcessExecutor } from '../runtime/process.js';
 import { HttpBroker } from '../runtime/broker.js';
 import { Execution } from '../shared/executions.js';
+import { RequestInput } from '../shared/contracts.js';
+import { Accounts } from '../server/accounts.js';
 
 async function processFixture(t: TestContext) {
   const f = await flowFixture();
@@ -125,6 +127,20 @@ test('許可されたプリンシパルが実行し、権限を解除した要�
   await f.worker.tick();
   const failed = await f.get(started.id);
   assert.equal(failed.state, 'failed'); assert.equal(failed.error, 'authorization_changed');
+});
+
+test('コマンドを実行して依頼を送ったプリンシパルを削除し、持ち主の履歴には実行と依頼を残す', async t => {
+  const f = await processFixture(t);
+  const started = await f.create({ command: ['node', '-e', 'process.stdout.write("kept")'] });
+  await f.worker.tick();
+  const request = await f.context.requests.create(f.caller.actor, RequestInput.parse({ to: f.owner.actor.id,
+    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'Requested principal' } }] }));
+  await new Accounts(f.context).remove(f.caller.actor, f.caller.actor.id);
+  await assert.rejects(f.context.authorization.active({ id: f.caller.actor.id }), { code: 'unauthenticated' });
+  const kept = await f.api(f.owner.token).json('/api/processes/' + started.id, {}, ProcessView);
+  assert.equal(kept.state, 'succeeded'); assert.equal(kept.result!.stdout, 'kept'); assert.equal(kept.actorId, f.caller.actor.id);
+  const received = (await f.context.requests.list(f.owner.actor)).items.find(item => item.id === request.id)!;
+  assert.equal(received.state, 'cancelled'); assert.deepEqual(received.from, { id: f.caller.actor.id, name: f.caller.actor.id });
 });
 
 test('実行出力をUnicode文字ごとに区切り、続きの位置から取得する', async t => {

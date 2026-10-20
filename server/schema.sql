@@ -117,7 +117,8 @@ CREATE UNIQUE INDEX environment_network_slot ON environment_jobs(network_slot) W
 CREATE TABLE environment_deletions (
   resource_id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid REFERENCES principals(id) ON DELETE SET NULL,
+  -- Who asked for it, by id alone: the owner keeps the record after that principal is deleted.
+  actor_id uuid,
   state text NOT NULL CHECK (state IN ('pending','failed','complete')),
   error text,
   requested_at timestamptz NOT NULL DEFAULT now(),
@@ -135,12 +136,14 @@ CREATE TABLE function_settings (
   version integer NOT NULL CHECK (version > 0),
   approval jsonb NOT NULL
 );
+-- The records of what principals did name who acted by id alone: deleting a principal neither waits for them nor
+-- removes them from the history of others. What a principal owns still goes with it.
 CREATE TABLE executions (
   id uuid PRIMARY KEY,
-  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  creator_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  actor_id uuid NOT NULL,
+  creator_id uuid NOT NULL,
   owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
-  responder_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  responder_id uuid,
   message text NOT NULL DEFAULT '',
   proposal jsonb,
   code_hash text,
@@ -160,8 +163,8 @@ CREATE INDEX executions_recipient ON executions(responder_id,state,created_at);
 CREATE TABLE requests (
   id uuid PRIMARY KEY,
   execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-  from_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  to_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  from_id uuid NOT NULL,
+  to_id uuid,
   message text NOT NULL DEFAULT '',
   purpose text NOT NULL CHECK(purpose IN ('input','approval')),
   state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
@@ -200,7 +203,8 @@ CREATE TABLE billing_events (
   id uuid PRIMARY KEY,
   reference text NOT NULL UNIQUE,
   payer_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  -- Who used it, by id alone: the payer keeps the usage after that principal is deleted.
+  principal_id uuid NOT NULL,
   meter text NOT NULL CHECK(meter IN ('compute','storage')),
   amount bigint NOT NULL CHECK(amount >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -219,7 +223,7 @@ CREATE TABLE usage_limits (
 CREATE TABLE audit_log (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid REFERENCES principals(id) ON DELETE SET NULL,
+  actor_id uuid,
   action text NOT NULL,
   target_id uuid,
   details jsonb NOT NULL DEFAULT '{}',
@@ -249,7 +253,7 @@ CREATE TABLE executor_environments (
 CREATE TABLE execution_tasks (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL REFERENCES principals(id),
+  actor_id uuid NOT NULL,
   environment_id uuid NOT NULL,
   kind text NOT NULL CHECK(kind IN ('http','command','function','connect','refresh','revoke')),
   state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
@@ -272,8 +276,8 @@ CREATE INDEX execution_operation_context ON execution_tasks((request->'intent'->
 CREATE TABLE environment_processes (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL REFERENCES principals(id),
-  executor_id uuid REFERENCES principals(id),
+  actor_id uuid NOT NULL,
+  executor_id uuid,
   environment_id uuid NOT NULL,
   state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
   actor jsonb NOT NULL,
@@ -294,8 +298,8 @@ CREATE TABLE function_invocations (
   function_id uuid NOT NULL,
   function_owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  executor_id uuid NOT NULL REFERENCES principals(id),
+  actor_id uuid NOT NULL,
+  executor_id uuid NOT NULL,
   environment_id uuid NOT NULL,
   executor jsonb NOT NULL,
   actor jsonb NOT NULL,
@@ -319,7 +323,7 @@ CREATE INDEX invocation_owner ON function_invocations(owner_id,id);
 CREATE TABLE connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  executor_id uuid NOT NULL REFERENCES principals(id),
+  executor_id uuid NOT NULL,
   expected_revision integer NOT NULL,
   state text NOT NULL CHECK(state IN ('prepared','in_flight','committed','uncertain','aborted')),
   fence bigint GENERATED ALWAYS AS IDENTITY,

@@ -31,6 +31,11 @@ export class Principals {
       await this.db.one<PrincipalRow>('SELECT * FROM principals WHERE id=$1', [id], connection),
     );
   }
+  // Whom a record names: by name while the principal exists, and by id once it has been deleted.
+  async named(id: string, connection: Queryable = this.db.pool) {
+    const row = await this.db.one<{ name: string }>('SELECT name FROM principals WHERE id=$1', [id], connection);
+    return { id, name: row?.name ?? id };
+  }
   async create(
     name: string,
     publicKey: PublicEncryptionKey | null = null,

@@ -95,6 +95,21 @@ export class Accounts {
         'DELETE FROM resource_references WHERE resource_id IN (SELECT id FROM resources WHERE owner_id=$1)',
         [id],
       );
+      // What it did with others stays in their history, and what still waits there for it ends. The operations it
+      // kept to itself go with it, while those it asked another to answer stay with the one asked.
+      await connection.query(
+        "UPDATE executions SET state='cancelled',response='cancelled',wait=NULL,revision=revision+1 WHERE state IN ('waiting','running') AND (actor_id=$1 OR creator_id=$1 OR responder_id=$1)",
+        [id],
+      );
+      await connection.query(
+        "UPDATE requests SET state='cancelled',answered_at=now() WHERE state='pending' AND (from_id=$1 OR to_id=$1)",
+        [id],
+      );
+      await connection.query('UPDATE executions SET owner_id=NULL WHERE owner_id=$1 AND responder_id<>$1', [id]);
+      await connection.query(
+        'DELETE FROM executions WHERE owner_id IS NULL AND creator_id=$1 AND (responder_id IS NULL OR responder_id=$1)',
+        [id],
+      );
       await connection.query('DELETE FROM principals WHERE id=$1', [id]);
     });
   }

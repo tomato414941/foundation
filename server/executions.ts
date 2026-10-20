@@ -135,7 +135,7 @@ export class Executions {
   }
   private async metadata(row: ExecutionRow, actor: Actor | null): Promise<ViewMetadata> {
     const [creator, canRespond, proposal, deliveries, runtime] = await Promise.all([
-      this.principals.get(row.creator_id), this.canRespond(actor, row), this.proposal(row.proposal),
+      this.principals.named(row.creator_id), this.canRespond(actor, row), this.proposal(row.proposal),
       this.db.all<{ id: string }>('SELECT id FROM requests WHERE execution_id=$1 ORDER BY created_at', [row.id]),
       this.db.all<{ id: string; index: number }>(`SELECT id,(request->'intent'->'operationContext'->>'index')::integer AS index
         FROM execution_tasks WHERE request->'intent'->'operationContext'->>'id'=$1 ORDER BY created_at`, [row.id]),
@@ -192,7 +192,7 @@ export class Executions {
     if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own operation.');
     const represented = await this.authorization.find(actor.id, 'principal', 'stands');
     if (ownerId) await this.authorization.requirePrincipal(actor, ownerId, 'read');
-    const rows = await this.db.all<ExecutionRow & { creator_name: string }>(`SELECT e.*,p.name AS creator_name FROM executions e JOIN principals p ON p.id=e.creator_id
+    const rows = await this.db.all<ExecutionRow & { creator_name: string }>(`SELECT e.*,coalesce(p.name,e.creator_id::text) AS creator_name FROM executions e LEFT JOIN principals p ON p.id=e.creator_id
       WHERE (($5::uuid IS NULL AND (creator_id=$1 OR actor_id=$1 OR responder_id=ANY($2::uuid[]) OR e.owner_id=ANY($2::uuid[]) OR p.merged_into=$1)) OR e.owner_id=$5)
       AND ($3::uuid IS NULL OR e.id>$3) ORDER BY e.id LIMIT $4`,
       [actor.id, represented, after ?? null, limit + 1, ownerId ?? null]);
