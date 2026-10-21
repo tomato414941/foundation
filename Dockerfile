@@ -8,7 +8,9 @@ RUN npm run build
 RUN npm prune --omit=dev --offline --ignore-scripts --no-audit --no-fund
 
 FROM public.ecr.aws/docker/library/node:24.22.1-bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client \
+    && sed -i -E '/^mozilla\/(Comodo_AAA_Services_root|emSign_(ECC_Root_CA|Root_TLS_CA|Root_CS_CA)_-_G3)\.crt$/s/^/!/' /etc/ca-certificates.conf \
+    && update-ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG FOUNDATION_RELEASE_COMMIT=
 ENV FOUNDATION_RELEASE_COMMIT=$FOUNDATION_RELEASE_COMMIT
 ENV NODE_ENV=production FOUNDATION_HOST=0.0.0.0 FOUNDATION_PORT=3417 FOUNDATION_DATA=/var/lib/foundation
