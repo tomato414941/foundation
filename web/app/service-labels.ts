@@ -1,4 +1,8 @@
 export const serviceLabels: Record<string, string> = {
+  'railway.token.token.label': 'APIトークン',
+  'railway.token.token.note': 'アカウント設定の「Tokens」で作成したAccount tokenまたはWorkspace tokenを入力してください。No workspaceを選んだAccount tokenはアカウント全体、Workspace tokenは選択したワークスペースにアクセスできます。',
+  'railway.token.projectToken.label': 'プロジェクトトークン',
+  'railway.token.projectToken.note': 'プロジェクト設定の「Tokens」で作成したトークンを入力してください。発行時に選択したプロジェクトの環境だけにアクセスできます。',
   'http.token.url.label': '送信先URL',
   'http.token.token.label': 'Bearerトークン',
   'http.token.username.label': 'ユーザー名',

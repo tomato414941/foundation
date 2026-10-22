@@ -1096,6 +1096,33 @@ class BrowserTests(unittest.TestCase):
                 expect(page.get_by_text("接続済み", exact=True)).to_be_visible()
                 expect(page.get_by_text(service, exact=True)).to_be_visible()
 
+    def test_RailwayのAPIトークンとプロジェクトトークンを登録し再接続する(self):
+        page, principal = self.passkey_account("Railway account")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        saved_ids = []
+        for method, choice, label, name in [
+            ("token", "APIトークンを入力", "APIトークン", "Railway account API"),
+            ("project-token", "プロジェクトトークンを入力", "プロジェクトトークン", "Railway project API"),
+        ]:
+            with self.subTest(method=method):
+                page.goto(root + "/services/new?service=railway")
+                self.select(page, "接続方法", choice)
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                page.get_by_label(label, exact=True).fill("railway-browser-test-token")
+                expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
+                print("Rendered Railway connection: " + page.locator("main").inner_text(), flush=True)
+                page.screenshot(path=str(ARTIFACTS / ("railway-" + method + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], "railway:" + method)
+                self.assertEqual(saved["data"]["services"], [{"id": "railway", "name": "Railway"}])
+                saved_ids.append(saved["id"])
+                page.get_by_role("link", name="再接続", exact=True).click()
+                page.get_by_label(label, exact=True).fill("railway-browser-updated-token")
+                page.get_by_role("button", name="接続する", exact=True).click()
+                self.assertEqual(self.saved_connection(page, name)["id"], saved["id"])
+        self.assertEqual(len(set(saved_ids)), 2)
+
     def test_OpenAIのAPIキーと管理キーを選んで複数の接続を作成し更新する(self):
         page, principal = self.passkey_account("OpenAI account")
         root = f"{ORIGIN}/p/{principal['id']}"

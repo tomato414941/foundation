@@ -1,0 +1,63 @@
+{
+  "id": "railway",
+  "name": "Railway",
+  "api": "https://backboard.railway.com/graphql/v2",
+  "docs": "https://docs.railway.com/integrations/api",
+  "console": "https://railway.com/account/tokens",
+  "methods": {
+    "token": {
+      "name": "Railway · Enter API token",
+      "kind": "token",
+      "docs": "https://docs.railway.com/integrations/api#account-tokens-and-workspace-tokens",
+      "console": "https://railway.com/account/tokens",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "RAILWAY_API_TOKEN" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API token",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Create an account token or workspace token in Account Settings → Tokens. An account token with No workspace can access all your resources; a workspace token is limited to the selected workspace."
+          }
+        ],
+        "constants": { "url": "https://backboard.railway.com/graphql/v2" },
+        "outputs": {
+          "RAILWAY_API_TOKEN": "/token",
+          "RAILWAY_API_URL": "/url"
+        },
+        "hint": "Use RAILWAY_API_TOKEN with the Railway CLI or send it as a Bearer token to RAILWAY_API_URL. Account and workspace tokens use the same authentication."
+      }
+    },
+    "project-token": {
+      "name": "Railway · Enter project token",
+      "kind": "token",
+      "docs": "https://docs.railway.com/integrations/api#project-token",
+      "console": "https://railway.com/dashboard",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "header", "name": "Project-Access-Token", "value": "RAILWAY_TOKEN" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "projectToken",
+            "label": "Project token",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Create a token in the project's Settings → Tokens. It can access only the project environment selected when it was created."
+          }
+        ],
+        "constants": { "url": "https://backboard.railway.com/graphql/v2" },
+        "outputs": {
+          "RAILWAY_TOKEN": "/projectToken",
+          "RAILWAY_API_URL": "/url"
+        },
+        "hint": "Use RAILWAY_TOKEN with the Railway CLI or send it in the Project-Access-Token header to RAILWAY_API_URL. A project token cannot authenticate account-wide queries."
+      }
+    }
+  }
+}

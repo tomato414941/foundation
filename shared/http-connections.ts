@@ -11,7 +11,9 @@ export function httpSources(request: HttpRequestInput): SourceReference[] {
 export function connectionDestination(state: ConnectionState, request: HttpRequestInput, origin: string): string {
   if (!state.method.http) fail(400, 'invalid_http_connection', 'This connection does not provide HTTP authentication.');
   const field = state.method.http.urlField;
-  const configured = field && state.fields?.[field];
+  const configured = field && (
+    (state.method.kind === 'token' ? state.method.config.constants?.[field] : undefined) ?? state.fields?.[field]
+  );
   if (field && !configured) fail(409, 'reconnect_required', 'Reconnect with a destination URL.');
   const url = publicUrl(request.url ?? configured ?? '', origin);
   if (configured && url.origin !== publicUrl(configured, origin).origin)

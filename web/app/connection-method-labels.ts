@@ -7,6 +7,7 @@ const labels: Record<string, string> = {
   'Enter Admin API key': 'enterAdminApiKey',
   'Enter access token': 'enterAccessToken',
   'Enter API token': 'enterApiToken',
+  'Enter project token': 'enterProjectToken',
   'Enter proxy token': 'enterProxyToken',
   'Enter bot token': 'enterBotToken',
   'Enter integration secret': 'enterIntegrationSecret',

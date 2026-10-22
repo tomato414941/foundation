@@ -386,6 +386,7 @@ const words: Record<string, [string, string]> = {
   enterAdminApiKey: ['Admin APIキーを入力', 'Enter Admin API key'],
   enterAccessToken: ['アクセストークンを入力', 'Enter access token'],
   enterApiToken: ['APIトークンを入力', 'Enter API token'],
+  enterProjectToken: ['プロジェクトトークンを入力', 'Enter project token'],
   enterBotToken: ['Botトークンを入力', 'Enter bot token'],
   enterIntegrationSecret: ['インテグレーションのシークレットを入力', 'Enter integration secret'],
   enterCredentials: ['認証情報を入力', 'Enter credentials'],
