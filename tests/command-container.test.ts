@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const image = process.env.TEST_COMMAND_IMAGE ??
-  'node@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8';
+  'node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205';
 test('指定したコンテナで入力を読み、読み取り専用のファイルシステムと最小の環境を使う', async () => {
   const commands = new CommandProcess({ isolation: 'container', image });
   const program = "const fs=require('fs');let writeError=null;try{fs.writeFileSync('/write-check','x')}catch(error){writeError=error.code}" +
