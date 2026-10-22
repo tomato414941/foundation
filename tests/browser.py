@@ -255,7 +255,7 @@ class BrowserTests(unittest.TestCase):
             url = cli("request-access", "--to", principal["id"])["url"]
             self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
             owner.goto(url.split("#")[0])
-            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、この依頼を開き直してください。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、このリクエストを開き直してください。", exact=True)).to_be_visible()
             expect(owner.get_by_role("button", name="承認", exact=True)).to_be_disabled()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-unverified-ja.png"), full_page=True)
             owner.goto(ORIGIN + "/account")
@@ -1254,7 +1254,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(saved["data"]["methodId"], "runpod:mcp-oauth")
         self.assertEqual(len(registrations), 1)
 
-    def test_HFの登録を依頼して所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
+    def test_HFの登録をリクエストして所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
         import tempfile
         sender, _ = self.passkey_account("HF requester")
         owner, principal = self.passkey_account("Chancellor Rigel")
@@ -1745,7 +1745,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name="実行環境", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/environments")
 
-    def test_依頼画面で機密の変数を入力して承認すると暗号化して保存する(self):
+    def test_リクエスト画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
@@ -1764,11 +1764,11 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
 
-    def test_依頼内容を確認して承認し新しいプリンシパルを作成する(self):
+    def test_リクエスト内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
         receiver, principal = self.passkey_account("Approver")
         sender.goto(ORIGIN + "/requests/new")
-        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
+        sender.get_by_role("textbox", name="リクエスト先のプリンシパルID").fill(principal["id"])
         sender.get_by_role("textbox", name="メッセージ", exact=True).fill("Create a project account")
         sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Approved project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
@@ -1782,12 +1782,12 @@ class BrowserTests(unittest.TestCase):
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
 
-    def test_通常のログインがある端末で依頼専用リンクを開いて依頼を承認する(self):
+    def test_通常のログインがある端末でリクエスト専用リンクを開いてリクエストを承認する(self):
         sender, _ = self.passkey_account("Link requester")
         owner, principal = self.passkey_account("Link approver")
         viewer, _ = self.passkey_account("Existing session")
         sender.goto(ORIGIN + "/requests/new")
-        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
+        sender.get_by_role("textbox", name="リクエスト先のプリンシパルID").fill(principal["id"])
         sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Link project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
         sender.wait_for_url("**/requests/*")
@@ -2003,7 +2003,7 @@ class BrowserTests(unittest.TestCase):
                 expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-cli-registration-ja.png")), full_page=True)
 
-    def test_OVHのサービスアカウントの接続を依頼すると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
+    def test_OVHのサービスアカウントの接続をリクエストすると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
         owner, principal = self.passkey_account("OVH service account owner")
         sender, requester = self.passkey_account("OVH service account requester")
         asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
@@ -2021,7 +2021,7 @@ class BrowserTests(unittest.TestCase):
         saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
         self.assertEqual((saved["data"]["methodId"], saved["data"]["fields"]), ("ovh:client_credentials", {"apiRegion": "ca"}))
 
-    def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
+    def test_OVH接続のリクエストを受け手のブラウザで入力して完了する(self):
         owner, principal = self.passkey_account("OVH request owner")
         sender, requester = self.passkey_account("OVH requester")
         asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
