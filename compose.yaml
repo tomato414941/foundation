@@ -1,6 +1,41 @@
 services:
   postgres:
     image: postgres:18-alpine
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        bundle=/etc/ssl/certs/ca-certificates.crt
+        filtered=$$(mktemp)
+        trap 'rm -f "$$filtered"' EXIT
+        certificate=
+        while IFS= read -r line; do
+          case "$$line" in
+            '-----BEGIN CERTIFICATE-----') certificate= ;;
+            '-----END CERTIFICATE-----')
+              fingerprint=$$(printf '%s' "$$certificate" | base64 -d | sha256sum | cut -d ' ' -f 1)
+              case "$$fingerprint" in
+                7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d) ;;
+                f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5) ;;
+                d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4) ;;
+                86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b) ;;
+                *)
+                  printf '%s\n' '-----BEGIN CERTIFICATE-----' >> "$$filtered"
+                  printf '%s' "$$certificate" | fold -w 64 >> "$$filtered"
+                  printf '\n%s\n' '-----END CERTIFICATE-----' >> "$$filtered"
+                  ;;
+              esac
+              ;;
+            *) certificate="$$certificate$$line" ;;
+          esac
+        done < "$$bundle"
+        test -s "$$filtered"
+        cat "$$filtered" > "$$bundle"
+        rm -f "$$filtered"
+        trap - EXIT
+        exec /usr/local/bin/docker-entrypoint.sh "$$@"
+      - --
+    command: [postgres]
     restart: unless-stopped
     environment:
       POSTGRES_USER: foundation
