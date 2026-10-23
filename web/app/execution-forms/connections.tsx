@@ -64,17 +64,21 @@ export const connectionForm = defineForm({ load,
       fields: { ...(input.fields as Record<string, string> | undefined), ...visibleConnectionFields(data.method ? connectionMethod(data.method).fields : [], connectionFields(form)) } },
       material: { clientSecret: formText(form, 'clientSecret') || undefined, fields: connectionFields(form) } };
   },
-  Fields: ({ data }: { data: Data }) => {
+  Fields: ({ data, requestPrincipalId }: { data: Data; requestPrincipalId?: string }) => {
     const { t } = useTranslation(), { name, input } = data.invocation;
+    const compact = !!requestPrincipalId && name === 'connection.connect';
     return <>
-      <OwnerFields data={data} name={name !== 'connection.authorize'} defaultName={data.method?.defaultName} />
+      {compact ? input.ownerId !== requestPrincipalId && <Detail label={t('owner')}>{data.owner.name}</Detail>
+        : <OwnerFields data={data} name={name !== 'connection.authorize'} defaultName={data.method?.defaultName} />}
       {name === 'connection.authorize' ? <>
         <Detail label={t('connectionName')}>{data.connection?.name}</Detail>
         <Detail label={t('authorizedUsers')}>{data.users.map(user => user.name).join(', ') || '—'}</Detail>
       </> : <>
-        {data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
-        <ConnectionMethodHelp method={data.method} connecting={name === 'connection.connect'} />
+        {!compact && data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
+        {(!compact || data.method?.registration.device === 'cli') && <ConnectionMethodHelp method={data.method} connecting={name === 'connection.connect'} />}
         <ConnectionFields purpose={name === 'app.save' ? 'app' : 'connection'} method={data.method}
+          compact={compact}
+          reviewAccess={Array.isArray(input.users) && input.users.length > 0}
           existing={data.connection} appMaterial={null} apps={data.apps}
           selectedAppId={typeof input.appId === 'string' ? input.appId : undefined}
           preparedFields={input.fields as Record<string, string> | undefined} preparedScopes={input.scopes as string[] | undefined}

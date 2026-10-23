@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Form, Link, redirect, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
+import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { clientLoader as rootLoader } from './root';
 import { ApprovalRequest } from '../../shared/contracts';
@@ -13,6 +13,7 @@ import { getIdentity, requireKeys, resealNow } from './keys';
 import { ResealingNotice } from './resealing-notice';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
+import { loadRequestConnection, requestConnectionMethod } from './request-connection';
 import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
@@ -121,16 +122,22 @@ export async function clientLoader({ params, request }: PageArgs) {
   if (failed && typeof failed === 'object' && !Array.isArray(failed) && failed.error && typeof failed.error === 'object' && !Array.isArray(failed.error))
     operationError ??= typeof failed.error.code === 'string' ? failed.error.code : 'failure';
   const current = inputOperation(item, account.principal?.id ?? '');
-  const inputForm = current && item.canRespond && !account.requestId && !item.waiting?.continuation
-    ? await loadExecutionForm(current.invocation) : null;
+  const operation = item.operations.length === 1 ? item.operations[0] : null;
+  const [inputForm, requestConnection] = await Promise.all([
+    current && item.canRespond && !account.requestId && !item.waiting?.continuation ? loadExecutionForm(current.invocation) : null,
+    requestMode && operation?.name === 'connection.connect' ? loadRequestConnection({ name: operation.name,
+      input: substitute(operation.input, account.principal?.id ?? '', item.from.id) as DefinitionCall['input'] }, request.signal, !account.requestId) : null,
+  ]);
   if (['waiting', 'running'].includes(item.state) && item.from.id === account.principal?.id)
     item.code = sessionStorage.getItem('foundation.request.' + (item.delivery?.id ?? item.id)) ?? undefined;
   else sessionStorage.removeItem('foundation.request.' + (item.delivery?.id ?? item.id));
-  const details = await loadExecutionDetails(item, !!account.principal && !account.requestId, request.signal);
+  const details = requestConnection && item.from.id !== account.principal?.id
+    ? { steps: [], environments: [], initiator: item.creator }
+    : await loadExecutionDetails(item, !!account.principal && !account.requestId, request.signal);
   const unverified = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
     ['waiting', 'running'].includes(item.state) && await getIdentity(account.principal.id)
     ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
-  return { item, account, current, inputForm, progress, operationError, requestMode, details, unverified };
+  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, details, unverified };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -173,17 +180,31 @@ export async function clientAction({ params, request }: PageArgs) {
       if (resealing(item)) resealed = (await resealNow(approverId))?.done ?? 0;
       item = await readItem(params.id!, requestMode);
     } else if (prepared && current) await (await executionClient()).configure(item.id, configuration(current.invocation, prepared.input, item.operations[current.index]!.configure));
-    if (item.waiting && prepared) await (await executionClient()).continue(item.id, prepared.material);
+    if (item.waiting && prepared) {
+      const progress = await (await executionClient()).continue(item.id, prepared.material);
+      if (requestMode && current?.invocation.name === 'connection.connect' && 'kind' in progress && progress.kind === 'authorize') {
+        const method = await requestConnectionMethod(String(current.invocation.input.methodId));
+        if (method.kind !== 'approval' && ['http:', 'https:'].includes(new URL(progress.url).protocol))
+          return redirectDocument(progress.url);
+      }
+    }
     return { ...(await readItem(params.id!, requestMode)), resealed };
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, details, unverified } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, details, unverified } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
   const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
   const needsKeys = !!current && !!account.requestId;
+  const focusedConnection = !!requestConnection && !requester;
+  const service = requestConnection?.method?.defaultName ?? requestConnection?.name ?? '';
+  const connectionAction = requestConnection?.reconnecting ? 'reconnect' : 'connect';
+  const title = focusedConnection && service ? t(item.state === 'succeeded'
+    ? requestConnection?.reconnecting ? 'requestReconnected' : 'requestConnected'
+    : requestConnection?.reconnecting ? 'requestReconnect' : 'requestConnect', { name: service })
+    : focusedConnection ? t(connectionAction) : t(requestMode ? 'requests' : 'executionDetail');
   const showSteps = pending || item.operations.length > 1;
   const completedResults = item.steps.filter(step => {
     const value = item.results[step.index];
@@ -195,11 +216,26 @@ export default function ExecutionPage() {
     if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle') void revalidator.revalidate();
   }, [account.requestId, root?.requestId, revalidator]);
   usePolling(pending, progress?.kind === 'pending' || progress?.kind === 'authorize' ? 2000 : 5000);
-  return <Page title={t(requestMode ? 'requests' : 'executionDetail')} narrow>
+  return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     {result && 'resealed' in result && result.resealed > 0 && <Notice tone="success">{t('resealed', { count: result.resealed })}</Notice>}
-    <ResealingNotice principalId={account.principal?.id} />
-    <Panel>
+    {!focusedConnection && <ResealingNotice principalId={account.principal?.id} />}
+    {focusedConnection && requestConnection ? <div className="flex flex-col gap-3">
+      {pending && <p className="text-sm text-muted-foreground">{t('requestFrom', { name: item.from.name })}</p>}
+      {requestConnection.name !== service && <p className="font-medium wrap-anywhere">{requestConnection.name}</p>}
+      {pending && item.message && <p className="leading-relaxed whitespace-pre-wrap wrap-anywhere">{item.message}</p>}
+      {pending && requestConnection.usersConfigured && <div className="flex flex-col gap-2">
+        {requestConnection.users.length > 0 ? <>
+          <Detail label={t('requestConnectionUsers')}>{requestConnection.users.map(user => user.name).join(', ')}</Detail>
+          <p className="text-sm leading-relaxed text-muted-foreground">{t('requestConnectionUsersHelp')}</p>
+        </> : <p className="text-sm leading-relaxed">{t('requestConnectionNoUsers')}</p>}
+      </div>}
+      {progress?.kind === 'authorize' && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
+      {!pending && item.state !== 'succeeded' && <p role="status"><State value={
+        ['declined', 'expired', 'cancelled'].includes(item.delivery?.state ?? '') ? item.delivery!.state : item.state
+      } /></p>}
+      {pending && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{t('requestWaitingForRecipient')}</p>}
+    </div> : <Panel>
       <Detail label={t('status')}><State value={requestMode ? item.delivery!.state : item.state} /></Detail>
       {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}
       <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{requestMode ? item.from.name : details.initiator.name}<Copy value={requestMode ? item.from.id : details.initiator.id} /></Detail>
@@ -212,16 +248,19 @@ export default function ExecutionPage() {
       {item.code && <Detail label={t('code')}>{item.code}<Copy value={item.code} /></Detail>}
       {requester && pending && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(item.url).pathname}>{item.url}</Link><Copy value={item.url} /></Detail>}
       {item.delivery && <Detail label={t(requestMode ? 'execution' : 'requests')}><Link className="underline underline-offset-4" to={(requestMode ? '/executions/' + item.id : '/requests/' + item.delivery.id)}>{t(requestMode ? 'executionOpen' : 'requestOpen')}</Link></Detail>}
-    </Panel>
+    </Panel>}
     {(showSteps || item.state === 'failed' && item.canRespond) && <Form method="post">
       <div className="flex min-w-0 flex-col gap-6">
         {!item.proposal && (pending || item.operations.length > 1) && item.operations.map((operation, index) => {
           const privateOperation = operation.execution === 'keyholder';
-          return <Panel key={index} title={item.operations.length > 1 ? `${index + 1}. ${executionTitle(operation, i18n.language)}` : executionTitle(operation, i18n.language)}>
-            {current?.index === index && inputForm && <ExecutionInputFields data={inputForm} />}
-            {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" />}
+          const Container = focusedConnection ? 'div' : Panel;
+          return <Container key={index} title={focusedConnection ? undefined : item.operations.length > 1 ? `${index + 1}. ${executionTitle(operation, i18n.language)}` : executionTitle(operation, i18n.language)}>
+            {current?.index === index && inputForm && <ExecutionInputFields data={inputForm}
+              requestPrincipalId={focusedConnection ? account.principal?.id : undefined} />}
+            {item.waiting?.index === index && progress && <ConnectionProgress progress={progress} cancelIntent="cancel"
+              authorization={focusedConnection ? { label: t('requestContinueAtService', { name: service }), newWindow: requestConnection?.method?.kind === 'approval' } : undefined} />}
             {!privateOperation && awaitingApproval && <JsonView value={operation.input} />}
-            <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>
+            {!focusedConnection && <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>}
             {item.operations.length > 1 && details.steps[index] && <ExecutionFacts details={details.steps[index]} environments={details.environments} />}
             {pending && !privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
               {input.multiline ? <TextareaField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
@@ -230,16 +269,19 @@ export default function ExecutionPage() {
                   disabled={!item.canRespond || !pending} required={item.canRespond && pending} />}
               {input.site && <ExternalLink href={input.site}>{t('serviceConsole')}</ExternalLink>}
             </div>)}
-          </Panel>;
+          </Container>;
         })}
         {awaitingApproval && item.canRespond && !item.to && <InputField name="code" label={t('code')} required autoComplete="off" hint={t('codeHelp')} />}
         {needsKeys && <Notice tone="info" action={<Button asChild><Link to={'/signin?returnTo=' + encodeURIComponent((requestMode ? '/requests/' : '/executions/') + (item.delivery?.id ?? item.id))}>{t('signin')}</Link></Button>}>
-          {t('signinForPrivateInput')}
+          {t(focusedConnection ? 'requestSignInHelp' : 'signinForPrivateInput')}
         </Notice>}
         {unverified && <Notice tone="warning">{t('approvalUnverified', { name: unverified })}</Notice>}
         {pending && item.canRespond && !needsKeys && !item.waiting?.continuation && (awaitingApproval || current) && <div className="flex flex-wrap items-center gap-4">
           <Button type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!unverified)}>
-            {t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
+            {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
+              ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
+              : t(connectionAction)
+              : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           </Button>
           {canDecline && <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('decline')}</Button>}
         </div>}
@@ -247,7 +289,7 @@ export default function ExecutionPage() {
         {item.state === 'failed' && item.canRespond && !needsKeys && <Button type="submit" name="intent" value="resume">{t('retry')}</Button>}
       </div>
     </Form>}
-    {completedResults.length > 0 && <Panel title={t('result')}>
+    {!focusedConnection && completedResults.length > 0 && <Panel title={t('result')}>
       {requestMode && <Detail label={t('status')}><State value={item.state} /></Detail>}
       <div className="flex min-w-0 flex-col gap-6">{completedResults.map(({ index }) => {
         const value = item.results[index], output = details.steps[index]?.output;

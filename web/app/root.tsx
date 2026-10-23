@@ -99,6 +99,8 @@ export default function App() {
   const prefix = '/p/' + (owner ?? data.principal?.id);
   // The page that sets up this device comes before everything else, so it shows nothing to go to.
   const authenticated = !!data.principal && !data.requestId && location.pathname !== '/keys';
+  const focusedRequest = location.pathname.startsWith('/requests/') && location.pathname !== '/requests/new';
+  const showNavigation = authenticated && !focusedRequest;
   useEffect(() => {
     const language = localStorage.getItem('foundation.language');
     if (language === 'en' || language === 'ja') void i18n.changeLanguage(language);
@@ -212,7 +214,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh">
-      {authenticated && (
+      {showNavigation && (
         <>
           <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r bg-card/50 md:block">
             {nav(false)}
@@ -240,10 +242,10 @@ export default function App() {
           </Sheet>
         </>
       )}
-      <div className={authenticated ? 'md:pl-60' : ''}>
+      <div className={showNavigation ? 'md:pl-60' : ''}>
         <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur-sm">
           <div className="flex h-14 items-center gap-2 px-4 sm:px-6 lg:px-8">
-            {authenticated && (
+            {showNavigation && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -255,7 +257,7 @@ export default function App() {
               </Button>
             )}
             <div className="min-w-0 flex-1 truncate text-sm font-medium">
-              {authenticated ? principal?.name : brand}
+              {showNavigation ? principal?.name : brand}
             </div>
             <Select
               value={i18n.language === 'en' ? 'en' : 'ja'}

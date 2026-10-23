@@ -7,6 +7,7 @@ import { connectionForm } from './connection-forms';
 import { OAuthConnectionFields } from './oauth-connection-form';
 import type { ConnectionFieldsProps } from './connection-fields';
 import { connectionConsole } from '../../shared/connection-fields';
+import { connectionMethod } from '../../shared/connection-methods';
 export { ConnectionPreparation, connectionInitialValues, connectionNeedsMaterial } from './connection-forms';
 
 export function connectionFields(form: FormData): Record<string, string> {
@@ -43,6 +44,7 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
   const console = props.method ? connectionConsole(props.method, fields) : undefined;
   return <div className="flex min-w-0 flex-col gap-6">
     {Fields && <Fields {...props} fieldValues={fields} onFieldsChange={values => setFields(previous => ({ ...previous, ...values }))} />}
-    {console && <ExternalLink href={console}>{t('serviceConsole')}</ExternalLink>}
+    {console && (!props.compact || !props.method || !connectionMethod(props.method).browserAuthorization) &&
+      <ExternalLink href={console}>{t('serviceConsole')}</ExternalLink>}
   </div>;
 }

@@ -12,10 +12,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const id = Id.safeParse(new URL(request.url).searchParams.get('flow'));
   if (id.success) {
     const progress = await (await connectionClient()).progress(id.data);
-    if (progress.kind === 'connected') {
-      const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
-      return redirect(execution.requests.length ? '/requests/' + execution.requests.at(-1) : resourcePath(await api('/resources/' + progress.id, {}, Resource)));
-    }
+    const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
+    if (execution.requests.length) return redirect('/requests/' + execution.requests.at(-1));
+    if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
     return redirect('/executions/' + progress.flow.execution.id);
   }
   return null;

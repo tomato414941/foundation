@@ -6,6 +6,7 @@ import { InputField } from './form-fields';
 import { ApplicationConnectionFields } from './application-connection-fields';
 import type { ConnectionFieldsProps } from './connection-fields';
 import { servicePreparation } from './service-preparations';
+import { PreparedConnectionScopes } from './connection-scopes';
 
 export function OAuthConnectionHelp({ method, connecting = true }: { method?: CatalogConnectionMethod; connecting?: boolean }) {
   const { t, i18n } = useTranslation();
@@ -30,10 +31,11 @@ export function OAuthConnectionFields(props: ConnectionFieldsProps) {
   return <ApplicationConnectionFields {...props} callback={!method || behavior?.browserAuthorization}
     secretRequired={spec ? spec.clientAuth !== 'none' : false}>
     {method && spec && <>
-      {servicePreparation(method).scopes && <InputField name="scopes" label={t('scopes')}
+      {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} existing={existing} reviewAccess={props.reviewAccess} />
+        : servicePreparation(method).scopes && <InputField name="scopes" label={t('scopes')}
         defaultValue={selectScopes(spec.scopes, props.preparedScopes ?? (existing?.kind === 'connection' ? existing.data.scopes : undefined)).join(' ')}
         readOnly={!!props.preparedScopes} required={servicePreparation(method).scopesRequired} hint={requiredScopes.length ? t('scopesHelp') + ' ' + t('requiredScopesHelp', { scopes: requiredScopes.join(', ') }) : t('scopesHelp')} />}
-      {spec.scopes.docs && <ExternalLink href={spec.scopes.docs}>{t('docs')}</ExternalLink>}
+      {!props.compact && spec.scopes.docs && <ExternalLink href={spec.scopes.docs}>{t('docs')}</ExternalLink>}
     </>}
   </ApplicationConnectionFields>;
 }

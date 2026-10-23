@@ -8,7 +8,7 @@ import time
 import unittest
 import urllib.request
 import uuid
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from playwright.sync_api import sync_playwright, expect
 
@@ -236,6 +236,29 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
         return page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+
+    def google_connection(self, page, principal):
+        exchanges = []
+        def exchange(route):
+            if route.request.method == "OPTIONS":
+                route.fulfill(status=204, headers={"access-control-allow-origin": ORIGIN,
+                    "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"})
+                return
+            exchanges.append(parse_qs(route.request.post_data))
+            route.fulfill(json={"access_token": "request-google-token-" + str(len(exchanges)),
+                "refresh_token": "request-google-refresh", "token_type": "Bearer", "expires_in": 3600},
+                headers={"access-control-allow-origin": ORIGIN})
+        page.context.route("https://oauth2.googleapis.com/token", exchange)
+        self.application(page, principal, "google:oauth", "request-google-client", "request-google-secret")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=google:oauth")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Mail account")
+        page.get_by_role("textbox", name="スコープ", exact=True).fill("https://www.googleapis.com/auth/gmail.readonly")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        link = page.get_by_role("link", name="サービスで認可する", exact=True)
+        expect(link).to_be_visible()
+        state = parse_qs(urlparse(link.get_attribute("href")).query)["state"][0]
+        page.goto(ORIGIN + "/oauth/callback?" + urlencode({"state": state, "code": "initial-google-code"}))
+        return self.saved_connection(page, "Mail account"), exchanges
 
     def allow_environment(self, page, name="Browser executor"):
         page.get_by_text("実行環境での利用を許可する（任意）", exact=True).click()
@@ -1257,7 +1280,7 @@ class BrowserTests(unittest.TestCase):
     def test_HFの登録をリクエストして所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
         import tempfile
         sender, _ = self.passkey_account("HF requester")
-        owner, principal = self.passkey_account("Chancellor Rigel")
+        owner, principal = self.passkey_account("HF owner")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
             "message": "Hugging Faceに接続してください。", "operations": [{"name": "connection.connect", "input": {
                 "ownerId": principal["id"], "methodId": "huggingface:token", "name": "Hugging Face"
@@ -1265,13 +1288,13 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         owner.goto(asked["url"])
-        expect(owner.get_by_text("Chancellor Rigel", exact=True).last).to_be_visible()
+        expect(owner.get_by_role("heading", name="Hugging Faceに接続", exact=True)).to_be_visible()
+        expect(owner.get_by_text("HF requesterからのリクエスト", exact=True)).to_be_visible()
         owner.get_by_label("ユーザーアクセストークン", exact=True).fill("hf_browser_registration")
         owner.screenshot(path=str(ARTIFACTS / "hf-request-input-ja.png"), full_page=True)
         print("Rendered HF request: " + owner.locator("main").inner_text(), flush=True)
-        owner.get_by_role("button", name="承認", exact=True).click()
-        expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
-        expect(owner.get_by_text("完了", exact=True)).to_be_visible()
+        owner.get_by_role("button", name="接続する", exact=True).click()
+        expect(owner.get_by_role("heading", name="Hugging Faceへの接続が完了しました", exact=True)).to_be_visible()
         completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
         self.assertEqual(completed["state"], "succeeded")
         connection_id = completed["results"][0]["id"]
@@ -1281,7 +1304,7 @@ class BrowserTests(unittest.TestCase):
         owner.screenshot(path=str(ARTIFACTS / "hf-connection-ja.png"), full_page=True)
         paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(paid.ok, paid.text())
-        created = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "dev-us の AI"}, headers={"origin": ORIGIN})
+        created = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "Model assistant"}, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         agent = created.json()
         owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
@@ -1310,7 +1333,7 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(trusted.returncode, 0, trusted.stderr)
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
             permission = subprocess.run(["node", "cli/dist/cli.mjs", "execution", "start", "--body", json.dumps({
-                "responderId": principal["id"], "message": "dev-us の AIでモデルを保存・取得します。",
+                "responderId": principal["id"], "message": "モデルの保存・取得に接続を使います。",
                 "operations": [{"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id,
                     "version": connection["version"], "users": [agent["id"]]
@@ -1320,7 +1343,7 @@ class BrowserTests(unittest.TestCase):
             permission_execution = json.loads(permission.stdout)
             owner.goto(ORIGIN + "/requests/" + permission_execution["requests"][0])
             expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
-            expect(owner.get_by_text("dev-us の AI", exact=True).last).to_be_visible()
+            expect(owner.get_by_text("Model assistant", exact=True).last).to_be_visible()
             expect(owner.get_by_text("利用を許可するプリンシパル", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
@@ -1962,6 +1985,137 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(parse_qs(exchanges[0])["code"], ["browser-google-code"])
         page.screenshot(path=str(ARTIFACTS / "google-browser-registration-ja.png"), full_page=True)
 
+    def test_再接続のリクエストからGoogleで認証し同じ接続を更新する(self):
+        owner, principal = self.passkey_account("Mail owner", mobile=True)
+        sender, _ = self.passkey_account("Mail assistant")
+        connection, exchanges = self.google_connection(owner, principal)
+        authorizations = []
+        def authorize(route):
+            query = parse_qs(urlparse(route.request.url).query)
+            authorizations.append(query)
+            callback = ORIGIN + "/oauth/callback?" + urlencode({"state": query["state"][0], "code": "reconnect-google-code"})
+            route.fulfill(content_type="text/html", body='<h1>Google authorization</h1><a href="' + callback + '">Allow requested access</a>')
+        owner.context.route("https://accounts.google.com/**", authorize)
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "通知メールを確認するために、接続を再認証してください。", "operations": [{"name": "connection.connect", "input": {
+                "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
+                "appId": connection["data"]["appId"], "name": connection["name"], "scopes": connection["data"]["scopes"]
+            }}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        owner.goto(asked["url"])
+        expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
+        expect(owner.get_by_text("Mail assistantからのリクエスト", exact=True)).to_be_visible()
+        expect(owner.get_by_text("Mail account", exact=True)).to_be_visible()
+        button = owner.get_by_role("button", name="Googleで再接続する", exact=True)
+        expect(button).to_be_in_viewport()
+        self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
+        owner.screenshot(path=str(ARTIFACTS / "google-request-reconnect-mobile-ja.png"), full_page=True)
+        owner.set_viewport_size({"width": 1440, "height": 1050})
+        owner.screenshot(path=str(ARTIFACTS / "google-request-reconnect-ja.png"), full_page=True)
+        button.click()
+        expect(owner.get_by_role("heading", name="Google authorization", exact=True)).to_be_visible()
+        self.assertEqual(authorizations[-1]["scope"], ["https://www.googleapis.com/auth/gmail.readonly"])
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "accepted")
+        self.assertEqual(sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "waiting")
+        owner.goto(asked["url"])
+        expect(owner.get_by_role("status")).to_have_text("Googleでの操作を完了してください。")
+        owner.screenshot(path=str(ARTIFACTS / "google-request-authorizing-ja.png"), full_page=True)
+        owner.get_by_role("link", name="Googleで続ける", exact=True).click()
+        owner.get_by_role("link", name="Allow requested access", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続が完了しました", exact=True)).to_be_visible()
+        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
+        self.assertEqual(completed["state"], "succeeded")
+        self.assertEqual(completed["results"][0]["id"], connection["id"])
+        updated = owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()
+        self.assertEqual(updated["name"], connection["name"])
+        self.assertEqual(updated["data"]["scopes"], connection["data"]["scopes"])
+        self.assertGreater(updated["version"], connection["version"])
+        self.assertEqual([item["code"] for item in exchanges], [["initial-google-code"], ["reconnect-google-code"]])
+        owner.set_viewport_size({"width": 390, "height": 844})
+        owner.screenshot(path=str(ARTIFACTS / "google-request-complete-mobile-ja.png"), full_page=True)
+        self.select(owner, "言語", "English")
+        expect(owner.get_by_role("heading", name="Reconnected to Google", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-complete-mobile-en.png"), full_page=True)
+
+    def test_接続の依頼専用リンクで本人確認を案内しログイン後に操作を選べる(self):
+        owner, principal = self.passkey_account("Sign-in owner", mobile=True)
+        sender, _ = self.passkey_account("Sign-in assistant")
+        connection, _ = self.google_connection(owner, principal)
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "メールの確認に使うGoogle接続を再認証してください。", "operations": [{"name": "connection.connect", "input": {
+                "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
+                "appId": connection["data"]["appId"], "name": connection["name"], "scopes": connection["data"]["scopes"]
+            }}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        link = owner.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/links", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(link.ok, link.text())
+        owner.goto(link.json()["url"])
+        expect(owner.get_by_role("heading", name="Mail accountを再接続", exact=True)).to_be_visible()
+        expect(owner.get_by_text("続けるには、Foundationにサインインしてください。", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-signin-mobile-ja.png"), full_page=True)
+        owner.get_by_role("link", name="サインイン", exact=True).click()
+        owner.get_by_role("button", name="パスキーでサインイン", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
+        expect(owner.get_by_role("button", name="Googleで再接続する", exact=True)).to_be_enabled()
+        self.assertIsNone(owner.request.get(ORIGIN + "/api/session").json()["requestId"])
+        owner.get_by_role("button", name="辞退", exact=True).click()
+        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
+
+    def test_再接続で求める権限や利用者の変更を確認して辞退し認証途中でもキャンセルする(self):
+        owner, principal = self.passkey_account("Permissions owner")
+        sender, requester = self.passkey_account("Permissions assistant")
+        connection, exchanges = self.google_connection(owner, principal)
+        body = {"to": principal["id"], "message": "メールの送信にも接続を使います。", "operations": [{"name": "connection.connect", "input": {
+            "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
+            "appId": connection["data"]["appId"], "name": connection["name"],
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
+        }}]}
+        response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        owner.goto(asked["url"])
+        expect(owner.get_by_text("許可する内容", exact=True)).to_be_visible()
+        expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
+        expect(owner.get_by_role("listitem").filter(has_text="Gmailでメールを送信する")).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-permissions-ja.png"), full_page=True)
+        owner.get_by_role("button", name="辞退", exact=True).click()
+        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
+        self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
+        body["operations"][0]["input"]["scopes"] = connection["data"]["scopes"]
+        body["message"] = "通知メールの確認に接続を使います。"
+        body["operations"][0]["input"]["users"] = [requester["id"]]
+        response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        access_request = response.json()
+        owner.goto(access_request["url"])
+        expect(owner.get_by_text("Permissions assistant", exact=True)).to_be_visible()
+        expect(owner.get_by_text("接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
+        expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-access-ja.png"), full_page=True)
+        owner.get_by_role("button", name="辞退", exact=True).click()
+        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        del body["operations"][0]["input"]["users"]
+        response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        def authorize(route):
+            state = parse_qs(urlparse(route.request.url).query)["state"][0]
+            callback = ORIGIN + "/oauth/callback?" + urlencode({"state": state, "error": "access_denied"})
+            route.fulfill(content_type="text/html", body='<h1>Google authorization</h1><a href="' + callback + '">Cancel authorization</a>')
+        owner.context.route("https://accounts.google.com/**", authorize)
+        owner.goto(asked["url"])
+        owner.get_by_role("button", name="Googleで再接続する", exact=True).click()
+        owner.get_by_role("link", name="Cancel authorization", exact=True).click()
+        expect(owner).to_have_url(asked["url"])
+        expect(owner.get_by_role("status")).to_contain_text("取消")
+        self.assertEqual(sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "cancelled")
+        self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
+        self.assertEqual(len(exchanges), 1)
+
     def test_OVHのブラウザ認可で取得したConsumerKeyを保存する(self):
         page, principal = self.passkey_account("OVH browser owner")
         issued = []
@@ -2014,8 +2168,8 @@ class BrowserTests(unittest.TestCase):
         owner.goto(ORIGIN + "/requests/" + request["id"])
         owner.get_by_label("クライアントID", exact=True).fill("request-client")
         owner.get_by_label("クライアントシークレット", exact=True).fill("request-client-secret")
-        owner.get_by_role("button", name="承認", exact=True).click()
-        expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+        owner.get_by_role("button", name="接続する", exact=True).click()
+        expect(owner.get_by_role("heading", name="OVHcloudへの接続が完了しました", exact=True)).to_be_visible()
         completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
         self.assertEqual(completed["state"], "succeeded")
         saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
@@ -2033,8 +2187,8 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_label("Application Key", exact=True).fill("request-application")
         owner.get_by_label("Application Secret", exact=True).fill("request-secret")
         owner.get_by_label("Consumer Key", exact=True).fill("request-consumer")
-        owner.get_by_role("button", name="承認", exact=True).click()
-        expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+        owner.get_by_role("button", name="接続する", exact=True).click()
+        expect(owner.get_by_role("heading", name="OVHcloudへの接続が完了しました", exact=True)).to_be_visible()
         completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
         self.assertEqual(completed["state"], "succeeded")
         saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()

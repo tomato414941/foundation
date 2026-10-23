@@ -14,7 +14,7 @@ export type ExecutionFormData = Awaited<ReturnType<typeof loadExecutionForm>>;
 export function executionSubmission(data: ExecutionFormData, form: FormData) {
   return formFor(data.invocation).submit(data.fields, form);
 }
-export function ExecutionInputFields({ data }: { data: ExecutionFormData }) {
+export function ExecutionInputFields({ data, requestPrincipalId }: { data: ExecutionFormData; requestPrincipalId?: string }) {
   const Fields = formFor(data.invocation).Fields;
-  return <div className="flex min-w-0 flex-col gap-6"><Fields data={data.fields} /></div>;
+  return <div className="flex min-w-0 flex-col gap-6"><Fields data={data.fields} requestPrincipalId={requestPrincipalId} /></div>;
 }

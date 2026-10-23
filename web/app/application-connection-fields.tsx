@@ -9,7 +9,7 @@ import { SelectItem } from './components/ui/select';
 import { ServiceFields } from './connection-fields';
 import type { ConnectionFieldsProps } from './connection-fields';
 
-export function ApplicationConnectionFields({ purpose, method, existing, appMaterial, apps, selectedAppId, clientId,
+export function ApplicationConnectionFields({ purpose, compact = false, method, existing, appMaterial, apps, selectedAppId, clientId,
   preparedFields, fieldValues, onFieldsChange, appSetupUrl, identifierLabel = 'clientId', secretLabel = 'clientSecret',
   callback = false, secretRequired = false, children }: ConnectionFieldsProps & {
     identifierLabel?: string; secretLabel?: string; callback?: boolean; secretRequired?: boolean; children?: ReactNode;
@@ -23,18 +23,19 @@ export function ApplicationConnectionFields({ purpose, method, existing, appMate
   const direct = purpose === 'connection' && !!behavior?.requiresApp && !behavior.browserAuthorization;
   const [appId, setAppId] = useState(selectedAppId ?? (existing?.kind === 'connection' ? existing.data.appId ?? '' : apps[0]?.id ?? (direct ? 'new' : '')));
   const inline = direct && appId === 'new';
+  const chooseApp = !compact || !selectedAppId && (apps.length > 1 || direct);
   const selected = apps.find(item => item.id === appId);
   const applicationFields = selected?.kind === 'app' ? selected.data.fields : {};
   return <>
     {purpose === 'connection' && <>
-      {behavior?.requiresApp && apps.length > 0 && <SelectField name="appId" label={t('app')} value={appId} onValueChange={value => {
+      {behavior?.requiresApp && apps.length > 0 && (chooseApp ? <SelectField name="appId" label={t('app')} value={appId} onValueChange={value => {
         setAppId(value);
         const app = apps.find(item => item.id === value);
         if (app?.kind === 'app') onFieldsChange?.(app.data.fields);
       }} disabled={!!selectedAppId}>
         {apps.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
         {direct && <SelectItem value="new">{t('newApplication')}</SelectItem>}
-      </SelectField>}
+      </SelectField> : <input type="hidden" name="appId" value={appId} />)}
       {behavior?.requiresApp && !apps.length && !direct && <Notice tone="info">
         <p>{t('appRequired')}</p>
         {appSetupUrl && <Link className="mt-2 inline-block underline underline-offset-4" to={appSetupUrl}>{t('prepareConnectionApp')}</Link>}

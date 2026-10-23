@@ -17,6 +17,13 @@
           "include_granted_scopes": "true"
         },
         "scopes": {
+          "values": [
+            { "id": "https://www.googleapis.com/auth/gmail.readonly", "name": "Read Gmail messages and settings" },
+            { "id": "https://www.googleapis.com/auth/gmail.send", "name": "Send Gmail messages" },
+            { "id": "https://www.googleapis.com/auth/cloud-platform", "name": "View, modify, and delete Google Cloud resources" },
+            { "id": "https://www.googleapis.com/auth/userinfo.email", "name": "View your email address" },
+            { "id": "openid", "name": "Verify your Google identity" }
+          ],
           "default": [],
           "docs": "https://developers.google.com/identity/protocols/oauth2/scopes"
         },

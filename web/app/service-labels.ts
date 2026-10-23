@@ -1,4 +1,9 @@
 export const serviceLabels: Record<string, string> = {
+  'google:oauth.scope.https://www.googleapis.com/auth/gmail.readonly': 'Gmailのメールと設定を読む',
+  'google:oauth.scope.https://www.googleapis.com/auth/gmail.send': 'Gmailでメールを送信する',
+  'google:oauth.scope.https://www.googleapis.com/auth/cloud-platform': 'Google Cloudのリソースを閲覧・変更・削除する',
+  'google:oauth.scope.https://www.googleapis.com/auth/userinfo.email': 'メールアドレスを確認する',
+  'google:oauth.scope.openid': 'Googleアカウントの本人確認をする',
   'railway.token.token.label': 'APIトークン',
   'railway.token.token.note': 'アカウント設定の「Tokens」で作成したAccount tokenまたはWorkspace tokenを入力してください。No workspaceを選んだAccount tokenはアカウント全体、Workspace tokenは選択したワークスペースにアクセスできます。',
   'railway.token.projectToken.label': 'プロジェクトトークン',
