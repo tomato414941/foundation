@@ -2038,7 +2038,7 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("heading", name="Reconnected to Google", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-complete-mobile-en.png"), full_page=True)
 
-    def test_接続の依頼専用リンクで本人確認を案内しログイン後に操作を選べる(self):
+    def test_接続の依頼専用リンクから本人確認して再接続をキャンセルする(self):
         owner, principal = self.passkey_account("Sign-in owner", mobile=True)
         sender, _ = self.passkey_account("Sign-in assistant")
         connection, _ = self.google_connection(owner, principal)
@@ -2060,11 +2060,18 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
         expect(owner.get_by_role("button", name="Googleで再接続する", exact=True)).to_be_enabled()
         self.assertIsNone(owner.request.get(ORIGIN + "/api/session").json()["requestId"])
-        owner.get_by_role("button", name="辞退", exact=True).click()
-        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        owner.get_by_role("button", name="キャンセル", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
+        self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
+        owner.screenshot(path=str(ARTIFACTS / "google-request-cancelled-mobile-ja.png"), full_page=True)
+        self.select(owner, "言語", "English")
+        expect(owner.get_by_role("heading", name="Reconnection to Google cancelled", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-cancelled-mobile-en.png"), full_page=True)
         self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
+        sender.goto(asked["url"])
+        expect(sender.get_by_text("承認されませんでした", exact=True)).to_be_visible()
 
-    def test_再接続で求める権限や利用者の変更を確認して辞退し認証途中でもキャンセルする(self):
+    def test_再接続で権限や利用者を確認し認証前と認証中にキャンセルする(self):
         owner, principal = self.passkey_account("Permissions owner")
         sender, requester = self.passkey_account("Permissions assistant")
         connection, exchanges = self.google_connection(owner, principal)
@@ -2081,8 +2088,8 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
         expect(owner.get_by_role("listitem").filter(has_text="Gmailでメールを送信する")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-permissions-ja.png"), full_page=True)
-        owner.get_by_role("button", name="辞退", exact=True).click()
-        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        owner.get_by_role("button", name="キャンセル", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
         self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
         self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
         body["operations"][0]["input"]["scopes"] = connection["data"]["scopes"]
@@ -2096,8 +2103,8 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_text("接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
         expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-access-ja.png"), full_page=True)
-        owner.get_by_role("button", name="辞退", exact=True).click()
-        expect(owner.get_by_role("status")).to_contain_text("辞退")
+        owner.get_by_role("button", name="キャンセル", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
         del body["operations"][0]["input"]["users"]
         response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
@@ -2111,7 +2118,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("button", name="Googleで再接続する", exact=True).click()
         owner.get_by_role("link", name="Cancel authorization", exact=True).click()
         expect(owner).to_have_url(asked["url"])
-        expect(owner.get_by_role("status")).to_contain_text("取消")
+        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
         self.assertEqual(sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "cancelled")
         self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
         self.assertEqual(len(exchanges), 1)

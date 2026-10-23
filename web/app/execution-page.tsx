@@ -125,7 +125,7 @@ export async function clientLoader({ params, request }: PageArgs) {
   const operation = item.operations.length === 1 ? item.operations[0] : null;
   const [inputForm, requestConnection] = await Promise.all([
     current && item.canRespond && !account.requestId && !item.waiting?.continuation ? loadExecutionForm(current.invocation) : null,
-    requestMode && operation?.name === 'connection.connect' ? loadRequestConnection({ name: operation.name,
+    requestMode && operation?.name === 'connection.connect' && item.from.id !== account.principal?.id ? loadRequestConnection({ name: operation.name,
       input: substitute(operation.input, account.principal?.id ?? '', item.from.id) as DefinitionCall['input'] }, request.signal, !account.requestId) : null,
   ]);
   if (['waiting', 'running'].includes(item.state) && item.from.id === account.principal?.id)
@@ -201,9 +201,11 @@ export default function ExecutionPage() {
   const focusedConnection = !!requestConnection && !requester;
   const service = requestConnection?.method?.defaultName ?? requestConnection?.name ?? '';
   const connectionAction = requestConnection?.reconnecting ? 'reconnect' : 'connect';
-  const title = focusedConnection && service ? t(item.state === 'succeeded'
-    ? requestConnection?.reconnecting ? 'requestReconnected' : 'requestConnected'
-    : requestConnection?.reconnecting ? 'requestReconnect' : 'requestConnect', { name: service })
+  const connectionCancelled = item.delivery?.state === 'declined' || item.state === 'cancelled' && item.delivery?.state !== 'expired';
+  const connectionTitle = requestConnection?.reconnecting
+    ? item.state === 'succeeded' ? 'requestReconnected' : connectionCancelled ? 'requestReconnectCancelled' : 'requestReconnect'
+    : item.state === 'succeeded' ? 'requestConnected' : connectionCancelled ? 'requestConnectCancelled' : 'requestConnect';
+  const title = focusedConnection && service ? t(connectionTitle, { name: service })
     : focusedConnection ? t(connectionAction) : t(requestMode ? 'requests' : 'executionDetail');
   const showSteps = pending || item.operations.length > 1;
   const completedResults = item.steps.filter(step => {
@@ -231,7 +233,7 @@ export default function ExecutionPage() {
         </> : <p className="text-sm leading-relaxed">{t('requestConnectionNoUsers')}</p>}
       </div>}
       {progress?.kind === 'authorize' && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
-      {!pending && item.state !== 'succeeded' && <p role="status"><State value={
+      {!pending && item.state !== 'succeeded' && !connectionCancelled && <p role="status"><State value={
         ['declined', 'expired', 'cancelled'].includes(item.delivery?.state ?? '') ? item.delivery!.state : item.state
       } /></p>}
       {pending && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{t('requestWaitingForRecipient')}</p>}
@@ -283,7 +285,7 @@ export default function ExecutionPage() {
               : t(connectionAction)
               : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           </Button>
-          {canDecline && <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('decline')}</Button>}
+          {canDecline && <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('cancel')}</Button>}
         </div>}
         {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate variant="destructive">{t(requestMode && item.delivery?.state === 'pending' ? 'cancelRequest' : 'cancelOperation')}</Button>}
         {item.state === 'failed' && item.canRespond && !needsKeys && <Button type="submit" name="intent" value="resume">{t('retry')}</Button>}
