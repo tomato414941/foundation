@@ -67,6 +67,7 @@ const words: Record<string, [string, string]> = {
   requestAuthorize: ['{{name}}での操作を完了してください。', 'Finish authorization with {{name}}.'],
   requestConnectionUsers: ['接続を使用する相手', 'Who can use this connection'],
   requestConnectionUsersHelp: ['接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。', 'Allow use, renewal, and disconnection for 30 days. These recipients can read the credentials.'],
+  requestConnectionPermissionsHelp: ['接続の使用・更新・解除を許可します。相手は認証情報の内容を読めます。', 'Allow use, renewal, and disconnection. These recipients can read the credentials.'],
   requestConnectionNoUsers: ['ほかの相手への実行許可を解除します。', 'Remove execution permissions granted to other recipients.'],
   requestWaitingForRecipient: ['依頼を受けた方の操作を待っています。', 'Waiting for the recipient to continue.'],
   requestSignInHelp: ['続けるには、Foundationにサインインしてください。', 'Sign in to Foundation to continue.'],

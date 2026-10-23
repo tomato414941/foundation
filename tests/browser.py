@@ -291,7 +291,7 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True)).to_have_value(agent["fingerprint"])
             owner.goto(url)
             owner.get_by_role("button", name="承認", exact=True).click()
-            expect(owner.get_by_text("承諾済み", exact=True)).to_be_visible()
+            expect(owner.get_by_role("status")).to_have_text("完了")
             expect(owner.get_by_text("開ける相手の変更を、1件の項目に反映しました。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-sealed-ja.png"), full_page=True)
             owner.goto(ORIGIN + "/account")
@@ -1344,7 +1344,8 @@ class BrowserTests(unittest.TestCase):
             owner.goto(ORIGIN + "/requests/" + permission_execution["requests"][0])
             expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
             expect(owner.get_by_text("Model assistant", exact=True).last).to_be_visible()
-            expect(owner.get_by_text("利用を許可するプリンシパル", exact=True)).to_be_visible()
+            expect(owner.get_by_text("接続を使用する相手", exact=True)).to_be_visible()
+            expect(owner.get_by_text("接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
             owner.get_by_role("button", name="承認", exact=True).click()
@@ -1357,6 +1358,30 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, env=environment)
             self.assertEqual(used.returncode, 0, used.stderr)
             self.assertEqual(used.stdout, "Configured\n")
+            expires_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 3600))
+            response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+                "message": "この接続を1時間使用します。", "operations": [{"name": "connection.authorize", "input": {
+                    "ownerId": principal["id"], "connectionId": connection_id, "version": connection["version"],
+                    "users": [agent["id"]], "expiresAt": expires_at
+                }}]}, headers={"origin": ORIGIN})
+            self.assertTrue(response.ok, response.text())
+            limited_request = response.json()
+            owner.goto(limited_request["url"])
+            expect(owner.get_by_role("heading", name="接続の使用を許可する", exact=True)).to_be_visible()
+            expect(owner.get_by_text("接続の使用・更新・解除を許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("有効期限", exact=True)).to_be_visible()
+            owner.set_viewport_size({"width": 390, "height": 844})
+            self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
+            owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-ja.png"), full_page=True)
+            self.select(owner, "言語", "English")
+            expect(owner.get_by_text("Allow use, renewal, and disconnection. These recipients can read the credentials.", exact=True)).to_be_visible()
+            owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-en.png"), full_page=True)
+            owner.get_by_role("button", name="Cancel", exact=True).click()
+            expect(owner.get_by_role("status")).to_have_text("Cancelled")
+            self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + limited_request["id"]).json()["state"], "declined")
+            self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()["version"], connection["version"])
+            self.select(owner, "Language", "日本語")
+            owner.set_viewport_size({"width": 1440, "height": 1050})
         owner.goto(f"{ORIGIN}/p/{principal['id']}/runs")
         execution_link = owner.locator(f'a[href="/executions/{asked["executionId"]}"]')
         expect(execution_link).to_have_count(1)
@@ -1770,8 +1795,9 @@ class BrowserTests(unittest.TestCase):
 
     def test_リクエスト画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
-        receiver, principal = self.passkey_account("Value approver")
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+        receiver, principal = self.passkey_account("Value approver", mobile=True)
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "作業で使用する値を保存してください。", "operations": [{
             "name": "variable.save", "input": {
                 "ownerId": "$approver", "name": "Requested variable", "value": "", "environmentIds": []
             }, "inputs": [{"pointer": "/value", "label": "Private value", "secret": True}]
@@ -1779,9 +1805,20 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         receiver.goto(asked["url"])
+        expect(receiver.get_by_role("heading", name="変数を保存する", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Value requesterからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("作業で使用する値を保存してください。", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Requested variable", exact=True)).to_be_visible()
         receiver.get_by_role("textbox", name="値", exact=True).fill("requested-private-value")
+        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
+        receiver.screenshot(path=str(ARTIFACTS / "variable-request-mobile-ja.png"), full_page=True)
+        self.select(receiver, "言語", "English")
+        expect(receiver.get_by_role("heading", name="Save a variable", exact=True)).to_be_visible()
+        receiver.screenshot(path=str(ARTIFACTS / "variable-request-mobile-en.png"), full_page=True)
+        self.select(receiver, "Language", "日本語")
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible(timeout=15000)
+        expect(receiver.get_by_role("status")).to_have_text("完了", timeout=15000)
+        expect(receiver.get_by_role("link", name="Requested variable", exact=True)).to_be_visible()
         result = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["results"][0]
         receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
@@ -1801,7 +1838,8 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("heading", name="プリンシパルを作る", exact=True)).to_be_visible()
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_text("承諾済み", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("status")).to_have_text("完了")
+        expect(receiver.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
 
@@ -1824,9 +1862,36 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(current["principal"]["id"], principal["id"])
         self.assertEqual(current["requestId"], sender.url.rsplit("/", 1)[1])
         viewer.get_by_role("button", name="承認", exact=True).click()
-        expect(viewer.get_by_text("承諾済み", exact=True)).to_be_visible()
+        expect(viewer.get_by_role("status")).to_have_text("完了")
         projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Link project", [item["name"] for item in projects])
+
+    def test_複数の処理を含むリクエストで目的と各処理を確認して承認し結果を開く(self):
+        sender, _ = self.passkey_account("Project requester")
+        receiver, principal = self.passkey_account("Project approver", mobile=True)
+        names = ["Research project", "Delivery project"]
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "調査と納品の作業場所を作成してください。", "operations": [
+                {"name": "principal.create", "input": {"ownerId": "$approver", "name": name}} for name in names
+            ]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        receiver.goto(asked["url"])
+        expect(receiver.get_by_text("Project requesterからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("調査と納品の作業場所を作成してください。", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="1. プリンシパルを作る", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="2. プリンシパルを作る", exact=True)).to_be_visible()
+        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
+        receiver.screenshot(path=str(ARTIFACTS / "multi-request-mobile-ja.png"), full_page=True)
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_role("status")).to_have_text("完了")
+        for name in names:
+            expect(receiver.get_by_role("link", name=name, exact=True)).to_be_visible()
+        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
+        self.assertEqual(completed["state"], "succeeded")
+        self.assertEqual([result["name"] for result in completed["results"]], names)
+        receiver.get_by_role("link", name=names[-1], exact=True).click()
+        expect(receiver.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
 
     def test_モバイルでメール認証するとパスキーの登録を求め英語表示へ切り替える(self):
         page = self.page(webkit=True, mobile=True)

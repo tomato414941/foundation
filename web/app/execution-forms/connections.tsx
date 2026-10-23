@@ -6,6 +6,7 @@ import type { ConnectionState } from '../../../shared/connections';
 import { api, formText, ApiFailure } from '../api';
 import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionSettings, connectionFields } from '../connection-form';
 import { Detail } from '../components';
+import { ConnectionUsers } from '../connection-users';
 import { connectionMethodName } from '../connection-method-labels';
 import { connectionMethod } from '../../../shared/connection-methods';
 import { visibleConnectionFields } from '../../../shared/connection-fields';
@@ -72,7 +73,8 @@ export const connectionForm = defineForm({ load,
         : <OwnerFields data={data} name={name !== 'connection.authorize'} defaultName={data.method?.defaultName} />}
       {name === 'connection.authorize' ? <>
         <Detail label={t('connectionName')}>{data.connection?.name}</Detail>
-        <Detail label={t('authorizedUsers')}>{data.users.map(user => user.name).join(', ') || '—'}</Detail>
+        {requestPrincipalId ? <ConnectionUsers users={data.users} expiresAt={typeof input.expiresAt === 'string' ? input.expiresAt : undefined} />
+          : <Detail label={t('authorizedUsers')}>{data.users.map(user => user.name).join(', ') || '—'}</Detail>}
       </> : <>
         {!compact && data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}
         {(!compact || data.method?.registration.device === 'cli') && <ConnectionMethodHelp method={data.method} connecting={name === 'connection.connect'} />}
