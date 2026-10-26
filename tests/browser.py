@@ -1165,6 +1165,25 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="接続する", exact=True).click()
         self.assertEqual(self.saved_connection(page, "Vercel projects")["id"], saved["id"])
 
+    def test_TailscaleのAPIアクセストークンを登録して再接続する(self):
+        page, principal = self.passkey_account("Tailscale account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
+        self.select(page, "サービス", "Tailscale")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Tailnet admin")
+        token = page.get_by_label("APIアクセストークン", exact=True)
+        expect(token).to_have_attribute("type", "password")
+        expect(page.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://login.tailscale.com/admin/settings/keys")
+        token.fill("tskey-api-browser-test-token")
+        print("Rendered Tailscale connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "tailscale-connection-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "Tailnet admin")
+        self.assertEqual(saved["data"]["services"], [{"id": "tailscale", "name": "Tailscale"}])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("APIアクセストークン", exact=True).fill("tskey-api-browser-updated-token")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.assertEqual(self.saved_connection(page, "Tailnet admin")["id"], saved["id"])
+
     def test_OpenAIのAPIキーと管理キーを選んで複数の接続を作成し更新する(self):
         page, principal = self.passkey_account("OpenAI account")
         root = f"{ORIGIN}/p/{principal['id']}"

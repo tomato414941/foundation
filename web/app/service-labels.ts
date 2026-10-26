@@ -10,6 +10,8 @@ export const serviceLabels: Record<string, string> = {
   'railway.token.projectToken.note': 'プロジェクト設定の「Tokens」で作成したトークンを入力してください。発行時に選択したプロジェクトの環境だけにアクセスできます。',
   'vercel.token.token.label': 'アクセストークン',
   'vercel.token.token.note': 'アカウント設定の「Tokens」で、利用するアカウント・チーム・プロジェクトを対象に作成してください。',
+  'tailscale.token.token.label': 'APIアクセストークン',
+  'tailscale.token.token.note': '管理画面の「Settings → Keys」で「Generate access token」を押して作成してください。有効期限は最長90日です。',
   'http.token.url.label': '送信先URL',
   'http.token.token.label': 'Bearerトークン',
   'http.token.username.label': 'ユーザー名',

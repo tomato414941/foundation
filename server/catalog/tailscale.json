@@ -1,0 +1,36 @@
+{
+  "id": "tailscale",
+  "name": "Tailscale",
+  "api": "https://api.tailscale.com/api/v2",
+  "docs": "https://tailscale.com/api",
+  "console": "https://login.tailscale.com/admin/settings/keys",
+  "methods": {
+    "api-access-token": {
+      "name": "Tailscale · Enter API access token",
+      "kind": "token",
+      "docs": "https://tailscale.com/kb/1101/api",
+      "console": "https://login.tailscale.com/admin/settings/keys",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "TAILSCALE_API_KEY" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API access token",
+            "secret": true,
+            "pattern": "^tskey-api-\\S+$",
+            "note": "Generate an API access token in Settings → Keys of the admin console. It expires within 90 days."
+          }
+        ],
+        "constants": { "url": "https://api.tailscale.com" },
+        "outputs": {
+          "TAILSCALE_API_KEY": "/token",
+          "TAILSCALE_BASE_URL": "/url"
+        },
+        "hint": "Use TAILSCALE_API_KEY as a Bearer token for the Tailscale API at https://api.tailscale.com/api/v2. The token acts with the permissions of the user who generated it until it expires or is revoked."
+      }
+    }
+  }
+}
