@@ -11,7 +11,6 @@ import { activeConnectionField } from '../../shared/connection-fields';
 export interface ConnectionFieldsProps {
   purpose: 'connection' | 'app';
   compact?: boolean;
-  reviewAccess?: boolean;
   method?: CatalogConnectionMethod;
   existing: ResourceView | null;
   appMaterial: AppState | null;

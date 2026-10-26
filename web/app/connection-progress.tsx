@@ -1,16 +1,18 @@
 import { useTranslation } from 'react-i18next';
 import type { FlowProgress } from '../../shared/connection-client';
 import { Button } from './components/ui/button';
+import { ArrowUpRight } from 'lucide-react';
+import { connectionRequestAction } from './connection-request-review';
 import { Copy, ErrorNotice, ExternalLink, Notice } from './components';
 
-export function ConnectionProgress({ progress, cancelIntent = 'cancel', authorization }: {
-  progress: FlowProgress; cancelIntent?: string; authorization?: { label: string; newWindow: boolean };
+export function ConnectionProgress({ progress, cancelIntent = 'cancel', authorization, review = false }: {
+  progress: FlowProgress; cancelIntent?: string; authorization?: { label: string; newWindow: boolean }; review?: boolean;
 }) {
   const { t } = useTranslation();
   return <div className="flex min-w-0 flex-col gap-6">
     {progress.kind === 'pending' && <Notice tone="info">{t('connectionPending')}</Notice>}
-    {progress.kind === 'authorize' && (authorization ? <Button asChild className="w-fit">
-      <a href={progress.url} target={authorization.newWindow ? '_blank' : undefined} rel={authorization.newWindow ? 'noopener noreferrer' : undefined}>{authorization.label}</a>
+    {progress.kind === 'authorize' && (authorization ? <Button asChild className={review ? 'w-fit ' + connectionRequestAction : 'w-fit'}>
+      <a href={progress.url} target={authorization.newWindow ? '_blank' : undefined} rel={authorization.newWindow ? 'noopener noreferrer' : undefined}>{authorization.label}{review && <ArrowUpRight aria-hidden="true" />}</a>
     </Button> : <ExternalLink href={progress.url}>{t('authorizeService')}</ExternalLink>)}
     {progress.kind === 'cli' && <Notice tone="info">
       <p>{t(progress.flow.error ? 'browserExchangeRestart' : 'connectionCliHelp')}</p>
@@ -18,6 +20,6 @@ export function ConnectionProgress({ progress, cancelIntent = 'cancel', authoriz
       <p className="mt-3">{t('connectionCliLoginHelp')}</p>
     </Notice>}
     {progress.kind === 'failed' && <ErrorNotice error={progress.error} />}
-    {!['cancelled', 'connected'].includes(progress.kind) && <Button variant="ghost" type="submit" name="intent" value={cancelIntent} formNoValidate>{t('cancel')}</Button>}
+    {!['cancelled', 'connected'].includes(progress.kind) && <Button className={review ? 'min-h-12 w-fit px-4 text-muted-foreground' : undefined} variant="ghost" type="submit" name="intent" value={cancelIntent} formNoValidate>{t('cancel')}</Button>}
   </div>;
 }

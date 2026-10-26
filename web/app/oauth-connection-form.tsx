@@ -31,7 +31,7 @@ export function OAuthConnectionFields(props: ConnectionFieldsProps) {
   return <ApplicationConnectionFields {...props} callback={!method || behavior?.browserAuthorization}
     secretRequired={spec ? spec.clientAuth !== 'none' : false}>
     {method && spec && <>
-      {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} existing={existing} reviewAccess={props.reviewAccess} />
+      {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} />
         : servicePreparation(method).scopes && <InputField name="scopes" label={t('scopes')}
         defaultValue={selectScopes(spec.scopes, props.preparedScopes ?? (existing?.kind === 'connection' ? existing.data.scopes : undefined)).join(' ')}
         readOnly={!!props.preparedScopes} required={servicePreparation(method).scopesRequired} hint={requiredScopes.length ? t('scopesHelp') + ' ' + t('requiredScopesHelp', { scopes: requiredScopes.join(', ') }) : t('scopesHelp')} />}

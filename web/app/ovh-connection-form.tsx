@@ -25,7 +25,7 @@ export function OvhConnectionFields(props: ConnectionFieldsProps) {
   const scopes = selectScopes(method.config.scopes, props.preparedScopes ?? (existing?.kind === 'connection'
     ? existing.data.scopes : undefined));
   return <ApplicationConnectionFields {...props} identifierLabel="ovhApplicationKey" secretLabel="ovhApplicationSecret" secretRequired>
-    {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} existing={existing} reviewAccess={props.reviewAccess} />
+    {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} />
       : <TextareaField name="scopes" label={t('ovhApiPermissions')} defaultValue={scopes.join('\n')} rows={5} readOnly={!!props.preparedScopes}
         hint={t('ovhApiPermissionsHelp')} />}
   </ApplicationConnectionFields>;

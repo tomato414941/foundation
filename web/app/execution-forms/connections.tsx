@@ -80,7 +80,6 @@ export const connectionForm = defineForm({ load,
         {(!compact || data.method?.registration.device === 'cli') && <ConnectionMethodHelp method={data.method} connecting={name === 'connection.connect'} />}
         <ConnectionFields purpose={name === 'app.save' ? 'app' : 'connection'} method={data.method}
           compact={compact}
-          reviewAccess={Array.isArray(input.users) && input.users.length > 0}
           existing={data.connection} appMaterial={null} apps={data.apps}
           selectedAppId={typeof input.appId === 'string' ? input.appId : undefined}
           preparedFields={input.fields as Record<string, string> | undefined} preparedScopes={input.scopes as string[] | undefined}
