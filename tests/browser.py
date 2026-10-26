@@ -1146,6 +1146,25 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual(self.saved_connection(page, name)["id"], saved["id"])
         self.assertEqual(len(set(saved_ids)), 2)
 
+    def test_Vercelのアクセストークンを登録して再接続する(self):
+        page, principal = self.passkey_account("Vercel account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
+        self.select(page, "サービス", "Vercel")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Vercel projects")
+        token = page.get_by_label("アクセストークン", exact=True)
+        expect(token).to_have_attribute("type", "password")
+        expect(page.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://vercel.com/account/tokens")
+        token.fill("vercel-browser-test-token")
+        print("Rendered Vercel connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "vercel-connection-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "Vercel projects")
+        self.assertEqual(saved["data"]["services"], [{"id": "vercel", "name": "Vercel"}])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("アクセストークン", exact=True).fill("vercel-browser-updated-token")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.assertEqual(self.saved_connection(page, "Vercel projects")["id"], saved["id"])
+
     def test_OpenAIのAPIキーと管理キーを選んで複数の接続を作成し更新する(self):
         page, principal = self.passkey_account("OpenAI account")
         root = f"{ORIGIN}/p/{principal['id']}"

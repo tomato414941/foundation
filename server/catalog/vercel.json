@@ -1,0 +1,35 @@
+{
+  "id": "vercel",
+  "name": "Vercel",
+  "api": "https://api.vercel.com",
+  "docs": "https://vercel.com/docs/rest-api",
+  "console": "https://vercel.com/account/tokens",
+  "methods": {
+    "token": {
+      "name": "Vercel · Enter access token",
+      "kind": "token",
+      "docs": "https://vercel.com/kb/guide/how-do-i-use-a-vercel-api-access-token",
+      "console": "https://vercel.com/account/tokens",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "VERCEL_TOKEN" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Access token",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Create a token in Account Settings → Tokens with access to the account, team, or project you want to use."
+          }
+        ],
+        "constants": { "url": "https://api.vercel.com" },
+        "outputs": {
+          "VERCEL_TOKEN": "/token",
+          "VERCEL_API_URL": "/url"
+        }
+      }
+    }
+  }
+}
