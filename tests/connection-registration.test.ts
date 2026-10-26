@@ -35,7 +35,8 @@ test('サービスへアクセスできない端末でも入力式の認証情�
     const entered = Object.fromEntries(definitions.map(field => [field.name, field.choices?.[0]?.value ?? field.defaultValue ??
       (field.name === 'endpoint' ? 'https://storage.example.com' : field.name === 'region' ? 'us-east-1' :
         field.name === 'domain' && method.id.startsWith('atlassian:') ? 'example.atlassian.net' :
-        field.name === 'domain' && method.id.startsWith('kintone:') ? 'example.cybozu.com' : valueFor(field.name))]));
+        field.name === 'domain' && method.id.startsWith('kintone:') ? 'example.cybozu.com' :
+        field.name === 'token' && method.id.startsWith('tailscale:') ? 'tskey-api-private-value' : valueFor(field.name))]));
     const fields = Object.fromEntries(definitions.filter(field => activeConnectionField(field, entered))
       .map(field => [field.name, entered[field.name]!]));
     const saved = await client.execute({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
