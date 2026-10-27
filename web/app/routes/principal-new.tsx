@@ -9,8 +9,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   return actionResult(async () => {
     const form = await request.formData();
     const principal = await api(
-      '/principals',
-      { method: 'POST', body: { name: formText(form, 'name'), ownerId: params.owner } },
+      '/principals/' + params.owner + '/principals',
+      { method: 'POST', body: { name: formText(form, 'name') } },
       Principal,
     );
     return redirect('/p/' + principal.id);
