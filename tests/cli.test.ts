@@ -295,6 +295,58 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   assert.equal(used.stdout, '[redacted]');
 });
 
+test('代理が持ち主の変数を保存すると信頼済みの別の代理が読み出しコマンドに渡す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const owner = await c.person('Shared owner');
+  const writer = JSON.parse((await c.run(['init', '--name', 'Saving delegate', '--origin', c.origin])).stdout);
+  const reader = JSON.parse((await c.run(['init', '--name', 'Reading delegate', '--origin', c.origin])).stdout);
+  for (const identity of [writer, reader]) await c.context.relations.draw(owner.actor,
+    { subjectId: identity.principal.id, relation: 'delegate', objectId: owner.actor.id });
+  for (const [actor, targets] of [[writer, [{ id: owner.actor.id, fingerprint: await fingerprint(owner.binding) },
+    { id: reader.principal.id, fingerprint: reader.fingerprint }]], [reader, [
+    { id: owner.actor.id, fingerprint: await fingerprint(owner.binding) }, { id: writer.principal.id, fingerprint: writer.fingerprint }]]] as const) {
+    for (const target of targets) {
+      const trusted = await c.run(['trust', target.id, '--principal', actor.principal.id, '--fingerprint', target.fingerprint]);
+      assert.equal(trusted.code, 0, trusted.stderr);
+    }
+  }
+  const kept = await c.run(['keep', 'Shared variable', '--principal', writer.principal.id, '--owner', owner.actor.id, '--stdin'], 'shared-secret-value');
+  assert.equal(kept.code, 0, kept.stderr);
+  const resource = JSON.parse(kept.stdout);
+  const read = await c.run(['read', resource.id, '--principal', reader.principal.id]);
+  assert.equal(read.code, 0, read.stderr);
+  assert.equal(read.stdout.trim(), 'shared-secret-value');
+  const executed = await c.run(['exec', '--principal', reader.principal.id, '--inputs', JSON.stringify([
+    { name: 'SHARED_VALUE', source: { id: resource.id } }]), '--', process.execPath, '-e',
+    "if(process.env.SHARED_VALUE!=='shared-secret-value')process.exit(1);process.stdout.write('shared variable opened');"]);
+  assert.equal(executed.code, 0, executed.stderr);
+  assert.equal(executed.stdout, 'shared variable opened');
+});
+
+test('持ち主の別の代理の鍵を検証するようCLIで知らせてから信頼済みの相手に保存する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const owner = await c.person('Verification owner');
+  const writer = JSON.parse((await c.run(['init', '--name', 'Saving delegate', '--origin', c.origin])).stdout);
+  const reader = JSON.parse((await c.run(['init', '--name', 'Unverified delegate', '--origin', c.origin])).stdout);
+  for (const identity of [writer, reader]) await c.context.relations.draw(owner.actor,
+    { subjectId: identity.principal.id, relation: 'delegate', objectId: owner.actor.id });
+  const trusted = await c.run(['trust', owner.actor.id, '--principal', writer.principal.id, '--fingerprint', await fingerprint(owner.binding)]);
+  assert.equal(trusted.code, 0, trusted.stderr);
+  const save = () => c.run(['keep', 'Verified variable', '--principal', writer.principal.id, '--owner', owner.actor.id, '--stdin'], 'verified-value');
+  const refused = await save();
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /Unverified delegate/);
+  assert.ok(refused.stderr.includes(reader.principal.id));
+  assert.match(refused.stderr, /foundation trust/);
+  const verified = await c.run(['trust', reader.principal.id, '--principal', writer.principal.id, '--fingerprint', reader.fingerprint]);
+  assert.equal(verified.code, 0, verified.stderr);
+  const kept = await save();
+  assert.equal(kept.code, 0, kept.stderr);
+  const content = await c.context.custody.get(JSON.parse(kept.stdout).id);
+  assert.deepEqual(content.policy.readers.map(binding => binding.principalId).sort(),
+    [owner.actor.id, writer.principal.id, reader.principal.id].sort());
+});
+
 test('発行されたキーでログインした CLI は本人として入り、別の端末が暗号化した変数を読む', async (t) => {
   const c = await cliFixture();
   t.after(c.close);

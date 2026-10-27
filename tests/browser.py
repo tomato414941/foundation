@@ -443,7 +443,8 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("button", name="承認", exact=True).click()
         notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
         expect(notice.get_by_text("1件は、開ける相手の変更をまだ反映できていません。下の理由に沿って対処し、残りを再試行してください。", exact=True)).to_be_visible()
-        expect(notice.get_by_role("listitem")).to_have_text("Pending variable：公開鍵の検証待ち、または利用中の処理の終了待ちです。未検証の公開鍵があれば検証し、利用中の処理があれば終了後に再試行してください。")
+        expect(notice.get_by_role("listitem").filter(has_text="Pending variable")).to_have_text("Pending variable：公開鍵の検証が必要です。")
+        expect(notice.get_by_role("link", name="Unverified delegateの公開鍵を検証", exact=True)).to_have_attribute("href", "/account/trust?principal=" + unverified["id"])
         expect(notice.get_by_text("承認し直す必要はありません。", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-deferred-ja.png"), full_page=True)
         verifier = owner.context.new_page()
@@ -452,6 +453,46 @@ class BrowserTests(unittest.TestCase):
         expect(notice.get_by_text("更新が必要な項目はありません。追加の操作は不要です。", exact=True)).to_be_visible()
         pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
         self.assertEqual(pending, [])
+
+    def test_別の代理の未検証の公開鍵を確認してから持ち主の変数を保存する(self):
+        owner, principal = self.passkey_account("Variable owner")
+        writer, saving = self.passkey_account("Saving delegate")
+        peer, reading = self.passkey_account("Reading delegate")
+        for recipient in [saving, reading]:
+            response = owner.request.post(ORIGIN + "/api/relations", data={
+                "subjectId": recipient["id"], "relation": "delegate", "objectId": principal["id"]
+            }, headers={"origin": ORIGIN})
+            self.assertTrue(response.ok, response.text())
+        self.trust(writer, owner, principal)
+        peer.goto(ORIGIN + "/account/trust")
+        fingerprint = peer.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
+        writer.goto(f"{ORIGIN}/p/{principal['id']}/variables/new")
+        writer.get_by_role("textbox", name="名前", exact=True).fill("Peer variable")
+        writer.get_by_role("textbox", name="値", exact=True).fill("peer value")
+        writer.get_by_role("button", name="作成", exact=True).click()
+        expect(writer.get_by_text("暗号化する前に、次のプリンシパルの公開鍵を検証してください。", exact=True)).to_be_visible()
+        link = writer.get_by_role("link", name="Reading delegateの公開鍵を検証", exact=True)
+        expect(link).to_have_attribute("href", "/account/trust?principal=" + reading["id"])
+        expect(writer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
+        writer.screenshot(path=str(ARTIFACTS / "delegate-variable-verification-ja.png"), full_page=True)
+        self.select(writer, "言語", "English")
+        expect(writer.get_by_text("Verify the public keys of these principals before encrypting the items.", exact=True)).to_be_visible()
+        expect(writer.get_by_role("link", name="Verify the public key of Reading delegate", exact=True)).to_be_visible()
+        self.select(writer, "Language", "日本語")
+        with writer.expect_popup() as popup:
+            link.click()
+        verification = popup.value
+        expect(verification.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True)).to_have_value(reading["id"])
+        verification.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
+        verification.get_by_role("button", name="公開鍵の検証", exact=True).click()
+        expect(verification.get_by_text("Reading delegateの公開鍵を検証しました。", exact=True)).to_be_visible()
+        verification.close()
+        writer.get_by_role("button", name="作成", exact=True).click()
+        expect(writer.get_by_role("heading", name="Peer variable", exact=True)).to_be_visible()
+        self.trust(peer, writer, saving)
+        peer.goto(writer.url)
+        peer.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(peer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
 
     def test_委任リクエストの作成元と承認するプリンシパルを確認する(self):
         sender, _ = self.passkey_account("Delegation requester")

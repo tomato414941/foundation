@@ -17,6 +17,7 @@ import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
+import type { RecipientVerification } from '../../shared/client';
 
 const unlocked = new Map<string, IdentityKeys>();
 type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
@@ -85,7 +86,7 @@ export type Resealing = {
   completed: number;
   total: number | null;
   done: number;
-  failed: Array<{ id: string; name: string | null; code: string }>;
+  failed: Array<{ id: string; name: string | null; code: string; verification?: RecipientVerification[] }>;
   error: string | null;
 };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
@@ -118,8 +119,8 @@ function reseal(id: string, requestId?: string) {
       // Check what still needs updating before reporting that everyone can open their items.
       const pending = await client.pendingProtection();
       const pendingIds = new Set(pending.map(item => item.id));
-      const remaining = await Promise.all(pending.map(async item => ({ id: item.id,
-        code: failed.find(failure => failure.id === item.id)?.code ?? 'resealing_deferred',
+      const remaining = await Promise.all(pending.map(async item => ({
+        ...(failed.find(failure => failure.id === item.id) ?? { id: item.id, code: 'resealing_deferred' }),
         name: await api('/resources/' + item.id, {}, Resource).then(resource => resource.name, () => null) })));
       publish({ running: false, done: done.filter(item => !pendingIds.has(item)).length, failed: remaining });
     } catch (error) {

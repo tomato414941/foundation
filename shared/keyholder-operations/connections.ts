@@ -73,7 +73,7 @@ class ConnectionOperations {
     const type = ContentTypes.clientCredential;
     if (previous && (previous.content.policy.contentType !== type || previous.content.policy.ownerId !== destination.ownerId))
       throw new Error('Choose the item prepared by this operation.');
-    const policy = previous && !previous.replaced && destination.environmentIds === undefined ? previous.content.policy
+    const policy = previous && !previous.replaced && destination.environmentIds === undefined ? await this.client.custody.refreshRecipients(previous.content.policy)
       : await this.client.custody.policy(destination.ownerId, type, environments,
         previous?.replaced ? { replacing: previous.content.policy } : { previous: previous?.content.policy });
     let bytes: Uint8Array, metadata: Record<string, JsonValue> | undefined;

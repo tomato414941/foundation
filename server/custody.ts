@@ -287,7 +287,14 @@ export class Custody {
         if (previous) {
           if (policy.ownerId !== previous.content.policy.ownerId && succeeds(previous.content.policy, binding))
             fail(403, 'handoff_required', 'Seal the item for its current owner before passing it on.');
-          if (canonical(sharedWith(previous.content.policy, binding)) !== canonical(sharedWith(policy, binding)))
+          const before = sharedWith(previous.content.policy, binding), after = sharedWith(policy, binding);
+          const implicit = new Set((await this.resources.recipients(policy.ownerId, connection)).map(principal => principal.id));
+          // Existing owner access may be added to the encryption policy without granting a new permission.
+          // Removing a reader or adding anyone outside that access still requires permission to share.
+          const sharing = { ...after,
+            readers: after.readers.filter(id => before.readers.includes(id) || !implicit.has(id)),
+            authorities: after.authorities.filter(id => before.authorities.includes(id) || !implicit.has(id)) };
+          if (canonical(before) !== canonical(sharing))
             await this.resources.authorization.requireResource(actor, current, 'share', connection);
           sealed = true;
           const policyChanged = await hash(previous.content.policy) !== await hash(policy);
@@ -314,7 +321,8 @@ export class Custody {
       // Sealing something for the first time shares it beyond those who open what the owner holds only by one who
       // may share what the owner holds.
       if (!sealed) {
-        const expected = sharedWith({ ...policy, readers: required, authorities: required, observers: [], grants: [] }, binding).readers;
+        const recipients = (await this.recipients(policy.ownerId, connection)).map(item => item.binding);
+        const expected = sharedWith({ ...policy, readers: recipients, authorities: recipients, observers: [], grants: [] }, binding).readers;
         const given = sharedWith(policy, binding);
         if ([...given.readers, ...given.authorities].some(id => !expected.includes(id)) || given.observers.length || given.grants.length)
           await this.resources.authorization.requirePrincipal(actor, policy.ownerId, 'share', connection);

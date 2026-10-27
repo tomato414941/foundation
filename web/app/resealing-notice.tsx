@@ -6,6 +6,7 @@ import { requireKeys, resealNow, useResealing } from './keys';
 import { Alert, AlertDescription, AlertTitle } from './components/ui/alert';
 import { Button } from './components/ui/button';
 import { Progress } from './components/ui/progress';
+import { RecipientVerificationLinks } from './recipient-verification';
 
 export function ResealingNotice({ principalId, requestId }: { principalId?: string; requestId?: string }) {
   const { t } = useTranslation(), state = useResealing(principalId);
@@ -52,6 +53,7 @@ export function ResealingNotice({ principalId, requestId }: { principalId?: stri
             {t('resealingItem', { name: item.name ?? t('resealingUnnamed'), reason: reason(item.code) })}
           </li>)}
         </ul>}
+        <RecipientVerificationLinks recipients={outcome.failed.flatMap(item => item.verification ?? [])} />
         {requestId && <p>{t('resealingNoApprovalNeeded')}</p>}
         {retryError && <p role="alert">{reason(retryError)}</p>}
         <Button variant="outline" onClick={() => void retry()} loading={retrying} disabled={retrying}>{t('resealingRetry')}</Button>

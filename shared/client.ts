@@ -38,6 +38,16 @@ export interface TrustStore {
 export class ClientFailure extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
+export type RecipientVerification = { id: string; name: string; code: 'identity_untrusted' | 'identity_changed' };
+export class RecipientVerificationRequired extends ClientFailure {
+  constructor(readonly recipients: RecipientVerification[]) {
+    super('recipient_verification_required', 'Verify the public keys of these principals before encrypting their items:\n' +
+      recipients.map(recipient => recipient.name + ' (' + recipient.id + ')' +
+        (recipient.code === 'identity_changed' ? ': the previously verified keys changed.' : ': the keys are not verified.') +
+        '\nVerify the fingerprint with this principal, then run foundation trust ' + recipient.id +
+        ' --fingerprint <verified-fingerprint>.').join('\n'));
+  }
+}
 export class SubmissionPending extends Error {
   constructor(readonly id: string) {
     super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
@@ -172,15 +182,31 @@ export class CustodyClient {
     const { items } = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-recipients', {}, listOf(BoundRecipient));
     if (!items.length) throw new Error('Set up an encryption key for the owner before saving private content.');
     for (const { name: _name, ...item } of items) { await verifyBinding(item); await this.trusted(item.binding); }
-    // Delegates are sealed for once this device has verified their keys; until then they are left out.
+    // The owner permits its delegates, but only this identity's verified keys authorize encryption for them.
     const delegates = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-delegates', {}, listOf(BoundRecipient));
-    const verified: BoundKeys[] = [];
-    for (const { name: _name, ...item } of delegates.items) {
+    const verified: BoundKeys[] = [], unverified: RecipientVerification[] = [];
+    for (const { name, ...item } of delegates.items) {
       await verifyBinding(item);
       try { verified.push(await this.trusted(item.binding)); }
-      catch (error) { if (!(error instanceof ClientFailure && ['identity_untrusted', 'identity_changed'].includes(error.code))) throw error; }
+      catch (error) {
+        if (!(error instanceof ClientFailure) || error.code !== 'identity_untrusted' && error.code !== 'identity_changed') throw error;
+        unverified.push({ id: item.binding.principalId, name, code: error.code });
+      }
     }
+    if (unverified.length) throw new RecipientVerificationRequired(unverified);
     return [...items.map(item => item.binding), ...verified];
+  }
+  private async ownerRecipients(ownerId: string, previous?: CustodyPolicy) {
+    const current = new Map([...(await this.recipients(ownerId)), this.binding].map(binding => [binding.principalId, binding]));
+    const include = (values: BoundKeys[]) => [...new Map([
+      ...values.map(binding => current.get(binding.principalId) ?? binding), ...current.values(),
+    ].map(binding => [binding.principalId, binding])).values()];
+    return { readers: include(previous?.readers ?? []), authorities: include(previous?.authorities ?? []) };
+  }
+  async refreshRecipients(policy: CustodyPolicy) {
+    const recipients = await this.ownerRecipients(policy.ownerId, policy);
+    const changed = canonical(recipients) !== canonical({ readers: policy.readers, authorities: policy.authorities });
+    return { ...policy, ...recipients, revision: policy.revision + (changed ? 1 : 0) };
   }
   async read(id: string) {
     const item = await this.latest(id);
@@ -242,8 +268,7 @@ export class CustodyClient {
   // replaced is sealed anew as the same item, at its next revision.
   async policy(ownerId: string, contentType: ContentTypeId, environments: RegisteredEnvironment[] = [],
     options: { id?: string; previous?: CustodyPolicy; replacing?: CustodyPolicy; expiresAt?: string } = {}) {
-    const readers = options.previous?.readers ?? [...new Map([...(await this.recipients(ownerId)), this.binding]
-      .map(binding => [binding.id, binding])).values()];
+    const { readers, authorities } = await this.ownerRecipients(ownerId, options.previous);
     if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
       throw new Error('Include your own identity as a reader before creating this item.');
     const expiresAt = options.expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
@@ -257,7 +282,7 @@ export class CustodyClient {
     }
     return AccessPolicy.parse({ format: 2, id: options.id ?? options.previous?.id ?? options.replacing?.id ?? crypto.randomUUID(),
       origin: this.origin, ownerId, contentType, revision: (options.previous?.revision ?? options.replacing?.revision ?? 0) + 1,
-      authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
+      authorities, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
     options: { metadata?: Record<string, JsonValue>; labels?: z.infer<typeof import('./connections.js').ConnectionLabels>; previous?: { content: CustodyContent; version: number };
@@ -336,7 +361,7 @@ export class CustodyClient {
   }
   // Seals each listed item again on its own: one that cannot change now is left, with the reason, for another time.
   async reprotectPending(onProgress?: (progress: { completed: number; total: number }) => void) {
-    const done: string[] = [], failed: Array<{ id: string; code: string }> = [];
+    const done: string[] = [], failed: Array<{ id: string; code: string; verification?: RecipientVerification[] }> = [];
     const items = await this.pendingProtection();
     let completed = 0;
     onProgress?.({ completed, total: items.length });
@@ -345,7 +370,7 @@ export class CustodyClient {
         if (await this.reprotect(item.id, item.reason, item.remove)) done.push(item.id);
       } catch (error) {
         failed.push({ id: item.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-          ? error.code : 'failure' });
+          ? error.code : 'failure', ...(error instanceof RecipientVerificationRequired ? { verification: error.recipients } : {}) });
       }
       onProgress?.({ completed: ++completed, total: items.length });
     }

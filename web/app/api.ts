@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Ok } from '../../shared/contracts';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
-import { ClientFailure, SubmissionPending } from '../../shared/client';
+import { ClientFailure, RecipientVerificationRequired, SubmissionPending } from '../../shared/client';
 import { Execution } from '../../shared/executions';
 import type { PrincipalView } from '../../shared/contracts';
 import { heldKeys } from './keys';
@@ -97,7 +97,7 @@ export async function actionResult<T>(action: () => Promise<T>) {
     return await action();
   } catch (error) {
     if (error instanceof Response) throw error;
-    return { error: errorCode(error) };
+    return { error: errorCode(error), verification: error instanceof RecipientVerificationRequired ? error.recipients : undefined };
   }
 }
 export async function upload(
