@@ -275,12 +275,24 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout) if result.stdout.startswith("{") else result.stdout
             agent = cli("init", "--name", "Linked AI", "--origin", ORIGIN)
-            url = cli("request-access", "--to", principal["id"])["url"]
+            url = cli("request-access", "--to", principal["id"], "--message", "Use the shared resources")["url"]
             self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
             owner.goto(url.split("#")[0])
+            expect(owner.get_by_text("Linked AIに、Linked ownerが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
+            expect(owner.get_by_role("listitem").filter(has_text="リソースの作成・閲覧・変更・削除・実行")).to_be_visible()
+            expect(owner.get_by_role("listitem").filter(has_text="接続情報や変数などの機密情報の閲覧")).to_be_visible()
+            expect(owner.get_by_text("プリンシパルの管理・共有権限や支払い設定の変更は含まれません。", exact=True)).to_be_visible()
+            self.select(owner, "言語", "English")
+            expect(owner.get_by_text("Allow Linked AI to operate resources owned by Linked owner.", exact=True)).to_be_visible()
+            expect(owner.get_by_role("listitem").filter(has_text="Read private content, including connection credentials and variables")).to_be_visible()
+            self.select(owner, "Language", "日本語")
             expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、このリクエストを開き直してください。", exact=True)).to_be_visible()
             expect(owner.get_by_role("button", name="承認", exact=True)).to_be_disabled()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-unverified-ja.png"), full_page=True)
+            owner.set_viewport_size({"width": 390, "height": 844})
+            self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 390)
+            owner.screenshot(path=str(ARTIFACTS / "delegate-approval-mobile-ja.png"), full_page=True)
+            owner.set_viewport_size({"width": 1440, "height": 1050})
             owner.goto(ORIGIN + "/account")
             owner.goto(url.replace(agent["fingerprint"], "sha256:" + "0" * 64))
             owner.get_by_role("button", name="承認", exact=True).click()
@@ -299,6 +311,48 @@ class BrowserTests(unittest.TestCase):
             owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
             cli("trust", principal["id"], "--fingerprint", owner_fingerprint)
             self.assertEqual(cli("read", variable_id), "linked-variable-value")
+
+    def test_委任リクエストの作成元と承認するプリンシパルを確認する(self):
+        sender, _ = self.passkey_account("Delegation requester")
+        receiver, principal = self.passkey_account("Delegation approver")
+        response = sender.request.post(ORIGIN + "/api/requests", data={
+            "to": principal["id"], "operations": [{"name": "relation.draw", "input": {
+                "subjectId": "$requester", "relation": "delegate", "objectId": "$approver"
+            }}]
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        sender.goto(asked["url"])
+        expect(sender.get_by_text("Delegation requesterに、承認するプリンシパルが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
+        receiver.goto(asked["url"])
+        expect(receiver.get_by_text("Delegation requesterに、Delegation approverが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
+
+    def test_委任リクエストの操作対象から委任先と委任元を確認して承認する(self):
+        owner, principal = self.passkey_account("Delegation owner")
+        sender, _ = self.passkey_account("Request coordinator")
+        delegate, recipient = self.passkey_account("Delegate worker")
+        self.trust(owner, delegate, recipient)
+        response = owner.request.post(ORIGIN + "/api/principals", data={
+            "ownerId": principal["id"], "name": "Delegation workspace"
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        workspace = response.json()
+        response = sender.request.post(ORIGIN + "/api/requests", data={
+            "to": principal["id"], "message": "共同作業のための権限を確認してください。",
+            "operations": [{"name": "relation.draw", "input": {
+                "subjectId": recipient["id"], "relation": "delegate", "objectId": workspace["id"]
+            }}]
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        owner.goto(asked["url"])
+        expect(owner.get_by_text("Delegate workerに、Delegation workspaceが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
+        expect(owner.get_by_role("listitem").filter(has_text="接続情報や変数などの機密情報の閲覧")).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "delegate-approval-other-principals-ja.png"), full_page=True)
+        owner.get_by_role("button", name="承認", exact=True).click()
+        expect(owner.get_by_role("status")).to_have_text("完了")
+        relations = owner.request.get(ORIGIN + "/api/relations?object=" + workspace["id"] + "&relation=delegate").json()["items"]
+        self.assertIn(recipient["id"], [item["subjectId"] for item in relations])
 
     def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
         owner, principal = self.passkey_account("Chancellor Rigel")

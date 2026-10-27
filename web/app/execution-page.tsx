@@ -17,6 +17,7 @@ import { ConnectionProgress } from './connection-progress';
 import { ConnectionUsers } from './connection-users';
 import { ConnectionRequestReview, connectionRequestAction } from './connection-request-review';
 import { loadRequestConnection, requestConnectionMethod } from './request-connection';
+import { DelegationReview, loadDelegationReviews } from './delegation-review';
 import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
@@ -126,10 +127,15 @@ export async function clientLoader({ params, request }: PageArgs) {
     operationError ??= typeof failed.error.code === 'string' ? failed.error.code : 'failure';
   const current = inputOperation(item, account.principal?.id ?? '');
   const operation = item.operations.length === 1 ? item.operations[0] : null;
-  const [inputForm, requestConnection] = await Promise.all([
+  const [inputForm, requestConnection, delegationReviews] = await Promise.all([
     current && item.canRespond && !account.requestId && !item.waiting?.continuation ? loadExecutionForm(current.invocation) : null,
     requestMode && operation?.name === 'connection.connect' && item.from.id !== account.principal?.id ? loadRequestConnection({ name: operation.name,
       input: substitute(operation.input, account.principal?.id ?? '', item.from.id) as DefinitionCall['input'] }, request.signal, !account.requestId) : null,
+    item.wait === 'approval' && !item.proposal ? loadDelegationReviews(item.operations, {
+      approver: item.canRespond ? account.principal : null, requester: item.creator,
+      principals: [...account.principals, item.from, ...(item.to ? [item.to] : [])],
+      inspect: !!account.principal && !account.requestId, signal: request.signal,
+    }) : [],
   ]);
   if (['waiting', 'running'].includes(item.state) && item.from.id === account.principal?.id)
     item.code = sessionStorage.getItem('foundation.request.' + (item.delivery?.id ?? item.id)) ?? undefined;
@@ -140,7 +146,7 @@ export async function clientLoader({ params, request }: PageArgs) {
   const unverified = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
     ['waiting', 'running'].includes(item.state) && await getIdentity(account.principal.id)
     ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
-  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, details, unverified };
+  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, details, unverified };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -195,7 +201,7 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, details, unverified } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, details, unverified } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
@@ -238,7 +244,8 @@ export default function ExecutionPage() {
             {current?.index === index && inputForm && <ExecutionInputFields data={inputForm}
               requestPrincipalId={recipientRequest && (focusedConnection || operation.name === 'connection.authorize') ? account.principal?.id : undefined} />}
             {item.waiting?.index === index && progress && !focusedConnection && <ConnectionProgress progress={progress} cancelIntent="cancel" />}
-            {!privateOperation && awaitingApproval && <JsonView value={operation.input} />}
+            {!privateOperation && awaitingApproval && (delegationReviews[index]
+              ? <DelegationReview review={delegationReviews[index]} /> : <JsonView value={operation.input} />)}
             {(!recipientRequest || item.operations.length > 1) && <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>}
             {item.operations.length > 1 && details.steps[index] && <ExecutionFacts details={details.steps[index]} environments={details.environments} />}
             {pending && !privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
