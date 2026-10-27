@@ -134,18 +134,45 @@ test('所有と所属の循環を拒否し、所有するプリンシパルの�
   });
 });
 
-test('メールの確認リンクでサインインし、同じリンクの再使用を拒否する', async (t) => {
+test('登録のないメールアドレスは確認後に作成を求め、作成したアカウントでサインインする', async (t) => {
   const f = await fixture();
   t.after(f.close);
-  await f.authentication.beginEmail('person@example.test', 'browser');
-  const link = new URL(f.mailer.sent[0]!.link),
-    values = new URLSearchParams(link.hash.slice(1));
-  const result = await f.authentication.verifyEmail(values.get('challenge')!, values.get('token')!);
-  assert.ok('token' in result);
-  assert.ok(await f.authentication.authenticate(result.token));
-  await assert.rejects(f.authentication.verifyEmail(values.get('challenge')!, values.get('token')!), {
-    code: 'invalid_link',
-  });
+  const link = async () => {
+    await f.authentication.beginEmail('person@example.test', 'browser');
+    const values = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
+    return [values.get('challenge')!, values.get('token')!] as const;
+  };
+  const [challenge, secret] = await link();
+  const verified = await f.authentication.verifyEmail(challenge, secret);
+  assert.ok('registrationProof' in verified);
+  if (!('registrationProof' in verified)) return;
+  assert.equal(verified.email, 'person@example.test');
+  await assert.rejects(f.authentication.verifyEmail(challenge, secret), { code: 'invalid_link' });
+  const registered = await f.authentication.registerEmail(verified.registrationProof, 'Person');
+  assert.equal((await f.authentication.authenticate(registered.token))?.id, registered.actor.id);
+  assert.equal((await f.principals.get(registered.actor.id)).name, 'Person');
+  await assert.rejects(f.authentication.registerEmail(verified.registrationProof), { code: 'invalid_proof' });
+  await f.db.pool.query("UPDATE challenges SET created_at=now()-interval '2 minutes'");
+  const signedIn = await f.authentication.verifyEmail(...(await link()));
+  assert.ok('token' in signedIn);
+  if (!('token' in signedIn)) return;
+  assert.equal(signedIn.actor.id, registered.actor.id);
+});
+
+test('作成の確認中に同じアドレスが登録されたら、二つ目のアカウントを作らない', async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const proofs = [];
+  for (const browser of ['first', 'second']) {
+    await f.db.pool.query("UPDATE challenges SET created_at=now()-interval '2 minutes'");
+    await f.authentication.beginEmail('twice@example.test', browser);
+    const values = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
+    const verified = await f.authentication.verifyEmail(values.get('challenge')!, values.get('token')!);
+    assert.ok('registrationProof' in verified);
+    if ('registrationProof' in verified) proofs.push(verified.registrationProof);
+  }
+  await f.authentication.registerEmail(proofs[0]!);
+  await assert.rejects(f.authentication.registerEmail(proofs[1]!), { code: 'email_in_use' });
 });
 
 test('同時に編集された項目を上書きせず、最新の値を保持する', async (t) => {

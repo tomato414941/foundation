@@ -283,7 +283,12 @@ export class Authentication {
   async verifyEmail(
     id: string,
     secret: string,
-  ): Promise<SigninResult | { attached: true; returnTo: string } | { mergeProof: string; returnTo: string }> {
+  ): Promise<
+    | SigninResult
+    | { attached: true; returnTo: string }
+    | { mergeProof: string; returnTo: string }
+    | { registrationProof: string; email: string; returnTo: string }
+  > {
     const attempted = await this.db.one<ChallengeRow>(
       "UPDATE challenges SET attempts=attempts+1 WHERE id=$1 AND kind='email' AND expires_at>now() AND attempts<5 RETURNING *",
       [id],
@@ -296,7 +301,7 @@ export class Authentication {
         'This link has already been used.',
       );
       const email = String(challenge.data.email);
-      let credential = await this.db.one<CredentialRow>(
+      const credential = await this.db.one<CredentialRow>(
         "SELECT * FROM credentials WHERE kind='email' AND identifier=$1",
         [email],
         connection,
@@ -338,21 +343,17 @@ export class Authentication {
         );
         return { attached: true, returnTo: String(challenge.data.returnTo) };
       }
+      const returnTo = String(challenge.data.returnTo);
+      // An unregistered address proves who it is but does not sign up until the person asks to.
       if (!credential) {
-        const principal = await this.principals.create(
-          email.split('@')[0] || 'Foundation',
-          null,
-          undefined,
-          connection,
+        const proof = randomUUID();
+        await connection.query(
+          "INSERT INTO challenges(id,kind,data,expires_at) VALUES($1,'email-registration',$2,now()+interval '15 minutes')",
+          [proof, JSON.stringify({ email, returnTo })],
         );
-        credential = required(
-          await this.db.one<CredentialRow>(
-            "INSERT INTO credentials(id,principal_id,kind,name,identifier,last_used_at) VALUES($1,$2,'email',$3,$3,now()) RETURNING *",
-            [randomUUID(), principal.id, email],
-            connection,
-          ),
-        );
-      } else await connection.query('UPDATE credentials SET last_used_at=now() WHERE id=$1', [credential.id]);
+        return { registrationProof: proof, email, returnTo };
+      }
+      await connection.query('UPDATE credentials SET last_used_at=now() WHERE id=$1', [credential.id]);
       await this.audit.record(
         credential.principal_id,
         credential.principal_id,
@@ -361,8 +362,42 @@ export class Authentication {
         {},
         connection,
       );
+      return { ...(await this.session(credential.principal_id, credential.id, connection)), returnTo };
+    });
+  }
+  async registerEmail(proof: string, name?: string): Promise<SigninResult> {
+    return this.db.transaction(async (connection) => {
+      const challenge = await this.db.one<ChallengeRow>(
+        "DELETE FROM challenges WHERE id=$1 AND kind='email-registration' AND expires_at>now() RETURNING *",
+        [proof],
+        connection,
+      );
+      if (!challenge) fail(400, 'invalid_proof', 'This registration has expired. Sign in with your email again.');
+      const email = String(challenge.data.email);
+      if (
+        await this.db.one(
+          "SELECT id FROM credentials WHERE kind='email' AND identifier=$1",
+          [email],
+          connection,
+        )
+      )
+        fail(409, 'email_in_use', 'This address is already registered. Sign in instead.');
+      const principal = await this.principals.create(
+        name || email.split('@')[0] || 'Foundation',
+        null,
+        undefined,
+        connection,
+      );
+      const credential = required(
+        await this.db.one<CredentialRow>(
+          "INSERT INTO credentials(id,principal_id,kind,name,identifier,last_used_at) VALUES($1,$2,'email',$3,$3,now()) RETURNING *",
+          [randomUUID(), principal.id, email],
+          connection,
+        ),
+      );
+      await this.audit.record(principal.id, principal.id, 'session.signin', credential.id, {}, connection);
       return {
-        ...(await this.session(credential.principal_id, credential.id, connection)),
+        ...(await this.session(principal.id, credential.id, connection)),
         returnTo: String(challenge.data.returnTo),
       };
     });

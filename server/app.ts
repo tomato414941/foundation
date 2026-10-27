@@ -266,7 +266,13 @@ export async function buildApp(context: Context) {
       schema: {
         body: z.object({ challengeId: C.Id, token: z.string().max(200) }).strict(),
         response: {
-          200: z.object({ returnTo: z.string(), attached: z.boolean(), mergeProof: C.Id.optional() }),
+          200: z.object({
+            returnTo: z.string(),
+            attached: z.boolean(),
+            mergeProof: C.Id.optional(),
+            registrationProof: C.Id.optional(),
+            email: z.email().optional(),
+          }),
         },
         security: [],
       },
@@ -278,7 +284,26 @@ export async function buildApp(context: Context) {
         returnTo: result.returnTo,
         attached: 'attached' in result,
         ...('mergeProof' in result ? { mergeProof: result.mergeProof } : {}),
+        ...('registrationProof' in result
+          ? { registrationProof: result.registrationProof, email: result.email }
+          : {}),
       };
+    },
+  );
+  app.post(
+    '/api/auth/email/register',
+    {
+      config: { rateLimit: { max: 30, timeWindow: '1 hour' } },
+      schema: {
+        body: z.object({ proof: C.Id, name: C.Name.optional() }).strict(),
+        response: { 200: z.object({ returnTo: z.string() }) },
+        security: [],
+      },
+    },
+    async (request, reply) => {
+      const result = await authentication.registerEmail(request.body.proof, request.body.name);
+      signIn(reply, result);
+      return { returnTo: result.returnTo };
     },
   );
   app.post(
