@@ -323,6 +323,26 @@ test('APIの入力を検証し、公開したOpenAPIに呼び出し方法を示�
   const schema = await app.inject({ url: '/api/openapi.json' });
   assert.equal(schema.statusCode, 200, schema.body);
   assert.ok(schema.json().paths['/api/principals/{id}/resources'].post.requestBody);
+  assert.ok(schema.json().paths['/api/principals/{id}/principals'].post.requestBody);
+});
+
+test('URLで示した持ち主の下に、その持ち主のプリンシパルを作る', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person('Project owner'), stranger = await f.person('Stranger');
+  const created = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/principals',
+    headers: { authorization: 'Bearer ' + owner.token }, payload: { name: 'Owned project' } });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().name, 'Owned project');
+  assert.equal(created.json().owner.id, owner.actor.id);
+  const refused = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/principals',
+    headers: { authorization: 'Bearer ' + stranger.token }, payload: { name: 'Not my project' } });
+  assert.equal(refused.statusCode, 403, refused.body);
 });
 
 test('AWSのIAMロールを作るテンプレートを置き場に出し、一時的なリンクで渡す', async (t) => {

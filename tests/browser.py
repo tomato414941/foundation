@@ -514,8 +514,8 @@ class BrowserTests(unittest.TestCase):
         sender, _ = self.passkey_account("Request coordinator")
         delegate, recipient = self.passkey_account("Delegate worker")
         self.trust(owner, delegate, recipient)
-        response = owner.request.post(ORIGIN + "/api/principals", data={
-            "ownerId": principal["id"], "name": "Delegation workspace"
+        response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={
+            "name": "Delegation workspace"
         }, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         workspace = response.json()
@@ -540,7 +540,7 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Chancellor Rigel")
         paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(paid.ok, paid.text())
-        response = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "dev-us の AI"}, headers={"origin": ORIGIN})
+        response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "dev-us の AI"}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         agent = response.json()
         environment_id = self.executor(owner, agent, "dev-us").rsplit("/", 1)[1]
@@ -723,7 +723,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name="Received function", exact=True)).to_be_visible()
         function_id = page.url.rsplit("/", 1)[1]
-        created = page.request.post(ORIGIN + "/api/principals", data={"name": "Function recipient", "ownerId": principal["id"]}, headers={"origin": ORIGIN})
+        created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Function recipient"}, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         recipient = created.json()
         passed = page.request.post(ORIGIN + "/api/resources/" + function_id + "/transfer", data={"to": recipient["id"]}, headers={"origin": ORIGIN})
@@ -1117,7 +1117,7 @@ class BrowserTests(unittest.TestCase):
             )
             self.assertEqual(read.returncode, 0, read.stderr)
             self.assertEqual(read.stdout, "Issued through the browser")
-        created = page.request.post(ORIGIN + "/api/principals", data={"name": "Keyless child", "ownerId": principal["id"]}, headers={"origin": ORIGIN})
+        created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Keyless child"}, headers={"origin": ORIGIN})
         self.assertEqual(created.status, 201, created.text())
         child = created.json()
         self.assertIsNone(child["publicKey"])
@@ -1578,7 +1578,7 @@ class BrowserTests(unittest.TestCase):
         owner.screenshot(path=str(ARTIFACTS / "hf-connection-ja.png"), full_page=True)
         paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(paid.ok, paid.text())
-        created = owner.request.post(ORIGIN + "/api/principals", data={"ownerId": principal["id"], "name": "Model assistant"}, headers={"origin": ORIGIN})
+        created = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Model assistant"}, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         agent = created.json()
         owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
@@ -1671,8 +1671,8 @@ class BrowserTests(unittest.TestCase):
         page, principal = self.passkey_account("Connection owner")
         paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(paid.ok, paid.text())
-        created = page.request.post(ORIGIN + "/api/principals", data={
-            "name": "dev-us の AI", "ownerId": principal["id"],
+        created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={
+            "name": "dev-us の AI",
         }, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         child = created.json()

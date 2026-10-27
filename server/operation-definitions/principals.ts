@@ -4,7 +4,7 @@ import * as P from '../../shared/protocol.js';
 import { Execution } from '../../shared/executions.js';
 import { DefinitionRegistry } from '../definitions.js';
 import type { OperationServices } from '../builtin-definitions.js';
-import { idInput, withId, ok } from './support.js';
+import { bodyObject, idInput, withId, ok } from './support.js';
 
 const lineTitles: Record<string, readonly [readonly [string, string], readonly [string, string]]> = {
   delegate: [['権限を委任する', 'Delegate access'], ['委任を解除する', 'Revoke delegation']],
@@ -24,8 +24,9 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
     await authorization.requirePrincipal(who, input.ownerId, 'create');
     return principals.view(who, await principals.create(input.name, null, input.ownerId));
   });
-  bind({ name: 'principal.create', method: 'POST', path: '/api/principals', schema: { body: createPrincipal,
-    response: { 201: C.Principal } }, input: (_params, body) => body, status: 201 });
+  bind({ name: 'principal.create', method: 'POST', path: '/api/principals/:id/principals', schema: { params: C.IdParams,
+    body: createPrincipal.omit({ ownerId: true }), response: { 201: C.Principal } },
+    input: (params, body) => ({ ...bodyObject(body), ownerId: params.id }), status: 201 });
   const renamePrincipal = idInput.extend({ name: C.Name });
   definitions.define('principal.rename', renamePrincipal, ['プリンシパルを変更する', 'Change a principal'],
     (who, input) => principals.rename(who, input.id, input.name));
