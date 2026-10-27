@@ -32,8 +32,7 @@ export default function ConnectionFlow() {
   const progress = 'kind' in data ? data : null;
   usePolling(progress?.kind === 'pending' || progress?.kind === 'authorize');
   return <Page title={progress?.flow.name ?? t('connect')} narrow>
-    <ErrorNotice error={'error' in data && typeof data.error === 'string' ? data.error : result && 'error' in result ? result.error : null}
-      verification={'verification' in data ? data.verification : result && 'verification' in result ? result.verification : undefined} />
+    <ErrorNotice error={'error' in data && typeof data.error === 'string' ? data.error : result && 'error' in result ? result.error : null} />
     {!progress && <Notice tone="info">{t('connectionFlowHelp')}</Notice>}
     {progress && <Form method="post"><ConnectionProgress progress={progress} /></Form>}
     <Link className="text-sm underline underline-offset-4" to="/account">{t('account')}</Link>

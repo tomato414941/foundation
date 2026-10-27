@@ -39,15 +39,7 @@ export class ClientFailure extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 export type RecipientVerification = { id: string; name: string; code: 'identity_untrusted' | 'identity_changed' };
-export class RecipientVerificationRequired extends ClientFailure {
-  constructor(readonly recipients: RecipientVerification[]) {
-    super('recipient_verification_required', 'Verify the public keys of these principals before encrypting their items:\n' +
-      recipients.map(recipient => recipient.name + ' (' + recipient.id + ')' +
-        (recipient.code === 'identity_changed' ? ': the previously verified keys changed.' : ': the keys are not verified.') +
-        '\nVerify the fingerprint with this principal, then run foundation trust ' + recipient.id +
-        ' --fingerprint <verified-fingerprint>.').join('\n'));
-  }
-}
+export type RecipientAccess = { id: string; name: string; excluded: RecipientVerification[] };
 export class SubmissionPending extends Error {
   constructor(readonly id: string) {
     super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
@@ -57,8 +49,10 @@ const errorIs = (error: unknown, ...codes: Array<string | number>) => !!error &&
   (('code' in error && codes.includes(String(error.code))) || ('status' in error && codes.includes(Number(error.status))));
 export class CustodyClient {
   private verifiedKeys?: Promise<Map<string, KeyringEntryValue>>;
+  private readonly exclusions = new Map<string, RecipientVerification[]>();
+  private readonly pendingExclusions = new Map<string, RecipientVerification[]>();
   constructor(readonly api: JsonApi, readonly origin: string, readonly binding: BoundKeys,
-    readonly keys: KeyMaterial, readonly trust: TrustStore) {}
+    readonly keys: KeyMaterial, readonly trust: TrustStore, readonly onRecipientAccess?: (access: RecipientAccess) => void) {}
 
   async trusted(binding: BoundKeys) {
     if (!(await this.verifies(binding))) {
@@ -193,13 +187,14 @@ export class CustodyClient {
         unverified.push({ id: item.binding.principalId, name, code: error.code });
       }
     }
-    if (unverified.length) throw new RecipientVerificationRequired(unverified);
+    this.exclusions.set(ownerId, unverified);
     return [...items.map(item => item.binding), ...verified];
   }
   private async ownerRecipients(ownerId: string, previous?: CustodyPolicy) {
     const current = new Map([...(await this.recipients(ownerId)), this.binding].map(binding => [binding.principalId, binding]));
+    const excluded = new Set(this.exclusions.get(ownerId)?.map(recipient => recipient.id));
     const include = (values: BoundKeys[]) => [...new Map([
-      ...values.map(binding => current.get(binding.principalId) ?? binding), ...current.values(),
+      ...values.filter(binding => !excluded.has(binding.principalId)).map(binding => current.get(binding.principalId) ?? binding), ...current.values(),
     ].map(binding => [binding.principalId, binding])).values()];
     return { readers: include(previous?.readers ?? []), authorities: include(previous?.authorities ?? []) };
   }
@@ -297,6 +292,7 @@ export class CustodyClient {
     const resource = options.commit ? await options.commit(write) : await this.api.json('/api/resources/' + policy.id + '/custody',
       { method: 'PUT', body: write }, Resource);
     await this.trust.rememberContent(content);
+    this.onRecipientAccess?.({ id: resource.id, name: resource.name, excluded: this.exclusions.get(policy.ownerId) ?? [] });
     return resource;
   }
   // Seals an item for the new owner its policy names. The item comes back once it is theirs; while the new owner has
@@ -321,6 +317,9 @@ export class CustodyClient {
     const previous = await this.read(id);
     const { policy } = previous.content, now = Date.now(), removed = new Set(remove);
     const current = reason === 'recipients' ? await this.recipients(policy.ownerId) : [];
+    const excluded = reason === 'recipients' ? this.exclusions.get(policy.ownerId) ?? [] : [];
+    this.pendingExclusions.set(id, excluded);
+    for (const recipient of excluded) removed.add(recipient.id);
     // A principal that has replaced its keys is sealed for with its current keys only, in each of its roles, once this
     // device verified them: those who use what the owner holds as listed, and anyone else it is shared with as found.
     const latest = new Map(current.map(binding => [binding.principalId, binding]));
@@ -354,6 +353,7 @@ export class CustodyClient {
       await this.api.json('/api/custody/' + id, { method: 'PUT',
         body: { name: 'Execution result', content, version: previous.version } }, ProtectedRead);
       await this.trust.rememberContent(content);
+      this.onRecipientAccess?.({ id, name: 'Execution result', excluded });
       return id;
     }
     const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
@@ -368,9 +368,11 @@ export class CustodyClient {
     for (const item of items) {
       try {
         if (await this.reprotect(item.id, item.reason, item.remove)) done.push(item.id);
+        const verification = this.pendingExclusions.get(item.id);
+        if (verification?.length) failed.push({ id: item.id, code: 'recipient_excluded', verification });
       } catch (error) {
         failed.push({ id: item.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-          ? error.code : 'failure', ...(error instanceof RecipientVerificationRequired ? { verification: error.recipients } : {}) });
+          ? error.code : 'failure' });
       }
       onProgress?.({ completed: ++completed, total: items.length });
     }

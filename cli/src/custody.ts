@@ -19,7 +19,17 @@ export function privateClient(client: Client) {
   if (!keys || !binding) throw new Error('Use a sign-in key with encryption and signing keys for this operation.');
   const directory = join(dirname(configPath()), 'custody', binding.id);
   const journal = new FileJournal(join(directory, 'client'), origin, binding, keys);
-  const custody = new CustodyClient(client, origin, binding, keys, new JournalTrust(journal));
+  const notified = new Set<string>();
+  const custody = new CustodyClient(client, origin, binding, keys, new JournalTrust(journal), access => {
+    for (const recipient of access.excluded) {
+      if (notified.has(recipient.id)) continue;
+      notified.add(recipient.id);
+      process.stderr.write('foundation: ' + recipient.name + ' (' + recipient.id + ') cannot open the saved item: ' +
+        (recipient.code === 'identity_changed' ? 'the previously verified public keys changed.' : 'its public keys are not verified by this identity.') +
+        '\nVerify the fingerprint with this principal, then run foundation trust ' + recipient.id +
+        ' --fingerprint <verified-fingerprint> to encrypt existing items for it.\n');
+    }
+  });
   const broker = new HttpBroker(client), transport = new PublicTransport(origin);
   const connections = new Connections(binding, keys, broker.connections(),
     new FileJournal(join(directory, 'connections'), origin, binding, keys), transport);

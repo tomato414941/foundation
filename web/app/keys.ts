@@ -17,7 +17,7 @@ import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
-import type { RecipientVerification } from '../../shared/client';
+import type { RecipientAccess, RecipientVerification } from '../../shared/client';
 
 const unlocked = new Map<string, IdentityKeys>();
 type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
@@ -90,6 +90,15 @@ export type Resealing = {
   error: string | null;
 };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
+const recipientAccess = new Map<string, RecipientVerification[]>();
+export function rememberRecipientAccess(principalId: string, access: RecipientAccess) {
+  recipientAccess.set(principalId + ':' + access.id, access.excluded);
+  for (const notify of watching) notify();
+}
+export function useExcludedRecipients(principalId: string | undefined, resourceId: string) {
+  return useSyncExternalStore(notify => { watching.add(notify); return () => watching.delete(notify); },
+    () => principalId ? recipientAccess.get(principalId + ':' + resourceId) ?? null : null, () => null);
+}
 // One pass at a time for each principal: a pass asked for while another runs starts after it, so that the two never
 // seal the same item at once. An operation that opens the private key starts one in the background and then its own.
 const passes = new Map<string, Promise<Resealing | null>>();
@@ -154,6 +163,8 @@ export function useResealing(id: string | undefined) {
 export async function clearKeys() {
   unlocked.clear();
   held.clear();
+  recipientAccess.clear();
+  for (const notify of watching) notify();
   await stored('keys', 'readwrite', (store) => store.clear());
 }
 function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON): Uint8Array | null {

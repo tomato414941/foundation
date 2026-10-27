@@ -74,7 +74,7 @@ test('値を保存し直すとき、ほかの人が受けた許可のうち期�
   assert.equal(next.revision, previous.revision + 1);
 });
 
-test('持ち主の端末は未検証の委任先を明示し、全員の鍵を検証してから項目を暗号化し直す', async (t) => {
+test('持ち主の端末は未検証の代理を知らせ、検証済みの代理が項目を開けるように暗号化し直す', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
   const ai = await f.person('Agent'), other = await f.person('Other');
@@ -88,19 +88,19 @@ test('持ち主の端末は未検証の委任先を明示し、全員の鍵を�
   assert.deepEqual(pending.done, []);
   assert.deepEqual(pending.failed.map(item => item.id), items);
   for (const item of pending.failed) {
-    assert.equal(item.code, 'recipient_verification_required');
+    assert.equal(item.code, 'recipient_excluded');
     assert.deepEqual(item.verification?.map(recipient => recipient.id).sort(), [ai.actor.id, other.actor.id].sort());
   }
   await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
   await f.client.trust.rememberBinding(ai.binding);
   const remaining = await f.client.reprotectPending();
-  assert.deepEqual(remaining.done, []);
+  assert.deepEqual(remaining.done, items);
+  const shared = await f.custody.read(ai.actor, saved.id);
+  assert.equal(decode(await reveal(shared.content, ai.binding, ai.keys.encryption)), 'owner value');
   for (const item of remaining.failed) assert.deepEqual(item.verification, [
     { id: other.actor.id, name: 'Other', code: 'identity_untrusted' }]);
   await f.client.trust.rememberBinding(other.binding);
   assert.deepEqual(await f.client.reprotectPending(), { done: items, failed: [] });
-  const shared = await f.custody.read(ai.actor, saved.id);
-  assert.equal(decode(await reveal(shared.content, ai.binding, ai.keys.encryption)), 'owner value');
   assert.equal(decode(await reveal((await f.custody.read(other.actor, saved.id)).content, other.binding, other.keys.encryption)), 'owner value');
   const later = await f.client.save('Later', encode('later value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
   assert.deepEqual((await f.custody.get(later.id)).policy.readers.map(reader => reader.principalId).sort(),

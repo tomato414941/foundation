@@ -15,8 +15,6 @@ import {
 import { cn } from 'cn';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from './api';
-import type { RecipientVerification } from '../../shared/client';
-import { RecipientVerificationLinks } from './recipient-verification';
 import type { Proposal } from '../../shared/contracts';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
@@ -105,13 +103,10 @@ export function Notice({
   );
 }
 
-export function ErrorNotice({ error, verification }: { error?: string | null; verification?: RecipientVerification[] }) {
+export function ErrorNotice({ error }: { error?: string | null }) {
   const { t } = useTranslation();
   return error ? (
-    <Notice tone="error">
-      <p>{t('errors.' + error, { defaultValue: t('failure') })}</p>
-      {verification && <RecipientVerificationLinks recipients={verification} />}
-    </Notice>
+    <Notice tone="error">{t('errors.' + error, { defaultValue: t('failure') })}</Notice>
   ) : null;
 }
 

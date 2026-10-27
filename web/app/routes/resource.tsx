@@ -8,7 +8,8 @@ import type { Route } from './+types/resource';
 import { Resource, EnvironmentDeletion, FunctionExecutionSettings } from '../../../shared/contracts';
 import { decode } from '../../../shared/encryption';
 import { api, ApiFailure, actionResult, formText } from '../api';
-import { decryptVariable, requireKeys } from '../keys';
+import { decryptVariable, requireKeys, useExcludedRecipients } from '../keys';
+import { RecipientVerificationLinks } from '../recipient-verification';
 import {
   Bytes,
   Confirm,
@@ -94,6 +95,7 @@ export default function ResourceDetail() {
   const { resource: item, environments, functionSettings } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
+  const excluded = useExcludedRecipients(session.principal?.id, item.id);
   const { t } = useTranslation();
   const task = useTask();
   const navigation = useNavigation();
@@ -154,6 +156,10 @@ export default function ResourceDetail() {
       }
     >
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
+      {!!excluded?.length && <Notice tone="warning">
+        <p>{t('recipientExclusionsSaved')}</p>
+        <RecipientVerificationLinks recipients={excluded} />
+      </Notice>}
       {!environment && <Panel><BoxDetails item={item} /></Panel>}
       {item.kind === 'variable' && can('reveal') && (
         <Panel>

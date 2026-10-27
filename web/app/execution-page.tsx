@@ -305,8 +305,7 @@ export default function ExecutionPage() {
     from={pending ? item.from.name : undefined}
     name={requestConnection.name !== service || !pending ? requestConnection.name : undefined}
     message={pending ? item.message : undefined}>
-    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError}
-      verification={result && 'verification' in result ? result.verification : undefined} />
+    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     {requestState}
     {form}
     {!account.principal && pending && <Button className={connectionRequestAction} asChild><Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + (item.delivery?.id ?? item.id))}>{t('signinToApprove')}</Link></Button>}
@@ -320,8 +319,7 @@ export default function ExecutionPage() {
     {requestState}
   </>;
   return <Page title={title} narrow>
-    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError}
-      verification={result && 'verification' in result ? result.verification : undefined} />
+    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
     {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}</Panel> : <>
       <Panel>

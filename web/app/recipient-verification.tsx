@@ -11,7 +11,7 @@ export function RecipientVerificationLinks({ recipients }: { recipients: Recipie
       <Link className="underline underline-offset-4" to={'/account/trust?principal=' + recipient.id} target="_blank" rel="noopener noreferrer">
         {t('verifyRecipient', { name: recipient.name })}
       </Link>
-      {recipient.code === 'identity_changed' && <p>{t('errors.identity_changed')}</p>}
+      <p>{t('recipientExclusionReasons.' + recipient.code)}</p>
     </li>)}
   </ul>;
 }

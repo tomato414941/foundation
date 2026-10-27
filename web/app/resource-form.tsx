@@ -339,7 +339,7 @@ export default function ResourceForm() {
       }
       narrow
     >
-      <ErrorNotice error={result && 'error' in result ? result.error : null} verification={result && 'verification' in result ? result.verification : undefined} />
+      <ErrorNotice error={result && 'error' in result ? result.error : null} />
       {data.replaced && <Notice tone="warning">{t(data.kind === 'connection' ? 'errors.key_replaced' : 'valueReplaced')}</Notice>}
       {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
       {data.kind !== 'environment' && data.payment?.required && !data.payment.active && (

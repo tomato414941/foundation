@@ -104,7 +104,7 @@ export class Custody {
   }
 
   // Items this identity can seal again without anyone deciding anything: those still encrypted for executors whose
-  // grants have expired and, where it acts as the owner, those whose readers no longer match who may open them: not
+  // grants have expired and, where it uses what the owner holds, those whose readers no longer match who may open them: not
   // yet sealed for everyone who uses what the owner holds, as for a new delegate, still sealed for one that may no
   // longer open them, as for a delegate whose line was erased, or sealed for keys that someone has since replaced. The
   // server cannot do it, because only the item's readers can open it. The list only says where to look, and each item
@@ -131,7 +131,7 @@ export class Custody {
       "SELECT principal_id,binding->>'id' AS id FROM principal_key_bindings WHERE retired_at IS NULL AND principal_id=ANY($1::uuid[])",
       [[...new Set(rows.flatMap(row => named(row).map(value => value.principalId)))]])).map(row => [row.principal_id, row.id]));
     const replaced = (row: Row) => named(row).some(value => current.has(value.principalId) && current.get(value.principalId) !== value.id);
-    const owners = new Set(await this.resources.authorization.find(principalId, 'principal', 'stands'));
+    const owners = new Set(await this.resources.authorization.find(principalId, 'principal', 'use'));
     const recipients = new Map<string, string[]>();
     // A reader may open an item it may reveal, and a result of a principal it may read; one who runs with an item
     // may use it. Each is looked up once for each principal it is sealed for.
@@ -289,12 +289,11 @@ export class Custody {
             fail(403, 'handoff_required', 'Seal the item for its current owner before passing it on.');
           const before = sharedWith(previous.content.policy, binding), after = sharedWith(policy, binding);
           const implicit = new Set((await this.resources.recipients(policy.ownerId, connection)).map(principal => principal.id));
-          // Existing owner access may be added to the encryption policy without granting a new permission.
-          // Removing a reader or adding anyone outside that access still requires permission to share.
-          const sharing = { ...after,
-            readers: after.readers.filter(id => before.readers.includes(id) || !implicit.has(id)),
-            authorities: after.authorities.filter(id => before.authorities.includes(id) || !implicit.has(id)) };
-          if (canonical(before) !== canonical(sharing))
+          // Selecting verified keys within existing owner access does not grant or revoke a permission.
+          const explicit = (sharing: typeof before) => ({ ...sharing,
+            readers: sharing.readers.filter(id => !implicit.has(id)),
+            authorities: sharing.authorities.filter(id => !implicit.has(id)) });
+          if (canonical(explicit(before)) !== canonical(explicit(after)))
             await this.resources.authorization.requireResource(actor, current, 'share', connection);
           sealed = true;
           const policyChanged = await hash(previous.content.policy) !== await hash(policy);

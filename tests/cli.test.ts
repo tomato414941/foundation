@@ -298,10 +298,12 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
 test('代理が持ち主の変数を保存すると信頼済みの別の代理が読み出しコマンドに渡す', async t => {
   const c = await cliFixture(); t.after(c.close);
   const owner = await c.person('Shared owner');
+  const unused = await c.person('Unused delegate');
   const writer = JSON.parse((await c.run(['init', '--name', 'Saving delegate', '--origin', c.origin])).stdout);
   const reader = JSON.parse((await c.run(['init', '--name', 'Reading delegate', '--origin', c.origin])).stdout);
   for (const identity of [writer, reader]) await c.context.relations.draw(owner.actor,
     { subjectId: identity.principal.id, relation: 'delegate', objectId: owner.actor.id });
+  await c.context.relations.draw(owner.actor, { subjectId: unused.actor.id, relation: 'delegate', objectId: owner.actor.id });
   for (const [actor, targets] of [[writer, [{ id: owner.actor.id, fingerprint: await fingerprint(owner.binding) },
     { id: reader.principal.id, fingerprint: reader.fingerprint }]], [reader, [
     { id: owner.actor.id, fingerprint: await fingerprint(owner.binding) }, { id: writer.principal.id, fingerprint: writer.fingerprint }]]] as const) {
@@ -312,6 +314,7 @@ test('代理が持ち主の変数を保存すると信頼済みの別の代理�
   }
   const kept = await c.run(['keep', 'Shared variable', '--principal', writer.principal.id, '--owner', owner.actor.id, '--stdin'], 'shared-secret-value');
   assert.equal(kept.code, 0, kept.stderr);
+  assert.match(kept.stderr, /Unused delegate/);
   const resource = JSON.parse(kept.stdout);
   const read = await c.run(['read', resource.id, '--principal', reader.principal.id]);
   assert.equal(read.code, 0, read.stderr);
@@ -323,7 +326,7 @@ test('代理が持ち主の変数を保存すると信頼済みの別の代理�
   assert.equal(executed.stdout, 'shared variable opened');
 });
 
-test('持ち主の別の代理の鍵を検証するようCLIで知らせてから信頼済みの相手に保存する', async t => {
+test('未検証の代理をCLIで知らせて保存し鍵を検証すると既存の項目を読み出しコマンドに渡す', async t => {
   const c = await cliFixture(); t.after(c.close);
   const owner = await c.person('Verification owner');
   const writer = JSON.parse((await c.run(['init', '--name', 'Saving delegate', '--origin', c.origin])).stdout);
@@ -333,16 +336,29 @@ test('持ち主の別の代理の鍵を検証するようCLIで知らせてか�
   const trusted = await c.run(['trust', owner.actor.id, '--principal', writer.principal.id, '--fingerprint', await fingerprint(owner.binding)]);
   assert.equal(trusted.code, 0, trusted.stderr);
   const save = () => c.run(['keep', 'Verified variable', '--principal', writer.principal.id, '--owner', owner.actor.id, '--stdin'], 'verified-value');
-  const refused = await save();
-  assert.equal(refused.code, 1);
-  assert.match(refused.stderr, /Unverified delegate/);
-  assert.ok(refused.stderr.includes(reader.principal.id));
-  assert.match(refused.stderr, /foundation trust/);
-  const verified = await c.run(['trust', reader.principal.id, '--principal', writer.principal.id, '--fingerprint', reader.fingerprint]);
-  assert.equal(verified.code, 0, verified.stderr);
   const kept = await save();
   assert.equal(kept.code, 0, kept.stderr);
-  const content = await c.context.custody.get(JSON.parse(kept.stdout).id);
+  const resource = JSON.parse(kept.stdout);
+  assert.match(kept.stderr, /Unverified delegate/);
+  assert.ok(kept.stderr.includes(reader.principal.id));
+  assert.match(kept.stderr, /public keys are not verified/);
+  assert.match(kept.stderr, /foundation trust/);
+  const writerTrusted = await c.run(['trust', writer.principal.id, '--principal', reader.principal.id, '--fingerprint', writer.fingerprint]);
+  assert.equal(writerTrusted.code, 0, writerTrusted.stderr);
+  const pending = await c.run(['read', resource.id, '--principal', reader.principal.id]);
+  assert.equal(pending.code, 1);
+  const verified = await c.run(['trust', reader.principal.id, '--principal', writer.principal.id, '--fingerprint', reader.fingerprint]);
+  assert.equal(verified.code, 0, verified.stderr);
+  assert.match(verified.stderr, /Encrypted 1 existing item/);
+  const read = await c.run(['read', resource.id, '--principal', reader.principal.id]);
+  assert.equal(read.code, 0, read.stderr);
+  assert.equal(read.stdout.trim(), 'verified-value');
+  const executed = await c.run(['exec', '--principal', reader.principal.id, '--inputs', JSON.stringify([
+    { name: 'RESTORED_VALUE', source: { id: resource.id } }]), '--', process.execPath, '-e',
+    "if(process.env.RESTORED_VALUE!=='verified-value')process.exit(1);process.stdout.write('restored value opened');"]);
+  assert.equal(executed.code, 0, executed.stderr);
+  assert.equal(executed.stdout, 'restored value opened');
+  const content = await c.context.custody.get(resource.id);
   assert.deepEqual(content.policy.readers.map(binding => binding.principalId).sort(),
     [owner.actor.id, writer.principal.id, reader.principal.id].sort());
 });

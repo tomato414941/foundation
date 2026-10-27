@@ -454,7 +454,7 @@ class BrowserTests(unittest.TestCase):
         pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
         self.assertEqual(pending, [])
 
-    def test_別の代理の未検証の公開鍵を確認してから持ち主の変数を保存する(self):
+    def test_未検証の代理を知らせて変数を保存し公開鍵の検証後に既存の値を開けるようにする(self):
         owner, principal = self.passkey_account("Variable owner")
         writer, saving = self.passkey_account("Saving delegate")
         peer, reading = self.passkey_account("Reading delegate")
@@ -470,13 +470,17 @@ class BrowserTests(unittest.TestCase):
         writer.get_by_role("textbox", name="名前", exact=True).fill("Peer variable")
         writer.get_by_role("textbox", name="値", exact=True).fill("peer value")
         writer.get_by_role("button", name="作成", exact=True).click()
-        expect(writer.get_by_text("暗号化する前に、次のプリンシパルの公開鍵を検証してください。", exact=True)).to_be_visible()
+        expect(writer.get_by_role("heading", name="Peer variable", exact=True)).to_be_visible()
+        saved_url = writer.url
+        expect(writer.get_by_text("保存しました。次の代理は暗号化の対象に含めていません。公開鍵を検証してから利用できます。", exact=True)).to_be_visible()
         link = writer.get_by_role("link", name="Reading delegateの公開鍵を検証", exact=True)
         expect(link).to_have_attribute("href", "/account/trust?principal=" + reading["id"])
-        expect(writer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
+        expect(writer.get_by_text("公開鍵をまだ検証していません。", exact=True)).to_be_visible()
+        pending = peer.request.get(ORIGIN + "/api/resources/" + saved_url.rsplit("/", 1)[1] + "/custody")
+        self.assertEqual(pending.status, 403)
         writer.screenshot(path=str(ARTIFACTS / "delegate-variable-verification-ja.png"), full_page=True)
         self.select(writer, "言語", "English")
-        expect(writer.get_by_text("Verify the public keys of these principals before encrypting the items.", exact=True)).to_be_visible()
+        expect(writer.get_by_text("Saved. These delegates were excluded from encryption. Verify their public keys to let them open this item.", exact=True)).to_be_visible()
         expect(writer.get_by_role("link", name="Verify the public key of Reading delegate", exact=True)).to_be_visible()
         self.select(writer, "Language", "日本語")
         with writer.expect_popup() as popup:
@@ -487,10 +491,10 @@ class BrowserTests(unittest.TestCase):
         verification.get_by_role("button", name="公開鍵の検証", exact=True).click()
         expect(verification.get_by_text("Reading delegateの公開鍵を検証しました。", exact=True)).to_be_visible()
         verification.close()
-        writer.get_by_role("button", name="作成", exact=True).click()
+        writer.reload()
         expect(writer.get_by_role("heading", name="Peer variable", exact=True)).to_be_visible()
         self.trust(peer, writer, saving)
-        peer.goto(writer.url)
+        peer.goto(saved_url)
         peer.get_by_role("button", name="内容を表示", exact=True).click()
         expect(peer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
 

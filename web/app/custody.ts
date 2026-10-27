@@ -8,7 +8,7 @@ import { RemoteFlowStore } from '../../shared/operation-continuations';
 import { ExecutionClient } from '../../shared/execution-client';
 import { FunctionClient } from '../../shared/function-client';
 import { api, ApiFailure, session } from './api';
-import { getIdentity } from './keys';
+import { getIdentity, rememberRecipientAccess } from './keys';
 import { stored } from './storage';
 
 class BrowserTrust implements TrustStore {
@@ -59,7 +59,7 @@ export async function custodyClient(principalId?: string) {
   if (!identity) throw new ApiFailure('key_locked');
   const trust = new BrowserTrust(identity.binding, identity.keys);
   return new CustodyClient({ json: (path, options, schema) => api(path.slice(4), options, schema) },
-    location.origin, identity.binding, identity.keys, trust);
+    location.origin, identity.binding, identity.keys, trust, access => rememberRecipientAccess(id, access));
 }
 export async function connectionClient() {
   const custody = await custodyClient();

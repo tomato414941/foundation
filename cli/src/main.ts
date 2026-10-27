@@ -469,6 +469,14 @@ async function main(argv: string[]) {
         next: 'Verify this fingerprint with the identity holder, then repeat with --fingerprint.' }, args);
     } else {
       const identity = await custody.trustIdentity(id, args.values.fingerprint);
+      try {
+        const { done, failed } = await custody.reprotectPending();
+        if (done.length) process.stderr.write('Encrypted ' + done.length + ' existing item(s) for their verified recipients.\n');
+        if (failed.length) process.stderr.write(failed.length + ' item(s) still need an access update; run trust again after verifying the remaining keys or resolving the item errors.\n');
+      } catch (error) {
+        process.stderr.write('The public keys are verified, but existing items could not be updated: ' +
+          (error instanceof Error ? error.message : String(error)) + '\nRun trust again to retry the update.\n');
+      }
       await output({ identityId: id, fingerprint: identity.fingerprint, trusted: true }, args);
     }
     return 0;
