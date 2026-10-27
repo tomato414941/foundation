@@ -6,6 +6,28 @@ import { decode, encode } from '../shared/encryption.js';
 
 const minutes = (count: number) => new Date(Date.now() + count * 60_000).toISOString();
 
+test('委任先が64件の項目を開けるように暗号化し直す間の進捗を通知する', async (t) => {
+  const f = await flowFixture();
+  t.after(f.close);
+  const delegate = await f.person('Progress delegate');
+  await f.client.trust.rememberBinding(delegate.binding);
+  const saved = await Promise.all(Array.from({ length: 63 }, async (_, index) => f.client.save('Progress ' + index,
+    encode('value ' + index), await f.client.policy(f.owner.actor.id, ContentTypes.value))));
+  await f.client.api.json('/api/relations', { method: 'POST', body: {
+    subjectId: delegate.actor.id, relation: 'delegate', objectId: f.owner.actor.id } });
+
+  const progress: Array<{ completed: number; total: number }> = [];
+  const result = await f.client.reprotectPending(value => progress.push(value));
+  assert.equal(progress.length, 65);
+  assert.deepEqual(progress[0], { completed: 0, total: 64 });
+  assert.deepEqual(progress[12], { completed: 12, total: 64 });
+  assert.deepEqual(progress[64], { completed: 64, total: 64 });
+  assert.deepEqual(result, { done: [f.resource.id, ...saved.map(item => item.id)].sort(), failed: [] });
+  assert.deepEqual(await f.client.pendingProtection(), []);
+  const shared = await f.custody.read(delegate.actor, saved[62]!.id);
+  assert.equal(decode(await reveal(shared.content, delegate.binding, delegate.keys.encryption)), 'value 62');
+});
+
 test('期限の切れた許可が残る項目を待ち行列に示し、所有者の端末がその許可を外して封じ直す', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
@@ -106,7 +128,10 @@ test('トークン更新中の項目があっても委任先の線を引け、�
     [crypto.randomUUID(), busy.id, f.owner.actor.id]);
   await f.client.api.json('/api/relations', { method: 'POST', body: { subjectId: ai.actor.id, relation: 'delegate', objectId: f.owner.actor.id } });
 
-  assert.deepEqual(await f.client.reprotectPending(), { done: [f.resource.id], failed: [{ id: busy.id, code: 'connection_busy' }] });
+  const progress: Array<{ completed: number; total: number }> = [];
+  assert.deepEqual(await f.client.reprotectPending(value => progress.push(value)),
+    { done: [f.resource.id], failed: [{ id: busy.id, code: 'connection_busy' }] });
+  assert.deepEqual(progress, [{ completed: 0, total: 2 }, { completed: 1, total: 2 }, { completed: 2, total: 2 }]);
   assert.equal(decode(await reveal((await f.custody.read(ai.actor, f.resource.id)).content, ai.binding, ai.keys.encryption)).length > 0, true);
   await assert.rejects(f.custody.read(ai.actor, busy.id), { code: 'forbidden' });
   assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [busy.id]);

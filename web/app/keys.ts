@@ -12,7 +12,7 @@ import { base64url, decode, encode, hold, newEncryptionKey, open, unbase64url, u
 import { Session } from '../../shared/session';
 import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
-import { api, ApiFailure, session } from './api';
+import { api, ApiFailure, errorCode, session } from './api';
 import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
@@ -79,26 +79,56 @@ async function keep(id: string, keys: IdentityKeys) {
   unlocked.set(id, keys);
   reprotectInBackground(id);
 }
-// How many items this browser last sealed again for a principal, and those it could not, by name, and why.
-export type Resealing = { done: number; failed: Array<{ id: string; name: string | null; code: string }> };
+export type Resealing = {
+  requestId?: string;
+  running: boolean;
+  completed: number;
+  total: number | null;
+  done: number;
+  failed: Array<{ id: string; name: string | null; code: string }>;
+  error: string | null;
+};
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
 // One pass at a time for each principal: a pass asked for while another runs starts after it, so that the two never
 // seal the same item at once. An operation that opens the private key starts one in the background and then its own.
 const passes = new Map<string, Promise<Resealing | null>>();
-function reseal(id: string) {
-  const pass = (passes.get(id) ?? Promise.resolve(null)).catch(() => null).then(() => sealPending(id));
+function reseal(id: string, requestId?: string) {
+  let state: Resealing = { requestId, running: true, completed: 0, total: null, done: 0, failed: [], error: null };
+  const publish = (change: Partial<Resealing>) => {
+    const previous = state;
+    state = { ...state, ...change };
+    // A newer queued pass owns the notice while it waits; an older pass must not overwrite it.
+    if (resealing.get(id) !== previous) return;
+    resealing.set(id, state);
+    for (const notify of watching) notify();
+  };
+  resealing.set(id, state);
+  for (const notify of watching) notify();
+  const pass = (passes.get(id) ?? Promise.resolve(null)).catch(() => null).then(async () => {
+    try {
+      if (!(await getIdentity(id))) {
+        publish({ running: false, error: requestId ? 'key_locked' : null });
+        return requestId ? state : null;
+      }
+      const { custodyClient } = await import('./custody');
+      const client = await custodyClient(id);
+      const { done, failed } = await client.reprotectPending(publish);
+      publish({ done: done.length });
+      // A pass may leave an item unchanged, for example while its producer runs or a reader's keys await verification.
+      // Check what still needs updating before reporting that everyone can open their items.
+      const pending = await client.pendingProtection();
+      const pendingIds = new Set(pending.map(item => item.id));
+      const remaining = await Promise.all(pending.map(async item => ({ id: item.id,
+        code: failed.find(failure => failure.id === item.id)?.code ?? 'resealing_deferred',
+        name: await api('/resources/' + item.id, {}, Resource).then(resource => resource.name, () => null) })));
+      publish({ running: false, done: done.filter(item => !pendingIds.has(item)).length, failed: remaining });
+    } catch (error) {
+      publish({ running: false, error: errorCode(error) });
+    }
+    return state;
+  });
   passes.set(id, pass);
   return pass;
-}
-async function sealPending(id: string) {
-  if (!(await getIdentity(id))) return null;
-  const { custodyClient } = await import('./custody');
-  const { done, failed } = await (await custodyClient(id)).reprotectPending();
-  const outcome = { done: done.length, failed: await Promise.all(failed.map(async item => ({ ...item,
-    name: await api('/resources/' + item.id, {}, Resource).then(resource => resource.name, () => null) }))) };
-  resealing.set(id, outcome);
-  for (const notify of watching) notify();
-  return outcome;
 }
 // Whenever this browser holds a principal's keys, it seals again the items the server lists as
 // needing it. Each principal is handled once per page load, so an item left now is tried again next time.
@@ -106,15 +136,15 @@ const reprotecting = new Set<string>();
 export function reprotectInBackground(id: string) {
   if (reprotecting.has(id)) return;
   reprotecting.add(id);
-  void reseal(id).then(outcome => { if (!outcome) reprotecting.delete(id); }, (error: unknown) => {
+  void reseal(id).then(outcome => { if (!outcome || outcome.error) reprotecting.delete(id); }, (error: unknown) => {
     reprotecting.delete(id);
     console.warn('The items to seal again could not be checked.', error);
   });
 }
 // Seals the items again at once, as after a line changes who may open them.
-export async function resealNow(id: string) {
+export async function resealNow(id: string, requestId?: string) {
   reprotecting.add(id);
-  return reseal(id);
+  return reseal(id, requestId);
 }
 export function useResealing(id: string | undefined) {
   return useSyncExternalStore(notify => { watching.add(notify); return () => watching.delete(notify); },

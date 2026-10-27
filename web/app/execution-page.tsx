@@ -10,7 +10,7 @@ import type { DefinitionCall, ExecutionView } from '../../shared/executions';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, holdingKeys, session } from './api';
 import { connectionClient, custodyClient, executionClient } from './custody';
-import { getIdentity, requireKeys, resealNow } from './keys';
+import { getIdentity, requireKeys, resealNow, useResealing } from './keys';
 import { ResealingNotice } from './resealing-notice';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
@@ -171,7 +171,6 @@ export async function clientAction({ params, request }: PageArgs) {
     if (current || linked || intent === 'approve' && resealing(item)) await requireKeys(approverId);
     const data = current ? await loadExecutionForm(current.invocation) : null;
     const prepared = data ? executionSubmission(data, form) : null;
-    let resealed = 0;
     if (intent === 'approve') {
       if (!linked && !account.requestId && await unverifiedSubject(item, approverId, params.id!))
         throw new ApiFailure('identity_untrusted');
@@ -186,7 +185,7 @@ export async function clientAction({ params, request }: PageArgs) {
       await api(path + (requestMode ? '/approve' : '/respond'), { method: 'POST',
         body: { values, configuration: choices, code: formText(form, 'code') || undefined } });
       sessionStorage.removeItem('foundation.fingerprint.request.' + params.id);
-      if (resealing(item)) resealed = (await resealNow(approverId))?.done ?? 0;
+      if (resealing(item)) await resealNow(approverId, params.id!);
       item = await readItem(params.id!, requestMode);
     } else if (prepared && current) await (await executionClient()).configure(item.id, configuration(current.invocation, prepared.input, item.operations[current.index]!.configure));
     if (item.waiting && prepared) {
@@ -197,13 +196,16 @@ export async function clientAction({ params, request }: PageArgs) {
           return redirectDocument(progress.url);
       }
     }
-    return { ...(await readItem(params.id!, requestMode)), resealed };
+    return readItem(params.id!, requestMode);
   });
 }
 export default function ExecutionPage() {
   const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, details, unverified } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
+  const pageId = requestMode ? item.delivery?.id ?? item.id : item.id;
+  const sealing = useResealing(account.principal?.id);
+  const approvalAccepted = pending && navigation.state !== 'idle' && sealing?.requestId === pageId;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
   const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
   const needsKeys = !!current && !!account.requestId;
@@ -232,7 +234,7 @@ export default function ExecutionPage() {
     if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle') void revalidator.revalidate();
   }, [account.requestId, root?.requestId, revalidator]);
   usePolling(pending, progress?.kind === 'pending' || progress?.kind === 'authorize' ? 2000 : 5000);
-  const form = (showSteps || item.state === 'failed' && item.canRespond) && <Form method="post">
+  const form = !approvalAccepted && (showSteps || item.state === 'failed' && item.canRespond) && <Form method="post">
     <div className="flex min-w-0 flex-col gap-6">
       {!item.proposal && (pending || item.operations.length > 1) && item.operations.map((operation, index) => {
         const privateOperation = operation.execution === 'keyholder';
@@ -295,7 +297,7 @@ export default function ExecutionPage() {
     {!pending && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
       connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
     } /></p>}
-    {pending && !progress && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{
+    {pending && !approvalAccepted && !progress && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{
       item.wait === 'execution' ? <State value="running" /> : t('requestWaitingForRecipient')
     }</p>}
   </>;
@@ -318,9 +320,8 @@ export default function ExecutionPage() {
   </>;
   return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
-    {result && 'resealed' in result && result.resealed > 0 && <Notice tone="success">{t('resealed', { count: result.resealed })}</Notice>}
-    {!focusedConnection && <ResealingNotice principalId={account.principal?.id} />}
-    {recipientRequest ? <Panel>{requestSummary}{form}{output}</Panel> : <>
+    {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
+    {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}</Panel> : <>
       <Panel>
         <Detail label={t('status')}><State value={requestMode ? item.delivery!.state : item.state} /></Detail>
         {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}

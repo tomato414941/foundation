@@ -335,15 +335,19 @@ export class CustodyClient {
     return this.save(resource.name, bytes, next, { metadata: previous.content.metadata, previous });
   }
   // Seals each listed item again on its own: one that cannot change now is left, with the reason, for another time.
-  async reprotectPending() {
+  async reprotectPending(onProgress?: (progress: { completed: number; total: number }) => void) {
     const done: string[] = [], failed: Array<{ id: string; code: string }> = [];
-    for (const item of await this.pendingProtection()) {
+    const items = await this.pendingProtection();
+    let completed = 0;
+    onProgress?.({ completed, total: items.length });
+    for (const item of items) {
       try {
         if (await this.reprotect(item.id, item.reason, item.remove)) done.push(item.id);
       } catch (error) {
         failed.push({ id: item.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
           ? error.code : 'failure' });
       }
+      onProgress?.({ completed: ++completed, total: items.length });
     }
     return { done, failed };
   }

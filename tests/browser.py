@@ -304,13 +304,154 @@ class BrowserTests(unittest.TestCase):
             owner.goto(url)
             owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_role("status")).to_have_text("完了")
-            expect(owner.get_by_text("開ける相手の変更を、1件の項目に反映しました。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-sealed-ja.png"), full_page=True)
             owner.goto(ORIGIN + "/account")
             expect(owner.get_by_text(agent["principal"]["id"], exact=True)).to_be_visible()
             owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
             cli("trust", principal["id"], "--fingerprint", owner_fingerprint)
             self.assertEqual(cli("read", variable_id), "linked-variable-value")
+
+    def test_委任の承認後に項目の暗号化の進捗を確認して完了する(self):
+        owner, principal = self.passkey_account("Progress owner")
+        delegate, recipient = self.passkey_account("Progress delegate")
+        self.trust(owner, delegate, recipient)
+        self.trust(delegate, owner, principal)
+        paths = [self.variable(owner, principal, "Progress variable " + str(index), "progress value " + str(index)) for index in range(3)]
+        ids = sorted(path.rsplit("/", 1)[1] for path in paths)
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
+            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
+        ]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        owner.goto(response.json()["url"])
+        held = []
+        pattern = "**/api/resources/" + ids[1] + "/custody"
+        def hold_write(route):
+            if route.request.method == "PUT":
+                held.append(route)
+            else:
+                route.continue_()
+        owner.route(pattern, hold_write)
+        with owner.expect_request(lambda request: request.method == "PUT" and request.url.endswith("/" + ids[1] + "/custody")):
+            owner.get_by_role("button", name="承認", exact=True).click()
+        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
+        expect(notice.get_by_text("承認しました", exact=True)).to_be_visible()
+        expect(notice.get_by_text("許可された相手が項目を開けるよう、このブラウザで暗号化し直しています。", exact=True)).to_be_visible()
+        expect(notice.get_by_text("1 / 3件を処理", exact=True)).to_be_visible()
+        expect(notice.get_by_role("progressbar")).to_have_attribute("aria-valuetext", "1 / 3件を処理")
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-progress-ja.png"), full_page=True)
+        self.select(owner, "言語", "English")
+        english = owner.get_by_role("region", name="Item encryption", exact=True)
+        expect(english.get_by_text("1 / 3 items processed", exact=True)).to_be_visible()
+        expect(english.get_by_text("This browser is encrypting the items again so the permitted recipients can open them.", exact=True)).to_be_visible()
+        self.select(owner, "Language", "日本語")
+        owner.set_viewport_size({"width": 390, "height": 844})
+        expect(notice.get_by_text("1 / 3件を処理", exact=True)).to_be_visible()
+        self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 390)
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-progress-mobile-ja.png"), full_page=True)
+        self.assertEqual(len(held), 1)
+        held[0].continue_()
+        owner.unroute(pattern, hold_write)
+        expect(notice.get_by_text("3件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
+        expect(owner.get_by_role("status")).to_have_text("完了")
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-complete-mobile-ja.png"), full_page=True)
+        delegate.goto(paths[0])
+        delegate.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(delegate.get_by_role("textbox", name="値", exact=True)).to_have_value("progress value 0")
+
+    def test_委任の承認後に暗号化できなかった項目の理由を確認して残りを再試行する(self):
+        owner, principal = self.passkey_account("Retry owner")
+        delegate, recipient = self.passkey_account("Retry delegate")
+        self.trust(owner, delegate, recipient)
+        self.trust(delegate, owner, principal)
+        paths = [self.variable(owner, principal, "Retry variable " + str(index), "retry value " + str(index)) for index in range(2)]
+        blocked = paths[0].rsplit("/", 1)[1]
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
+            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
+        ]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        owner.goto(response.json()["url"])
+        def busy(route):
+            if route.request.method == "PUT":
+                route.fulfill(status=409, json={"error": {"code": "connection_busy"}})
+            else:
+                route.continue_()
+        pattern = "**/api/resources/" + blocked + "/custody"
+        owner.route(pattern, busy)
+        owner.get_by_role("button", name="承認", exact=True).click()
+        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
+        expect(notice.get_by_text("1件の項目を暗号化し直しました。", exact=True)).to_be_visible()
+        expect(notice.get_by_text("1件は、開ける相手の変更をまだ反映できていません。下の理由に沿って対処し、残りを再試行してください。", exact=True)).to_be_visible()
+        expect(notice.get_by_role("listitem")).to_have_text("Retry variable 0：トークンを更新中です。更新が終わってから再試行してください。")
+        expect(notice.get_by_text("承認し直す必要はありません。", exact=True)).to_be_visible()
+        expect(owner.get_by_role("status")).to_have_text("完了")
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-partial-ja.png"), full_page=True)
+        delegate.goto(paths[1])
+        delegate.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(delegate.get_by_role("textbox", name="値", exact=True)).to_have_value("retry value 1")
+        response = delegate.request.get(ORIGIN + "/api/resources/" + blocked + "/custody")
+        self.assertEqual(response.status, 403)
+        owner.unroute(pattern, busy)
+        notice.get_by_role("button", name="残りを再試行", exact=True).click()
+        expect(notice.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-retried-ja.png"), full_page=True)
+        delegate.goto(paths[0])
+        delegate.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(delegate.get_by_role("textbox", name="値", exact=True)).to_have_value("retry value 0")
+
+    def test_委任を承認した後に項目の確認が失敗しても承認を保ったまま再試行する(self):
+        owner, principal = self.passkey_account("Check owner")
+        delegate, recipient = self.passkey_account("Check delegate")
+        self.trust(owner, delegate, recipient)
+        self.variable(owner, principal, "Check variable", "check value")
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
+            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
+        ]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        owner.goto(response.json()["url"])
+        pattern = "**/api/principals/" + principal["id"] + "/reprotection"
+        owner.route(pattern, lambda route: route.abort())
+        owner.get_by_role("button", name="承認", exact=True).click()
+        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
+        expect(notice.get_by_text("承認しました", exact=True)).to_be_visible()
+        expect(notice.get_by_text("項目の更新を完了できませんでした。理由を確認して再試行してください。", exact=True)).to_be_visible()
+        expect(notice.get_by_text("接続できませんでした。通信状態を確認してください。", exact=True)).to_be_visible()
+        expect(notice.get_by_text("承認し直す必要はありません。", exact=True)).to_be_visible()
+        relations = owner.request.get(ORIGIN + "/api/relations?object=" + principal["id"] + "&relation=delegate").json()["items"]
+        self.assertIn(recipient["id"], [item["subjectId"] for item in relations])
+        owner.unroute(pattern)
+        notice.get_by_role("button", name="残りを再試行", exact=True).click()
+        expect(notice.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
+        pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
+        self.assertEqual(pending, [])
+
+    def test_未検証の委任先が残る項目を更新待ちとして表示し公開鍵を検証して更新する(self):
+        owner, principal = self.passkey_account("Pending owner")
+        delegate, recipient = self.passkey_account("Verified delegate")
+        other, unverified = self.passkey_account("Unverified delegate")
+        self.trust(owner, delegate, recipient)
+        self.variable(owner, principal, "Pending variable", "pending value")
+        response = owner.request.post(ORIGIN + "/api/relations", data={
+            "subjectId": unverified["id"], "relation": "delegate", "objectId": principal["id"]
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
+            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
+        ]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        owner.goto(response.json()["url"])
+        owner.get_by_role("button", name="承認", exact=True).click()
+        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
+        expect(notice.get_by_text("1件は、開ける相手の変更をまだ反映できていません。下の理由に沿って対処し、残りを再試行してください。", exact=True)).to_be_visible()
+        expect(notice.get_by_role("listitem")).to_have_text("Pending variable：公開鍵の検証待ち、または利用中の処理の終了待ちです。未検証の公開鍵があれば検証し、利用中の処理があれば終了後に再試行してください。")
+        expect(notice.get_by_text("承認し直す必要はありません。", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-deferred-ja.png"), full_page=True)
+        verifier = owner.context.new_page()
+        self.trust(verifier, other, unverified)
+        notice.get_by_role("button", name="残りを再試行", exact=True).click()
+        expect(notice.get_by_text("更新が必要な項目はありません。追加の操作は不要です。", exact=True)).to_be_visible()
+        pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
+        self.assertEqual(pending, [])
 
     def test_委任リクエストの作成元と承認するプリンシパルを確認する(self):
         sender, _ = self.passkey_account("Delegation requester")
