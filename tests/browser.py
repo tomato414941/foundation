@@ -2171,7 +2171,7 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("link", name=names[-1], exact=True).click()
         expect(receiver.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
 
-    def test_モバイルでメール認証するとパスキーの登録を求め英語表示へ切り替える(self):
+    def test_モバイルでメール認証してアカウントを作成するとパスキーの登録を求め英語表示へ切り替える(self):
         page = self.page(webkit=True, mobile=True)
         address = "mobile-" + uuid.uuid4().hex[:8] + "@example.com"
         page.goto(ORIGIN + "/signin")
@@ -2181,6 +2181,9 @@ class BrowserTests(unittest.TestCase):
         link = page.request.get(ORIGIN + "/__test/mail/" + address).json()["link"]
         page.goto(link)
         page.get_by_role("button", name="メールを確認して続ける", exact=True).click()
+        expect(page.get_by_text(f"{address} のアカウントはまだありません。新しく作りますか？", exact=True)).to_be_visible()
+        expect(page.get_by_role("textbox", name="名前", exact=True)).to_have_value(address.split("@")[0])
+        page.get_by_role("button", name="アカウントを作成", exact=True).click()
         page.wait_for_url("**/keys?**")
         expect(page.get_by_role("button", name="パスキーを追加", exact=True)).to_be_visible()
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)

@@ -264,6 +264,10 @@ const words: Record<string, [string, string]> = {
   emailVerify: ['メールアドレスを確認', 'Verify email address'],
   emailContinue: ['メールを確認して続ける', 'Verify and continue'],
   emailInvalid: ['メールに記載されたリンクを開いてください。', 'Open the link in your email.'],
+  emailNotRegistered: [
+    '{{email}} のアカウントはまだありません。新しく作りますか？',
+    'There is no account for {{email}} yet. Do you want to create one?',
+  ],
   or: ['または', 'or'],
   name: ['名前', 'Name'],
   create: ['作成', 'Create'],

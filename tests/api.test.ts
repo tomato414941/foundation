@@ -264,7 +264,7 @@ test('MCPで初期化し、認証したプリンシパルとして共通APIを�
   assert.equal(JSON.parse(result.json().result.content[0].text).body.principal.id, owner.actor.id);
 });
 
-test('メールの確認でセッションを開始し、同一オリジンの操作を受け入れる', async (t) => {
+test('メールの確認後にアカウントを作成してセッションを開始し、同一オリジンの操作を受け入れる', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
     app = await buildApp(context);
@@ -285,7 +285,15 @@ test('メールの確認でセッションを開始し、同一オリジンの�
     payload: { challengeId: fragment.get('challenge'), token: fragment.get('token') },
   });
   assert.equal(signed.statusCode, 200, signed.body);
-  const cookie = signed.cookies.find((cookie) => cookie.name === 'foundation_session')!;
+  assert.equal(signed.cookies.some((cookie) => cookie.name === 'foundation_session'), false);
+  assert.equal(signed.json().email, 'api@example.com');
+  const registered = await app.inject({
+    method: 'POST',
+    url: '/api/auth/email/register',
+    payload: { proof: signed.json().registrationProof, name: 'API person' },
+  });
+  assert.equal(registered.statusCode, 200, registered.body);
+  const cookie = registered.cookies.find((cookie) => cookie.name === 'foundation_session')!;
   assert.ok(cookie);
   const headers = { cookie: cookie.name + '=' + cookie.value };
   const session = await app.inject({ url: '/api/session', headers });
