@@ -3,15 +3,14 @@ import { Notice } from '../components';
 import { Form, redirect, useLoaderData, useActionData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource-transfer';
-import { Resource, listOf } from '../../../shared/contracts';
-import { BoundRecipient } from '../../../shared/protocol';
-import { verifyBinding } from '../../../shared/authority';
-import { isProtected } from '../../../shared/protected';
-import { Changed, actionResult, api, formText } from '../api';
+import { Resource } from '../../../shared/contracts';
+import { IdentityVerificationRequired } from '../../../shared/client';
+import { actionResult, api, formText } from '../api';
 import { custodyClient } from '../custody';
 import { requireKeys } from '../keys';
 import { ErrorNotice, Page, SaveBar } from '../components';
 import { resourcePath } from '../navigation';
+import { RecipientVerificationLinks } from '../recipient-verification';
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   return api('/resources/' + params.id, {}, Resource);
 }
@@ -19,24 +18,13 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   return actionResult(async () => {
     const form = await request.formData();
     const to = formText(form, 'to');
-    const resource = await api('/resources/' + params.id, {}, Resource);
-    if (isProtected(resource.kind)) {
-      await requireKeys();
-      const client = await custodyClient(), previous = await client.read(resource.id);
-      const recipients = await api(
-        `/resources/${resource.id}/transfer-recipients?to=${encodeURIComponent(to)}`,
-        {},
-        listOf(BoundRecipient),
-      );
-      for (const { name: _name, ...item } of recipients.items) { await verifyBinding(item); await client.trusted(item.binding); }
-      const readers = recipients.items.map(item => item.binding);
-      const policy = { ...previous.content.policy, ownerId: to, revision: previous.content.policy.revision + 1,
-        readers, authorities: readers, grants: [], observers: [], producers: [] };
-      const passed = await client.pass(resource.name, await client.reveal(resource.id), policy, previous);
-      if (!('kind' in passed)) return redirect(passed.url);
-    } else {
-      const changed = await api('/resources/' + resource.id + '/transfer', { method: 'POST', body: { to } }, Changed);
-      if ('id' in changed) return redirect(changed.url);
+    await requireKeys();
+    try {
+      const changed = await (await custodyClient()).transfer(params.id, to);
+      if ('url' in changed) return redirect(changed.url);
+    } catch (error) {
+      if (error instanceof IdentityVerificationRequired) return { error: error.code, verification: [error.recipient] };
+      throw error;
     }
     return redirect(`/p/${params.owner}/${params.section}`);
   });
@@ -44,10 +32,12 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
 export default function Transfer() {
   const item = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
+  const verification = result && 'verification' in result ? result.verification : [];
   const { t } = useTranslation();
   return (
     <Page title={t('transfer') + ' — ' + item.name} narrow>
-      <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      {verification.length ? <Notice tone="warning"><RecipientVerificationLinks recipients={verification} /></Notice>
+        : <ErrorNotice error={result && 'error' in result ? result.error : null} />}
       <Notice tone={'info'}>{t('transferHelp')}</Notice>
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">

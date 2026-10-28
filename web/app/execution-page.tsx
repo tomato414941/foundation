@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
+import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useLocation, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowUpRight } from 'lucide-react';
 import type { clientLoader as rootLoader } from './root';
@@ -12,6 +12,7 @@ import { actionResult, api, ApiFailure, errorCode, formText, holdingKeys, sessio
 import { connectionClient, custodyClient, executionClient } from './custody';
 import { getIdentity, requireKeys, resealNow, useResealing } from './keys';
 import { ResealingNotice } from './resealing-notice';
+import { RecipientAccessNotice } from './recipient-verification';
 import { loadExecutionForm, ExecutionInputFields, executionSubmission } from './execution-form';
 import { ConnectionProgress } from './connection-progress';
 import { ConnectionUsers } from './connection-users';
@@ -165,7 +166,8 @@ export async function clientAction({ params, request }: PageArgs) {
     }
     const account = await session(), approverId = account.principal!.id, current = inputOperation(item, approverId);
     // Approving with the fingerprint the requester linked first verifies its public key, for each of the approver's devices.
-    const linked = intent === 'approve' ? sessionStorage.getItem('foundation.fingerprint.request.' + params.id) : null;
+    const linked = intent === 'approve' ? new URLSearchParams(window.location.hash.slice(1)).get('fingerprint')
+      ?? sessionStorage.getItem('foundation.fingerprint.request.' + params.id) : null;
     // Entering input, verifying a public key, and sealing items again for a changed line all use the private key, so a
     // passkey opens it first when this browser does not hold it, before anything is answered.
     if (current || linked || intent === 'approve' && resealing(item)) await requireKeys(approverId);
@@ -204,6 +206,10 @@ export default function ExecutionPage() {
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const pageId = requestMode ? item.delivery?.id ?? item.id : item.id;
+  const location = useLocation();
+  const fingerprint = new URLSearchParams(location.hash.slice(1)).get('fingerprint')
+    ?? sessionStorage.getItem('foundation.fingerprint.request.' + pageId);
+  const shareUrl = item.url + (fingerprint ? '#fingerprint=' + encodeURIComponent(fingerprint) : '');
   const sealing = useResealing(account.principal?.id);
   const approvalAccepted = pending && navigation.state !== 'idle' && sealing?.requestId === pageId;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
@@ -320,6 +326,7 @@ export default function ExecutionPage() {
   </>;
   return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
+    <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
     {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}</Panel> : <>
       <Panel>
@@ -333,8 +340,8 @@ export default function ExecutionPage() {
         {item.proposal ? <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p> :
           (item.message || requestMode) && <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>}
         {item.code && <Detail label={t('code')}>{item.code}<Copy value={item.code} /></Detail>}
-        {requester && pending && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(item.url).pathname}>{item.url}</Link><Copy value={item.url} /></Detail>}
-        {item.delivery && <Detail label={t(requestMode ? 'execution' : 'requests')}><Link className="underline underline-offset-4" to={(requestMode ? '/executions/' + item.id : '/requests/' + item.delivery.id)}>{t(requestMode ? 'executionOpen' : 'requestOpen')}</Link></Detail>}
+        {requester && pending && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(shareUrl).pathname + new URL(shareUrl).hash}>{item.url}</Link><Copy value={shareUrl} /></Detail>}
+        {item.delivery && <Detail label={t(requestMode ? 'execution' : 'requests')}><Link className="underline underline-offset-4" to={(requestMode ? '/executions/' + item.id : '/requests/' + item.delivery.id) + new URL(shareUrl).hash}>{t(requestMode ? 'executionOpen' : 'requestOpen')}</Link></Detail>}
       </Panel>
       {form}
       {output && <Panel title={t('result')}>

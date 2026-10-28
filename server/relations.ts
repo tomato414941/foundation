@@ -208,7 +208,12 @@ export class Relations {
     await this.principals.get(to);
     if ('kind' in item) {
       if (isProtected(item.kind))
-        fail(409, 'rekey_required', 'Encrypt this item for its new owner before transferring it.');
+        fail(409, 'rekey_required', 'Verify the new owner\'s public keys and re-encrypt this item on your device, then submit to, version, and content to this endpoint. ' +
+          'Use foundation transfer ' + id + ' --to ' + to + ' to do this automatically.', {
+          content: { method: 'GET', path: '/api/resources/' + id + '/custody' },
+          recipients: { method: 'GET', path: '/api/resources/' + id + '/transfer-recipients?to=' + to },
+          submit: { method: 'POST', path: '/api/resources/' + id + '/transfer', fields: ['to', 'version', 'content'] },
+        });
       if (item.kind === 'environment')
         fail(400, 'not_transferable', 'An environment stays with the principal that created it.');
     }

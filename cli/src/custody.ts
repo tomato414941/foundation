@@ -24,9 +24,11 @@ export function privateClient(client: Client) {
     for (const recipient of access.excluded) {
       if (notified.has(recipient.id)) continue;
       notified.add(recipient.id);
-      process.stderr.write('foundation: ' + recipient.name + ' (' + recipient.id + ') cannot open the saved item: ' +
+      process.stderr.write('foundation: ' + recipient.name + ' (' + recipient.id + ') cannot open ' +
+        (access.operation === 'transfer' ? 'the item after the transfer: ' : 'the saved item: ') +
         (recipient.code === 'identity_changed' ? 'the previously verified public keys changed.' : 'its public keys are not verified by this identity.') +
-        '\nVerify the fingerprint with this principal, then run foundation trust ' + recipient.id +
+        (access.operation === 'transfer' ? '\nAfter acceptance, the recipient can verify this delegate\'s fingerprint and run foundation trust '
+          : '\nVerify the fingerprint with this principal, then run foundation trust ') + recipient.id +
         ' --fingerprint <verified-fingerprint> to encrypt existing items for it.\n');
     }
   });

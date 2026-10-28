@@ -5,6 +5,7 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
+import { TransferRecipients } from '../shared/protocol.js';
 
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
@@ -111,13 +112,13 @@ export async function routesResources(app: ApiApp, context: Context) {
       schema: {
         params: C.IdParams,
         querystring: z.object({ to: C.Id }),
-        response: { 200: C.listOf(C.Recipient) },
+        response: { 200: TransferRecipients },
       },
     },
     async (request) => {
       await authorization.requireResource(actor(request), await resources.get(request.params.id), 'transfer');
       await context.principals.get(request.query.to);
-      return { items: await resources.recipients(request.query.to), next: null };
+      return { required: await context.custody.required(request.query.to), delegates: await context.custody.delegates(request.query.to) };
     },
   );
   app.get(

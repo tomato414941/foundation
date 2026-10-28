@@ -12,7 +12,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, Operations, protect } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, Operations, protect, reveal } from '../shared/custody.js';
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 async function cliFixture(environmentOverrides: Record<string, string> = {}, bundleDirectory = resolve('cli/dist')) {
@@ -500,6 +500,41 @@ test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端�
   ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '[redacted]');
+});
+
+test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取り承認後に利用できるようにする', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Machine sender', '--origin', c.origin])).code, 0);
+  const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
+  const recipient = await c.person('Connection recipient'), unknown = await c.person('Unverified delegate');
+  await c.context.relations.draw(recipient.actor, { subjectId: unknown.actor.id, relation: 'delegate', objectId: recipient.actor.id });
+  const saved = await c.run(['connect', '--method', 'tailscale:api-access-token', '--name', 'Network connection', '--fields', '@-'],
+    JSON.stringify({ token: 'tskey-api-cli-transfer-test' }));
+  assert.equal(saved.code, 0, saved.stderr);
+  const id = JSON.parse(saved.stdout).connectionId;
+  const blocked = await c.run(['transfer', id, '--to', recipient.actor.id]);
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.stderr, /Connection recipient/);
+  assert.match(blocked.stderr, new RegExp('foundation trust ' + recipient.actor.id + ' --fingerprint'));
+  assert.equal((await c.context.resources.get(id)).owner_id, identity.principalId);
+  const trusted = await c.run(['trust', recipient.actor.id, '--fingerprint', await fingerprint(recipient.binding)]);
+  assert.equal(trusted.code, 0, trusted.stderr);
+  const transferred = await c.run(['transfer', id, '--to', recipient.actor.id]);
+  assert.equal(transferred.code, 0, transferred.stderr);
+  const execution = JSON.parse(transferred.stdout);
+  assert.equal(execution.wait, 'approval');
+  assert.match(transferred.stderr, /until the recipient accepts/);
+  assert.match(transferred.stderr, /Unverified delegate/);
+  assert.match(transferred.stderr, /cannot open the item after the transfer/);
+  assert.equal((await c.context.resources.get(id)).owner_id, identity.principalId);
+  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + execution.requests[0] + '/approve',
+    headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
+  assert.equal(response.json().state, 'accepted', response.body);
+  assert.equal((await c.context.resources.get(id)).owner_id, recipient.actor.id);
+  const content = (await c.context.custody.read(recipient.actor, id)).content;
+  const material = JSON.parse(new TextDecoder().decode(await reveal(content, recipient.binding, recipient.keys.encryption)));
+  assert.equal(material.fields.token, 'tskey-api-cli-transfer-test');
+  assert.equal(material.method.config.constants.url, 'https://api.tailscale.com');
 });
 
 test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLとトークンを端末で使用する', async t => {

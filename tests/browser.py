@@ -1258,6 +1258,54 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="内容を表示", exact=True).click()
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved with an expired grant")
 
+    def test_項目を渡す相手の公開鍵を検証し受け取り承認で所有者を変更する(self):
+        sender, owner = self.passkey_account("Transfer sender")
+        receiver, recipient = self.passkey_account("Transfer recipient")
+        _, delegate = self.passkey_account("Unverified transfer delegate")
+        response = receiver.request.post(ORIGIN + "/api/relations", data={
+            "subjectId": delegate["id"], "relation": "delegate", "objectId": recipient["id"]
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        receiver.goto(ORIGIN + "/account/trust")
+        fingerprint = receiver.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
+        path = self.variable(sender, owner, "Transferred variable", "transferred-browser-value")
+        resource_id = path.rsplit("/", 1)[1]
+        sender.get_by_role("link", name="所有者を変更", exact=True).click()
+        sender.get_by_role("textbox", name="新しい所有者のプリンシパルID", exact=True).fill(recipient["id"])
+        sender.get_by_role("button", name="所有者を変更", exact=True).click()
+        link = sender.get_by_role("link", name="Transfer recipientの公開鍵を検証", exact=True)
+        expect(link).to_have_attribute("href", "/account/trust?principal=" + recipient["id"])
+        self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
+        sender.screenshot(path=str(ARTIFACTS / "resource-transfer-verification-ja.png"), full_page=True)
+        with sender.expect_popup() as popup:
+            link.click()
+        verification = popup.value
+        expect(verification.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True)).to_have_value(recipient["id"])
+        verification.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
+        verification.get_by_role("button", name="公開鍵の検証", exact=True).click()
+        expect(verification.get_by_text("Transfer recipientの公開鍵を検証しました。", exact=True)).to_be_visible()
+        verification.close()
+        sender.get_by_role("button", name="所有者を変更", exact=True).click()
+        sender.wait_for_url("**/executions/*")
+        change = "Transferred variable の所有者を Transfer recipient に変更"
+        expect(sender.get_by_text(change, exact=True)).to_be_visible()
+        expect(sender.get_by_text("Unverified transfer delegate", exact=True)).to_be_visible()
+        expect(sender.get_by_text("次の代理は暗号化の対象に含めていません。受け取り後、新しい所有者が公開鍵を検証すると、この項目を開けるようにできます。", exact=True)).to_be_visible()
+        self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
+        sender.screenshot(path=str(ARTIFACTS / "resource-transfer-pending-ja.png"), full_page=True)
+        transfer_link = sender.get_by_role("link", name=sender.url.split("#", 1)[0], exact=True).get_attribute("href")
+        self.assertIn("#fingerprint=", transfer_link)
+        receiver.goto(ORIGIN + transfer_link)
+        expect(receiver.get_by_text(change, exact=True)).to_be_visible()
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_text("完了", exact=True).first).to_be_visible()
+        resource = receiver.request.get(ORIGIN + "/api/resources/" + resource_id).json()
+        self.assertEqual(resource["ownerId"], recipient["id"])
+        receiver.goto(f"{ORIGIN}/p/{recipient['id']}/variables/{resource_id}")
+        receiver.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("transferred-browser-value")
+        receiver.screenshot(path=str(ARTIFACTS / "resource-transfer-received-ja.png"), full_page=True)
+
     def test_メンバー追加と所有者変更で変数を引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")

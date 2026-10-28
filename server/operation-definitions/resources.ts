@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
+import { ResourceTransfer } from '../../shared/protocol.js';
+import { isProtected } from '../../shared/protected.js';
 import { Execution } from '../../shared/executions.js';
 import { fail } from '../errors.js';
 import { DefinitionRegistry } from '../definitions.js';
@@ -12,8 +14,8 @@ const CREATED: Record<string, readonly [string, string]> = {
   environment: ['実行環境を作る', 'Create an environment'],
 };
 
-export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'environments' | 'objects' | 'relations'>) {
-  const { authorization, resources, catalog, environments, objects, relations } = services;
+export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'environments' | 'objects' | 'relations' | 'custody'>) {
+  const { authorization, resources, catalog, environments, objects, relations, custody } = services;
   const bind = definitions.bind.bind(definitions);
   definitions.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
     input => CREATED[String((input.resource as Record<string, C.JsonValue>)?.kind)] ?? ['項目を作る', 'Create an item'],
@@ -73,10 +75,17 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
   bind({ name: 'resource.delete', method: 'DELETE', path: '/api/resources/:id', schema: { params: C.IdParams,
     querystring: z.object({}).strict(), response: { 200: C.Ok, 202: C.EnvironmentDeletion } }, input: params => params,
     status: result => result && typeof result === 'object' && 'ok' in result ? 200 : 202 });
-  const transferResource = idInput.extend({ to: C.Id });
+  const transferResource = ResourceTransfer.safeExtend({ id: C.Id });
   definitions.define('resource.transfer', transferResource, ['項目を譲る', 'Transfer an item'], async (who, input) => {
-    const row = await resources.get(input.id); await relations.transfer(who, row.id, input.to); return ok();
+    const row = await resources.get(input.id);
+    await authorization.requireResource(who, row, 'transfer');
+    if (input.content) {
+      if (!isProtected(row.kind) || input.content.policy.id !== row.id || input.content.policy.ownerId !== input.to)
+        fail(400, 'wrong_content', 'Encrypt the selected item for the new owner specified by to.');
+      return resources.view(who, await custody.put(who, { name: row.name, version: input.version, content: input.content }));
+    }
+    await relations.transfer(who, row.id, input.to); return ok();
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
-    body: transferResource.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
+    body: ResourceTransfer, response: { 200: z.union([C.Ok, C.Resource]), 202: Execution } }, input: withId });
 }

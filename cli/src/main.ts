@@ -31,6 +31,7 @@ import { Client, ApiError } from './client.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
+import { IdentityVerificationRequired } from '../../shared/client.js';
 import { launchAgent } from './agent-launcher.js';
 import { executionClient } from './executions.js';
 import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
@@ -69,6 +70,7 @@ Usage: foundation <command> [options]
   connect --method ID                  Encrypt and save a connection on this device
   connect wait ID                      Continue after service authorization
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
+  transfer ID --to ID                 Transfer an item after the recipient accepts it
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
   run --environment ID --request JSON  Run an HTTP request on the selected executor
@@ -92,6 +94,7 @@ Usage: foundation <command> [options]
 
 Options:
   --owner ID             Choose the principal that owns a new item or run
+  --to ID                Principal receiving a transfer or access request
   --principal ID         Act as this saved identity for one command
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
   --name NAME            How this machine appears when it signs in (default: host name)
@@ -624,6 +627,14 @@ async function main(argv: string[]) {
     else process.stdout.write(bytes);
     return 0;
   }
+  if (command === 'transfer') {
+    const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
+    const to = Id.parse(requireArgument(args.values.to, 'Choose the receiving principal with --to ID.'));
+    const result = await privateClient(client).custody.transfer(id, to);
+    if ('url' in result) process.stderr.write('The current owner keeps the item until the recipient accepts. Send this link to the recipient: ' + result.url + '\n');
+    await output(result, args);
+    return 0;
+  }
   if (command === 'exec') {
     const inputs = z
       .array(Input)
@@ -764,7 +775,12 @@ try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
   const message =
-    error instanceof ApiError
+    error instanceof IdentityVerificationRequired
+      ? error.recipient.name + ' (' + error.recipient.id + '): ' +
+        (error.code === 'identity_changed' ? 'the previously verified public keys changed.' : 'the public keys have not been verified.') +
+        '\nVerify the fingerprint with this principal, then run foundation trust ' + error.recipient.id +
+        ' --fingerprint <verified-fingerprint> and repeat this operation.'
+      : error instanceof ApiError
       ? error.code + ': ' + error.message
       : error instanceof z.ZodError
         ? 'Check the command inputs against foundation schema.'

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Execution } from './executions.js';
-import { Id, Resource, listOf } from './contracts.js';
+import { Id, Ok, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
@@ -9,8 +9,9 @@ import {
   prepareRun, protect, reveal, verifyContent, grantActive, grantExpiration,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun, UseGrant } from './custody.js';
-import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection } from './protocol.js';
+import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection, TransferRecipients } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
+import { isProtected } from './protected.js';
 import { HTTP_RUNTIME_VERSION, RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
 import { KeyringState, keyringClaim, openKeyring, signKeyring } from './keyring.js';
@@ -39,7 +40,12 @@ export class ClientFailure extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 export type RecipientVerification = { id: string; name: string; code: 'identity_untrusted' | 'identity_changed' };
-export type RecipientAccess = { id: string; name: string; excluded: RecipientVerification[] };
+export type RecipientAccess = { id: string; name: string; excluded: RecipientVerification[]; operation?: 'transfer' };
+export class IdentityVerificationRequired extends ClientFailure {
+  constructor(readonly recipient: RecipientVerification) {
+    super(recipient.code, 'Verify the public keys of ' + recipient.name + ' (' + recipient.id + ') before continuing.');
+  }
+}
 export class SubmissionPending extends Error {
   constructor(readonly id: string) {
     super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
@@ -174,12 +180,22 @@ export class CustodyClient {
   }
   async recipients(ownerId: string) {
     const { items } = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-recipients', {}, listOf(BoundRecipient));
+    const delegates = await this.api.json('/api/principals/' + ownerId + '/bound-delegates', {}, listOf(BoundRecipient));
+    return this.verifiedRecipients(ownerId, items, delegates.items);
+  }
+  private async verifiedRecipients(ownerId: string, items: z.infer<typeof BoundRecipient>[], delegates: z.infer<typeof BoundRecipient>[]) {
     if (!items.length) throw new Error('Set up an encryption key for the owner before saving private content.');
-    for (const { name: _name, ...item } of items) { await verifyBinding(item); await this.trusted(item.binding); }
+    for (const { name, ...item } of items) {
+      await verifyBinding(item);
+      try { await this.trusted(item.binding); }
+      catch (error) {
+        if (!(error instanceof ClientFailure) || error.code !== 'identity_untrusted' && error.code !== 'identity_changed') throw error;
+        throw new IdentityVerificationRequired({ id: item.binding.principalId, name, code: error.code });
+      }
+    }
     // The owner permits its delegates, but only this identity's verified keys authorize encryption for them.
-    const delegates = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-delegates', {}, listOf(BoundRecipient));
     const verified: BoundKeys[] = [], unverified: RecipientVerification[] = [];
-    for (const { name, ...item } of delegates.items) {
+    for (const { name, ...item } of delegates) {
       await verifyBinding(item);
       try { verified.push(await this.trusted(item.binding)); }
       catch (error) {
@@ -295,15 +311,26 @@ export class CustodyClient {
     this.onRecipientAccess?.({ id: resource.id, name: resource.name, excluded: this.exclusions.get(policy.ownerId) ?? [] });
     return resource;
   }
-  // Seals an item for the new owner its policy names. The item comes back once it is theirs; while the new owner has
-  // not agreed, the request that asks it comes back instead, and nothing here changes.
-  async pass(name: string, bytes: Uint8Array, policy: CustodyPolicy, previous: { content: CustodyContent; version: number }) {
-    const content = await protect(bytes, policy, previous.content.materialRevision + 1,
+  // The device opens and re-encrypts the item. The server keeps its current ownership and content until acceptance.
+  async transfer(id: string, to: string) {
+    Id.parse(to);
+    const resource = await this.api.json('/api/resources/' + Id.parse(id), {}, Resource);
+    const path = '/api/resources/' + id + '/transfer';
+    if (!isProtected(resource.kind)) return this.api.json(path, { method: 'POST', body: { to } }, z.union([Ok, Execution]));
+    const previous = await this.read(id);
+    const recipients = await this.api.json(path + '-recipients?to=' + encodeURIComponent(to), {}, TransferRecipients);
+    const readers = await this.verifiedRecipients(to, recipients.required, recipients.delegates);
+    const policy = { ...previous.content.policy, ownerId: to, revision: previous.content.policy.revision + 1,
+      readers, authorities: readers, grants: [], observers: [], producers: [] };
+    const content = await protect(await reveal(previous.content, this.binding, this.keys.encryption), policy, previous.content.materialRevision + 1,
       this.binding, this.keys, previous.content.metadata, previous.content);
-    const result = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
-      body: { name, content, version: previous.version } }, z.union([Resource, Execution]));
+    const result = await this.api.json(path, { method: 'POST',
+      body: { to, content, version: previous.version } }, z.union([Resource, Execution]));
     if ('kind' in result) await this.trust.rememberContent(content);
-    return result;
+    this.onRecipientAccess?.({ id: result.id, name: resource.name, operation: 'transfer', excluded: this.exclusions.get(to) ?? [] });
+    // The recipient verifies the sender from the link it received, rather than trusting a key supplied by the server.
+    return 'kind' in result ? result : { ...result,
+      url: result.url + (result.url.includes('#') ? '&' : '#') + 'fingerprint=' + await fingerprint(this.binding) };
   }
   // Items the server cannot seal again itself, because only their readers can open them. The list
   // only says where to look: each item is checked here before anything changes.

@@ -201,6 +201,7 @@ const words: Record<string, [string, string]> = {
   'state.uncertain': ['結果の確認が必要', 'Outcome needs review'],
   'errors.identity_untrusted': ['相手の公開鍵をまだ検証していません。「公開鍵の検証」で検証してから続けてください。', 'Verify the public key before continuing.'],
   recipientExclusionsSaved: ['保存しました。次の代理は暗号化の対象に含めていません。公開鍵を検証してから利用できます。', 'Saved. These delegates were excluded from encryption. Verify their public keys to let them open this item.'],
+  recipientExclusionsTransfer: ['次の代理は暗号化の対象に含めていません。受け取り後、新しい所有者が公開鍵を検証すると、この項目を開けるようにできます。', 'These delegates were excluded from encryption. After acceptance, the new owner can verify their public keys to let them open this item.'],
   'recipientExclusionReasons.identity_untrusted': ['公開鍵をまだ検証していません。', 'The public keys have not been verified.'],
   'recipientExclusionReasons.identity_changed': ['検証済みの公開鍵から変更されています。新しい公開鍵の検証が必要です。', 'The previously verified public keys changed. Verify the new public keys.'],
   verifyRecipient: ['{{name}}の公開鍵を検証', 'Verify the public key of {{name}}'],

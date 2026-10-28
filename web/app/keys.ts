@@ -90,12 +90,12 @@ export type Resealing = {
   error: string | null;
 };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
-const recipientAccess = new Map<string, RecipientVerification[]>();
+const recipientAccess = new Map<string, RecipientAccess>();
 export function rememberRecipientAccess(principalId: string, access: RecipientAccess) {
-  recipientAccess.set(principalId + ':' + access.id, access.excluded);
+  recipientAccess.set(principalId + ':' + access.id, access);
   for (const notify of watching) notify();
 }
-export function useExcludedRecipients(principalId: string | undefined, resourceId: string) {
+export function useRecipientAccess(principalId: string | undefined, resourceId: string) {
   return useSyncExternalStore(notify => { watching.add(notify); return () => watching.delete(notify); },
     () => principalId ? recipientAccess.get(principalId + ':' + resourceId) ?? null : null, () => null);
 }
