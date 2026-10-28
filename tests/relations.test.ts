@@ -333,10 +333,12 @@ test('持ち主を移すと、受け取る側でも作れる人ならその場�
   const owner = await f.person('Owner'), other = await f.person('Other');
   const team = await f.principals.create('Team', null, owner.actor.id), bot = await f.principals.create('Bot', null, owner.actor.id);
   const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
-  assert.equal((await call(owner, '/api/resources/' + file.id + '/transfer', { to: team.id })).statusCode, 200);
+  const moved = await call(owner, '/api/resources/' + file.id + '/transfer', { to: team.id, version: file.version });
+  assert.equal(moved.statusCode, 200, moved.body);
+  assert.equal(moved.json().ownerId, team.id);
   assert.equal((await f.resources.get(file.id)).owner_id, team.id);
   await assert.rejects(f.relations.transfer(other.actor, file.id, other.actor.id), { code: 'forbidden' });
-  const asked = await call(owner, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
+  const asked = await call(owner, '/api/resources/' + file.id + '/transfer', { to: other.actor.id, version: moved.json().version });
   assert.equal(asked.statusCode, 202, asked.body);
   assert.deepEqual(asked.json().approval.proposal, { kind: 'transfer', item: { id: file.id, name: 'report.txt' },
     to: { id: other.actor.id, name: 'Other' } });
@@ -357,7 +359,7 @@ test('承認までに頼んだ人が譲る権限を失っていると、承認�
   const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
   const role = { subjectId: helper.actor.id, relation: 'transferrer', objectId: file.id };
   await f.relations.draw(owner.actor, role);
-  const asked = await call(helper, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
+  const asked = await call(helper, '/api/resources/' + file.id + '/transfer', { to: other.actor.id, version: file.version });
   assert.equal(asked.statusCode, 202, asked.body);
   await f.relations.erase(owner.actor, role);
   assert.equal((await call(other, '/api/requests/' + asked.json().requests[0] + '/approve')).statusCode, 403);
@@ -370,7 +372,7 @@ test('開始した鍵が取り消されると、その権限による所有者�
   const owner = await f.person('Owner'), other = await f.person('Other');
   const file = await f.resources.insert(owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
   const second = await f.authentication.issueKey(owner.actor.id, 'Second key');
-  const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id });
+  const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id, version: file.version });
   assert.equal(asked.statusCode, 202, asked.body);
   await f.authentication.removeCredential(owner.actor, owner.actor.id, second.credential.id);
   assert.equal((await call(other, '/api/executions/' + asked.json().id + '/respond')).statusCode, 401);
@@ -387,7 +389,7 @@ test('鍵で守られた項目は、新しい持ち主向けに封をした内�
   const row = await f.custody.put(owner.actor, { name: 'Token', content: first });
   const passed = await protect(encode('kept value'), { ...policy, ownerId: other.actor.id, revision: 2,
     authorities: [other.binding], readers: [other.binding] }, 2, owner.binding, owner.keys, undefined, first);
-  const asked = await call(owner, '/api/resources/' + row.id + '/custody', { name: row.name, version: row.version, content: passed }, 'PUT');
+  const asked = await call(owner, '/api/resources/' + row.id + '/transfer', { to: other.actor.id, version: row.version, content: passed });
   assert.equal(asked.statusCode, 202, asked.body);
   assert.deepEqual(asked.json().approval.proposal, { kind: 'transfer', item: { id: row.id, name: 'Token' }, to: { id: other.actor.id, name: 'Other' } });
   assert.equal((await f.resources.get(row.id)).owner_id, owner.actor.id);

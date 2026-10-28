@@ -378,8 +378,8 @@ test('連続する操作で必要な相手ごとに同意を確認し、すで�
   const first = await f.resources.insert(f.owner.actor.id, 'object', 'First handoff', { size: 0, contentType: 'text/plain' });
   const second = await f.resources.insert(f.owner.actor.id, 'object', 'Second handoff', { size: 0, contentType: 'text/plain' });
   const execution = await f.client.api.json('/api/executions', { method: 'POST', body: { operations: [
-    { name: 'resource.transfer', input: { id: first.id, to: f.stranger.actor.id } },
-    { name: 'resource.transfer', input: { id: second.id, to: recipient.actor.id } },
+    { name: 'resource.transfer', input: { id: first.id, to: f.stranger.actor.id, version: first.version } },
+    { name: 'resource.transfer', input: { id: second.id, to: recipient.actor.id, version: second.version } },
   ] } }, Execution);
   assert.equal(execution.wait, 'approval'); assert.equal((await f.client.api.json('/api/requests/' + execution.requests[0], {}, ApprovalRequest)).to?.id, f.stranger.actor.id);
   const agreed = await f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond', { method: 'POST', body: {} }, Execution);

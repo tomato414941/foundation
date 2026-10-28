@@ -244,6 +244,17 @@ export class Custody {
   }
 
   async put(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[]) {
+    return this.write(actor, input, transaction, requiredReaders);
+  }
+
+  async transfer(actor: Actor, id: string, to: string, input: ProtectedWrite & { version: number }, transaction?: Queryable) {
+    if (input.content.policy.id !== id || input.content.policy.ownerId !== to)
+      fail(400, 'wrong_content', 'Encrypt the selected item for the new owner specified by to.');
+    return this.write(actor, input, transaction, undefined, { id, to });
+  }
+
+  private async write(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[],
+    transfer?: { id: string; to: string }) {
     const content = await verifyContent(input.content), policy = content.policy;
     if (policy.contentType === ContentTypes.executionResult)
       fail(400, 'wrong_kind', 'Use the protected result endpoint for execution results.');
@@ -251,29 +262,29 @@ export class Custody {
     if (input.data && canonical(input.data) !== canonical(content.metadata))
       fail(400, 'invalid_metadata', 'Sign the public metadata together with its encrypted content.');
     if (policy.origin !== this.origin) fail(400, 'wrong_origin', 'This content belongs to another Foundation server.');
-    const { binding } = await this.bindings.current(actor.id);
-    if (content.signerId !== binding.id || canonical(policyAuthority(content)) !== canonical(binding))
-      fail(403, 'forbidden', 'Sign this change as an authorized editor of the item.');
     const allBindings = [...policy.readers, ...policy.authorities,
       ...policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor])];
-    for (const keys of new Map(allBindings.map(keys => [keys.id, keys])).values())
-      await this.bindings.requireCurrent(keys);
     const persist = async (connection: Queryable) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      const { binding } = await this.bindings.current(actor.id, connection);
+      if (content.signerId !== binding.id || canonical(policyAuthority(content)) !== canonical(binding))
+        fail(403, 'forbidden', 'Sign this change as an authorized editor of the item.');
+      for (const keys of new Map(allBindings.map(keys => [keys.id, keys])).values())
+        await this.bindings.requireCurrent(keys, connection);
       if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
         fail(409, 'id_in_use', 'Choose a protected content ID that is not used by an execution.');
       const current = await this.resources.db.one<ResourceRow>(
         'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection,
       );
+      if (transfer && !current) fail(404, 'not_found', 'The item to transfer no longer exists.');
       let sealed = false;
       if (current) {
         if (current.kind !== kindOf(policy.contentType))
           fail(400, 'wrong_resource', 'Keep the same resource kind when updating an item.');
-        if (current.owner_id === policy.ownerId) await this.resources.authorization.requireResource(actor, current, 'update', connection);
-        else {
-          await this.resources.authorization.requireResource(actor, current, 'transfer', connection);
-          await this.resources.principals.get(policy.ownerId, connection);
-        }
+        await this.resources.authorization.requireResource(actor, current, transfer ? 'transfer' : 'update', connection);
+        if (!transfer && current.owner_id !== policy.ownerId)
+          fail(409, 'transfer_required', 'Use POST /api/resources/' + current.id + '/transfer to change the owner.');
+        if (transfer) await this.resources.principals.get(transfer.to, connection);
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
         const previous = await this.resources.db.one<{ content: CustodyContent }>(
           'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection,
@@ -326,10 +337,9 @@ export class Custody {
         if ([...given.readers, ...given.authorities].some(id => !expected.includes(id)) || given.observers.length || given.grants.length)
           await this.resources.authorization.requirePrincipal(actor, policy.ownerId, 'share', connection);
       }
-      // Sealing it for another owner passes it on, which the new owner agrees to as to anything passed to it.
-      if (current && current.owner_id !== policy.ownerId)
-        await this.relations.agree(actor, { kind: 'transfer', itemId: current.id, to: policy.ownerId },
-          this.relations.handing(current, policy.ownerId), connection);
+      if (transfer && current)
+        await this.relations.agree(actor, { kind: 'transfer', itemId: transfer.id, to: transfer.to },
+          this.relations.handing(current, transfer.to), connection);
       const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
         recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))],
@@ -349,6 +359,13 @@ export class Custody {
       await this.references(actor, content, connection);
       await this.resources.audit.record(policy.ownerId, actor.id, 'resource.protect', policy.id,
         { policyRevision: policy.revision, materialRevision: content.materialRevision }, connection);
+      if (transfer && current && current.owner_id !== transfer.to) {
+        const agreement: Record<string, string> = actor.agreedBy ? { agreedBy: actor.agreedBy } : {};
+        await this.resources.audit.record(transfer.to, actor.id, 'resource.receive', current.id,
+          { from: current.owner_id, ...agreement }, connection);
+        await this.resources.audit.record(current.owner_id, actor.id, 'resource.transfer', current.id,
+          { to: transfer.to, ...agreement }, connection);
+      }
       return row;
     };
     return transaction ? persist(transaction) : this.resources.db.transaction(persist);

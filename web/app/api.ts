@@ -55,18 +55,16 @@ function here(request: Request) {
   const url = new URL(request.url);
   return encodeURIComponent(url.pathname + url.search + (location.pathname === url.pathname ? location.hash : ''));
 }
-// Every page past sign-in works with the private key, so a browser that does not hold it, or holds one replaced by new
-// keys, stops at one page first. A request link's session answers only its own request without the private key, so it
-// does not stop.
+// Pages that use private keys first prepare this device. A request link's session answers only its own request.
 export async function holdingKeys(request: Request, principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
   if (!(await heldKeys(principal))) throw redirect('/keys?returnTo=' + here(request));
 }
-export async function signedIn(request: Request) {
+export async function signedIn(request: Request, options: { keys?: boolean } = {}) {
   const data = await session(request);
   if (!data.principal) throw redirect('/signin?returnTo=' + here(request));
   if (data.requestId && new URL(request.url).pathname !== '/requests/' + data.requestId)
     throw redirect('/requests/' + data.requestId);
-  if (!data.requestId) await holdingKeys(request, data.principal);
+  if (!data.requestId && options.keys !== false) await holdingKeys(request, data.principal);
   return data;
 }
 export function safeReturn(value: string | null | undefined, fallback = '/') {

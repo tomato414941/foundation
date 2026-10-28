@@ -243,7 +243,7 @@ export class Accounts {
           name = name.slice(0, 150) + ' · ' + row.id;
         if (isProtected(row.kind)) {
           // Both accounts are this person's: the one merged into agrees to receive what the other passes on.
-          await c.custody.put({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id },
+          await c.custody.transfer({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id }, row.id, to.id,
             { ...contents[row.id]!, name }, connection);
         } else {
           await c.resources.changeOwner(row, to.id, connection, name);

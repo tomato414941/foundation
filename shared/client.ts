@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Execution } from './executions.js';
-import { Id, Ok, Resource, listOf } from './contracts.js';
+import { Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
@@ -53,6 +53,14 @@ export class SubmissionPending extends Error {
 }
 const errorIs = (error: unknown, ...codes: Array<string | number>) => !!error && typeof error === 'object' &&
   (('code' in error && codes.includes(String(error.code))) || ('status' in error && codes.includes(Number(error.status))));
+// Items without encrypted content use the same transfer operation without opening this device's private keys.
+export async function transferResource(api: JsonApi, id: string, to: string, open: () => CustodyClient | Promise<CustodyClient>) {
+  Id.parse(to);
+  const resource = await api.json('/api/resources/' + Id.parse(id), {}, Resource);
+  if (isProtected(resource.kind)) return (await open()).transferProtected(resource, to);
+  return api.json('/api/resources/' + id + '/transfer', { method: 'POST', body: { to, version: resource.version } },
+    z.union([Resource, Execution]));
+}
 export class CustodyClient {
   private verifiedKeys?: Promise<Map<string, KeyringEntryValue>>;
   private readonly exclusions = new Map<string, RecipientVerification[]>();
@@ -312,12 +320,11 @@ export class CustodyClient {
     return resource;
   }
   // The device opens and re-encrypts the item. The server keeps its current ownership and content until acceptance.
-  async transfer(id: string, to: string) {
-    Id.parse(to);
-    const resource = await this.api.json('/api/resources/' + Id.parse(id), {}, Resource);
-    const path = '/api/resources/' + id + '/transfer';
-    if (!isProtected(resource.kind)) return this.api.json(path, { method: 'POST', body: { to } }, z.union([Ok, Execution]));
-    const previous = await this.read(id);
+  async transferProtected(resource: ResourceView, to: string) {
+    const path = '/api/resources/' + resource.id + '/transfer';
+    const previous = await this.read(resource.id);
+    if (previous.version !== resource.version)
+      throw new ClientFailure('changed', 'This item changed. Reload it before transferring it.');
     const recipients = await this.api.json(path + '-recipients?to=' + encodeURIComponent(to), {}, TransferRecipients);
     const readers = await this.verifiedRecipients(to, recipients.required, recipients.delegates);
     const policy = { ...previous.content.policy, ownerId: to, revision: previous.content.policy.revision + 1,

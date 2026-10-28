@@ -20,7 +20,7 @@ import { keyholder } from './support.js';
 export function defineConnections(definitions: DefinitionRegistry, services: Pick<OperationServices, 'resources' | 'custody' | 'delegation' | 'catalog' | 'authorization'>) {
   const { resources, custody, delegation, catalog, authorization } = services;
   const bind = definitions.bind.bind(definitions);
-  // Signed encrypted writes also use an operation. Consent can resume the exact signed write.
+  // Signed encrypted writes update content under its current owner.
   definitions.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
   bind({ name: 'custody.write', method: 'PUT', path: '/api/resources/:id/custody', schema: { params: C.IdParams,
     body: P.ProtectedWrite, response: { 200: C.Resource, 202: Execution } }, input: (params, body) => {

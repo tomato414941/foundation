@@ -537,6 +537,24 @@ test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取�
   assert.equal(material.method.config.constants.url, 'https://api.tailscale.com');
 });
 
+test('秘密鍵のないCLIから暗号化していない項目を渡し相手の承認後に所有者を変更する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const sender = await c.person('Public item sender'), recipient = await c.person('Public item recipient');
+  const file = await c.context.resources.insert(sender.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
+  const result = await c.run(['transfer', file.id, '--to', recipient.actor.id], undefined, {
+    FOUNDATION_ORIGIN: c.origin, FOUNDATION_TOKEN: sender.token, FOUNDATION_PRINCIPAL_ID: sender.actor.id,
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const execution = JSON.parse(result.stdout);
+  assert.equal(execution.wait, 'approval');
+  assert.equal((await c.context.resources.get(file.id)).owner_id, sender.actor.id);
+  const response = await c.app.inject({ method: 'POST', url: '/api/executions/' + execution.id + '/respond',
+    headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().results[0].ownerId, recipient.actor.id);
+  assert.equal(response.json().results[0].version, file.version + 1);
+});
+
 test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLとトークンを端末で使用する', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'HTTP owner', '--origin', c.origin])).code, 0);

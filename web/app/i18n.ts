@@ -1094,6 +1094,10 @@ const errors: Array<[string[], string, string]> = [
   ],
 ];
 errors.push([
+  ['transfer_required'],
+  '所有者を変えるには、項目の「所有者を変更」から手続きしてください。',
+  'To change the owner, open the item and choose Transfer ownership.',
+], [
   ['rekey_required'],
   '共有先が変わりました。再読み込みして、もう一度お試しください。',
   'Recipients changed. Reload the page and try again.',

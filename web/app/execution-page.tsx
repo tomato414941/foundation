@@ -103,7 +103,6 @@ export async function clientLoader({ params, request }: PageArgs) {
     history.replaceState(null, '', window.location.pathname);
   }
   const account = await session(request);
-  if (account.principal && !account.requestId) await holdingKeys(request, account.principal);
   let item: PageExecution;
   try { item = await readItem(params.id!, requestMode, request.signal); }
   catch (error) {
@@ -111,6 +110,8 @@ export async function clientLoader({ params, request }: PageArgs) {
       throw redirect('/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname));
     throw error;
   }
+  const needsKeys = !item.operations.every(operation => operation.name === 'resource.transfer' && !operation.input.content);
+  if (account.principal && !account.requestId && needsKeys) await holdingKeys(request, account.principal);
   let progress: Awaited<ReturnType<Awaited<ReturnType<typeof connectionClient>>['progress']>> | null = null;
   let operationError: string | null = null;
   operationError = item.error?.code ?? null;

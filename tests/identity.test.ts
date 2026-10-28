@@ -56,10 +56,11 @@ test('変数は新しい所有者が受け取りに同意したときに移り�
   const row = await f.custody.put(owner.actor, { name: 'Transferred variable', content: initial });
   const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
     revision: 2, authorities: [next.binding], readers: [next.binding] }, 2, owner.binding, owner.keys, undefined, initial);
-  await assert.rejects(f.custody.put(owner.actor, { name: row.name, version: row.version, content }),
+  await assert.rejects(f.custody.transfer(owner.actor, row.id, next.actor.id, { name: row.name, version: row.version, content }),
     (error) => error instanceof AgreementNeeded && error.to === next.actor.id);
   assert.equal((await f.resources.get(id)).owner_id, owner.actor.id);
-  await f.custody.put({ ...owner.actor, agreedBy: next.actor.id }, { name: row.name, version: row.version, content });
+  await f.custody.transfer({ ...owner.actor, agreedBy: next.actor.id }, row.id, next.actor.id,
+    { name: row.name, version: row.version, content });
   assert.equal((await f.resources.get(id)).owner_id, next.actor.id);
   assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'transfer-value');
   await assert.rejects(f.custody.read(owner.actor, id), { code: 'forbidden' });

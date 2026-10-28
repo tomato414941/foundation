@@ -14,7 +14,8 @@ import type { PrincipalView } from '../../../shared/contracts';
 import { api, ApiFailure, signedIn } from '../api';
 import { reprotectInBackground } from '../keys';
 export async function clientLoader({ request, params }: Route.ClientLoaderArgs) {
-  const session = await signedIn(request);
+  // The transfer action opens keys only when the selected item has encrypted content.
+  const session = await signedIn(request, { keys: !new URL(request.url).pathname.endsWith('/transfer') });
   if (session.principal && !session.requestId) reprotectInBackground(session.principal.id);
   let principal: Pick<PrincipalView, 'id' | 'name' | 'owner' | 'permissions' | 'publicKey' | 'createKinds'>;
   try {

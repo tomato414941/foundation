@@ -4,7 +4,7 @@ import { Form, redirect, useLoaderData, useActionData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource-transfer';
 import { Resource } from '../../../shared/contracts';
-import { IdentityVerificationRequired } from '../../../shared/client';
+import { IdentityVerificationRequired, transferResource } from '../../../shared/client';
 import { actionResult, api, formText } from '../api';
 import { custodyClient } from '../custody';
 import { requireKeys } from '../keys';
@@ -18,9 +18,9 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   return actionResult(async () => {
     const form = await request.formData();
     const to = formText(form, 'to');
-    await requireKeys();
     try {
-      const changed = await (await custodyClient()).transfer(params.id, to);
+      const changed = await transferResource({ json: (path, options, schema) => api(path.slice(4), options, schema) },
+        params.id, to, async () => { await requireKeys(); return custodyClient(); });
       if ('url' in changed) return redirect(changed.url);
     } catch (error) {
       if (error instanceof IdentityVerificationRequired) return { error: error.code, verification: [error.recipient] };

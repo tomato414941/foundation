@@ -75,17 +75,18 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
   bind({ name: 'resource.delete', method: 'DELETE', path: '/api/resources/:id', schema: { params: C.IdParams,
     querystring: z.object({}).strict(), response: { 200: C.Ok, 202: C.EnvironmentDeletion } }, input: params => params,
     status: result => result && typeof result === 'object' && 'ok' in result ? 200 : 202 });
-  const transferResource = ResourceTransfer.safeExtend({ id: C.Id });
+  const transferResource = ResourceTransfer.extend({ id: C.Id });
   definitions.define('resource.transfer', transferResource, ['項目を譲る', 'Transfer an item'], async (who, input) => {
     const row = await resources.get(input.id);
     await authorization.requireResource(who, row, 'transfer');
     if (input.content) {
       if (!isProtected(row.kind) || input.content.policy.id !== row.id || input.content.policy.ownerId !== input.to)
         fail(400, 'wrong_content', 'Encrypt the selected item for the new owner specified by to.');
-      return resources.view(who, await custody.put(who, { name: row.name, version: input.version, content: input.content }));
+      return resources.view(who, await custody.transfer(who, row.id, input.to,
+        { name: row.name, version: input.version, content: input.content }));
     }
-    await relations.transfer(who, row.id, input.to); return ok();
+    return resources.view(who, await relations.transferResource(who, row.id, input.to, input.version));
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
-    body: ResourceTransfer, response: { 200: z.union([C.Ok, C.Resource]), 202: Execution } }, input: withId });
+    body: ResourceTransfer, response: { 200: C.Resource, 202: Execution } }, input: withId });
 }

@@ -201,33 +201,39 @@ export class Relations {
         { subjectId: line.subjectId, relation: line.relation }, connection);
     });
   }
-  // Passes a principal or a thing to a new owner. What a principal's keys protect, here and below it, is sealed again
-  // for whoever then acts as it; a thing a key protects is passed on by sealing it for its new owner instead.
-  async transfer(actor: Actor, id: string, to: string, contents: KeyUpdates = {}) {
-    const item = await this.target(id);
-    await this.principals.get(to);
-    if ('kind' in item) {
-      if (isProtected(item.kind))
+  // Acceptance rechecks the exact version and both sides' current permissions while the item is locked.
+  async transferResource(actor: Actor, id: string, to: string, version: number) {
+    return this.db.transaction(async connection => {
+      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [id]);
+      const row = await this.resources.get(id, connection);
+      await this.authorization.requireResource(actor, row, 'transfer', connection);
+      if (row.version !== version) fail(409, 'changed', 'This item changed. Reload it before transferring it.');
+      await this.principals.get(to, connection);
+      if (isProtected(row.kind))
         fail(409, 'rekey_required', 'Verify the new owner\'s public keys and re-encrypt this item on your device, then submit to, version, and content to this endpoint. ' +
           'Use foundation transfer ' + id + ' --to ' + to + ' to do this automatically.', {
           content: { method: 'GET', path: '/api/resources/' + id + '/custody' },
           recipients: { method: 'GET', path: '/api/resources/' + id + '/transfer-recipients?to=' + to },
           submit: { method: 'POST', path: '/api/resources/' + id + '/transfer', fields: ['to', 'version', 'content'] },
         });
-      if (item.kind === 'environment')
+      if (row.kind === 'environment')
         fail(400, 'not_transferable', 'An environment stays with the principal that created it.');
-    }
+      await this.agree(actor, { kind: 'transfer', itemId: id, to }, this.handing(row, to), connection);
+      const changed = await this.resources.changeOwner(row, to, connection);
+      await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);
+      await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id, ...agreed(actor) }, connection);
+      await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to, ...agreed(actor) }, connection);
+      return changed;
+    });
+  }
+  // Passes a principal or a thing to a new owner. What a principal's keys protect, here and below it, is sealed again
+  // for whoever then acts as it; a thing a key protects is passed on by sealing it for its new owner instead.
+  async transfer(actor: Actor, id: string, to: string, contents: KeyUpdates = {}) {
+    const item = await this.target(id);
+    if ('kind' in item) return this.transferResource(actor, id, to, (await this.resources.get(id)).version);
+    await this.principals.get(to);
     await this.agree(actor, { kind: 'transfer', itemId: id, to }, this.handing(item, to));
-    if ('kind' in item) {
-      const row = await this.resources.get(id);
-      await this.db.transaction(async (connection) => {
-        await this.resources.changeOwner(row, to, connection);
-        await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);
-        await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id, ...agreed(actor) }, connection);
-        await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to, ...agreed(actor) }, connection);
-      });
-      return;
-    }
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.authorization.holds(id, principal(to), 'stands', connection))

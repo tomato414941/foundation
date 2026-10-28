@@ -31,7 +31,7 @@ import { Client, ApiError } from './client.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
-import { IdentityVerificationRequired } from '../../shared/client.js';
+import { IdentityVerificationRequired, transferResource } from '../../shared/client.js';
 import { launchAgent } from './agent-launcher.js';
 import { executionClient } from './executions.js';
 import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
@@ -70,7 +70,7 @@ Usage: foundation <command> [options]
   connect --method ID                  Encrypt and save a connection on this device
   connect wait ID                      Continue after service authorization
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
-  transfer ID --to ID                 Transfer an item after the recipient accepts it
+  transfer ID --to ID                  Transfer an item after the recipient accepts it
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
   run --environment ID --request JSON  Run an HTTP request on the selected executor
@@ -630,7 +630,7 @@ async function main(argv: string[]) {
   if (command === 'transfer') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
     const to = Id.parse(requireArgument(args.values.to, 'Choose the receiving principal with --to ID.'));
-    const result = await privateClient(client).custody.transfer(id, to);
+    const result = await transferResource(client, id, to, () => privateClient(client).custody);
     if ('url' in result) process.stderr.write('The current owner keeps the item until the recipient accepts. Send this link to the recipient: ' + result.url + '\n');
     await output(result, args);
     return 0;

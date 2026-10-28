@@ -730,7 +730,8 @@ class BrowserTests(unittest.TestCase):
         created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Function recipient"}, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         recipient = created.json()
-        passed = page.request.post(ORIGIN + "/api/resources/" + function_id + "/transfer", data={"to": recipient["id"]}, headers={"origin": ORIGIN})
+        version = page.request.get(ORIGIN + "/api/resources/" + function_id).json()["version"]
+        passed = page.request.post(ORIGIN + "/api/resources/" + function_id + "/transfer", data={"to": recipient["id"], "version": version}, headers={"origin": ORIGIN})
         self.assertTrue(passed.ok, passed.text())
         page.goto(f"{ORIGIN}/p/{recipient['id']}/functions/{function_id}")
         expect(page.locator("main")).to_contain_text("この所有者で関数を保存し直してください")
@@ -1305,6 +1306,37 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("transferred-browser-value")
         receiver.screenshot(path=str(ARTIFACTS / "resource-transfer-received-ja.png"), full_page=True)
+
+    def test_秘密鍵を開かずにオブジェクトを渡し相手の承認後にダウンロードする(self):
+        sender, owner = self.passkey_account("Public item sender")
+        receiver, recipient = self.passkey_account("Public item recipient")
+        response = sender.request.post(ORIGIN + "/__test/payment", data={"principalId": owner["id"]})
+        self.assertTrue(response.ok, response.text())
+        sender.goto(f"{ORIGIN}/p/{owner['id']}/storage/new")
+        sender.locator('input[name="file"]').set_input_files({"name": "report.txt", "mimeType": "text/plain", "buffer": b"transferred file"})
+        sender.get_by_role("button", name="アップロード", exact=True).click()
+        expect(sender.get_by_role("heading", name="report.txt", exact=True)).to_be_visible()
+        resource_id = sender.url.rsplit("/", 1)[1]
+        sender.get_by_role("link", name="所有者を変更", exact=True).click()
+        expect(sender.get_by_role("heading", name="所有者を変更 — report.txt", exact=True)).to_be_visible()
+        self.forget_keys(sender)
+        expect(sender.get_by_role("heading", name="所有者を変更 — report.txt", exact=True)).to_be_visible()
+        sender.get_by_role("textbox", name="新しい所有者のプリンシパルID", exact=True).fill(recipient["id"])
+        sender.get_by_role("button", name="所有者を変更", exact=True).click()
+        sender.wait_for_url("**/executions/*")
+        expect(sender.get_by_text("report.txt の所有者を Public item recipient に変更", exact=True)).to_be_visible()
+        sender.screenshot(path=str(ARTIFACTS / "resource-transfer-public-pending-ja.png"), full_page=True)
+        self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
+        receiver.goto(sender.url)
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_text("完了", exact=True).first).to_be_visible()
+        received = receiver.request.get(ORIGIN + "/api/resources/" + resource_id).json()
+        self.assertEqual(received["ownerId"], recipient["id"])
+        receiver.goto(f"{ORIGIN}/p/{recipient['id']}/storage/{resource_id}")
+        with receiver.expect_download() as download:
+            receiver.get_by_role("link", name="ダウンロード", exact=True).click()
+        self.assertEqual(Path(download.value.path()).read_bytes(), b"transferred file")
+        receiver.screenshot(path=str(ARTIFACTS / "resource-transfer-public-received-ja.png"), full_page=True)
 
     def test_メンバー追加と所有者変更で変数を引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")

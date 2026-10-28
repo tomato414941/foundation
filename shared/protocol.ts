@@ -7,11 +7,8 @@ import { ConnectionLabels } from './connections.js';
 
 export const BoundRecipient = SignedBinding.extend({ name: Name });
 export const TransferRecipients = z.object({ required: z.array(BoundRecipient), delegates: z.array(BoundRecipient) }).strict();
-export const ResourceTransfer = z.object({ to: Id, content: ProtectedContent.optional(),
-  version: z.number().int().positive().optional() }).strict().refine(
-  input => (input.content === undefined) === (input.version === undefined),
-  { message: 'Supply both the current version and the re-encrypted content.' },
-);
+export const ResourceTransfer = z.object({ to: Id, version: z.number().int().positive(),
+  content: ProtectedContent.optional() }).strict();
 export const PublishBinding = SignedBinding.extend({ previousSignature: Signature.optional() }).strict();
 // Labels are what people read about an item. They are stored as given and carry no authority.
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),
