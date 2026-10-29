@@ -114,6 +114,9 @@ export const serviceLabels: Record<string, string> = {
   'runpod.token.token.label': 'APIキー',
   'runpod.token.token.note':
     '「Credentials → API Keys」でキーを作成し、必要なAPIとエンドポイントへの権限を選んでください。リソースの変更には書き込み権限が必要です。S3ストレージには別のS3 APIキーを使います。',
+  'prime.token.token.label': 'APIキー',
+  'prime.token.token.note':
+    'Prime Intellectの「Settings → API Keys」で、必要な権限と有効期限を付けたキーを作成してください。podの作成・削除には管理権限が必要です。',
   'vast.token.token.label': 'APIキー',
   'vast.token.token.note':
     'Vast.aiの「Keys → API Keys」で作成したキーを入力してください。GPUインスタンスの作成・停止・削除には管理権限が必要です。',
