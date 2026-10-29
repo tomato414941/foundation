@@ -228,39 +228,49 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check the release commit against main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/release/current.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.source.outputs.current == 'true'
         with:
           node-version: '24.22.1'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        if: steps.source.outputs.current == 'true'
         with:
           role-to-assume: arn:aws:iam::052438773980:role/foundation-github-release
           role-session-name: foundation-release-${{ github.run_id }}
           aws-region: ap-northeast-1
           role-duration-seconds: 3600
       - name: Check CLI publication
+        if: steps.source.outputs.current == 'true'
         id: cli
         run: |
           npm ci --include=dev --no-audit --no-fund
           npm run build:cli
           node .github/scripts/cli-release.mjs plan
       - name: Check npm trusted publishing before deployment
-        if: steps.cli.outputs.publish == 'true'
+        if: steps.source.outputs.current == 'true' && steps.cli.outputs.publish == 'true'
         run: node .github/scripts/cli-release.mjs verify
       - name: Read the verified release artifacts
+        if: steps.source.outputs.current == 'true'
         run: python3 deploy/release/prepare.py "$RUNNER_TEMP/foundation-release" --existing-only
       - name: Deploy and verify production
         id: deploy
-        if: inputs.mode != 'publish-only'
+        if: steps.source.outputs.current == 'true' && inputs.mode != 'publish-only'
         env:
           ALLOW_SCHEMA_CHANGE: ${{ inputs.allow_schema_change == true }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           args=()
           if [ "$ALLOW_SCHEMA_CHANGE" = true ]; then args+=(--allow-schema-change); fi
-          python3 deploy/release/deploy.py "$RUNNER_TEMP/foundation-release/manifest.json" "${args[@]}"
+          python3 deploy/release/current.py -- python3 deploy/release/deploy.py "$RUNNER_TEMP/foundation-release/manifest.json" "${args[@]}"
       - name: Confirm the exact deployed release
-        if: steps.deploy.outputs.obsolete != 'true'
+        if: steps.source.outputs.current == 'true' && steps.deploy.outputs.obsolete != 'true'
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
@@ -272,19 +282,22 @@ jobs:
           console.log('Production verified: ' + actual.commit);
           NODE
       - name: Publish the verified CLI
-        if: steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true'
+        id: publish
+        if: steps.source.outputs.current == 'true' && steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true'
         working-directory: cli
-        run: npm publish "$RUNNER_TEMP/foundation-release/cli.tgz" --access public --ignore-scripts --registry=https://registry.npmjs.org/
-      - name: Confirm npm publication
-        if: steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true'
-        run: node .github/scripts/cli-release.mjs wait
-      - name: Publish the GitHub Release
-        if: steps.deploy.outputs.obsolete != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/cli-release.mjs github
+        run: python3 ../deploy/release/current.py -- npm publish "$RUNNER_TEMP/foundation-release/cli.tgz" --access public --ignore-scripts --registry=https://registry.npmjs.org/
+      - name: Confirm npm publication
+        if: steps.source.outputs.current == 'true' && steps.cli.outputs.publish == 'true' && steps.deploy.outputs.obsolete != 'true' && steps.publish.outputs.obsolete != 'true'
+        run: node .github/scripts/cli-release.mjs wait
+      - name: Publish the GitHub Release
+        if: steps.source.outputs.current == 'true' && steps.deploy.outputs.obsolete != 'true' && steps.publish.outputs.obsolete != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/release/current.py -- node .github/scripts/cli-release.mjs github
       - name: Record release artifacts
-        if: always()
+        if: always() && steps.source.outputs.current == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: foundation-release-${{ github.sha }}
