@@ -36,6 +36,7 @@ type PageExecution = ExecutionView & {
   canRespond: boolean;
   delivery: ApprovalView | null; returnUrl: string | null; refreshUrl: string | null;
 };
+const resourceTransfer = (item: ExecutionView) => item.operations.length === 1 && item.operations[0]?.name === 'resource.transfer';
 function inputOperation(item: PageExecution, actorId: string) {
   if (!['waiting', 'running'].includes(item.state)) return null;
   if (item.waiting) return { index: item.waiting.index, invocation: item.waiting.invocation };
@@ -109,6 +110,11 @@ export async function clientLoader({ params, request }: PageArgs) {
     if (!account.principal && error instanceof ApiFailure && [401, 403].includes(error.status))
       throw redirect('/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname));
     throw error;
+  }
+  // CLI links name the execution; transfer recipients review and answer its request.
+  if (!requestMode && resourceTransfer(item) && item.delivery && item.from.id !== account.principal?.id) {
+    const fingerprint = linked ?? sessionStorage.getItem('foundation.fingerprint.request.' + params.id);
+    throw redirect('/requests/' + item.delivery.id + (fingerprint ? '#fingerprint=' + encodeURIComponent(fingerprint) : ''));
   }
   const needsKeys = !item.operations.every(operation => operation.name === 'resource.transfer' && !operation.input.content);
   if (account.principal && !account.requestId && needsKeys) await holdingKeys(request, account.principal);
@@ -206,11 +212,12 @@ export default function ExecutionPage() {
   const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, details, unverified } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
+  const transferring = resourceTransfer(item);
   const pageId = requestMode ? item.delivery?.id ?? item.id : item.id;
   const location = useLocation();
   const fingerprint = new URLSearchParams(location.hash.slice(1)).get('fingerprint')
     ?? sessionStorage.getItem('foundation.fingerprint.request.' + pageId);
-  const shareUrl = item.url + (fingerprint ? '#fingerprint=' + encodeURIComponent(fingerprint) : '');
+  const shareUrl = (transferring ? item.delivery?.url ?? item.url : item.url) + (fingerprint ? '#fingerprint=' + encodeURIComponent(fingerprint) : '');
   const sealing = useResealing(account.principal?.id);
   const approvalAccepted = pending && navigation.state !== 'idle' && sealing?.requestId === pageId;
   const awaitingApproval = item.wait === 'approval', canDecline = item.delivery?.state === 'pending' && item.delivery.canRespond;
@@ -224,7 +231,7 @@ export default function ExecutionPage() {
   const connectionTitle = requestConnection?.reconnecting
     ? item.state === 'succeeded' ? 'requestReconnected' : connectionCancelled ? 'requestReconnectCancelled' : 'requestReconnect'
     : item.state === 'succeeded' ? 'requestConnected' : connectionCancelled ? 'requestConnectCancelled' : 'requestConnect';
-  const title = focusedConnection && service ? t(connectionTitle, { name: service })
+  const title = transferring ? t('transferTitle') : focusedConnection && service ? t(connectionTitle, { name: service })
     : focusedConnection ? t(connectionAction)
     : recipientRequest && !item.proposal && item.operations.length === 1 ? executionTitle(item.operations[0]!, i18n.language)
     : t(requestMode ? 'requests' : 'executionDetail');
@@ -276,7 +283,7 @@ export default function ExecutionPage() {
       </Notice>}
       {unverified && <Notice tone="warning">{t('approvalUnverified', { name: unverified })}</Notice>}
       {pending && item.canRespond && !needsKeys && !item.waiting?.continuation && (awaitingApproval || current) && <div className="flex flex-wrap items-center gap-4">
-        <Button className={focusedConnection ? connectionRequestAction : undefined} type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'}
+        <Button className={focusedConnection ? connectionRequestAction : transferring ? 'min-h-11 px-4' : undefined} type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'}
           loading={focusedConnection && navigation.state !== 'idle'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!unverified)}>
           {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
             ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
@@ -284,9 +291,12 @@ export default function ExecutionPage() {
             : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           {focusedConnection && requestConnection?.method?.registration.kind === 'authorization' && <ArrowUpRight aria-hidden="true" />}
         </Button>
-        {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t('cancel')}</Button>}
+        {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : transferring ? 'min-h-11 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t(transferring ? 'transferDecline' : 'cancel')}</Button>}
       </div>}
-      {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate variant="destructive">{t(requestMode && item.delivery?.state === 'pending' ? 'cancelRequest' : 'cancelOperation')}</Button>}
+      {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate
+        variant={transferring ? 'ghost' : 'destructive'} className={transferring ? 'min-h-11 w-fit px-4 text-muted-foreground' : undefined}>
+        {t(transferring || requestMode && item.delivery?.state === 'pending' ? 'cancelRequest' : 'cancelOperation')}
+      </Button>}
       {item.state === 'failed' && item.canRespond && !needsKeys && <Button type="submit" name="intent" value="resume">{t('retry')}</Button>}
     </div>
   </Form>;
@@ -302,7 +312,7 @@ export default function ExecutionPage() {
   const requestState = <>
     {focusedConnection && progress?.kind === 'authorize' && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
     {!pending && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
-      connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
+      transferring && item.delivery?.state === 'declined' ? 'declined' : connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
     } /></p>}
     {pending && !approvalAccepted && !progress && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{
       item.wait === 'execution' ? <State value="running" /> : t('requestWaitingForRecipient')
@@ -325,13 +335,30 @@ export default function ExecutionPage() {
     {item.proposal && <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p>}
     {requestState}
   </>;
+  if (transferring && requester && awaitingApproval && item.proposal?.kind === 'transfer') return <Page title={title} narrow>
+    <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
+    <Panel>
+      <p role="status" className="font-medium">{t('transferAwaitingRecipient', { name: item.proposal.to.name })}</p>
+      <p className="leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p>
+      <div className="flex min-w-0 flex-col gap-2">
+        <p className="text-sm text-muted-foreground">{t('transferShareLink', { name: item.proposal.to.name })}</p>
+        <div className="flex min-w-0 items-start gap-2">
+          <Link className="min-w-0 break-all text-sm underline underline-offset-4" to={new URL(shareUrl).pathname + new URL(shareUrl).hash}>{shareUrl}</Link>
+          <Copy value={shareUrl} />
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground">{t('expires')} <DateText value={item.expiresAt} /></p>
+      {form}
+    </Panel>
+    <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
+  </Page>;
   return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
     {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}</Panel> : <>
       <Panel>
-        <Detail label={t('status')}><State value={requestMode ? item.delivery!.state : item.state} /></Detail>
+        <Detail label={t('status')}><State value={transferring && item.delivery?.state === 'declined' ? 'declined' : requestMode ? item.delivery!.state : item.state} /></Detail>
         {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}
         <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{requestMode ? item.from.name : details.initiator.name}<Copy value={requestMode ? item.from.id : details.initiator.id} /></Detail>
         {requestMode && <Detail label={t('requestedTo')}>{item.to?.name ?? '—'}</Detail>}
