@@ -2,6 +2,7 @@ import safeRegex from 'safe-regex2';
 import { Template } from '@fedify/uri-template';
 import type { ConnectionField } from './connection-methods.js';
 import type { MethodDescription } from './contracts.js';
+import { atPointer } from './values.js';
 
 export class ConnectionFieldError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -84,4 +85,12 @@ export function connectionConsole(method: MethodDescription, fields: Record<stri
     const url = new URL(new Template(template).expand(values));
     return ['https:', 'http:'].includes(url.protocol) ? url.href : undefined;
   } catch { return undefined; }
+}
+
+// The account named inside a JSON document entered whole, such as a service account key.
+export function documentAccount(account: { field: string; pointer: string }, values: Record<string, string>) {
+  let name: unknown;
+  try { name = atPointer(JSON.parse(values[account.field] ?? ''), account.pointer); } catch { name = undefined; }
+  if (typeof name !== 'string' || !name) throw new ConnectionFieldError('invalid_field', 'Enter the complete JSON document the service issued.');
+  return name;
 }

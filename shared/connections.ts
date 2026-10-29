@@ -7,7 +7,7 @@ import { connectionAuthorization, connectionAccount } from './connection-authori
 import { ConnectionFacts, connectionFacts } from './connection-facts.js';
 import { OvhConnectionInfo } from './ovh.js';
 import type { ConnectionFactValues } from './connection-facts.js';
-import { publicConnectionFields, visibleConnectionFields } from './connection-fields.js';
+import { documentAccount, publicConnectionFields, visibleConnectionFields } from './connection-fields.js';
 export { requiresApp } from './connection-methods.js';
 
 const Fields = z.record(z.string().max(100), z.string().max(16384));
@@ -104,7 +104,9 @@ export function connectionLabels(state: ConnectionState): ConnectionLabelValues 
   const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(definitions, state.fields) : {};
   const settings = definitions.filter(field => fields[field.name]).map(field => ({ name: field.name, label: field.label,
     value: field.choices?.find(choice => choice.value === fields[field.name])?.label ?? fields[field.name]! }));
-  return { methodName: state.method.name, account: '', ...(settings.length ? { settings } : {}) };
+  const account = state.method.kind === 'token' && state.method.config.account && state.fields
+    ? documentAccount(state.method.config.account, state.fields) : '';
+  return { methodName: state.method.name, account, ...(settings.length ? { settings } : {}) };
 }
 
 export const ConnectionAction = z.discriminatedUnion('action', [

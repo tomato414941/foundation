@@ -13,6 +13,7 @@ import { HttpBroker } from '../../runtime/broker.js';
 import { Connections } from '../../runtime/connections.js';
 import { PublicTransport } from '../../server/transport.js';
 import { processInputs } from '../../runtime/inputs.js';
+import type { ConnectionOutputs } from '../../runtime/connection-provider.js';
 
 export function privateClient(client: Client) {
   const { keys, binding, origin } = client.identity;
@@ -51,13 +52,13 @@ export async function localInputs(client: Client, inputs: InjectionInput[]) {
     }))), resultRecipients: [binding], createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   };
-  const outputs = new Map<string, Promise<Record<string, string>>>();
+  const outputs = new Map<string, Promise<ConnectionOutputs>>();
   return processInputs(inputs, async source => {
     const content = sources.find(content => content.policy.id === source.id)!;
-    if (content.policy.contentType === ContentTypes.value) return useContent(content, intent, keys);
+    if (content.policy.contentType === ContentTypes.value) return { value: await useContent(content, intent, keys) };
     if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(content, intent, sources, new AbortController().signal));
-    const values = await outputs.get(source.id)!;
+    const { values, files } = await outputs.get(source.id)!;
     if (!source.output || !Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
-    return encode(values[source.output]!);
+    return { value: encode(values[source.output]!), file: files.includes(source.output) };
   });
 }

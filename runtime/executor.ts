@@ -20,6 +20,7 @@ import { publicUrl } from '../server/transport.js';
 import { DomainError } from '../server/errors.js';
 import type { Journal } from './journal.js';
 import type { CommandExecutor } from './command.js';
+import type { ConnectionOutputs } from './connection-provider.js';
 import { processInputs, utf8 } from './inputs.js';
 
 export interface ExecutionBroker {
@@ -32,7 +33,7 @@ export interface ExecutionBroker {
 export interface ExecutionExtension {
   validate(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]): Promise<void>;
   execute(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue>;
-  outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<Record<string, string>>;
+  outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<ConnectionOutputs>;
   httpDestination?(content: CustodyContent, intent: ExecutionIntent, request: HttpRequestInput): Promise<string>;
   http?(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
     request: HttpRequestInput): Promise<{ url: string; headers: Record<string, string>; sensitive: string[] }>;
@@ -254,17 +255,17 @@ export class Executor {
     const destination = request?.connectionId
       ? await this.extension!.httpDestination!(sources.find(content => content.policy.id === request.connectionId)!, intent, request)
       : request?.url;
-    const sensitive: string[] = [], cache = new Map<string, Promise<Record<string, string>>>();
+    const sensitive: string[] = [], cache = new Map<string, Promise<ConnectionOutputs>>();
     const resolve = async (source: SourceReference) => {
       const content = sources.find(content => content.policy.id === source.id)!;
-      if (content.policy.contentType === ContentTypes.value) return useContent(content, intent, this.keys, {
+      if (content.policy.contentType === ContentTypes.value) return { value: await useContent(content, intent, this.keys, {
         ...(request ? { destination } : {}),
-      });
+      }) };
       if (!this.extension) throw new Error('This executor cannot use connections.');
       if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal, destination));
-      const outputs = await cache.get(source.id)!;
-      if (!source.output || !Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
-      return encode(outputs[source.output]!);
+      const { values, files } = await cache.get(source.id)!;
+      if (!source.output || !Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
+      return { value: encode(values[source.output]!), file: files.includes(source.output) };
     };
     if (program.kind === 'command') {
       const values = await processInputs(program.inputs, resolve);
@@ -287,7 +288,7 @@ export class Executor {
       for (const part of binding.parts) {
         if (typeof part === 'string') value += part;
         else {
-          const text = utf8(await resolve(part));
+          const text = utf8((await resolve(part)).value);
           sensitive.push(text, Buffer.from(text).toString('base64'), Buffer.from(text).toString('base64url'));
           value += text;
         }

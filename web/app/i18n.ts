@@ -308,6 +308,8 @@ const words: Record<string, [string, string]> = {
   object: ['オブジェクト', 'Object'],
   replaceObject: ['内容を更新', 'Replace content'],
   selectFile: ['ファイルを選択', 'Choose file'],
+  fileTooLarge: ['16KB以下のファイルを選んでください。', 'Choose a file of 16 KB or less.'],
+  fileUnreadable: ['ファイルを読み込めませんでした。', 'The file could not be read.'],
   bytes: ['{{count}} バイト', '{{count}} bytes'],
   deleteTitle: ['「{{name}}」を削除しますか？', 'Delete “{{name}}”?'],
   deleteBody: ['削除すると元に戻せません。', 'This action cannot be undone.'],
@@ -427,6 +429,7 @@ const words: Record<string, [string, string]> = {
   enterProxyToken: ['Proxy Tokenを入力', 'Enter proxy token'],
   enterS3Credentials: ['S3の認証情報を入力', 'Enter S3 credentials'],
   enterRobotCredentials: ['Robotの認証情報を入力', 'Enter Robot credentials'],
+  enterServiceAccountKey: ['サービスアカウントの鍵を預ける', 'Enter service account key'],
   assumeIamRole: ['IAMロールで接続', 'Assume IAM role'],
   authorizeThroughFlash: ['Flashの承認画面で接続', 'Authorize through Flash'],
   runpodApprovalHelp: [

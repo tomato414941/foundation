@@ -1,7 +1,7 @@
 import { AppMaterial, ConnectionMaterial } from './connections.js';
 import type { AppState, ConnectionState } from './connections.js';
 import type { MethodDescription } from './contracts.js';
-import { connectionFields, connectionValues, visibleConnectionFields } from './connection-fields.js';
+import { connectionFields, connectionValues, documentAccount, visibleConnectionFields } from './connection-fields.js';
 import { connectionMethod, selectScopes } from './connection-methods.js';
 import { AwsConnectionInput } from './aws.js';
 import type { AwsConnectionRequest } from './aws.js';
@@ -41,7 +41,9 @@ export function registrationMaterial(input: RegistrationInput, previous?: Connec
     .map(field => [field.name, previous!.fields![field.name]!]));
   const entered = Object.fromEntries(Object.entries(input.fields).filter(([name, value]) => value !== '' ||
     definitions.find(field => field.name === name)?.secret === false || oldFields[name] === undefined));
-  return ConnectionMaterial.parse({ ...base, fields: connectionFields(definitions, entered, oldFields) });
+  const fields = connectionFields(definitions, entered, oldFields);
+  if (input.method.kind === 'token' && input.method.config.account) documentAccount(input.method.config.account, fields);
+  return ConnectionMaterial.parse({ ...base, fields });
 }
 export const OvhAuthorization = z.object({ consumerKey: z.string().min(1).max(16384), validationUrl: z.url() });
 export async function authorizeRegistration(input: RegistrationInput, transport: Transport, state: string, verifier: string, redirectUri: string) {

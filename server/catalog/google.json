@@ -41,6 +41,38 @@
       "preparation": {
         "scopeSelection": "required"
       }
+    },
+    "service_account": {
+      "name": "Google · Enter service account key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "credentials",
+            "label": "Service account key (JSON)",
+            "secret": true,
+            "inputType": "file",
+            "pattern": "\"type\"\\s*:\\s*\"service_account\"",
+            "note": "Create a JSON key for the service account in the Google Cloud console and choose the downloaded file."
+          }
+        ],
+        "account": {
+          "field": "credentials",
+          "pointer": "/client_email"
+        },
+        "outputs": {
+          "GOOGLE_APPLICATION_CREDENTIALS": "/credentials",
+          "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": "/credentials"
+        },
+        "files": [
+          "GOOGLE_APPLICATION_CREDENTIALS",
+          "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"
+        ],
+        "console": "https://console.cloud.google.com/iam-admin/serviceaccounts",
+        "hint": "GOOGLE_APPLICATION_CREDENTIALS names a file holding the service account's JSON key; Google client libraries read it as Application Default Credentials. gcloud reads the same file through CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE. The service account reaches only what was shared with it or granted to it."
+      },
+      "docs": "https://cloud.google.com/docs/authentication/application-default-credentials",
+      "console": "https://console.cloud.google.com/iam-admin/serviceaccounts"
     }
   }
 }

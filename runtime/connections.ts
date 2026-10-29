@@ -17,7 +17,7 @@ import type { Journal } from './journal.js';
 import { AwsConnections } from './aws.js';
 import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
-import type { ConnectionCheckpoint, ConnectionProvider } from './connection-provider.js';
+import type { ConnectionCheckpoint, ConnectionOutputs, ConnectionProvider } from './connection-provider.js';
 import { utf8 } from './inputs.js';
 import { authenticateHttp, connectionDestination } from '../shared/http-connections.js';
 
@@ -114,12 +114,13 @@ export class Connections implements ExecutionExtension {
     } finally { this.active.delete(action.id); }
   }
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
-    destination?: string): Promise<Record<string, string>> {
+    destination?: string): Promise<ConnectionOutputs> {
     let state = await this.material(content, intent, destination);
     if (this.provider(state.method).renew && await this.broker.state(content.policy.id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(content, state, intent, sources, signal, destination);
-    return this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
+    const values = await this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
+    return { values, files: state.method.kind === 'token' ? state.method.config.files ?? [] : [] };
   }
 
   async httpDestination(content: CustodyContent, intent: ExecutionIntent, request: HttpRequestInput) {
@@ -131,8 +132,8 @@ export class Connections implements ExecutionExtension {
     request: HttpRequestInput) {
     const url = await this.httpDestination(content, intent, request);
     const state = await this.material(content, intent, url);
-    const outputs = await this.outputs(content, intent, sources, signal, url);
-    return authenticateHttp(url, request.headers, state.method.http!, outputs);
+    const { values } = await this.outputs(content, intent, sources, signal, url);
+    return authenticateHttp(url, request.headers, state.method.http!, values);
   }
 
   private async refreshed(record: Renewal, material: ConnectionState) {

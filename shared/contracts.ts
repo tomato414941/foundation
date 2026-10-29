@@ -149,7 +149,8 @@ const Field = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/),
   label: z.string(),
   secret: z.boolean().optional(),
-  inputType: z.enum(['text', 'password']).optional(),
+  // A file field takes the text of a file the service issued, such as a JSON key.
+  inputType: z.enum(['text', 'password', 'file']).optional(),
   required: z.boolean().optional(),
   placeholder: z.string().optional(),
   note: z.string().optional(),
@@ -230,6 +231,10 @@ export const TokenDefinition = z.object({
   resolver: z.literal('vultr-role').optional(),
   bindFields: z.boolean().optional(),
   constants: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), z.string()).optional(),
+  // Outputs a command receives as a file, its environment variable naming the path, unless its input asks otherwise.
+  files: z.array(z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).max(32).optional(),
+  // The account a pasted JSON document names, shown so the owner can tell which identity it holds.
+  account: z.object({ field: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), pointer: z.string().max(1000) }).strict().optional(),
   // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
   identity: z.object({
     url: UrlTemplate,
@@ -240,6 +245,11 @@ export const TokenDefinition = z.object({
   console: z.url().optional(),
   instructions: z.string().optional(),
   hint: z.string().optional(),
+}).superRefine((value, context) => {
+  if (value.files?.some(name => !Object.hasOwn(value.outputs, name)))
+    context.addIssue({ code: 'custom', path: ['files'], message: 'Deliver only declared outputs as files.' });
+  if (value.account && !value.fields.some(field => field.name === value.account!.field))
+    context.addIssue({ code: 'custom', path: ['account'], message: 'Read the account from a declared field.' });
 });
 export const AuthKind = z.enum(['oauth', 'token', 'aws', 'ovh', 'approval']);
 export type AuthKindName = z.infer<typeof AuthKind>;
@@ -354,7 +364,8 @@ export const Input = z
   .object({
     name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
     source: Source,
-    format: z.enum(['text', 'file', 'json']).default('text'),
+    // Without a format, a connection output its method delivers as a file is a file, and anything else is text.
+    format: z.enum(['text', 'file', 'json']).optional(),
     pointer: z.string().optional(),
   })
   .strict();

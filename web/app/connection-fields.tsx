@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import type { AppState } from '../../shared/connections';
@@ -24,6 +25,19 @@ export interface ConnectionFieldsProps {
   reusableFields?: string[];
   appSetupUrl?: string;
 }
+// The chosen file's text is submitted as the field's value; the file itself is not.
+function FileTextField({ name, label, required, hint }: { name: string; label: string; required: boolean; hint?: string }) {
+  const { t } = useTranslation(), [text, setText] = useState('');
+  return <>
+    <InputField type="file" label={label} required={required} hint={hint} onChange={event => {
+      const input = event.currentTarget, file = input.files?.[0];
+      setText('');
+      input.setCustomValidity(file && file.size > 16384 ? t('fileTooLarge') : '');
+      if (file && file.size <= 16384) void file.text().then(setText, () => input.setCustomValidity(t('fileUnreadable')));
+    }} />
+    <input type="hidden" name={name} value={text} />
+  </>;
+}
 export function ServiceFields({ method, fields, defaults = {}, existing, appMaterial, preparedFields = {}, fieldValues = {}, onFieldsChange, reusableFields = [] }: {
   method: CatalogConnectionMethod; fields: ConnectionField[]; defaults?: Record<string, string>;
   existing: ResourceView | null; appMaterial: AppState | null;
@@ -48,6 +62,9 @@ export function ServiceFields({ method, fields, defaults = {}, existing, appMate
       {field.choices.map(choice => <SelectItem key={choice.value} value={choice.value}>{choiceLabel(choice)}</SelectItem>)}
     </SelectField>;
     const reusable = field.secret !== false && reusableFields.includes(field.name);
+    if (field.inputType === 'file') return <FileTextField key={field.name} name={'field.' + field.name} label={label}
+      required={!reusable && (field.required ?? true)}
+      hint={reusable ? t('unchangedSecret') : i18n.language === 'ja' ? serviceLabels[`${service}.${method.kind}.${field.name}.note`] ?? field.note : field.note} />;
     return <InputField key={field.name} name={'field.' + field.name} label={label}
       type={field.inputType ?? (field.secret !== false ? 'password' : 'text')} required={!reusable && (field.required ?? true)} defaultValue={value}
       onChange={field.secret !== false ? undefined : event => onFieldsChange?.({ [field.name]: event.target.value })}
