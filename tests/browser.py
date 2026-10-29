@@ -25,8 +25,8 @@ class BrowserTests(unittest.TestCase):
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         cls.next_client = 1
         cls.playwright = sync_playwright().start()
-        cls.chromium = cls.playwright.chromium.launch(headless=True)
-        cls.webkit = cls.playwright.webkit.launch(headless=True)
+        cls.chromium = cls.playwright.chromium.launch(executable_path=os.environ["FOUNDATION_TEST_CHROMIUM"], headless=True)
+        cls.webkit = cls.playwright.webkit.launch(executable_path=os.environ["FOUNDATION_TEST_WEBKIT"], headless=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -42,7 +42,7 @@ class BrowserTests(unittest.TestCase):
 
     def tearDown(self):
         result = self._outcome.result
-        if any(test is self for test, _ in result.failures + result.errors):
+        if self.errors or any(test is self for test, _ in result.failures + result.errors):
             for index, context in enumerate(self.contexts):
                 for page in context.pages:
                     if not page.is_closed():
@@ -2080,6 +2080,8 @@ class BrowserTests(unittest.TestCase):
             dialog.get_by_role("button", name="削除", exact=True).click()
             expect(dialog.get_by_role("button", name="削除中…", exact=True)).to_be_disabled()
             expect(dialog.get_by_role("status")).to_contain_text("画面を閉じても処理は続きます")
+            # Let the accepted delete and route revalidation finish before replacing the document.
+            page.wait_for_load_state("networkidle")
             page.reload()
             expect(page.get_by_role("button", name="削除中…", exact=True)).to_be_disabled()
             expect(page.get_by_role("status")).to_contain_text("画面を閉じても処理は続きます")
@@ -2638,7 +2640,7 @@ if __name__ == "__main__":
     print(f"Browser shard {shard}: {len(names)} tests", flush=True)
     server = None
     if not os.environ.get("FOUNDATION_UI_SERVER"):
-        log = (ARTIFACTS.parent / "browser-server.log")
+        log = ARTIFACTS.parent / ("browser-server-" + urlparse(ORIGIN).netloc.rsplit(":", 1)[-1] + ".log")
         log.parent.mkdir(parents=True, exist_ok=True)
         server_output = log.open("w")
         server = subprocess.Popen(["node", "--import", "tsx", "tests/browser-server.ts"], stdout=server_output, stderr=server_output)

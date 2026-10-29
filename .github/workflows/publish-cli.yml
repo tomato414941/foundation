@@ -121,7 +121,7 @@ jobs:
           npm run build
           bash .github/scripts/test-database.sh
       - name: Test browser workflows
-        run: bash .github/scripts/browser-tests.sh
+        run: npm run test:ui
       - name: Record browser failure evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

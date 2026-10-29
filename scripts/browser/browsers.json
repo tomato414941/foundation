@@ -1,0 +1,23 @@
+{
+  "playwright": "1.64.1",
+  "node": "v24.22.1",
+  "chromiumVersion": "156.0.8078.73",
+  "chrome": {
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.73/linux64/chrome-linux64.zip",
+    "sha256": "c51c24f0126534aaf6d21d1f85b8e243934b3951989dbb59a1f8aab8e32b20c1",
+    "executable": "/opt/browsers/chrome-linux64/chrome"
+  },
+  "headless": {
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.73/linux64/chrome-headless-shell-linux64.zip",
+    "sha256": "77eb8d52798efc7a857ab61abcc62a456d8ea9635b02341d06dffee2761768c8",
+    "executable": "/opt/browsers/chrome-headless-shell-linux64/chrome-headless-shell"
+  },
+  "webkit": {
+    "version": "27.2",
+    "revision": "2384",
+    "playwrightRevision": "880865ae68b140a4458ebf9253b7c337433be688",
+    "upstreamRevision": "5b391e6d3b14d549908dad2c6695999291313f30",
+    "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/webkit/2384/webkit-debian-13.zip",
+    "sha256": "d54e0e67d205b548b1c2cec9d6012c9cb7386d79dbaa89029b38453a151a236c"
+  }
+}
