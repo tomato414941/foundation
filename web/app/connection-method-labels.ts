@@ -15,6 +15,8 @@ const labels: Record<string, string> = {
   'Enter S3 credentials': 'enterS3Credentials',
   'Enter Robot credentials': 'enterRobotCredentials',
   'Enter service account key': 'enterServiceAccountKey',
+  'Enter secret key': 'enterSecretKey',
+  'Enter database password': 'enterDatabasePassword',
   'Assume IAM role': 'assumeIamRole',
   'Authorize through Flash': 'authorizeThroughFlash',
   'AWS authentication': 'awsAuthentication',

@@ -37,6 +37,9 @@ test('サービスへアクセスできない端末でも入力式の認証情�
         field.name === 'domain' && method.id.startsWith('atlassian:') ? 'example.atlassian.net' :
         field.name === 'domain' && method.id.startsWith('kintone:') ? 'example.cybozu.com' :
         field.name === 'token' && method.id.startsWith('tailscale:') ? 'tskey-api-private-value' :
+        field.name === 'token' && method.id.startsWith('supabase:') ? 'sbp_private-value' :
+        field.name === 'url' && method.id.startsWith('supabase:') ? 'https://example.supabase.co' :
+        field.name === 'projectId' && method.id.startsWith('supabase:') ? 'example' :
         field.name === 'credentials' && method.id.startsWith('google:') ?
           JSON.stringify({ type: 'service_account', client_email: 'robot@example.iam.gserviceaccount.com' }) : valueFor(field.name))]));
     const fields = Object.fromEntries(definitions.filter(field => activeConnectionField(field, entered))

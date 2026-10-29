@@ -117,6 +117,20 @@ export const serviceLabels: Record<string, string> = {
   'prime.token.token.label': 'APIキー',
   'prime.token.token.note':
     'Prime Intellectの「Settings → API Keys」で、必要な権限と有効期限を付けたキーを作成してください。podの作成・削除には管理権限が必要です。',
+  'supabase.token.token.label': 'パーソナルアクセストークン',
+  'supabase.token.token.note':
+    'Supabaseの「Account → Access Tokens」でトークンを作成してください。範囲を限ったトークンは、選んだ組織・プロジェクト・権限だけにアクセスできます。有効期限も設定してください。',
+  'supabase.token.url.label': 'プロジェクトのURL',
+  'supabase.token.url.note': 'プロジェクトの「Settings → Data API」に表示されるURLを入力してください。',
+  'supabase.token.publishableKey.label': 'パブリッシャブルキー（任意）',
+  'supabase.token.publishableKey.note': 'アプリケーションで使う場合は、同じ画面のパブリッシャブルキーも入力してください。',
+  'supabase.token.projectId.label': 'プロジェクトID',
+  'supabase.token.projectId.note': 'プロジェクトの「Settings → General」に表示されるIDを入力してください。',
+  'supabase.token.password.label': 'データベースのパスワード',
+  'supabase.token.password.note': 'プロジェクトのデータベースに設定したパスワードを入力してください。分からない場合は、プロジェクトの「Database」の設定で再設定できます。',
+  'supabase.token.secretKey.label': 'シークレットキー',
+  'supabase.token.secretKey.note':
+    'プロジェクトの「Settings → API Keys」でシークレットキーを作成してください。Row Level Securityを通さずにデータへアクセスできるので、サーバーでだけ使ってください。',
   'vast.token.token.label': 'APIキー',
   'vast.token.token.note':
     'Vast.aiの「Keys → API Keys」で作成したキーを入力してください。GPUインスタンスの作成・停止・削除には管理権限が必要です。',

@@ -430,6 +430,8 @@ const words: Record<string, [string, string]> = {
   enterS3Credentials: ['S3の認証情報を入力', 'Enter S3 credentials'],
   enterRobotCredentials: ['Robotの認証情報を入力', 'Enter Robot credentials'],
   enterServiceAccountKey: ['サービスアカウントの鍵を預ける', 'Enter service account key'],
+  enterSecretKey: ['シークレットキーを入力', 'Enter secret key'],
+  enterDatabasePassword: ['データベースのパスワードを入力', 'Enter database password'],
   assumeIamRole: ['IAMロールで接続', 'Assume IAM role'],
   authorizeThroughFlash: ['Flashの承認画面で接続', 'Authorize through Flash'],
   runpodApprovalHelp: [
