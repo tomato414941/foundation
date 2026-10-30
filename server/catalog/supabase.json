@@ -1,0 +1,123 @@
+{
+  "id": "supabase",
+  "name": "Supabase",
+  "api": "https://api.supabase.com",
+  "docs": "https://supabase.com/docs/reference/api/introduction",
+  "console": "https://supabase.com/dashboard/account/tokens",
+  "methods": {
+    "token": {
+      "name": "Supabase · Enter access token",
+      "kind": "token",
+      "docs": "https://supabase.com/docs/reference/api/introduction",
+      "console": "https://supabase.com/dashboard/account/tokens",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "SUPABASE_ACCESS_TOKEN" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Personal access token",
+            "secret": true,
+            "pattern": "^sbp_\\S+$",
+            "note": "Generate a token in Account → Access Tokens. A scoped token reaches only the organizations, projects, and permissions you choose; set an expiration date."
+          }
+        ],
+        "console": "https://supabase.com/dashboard/account/tokens",
+        "constants": { "url": "https://api.supabase.com" },
+        "outputs": {
+          "SUPABASE_ACCESS_TOKEN": "/token"
+        },
+        "hint": "Use SUPABASE_ACCESS_TOKEN with the Supabase CLI or as a Bearer token for the Management API at https://api.supabase.com/v1. The token's scope determines the available organizations and projects."
+      }
+    },
+    "secret-key": {
+      "name": "Supabase · Enter secret key",
+      "kind": "token",
+      "docs": "https://supabase.com/docs/guides/api/api-keys",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "header", "name": "apikey", "value": "SUPABASE_SECRET_KEY" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "url",
+            "label": "Project URL",
+            "secret": false,
+            "pattern": "^https://[^\\s/]+/?$",
+            "placeholder": "https://your-project.supabase.co",
+            "note": "Copy the project URL from the project's Settings → Data API."
+          },
+          {
+            "name": "secretKey",
+            "label": "Secret key",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Create a secret key in the project's Settings → API Keys. It bypasses Row Level Security; use it only on servers."
+          },
+          {
+            "name": "publishableKey",
+            "label": "Publishable key (optional)",
+            "secret": false,
+            "required": false,
+            "defaultValue": "",
+            "note": "Copy the publishable key from the same page if your application also uses it."
+          }
+        ],
+        "outputs": {
+          "SUPABASE_URL": "/url",
+          "SUPABASE_SECRET_KEY": "/secretKey",
+          "SUPABASE_PUBLISHABLE_KEY": "/publishableKey"
+        },
+        "hint": "Use SUPABASE_URL and SUPABASE_SECRET_KEY with Supabase client libraries, or send the key in the apikey header to the project's APIs. The secret key bypasses Row Level Security."
+      }
+    },
+    "database-password": {
+      "name": "Supabase · Enter database password",
+      "kind": "token",
+      "docs": "https://supabase.com/docs/reference/cli/supabase-link",
+      "config": {
+        "fields": [
+          {
+            "name": "projectId",
+            "label": "Project ID",
+            "secret": false,
+            "pattern": "^[a-z0-9-]+$",
+            "note": "Copy the project ID from the project's Settings → General."
+          },
+          {
+            "name": "password",
+            "label": "Database password",
+            "secret": true,
+            "note": "Use the password set for the project's database. Reset it in the project's Database settings if you do not have it."
+          }
+        ],
+        "outputs": {
+          "SUPABASE_PROJECT_ID": "/projectId",
+          "SUPABASE_DB_PASSWORD": "/password"
+        },
+        "hint": "Use SUPABASE_PROJECT_ID and SUPABASE_DB_PASSWORD with the Supabase CLI, together with SUPABASE_ACCESS_TOKEN from an access token connection, for commands such as supabase db push."
+      }
+    }
+  },
+  "targets": [
+    {
+      "id": "management",
+      "name": "Management API",
+      "api": "https://api.supabase.com",
+      "methods": ["token"]
+    },
+    {
+      "id": "project",
+      "name": "Project APIs",
+      "methods": ["secret-key"]
+    },
+    {
+      "id": "database",
+      "name": "Database",
+      "methods": ["database-password"]
+    }
+  ]
+}

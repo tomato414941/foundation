@@ -1,0 +1,36 @@
+{
+  "id": "prime",
+  "name": "Prime Intellect",
+  "api": "https://api.primeintellect.ai/api/v1",
+  "docs": "https://docs.primeintellect.ai/",
+  "console": "https://app.primeintellect.ai/dashboard/tokens",
+  "methods": {
+    "token": {
+      "name": "Prime Intellect · Enter API key",
+      "kind": "token",
+      "docs": "https://docs.primeintellect.ai/api-reference/api-keys",
+      "console": "https://app.primeintellect.ai/dashboard/tokens",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "PRIME_API_KEY" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true,
+            "note": "Create a key in Settings → API Keys with the permissions you need and an expiration date. Creating or deleting pods requires pod management permissions."
+          }
+        ],
+        "console": "https://app.primeintellect.ai/dashboard/tokens",
+        "constants": { "url": "https://api.primeintellect.ai" },
+        "outputs": {
+          "PRIME_API_KEY": "/token",
+          "PRIME_API_BASE_URL": "/url"
+        },
+        "hint": "Use PRIME_API_KEY with the Prime CLI or SDK, or as a Bearer token for the REST API at https://api.primeintellect.ai/api/v1. The key's permissions determine the available operations."
+      }
+    }
+  }
+}

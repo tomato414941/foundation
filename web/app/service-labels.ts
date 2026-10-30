@@ -4,6 +4,8 @@ export const serviceLabels: Record<string, string> = {
   'google:oauth.scope.https://www.googleapis.com/auth/cloud-platform': 'Google Cloudのリソースを閲覧・変更・削除する',
   'google:oauth.scope.https://www.googleapis.com/auth/userinfo.email': 'メールアドレスを確認する',
   'google:oauth.scope.openid': 'Googleアカウントの本人確認をする',
+  'google.token.credentials.label': 'サービスアカウントの鍵（JSON）',
+  'google.token.credentials.note': 'Google Cloud コンソールでサービスアカウントの JSON 鍵を作成し、ダウンロードしたファイルを選んでください。',
   'railway.token.token.label': 'APIトークン',
   'railway.token.token.note': 'アカウント設定の「Tokens」で作成したAccount tokenまたはWorkspace tokenを入力してください。No workspaceを選んだAccount tokenはアカウント全体、Workspace tokenは選択したワークスペースにアクセスできます。',
   'railway.token.projectToken.label': 'プロジェクトトークン',
@@ -112,6 +114,23 @@ export const serviceLabels: Record<string, string> = {
   'runpod.token.token.label': 'APIキー',
   'runpod.token.token.note':
     '「Credentials → API Keys」でキーを作成し、必要なAPIとエンドポイントへの権限を選んでください。リソースの変更には書き込み権限が必要です。S3ストレージには別のS3 APIキーを使います。',
+  'prime.token.token.label': 'APIキー',
+  'prime.token.token.note':
+    'Prime Intellectの「Settings → API Keys」で、必要な権限と有効期限を付けたキーを作成してください。podの作成・削除には管理権限が必要です。',
+  'supabase.token.token.label': 'パーソナルアクセストークン',
+  'supabase.token.token.note':
+    'Supabaseの「Account → Access Tokens」でトークンを作成してください。範囲を限ったトークンは、選んだ組織・プロジェクト・権限だけにアクセスできます。有効期限も設定してください。',
+  'supabase.token.url.label': 'プロジェクトのURL',
+  'supabase.token.url.note': 'プロジェクトの「Settings → Data API」に表示されるURLを入力してください。',
+  'supabase.token.publishableKey.label': 'パブリッシャブルキー（任意）',
+  'supabase.token.publishableKey.note': 'アプリケーションで使う場合は、同じ画面のパブリッシャブルキーも入力してください。',
+  'supabase.token.projectId.label': 'プロジェクトID',
+  'supabase.token.projectId.note': 'プロジェクトの「Settings → General」に表示されるIDを入力してください。',
+  'supabase.token.password.label': 'データベースのパスワード',
+  'supabase.token.password.note': 'プロジェクトのデータベースに設定したパスワードを入力してください。分からない場合は、プロジェクトの「Database」の設定で再設定できます。',
+  'supabase.token.secretKey.label': 'シークレットキー',
+  'supabase.token.secretKey.note':
+    'プロジェクトの「Settings → API Keys」でシークレットキーを作成してください。Row Level Securityを通さずにデータへアクセスできるので、サーバーでだけ使ってください。',
   'vast.token.token.label': 'APIキー',
   'vast.token.token.note':
     'Vast.aiの「Keys → API Keys」で作成したキーを入力してください。GPUインスタンスの作成・停止・削除には管理権限が必要です。',
