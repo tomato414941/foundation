@@ -1599,6 +1599,30 @@ class BrowserTests(unittest.TestCase):
         for name in ["OpenAI development", "OpenAI production", "OpenAI administration"]:
             expect(page.get_by_role("link", name=name, exact=True)).to_be_visible()
 
+    def test_AnthropicのAPIキーとAdminキーを選んで保存し更新する(self):
+        page, principal = self.passkey_account("Anthropic account")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        for method, choice, label in [
+            ("api_key", "APIキーを入力", "APIキー"),
+            ("admin_key", "Admin APIキーを入力", "Admin APIキー"),
+        ]:
+            with self.subTest(method=method):
+                name = "Anthropic " + method
+                page.goto(root + "/services/new?service=anthropic")
+                self.select(page, "接続方法", choice)
+                page.get_by_role("textbox", name="名前", exact=True).fill(name)
+                page.get_by_label(label, exact=True).fill("private-anthropic-browser-key")
+                print("Rendered Anthropic connection: " + page.locator("main").inner_text(), flush=True)
+                page.screenshot(path=str(ARTIFACTS / ("anthropic-" + method + "-input-ja.png")), full_page=True)
+                page.get_by_role("button", name="接続する", exact=True).click()
+                saved = self.saved_connection(page, name)
+                self.assertEqual(saved["data"]["methodId"], "anthropic:" + method)
+                self.assertEqual(saved["data"]["services"], [{"id": "anthropic", "name": "Anthropic"}])
+                page.get_by_role("link", name="再接続", exact=True).click()
+                page.get_by_label(label, exact=True).fill("updated-anthropic-browser-key")
+                page.get_by_role("button", name="接続する", exact=True).click()
+                self.assertEqual(self.saved_connection(page, name)["id"], saved["id"])
+
     def test_Modalの接続先を選んでAPIトークンとProxyTokenを保存し更新する(self):
         page, principal = self.passkey_account("Modal account")
         root = f"{ORIGIN}/p/{principal['id']}"

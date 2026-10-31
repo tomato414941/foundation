@@ -1,0 +1,51 @@
+{
+  "id": "anthropic",
+  "name": "Anthropic",
+  "api": "https://api.anthropic.com/v1",
+  "docs": "https://platform.claude.com/docs/en/api/overview",
+  "console": "https://platform.claude.com/settings/keys",
+  "methods": {
+    "api_key": {
+      "name": "Anthropic · Enter API key",
+      "kind": "token",
+      "docs": "https://platform.claude.com/docs/en/api/overview#authentication",
+      "console": "https://platform.claude.com/settings/keys",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "header", "name": "x-api-key", "value": "ANTHROPIC_API_KEY" }
+      },
+      "config": {
+        "fields": [
+          { "name": "token", "label": "API key", "secret": true, "pattern": "^\\S+$" }
+        ],
+        "constants": { "url": "https://api.anthropic.com" },
+        "outputs": { "ANTHROPIC_API_KEY": "/token" },
+        "hint": "Use ANTHROPIC_API_KEY with the Anthropic SDK. REST requests also require an anthropic-version header."
+      }
+    },
+    "admin_key": {
+      "name": "Anthropic · Enter Admin API key",
+      "kind": "token",
+      "docs": "https://platform.claude.com/docs/en/manage-claude/admin-api",
+      "console": "https://platform.claude.com/settings/admin-keys",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "header", "name": "x-api-key", "value": "ANTHROPIC_ADMIN_KEY" }
+      },
+      "config": {
+        "fields": [
+          {
+            "name": "adminKey",
+            "label": "Admin API key",
+            "secret": true,
+            "pattern": "^\\S+$",
+            "note": "Admin keys can read usage and costs and manage organization resources."
+          }
+        ],
+        "constants": { "url": "https://api.anthropic.com" },
+        "outputs": { "ANTHROPIC_ADMIN_KEY": "/adminKey" },
+        "hint": "Send ANTHROPIC_ADMIN_KEY in the x-api-key header. Include an anthropic-version header."
+      }
+    }
+  }
+}
