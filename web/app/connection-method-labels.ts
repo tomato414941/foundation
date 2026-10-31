@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next';
 
 const labels: Record<string, string> = {
   'Connect in browser': 'connectInBrowser',
+  'Connect with device code': 'connectWithDeviceCode',
   'Connect with app credentials': 'connectWithApp',
   'Enter API key': 'enterApiKey',
   'Enter Admin API key': 'enterAdminApiKey',

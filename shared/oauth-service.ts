@@ -62,6 +62,11 @@ const vultr: OAuthService = {
 export function oauthService(spec: OAuthSpec, endpoint?: string): OAuthService {
   const url = endpoint ? new URL(endpoint) : undefined;
   return { recognizedTokenTypes: tokenTypes,
+    ...(spec.adapter === 'github' ? {
+      normalizeToken(data: Record<string, unknown>) {
+        if (typeof data.scope === 'string') data.scope = data.scope.split(',').map(value => value.trim()).join(spec.scopes.separator);
+      },
+    } : {}),
     ...(url?.hostname.endsWith('.myshopify.com') && url.pathname === '/admin/oauth/access_token' ? {
       normalizeToken(data: Record<string, unknown>) { if (data.token_type === undefined) data.token_type = 'bearer'; },
       ...(spec.grantType === 'client_credentials' ? {

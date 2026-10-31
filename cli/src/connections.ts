@@ -57,7 +57,10 @@ export function flowOutput(progress: FlowProgress | { kind: 'saved'; resource: z
   if (progress.kind === 'saved') return { kind: 'connected', id: progress.executionId, connectionId: progress.resource.id, resource: progress.resource };
   return { kind: progress.kind, id: progress.flow.execution.id,
     ...(progress.kind === 'pending' ? { state: 'running' } : {}),
-    ...(progress.kind === 'authorize' ? { authorizationUrl: progress.url, next: 'Open the URL, then run foundation connect wait ' + progress.flow.execution.id } : {}),
+    ...(progress.kind === 'authorize' ? { authorizationUrl: progress.url,
+      ...(progress.device ? { userCode: progress.device.userCode, verificationUri: progress.device.verificationUri,
+        expiresAt: new Date(progress.device.expiresAt).toISOString() } : {}),
+      next: (progress.device ? 'Open the URL and enter the user code, then run foundation connect wait ' : 'Open the URL, then run foundation connect wait ') + progress.flow.execution.id } : {}),
     ...(progress.kind === 'cli' ? { next: progress.command } : {}),
     ...(progress.kind === 'connected' ? { connectionId: progress.id } : {}),
     ...(progress.kind === 'failed' ? { error: progress.error } : {}),

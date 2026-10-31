@@ -11,6 +11,14 @@ export function ConnectionProgress({ progress, cancelIntent = 'cancel', authoriz
   const { t } = useTranslation();
   return <div className="flex min-w-0 flex-col gap-6">
     {progress.kind === 'pending' && <Notice tone="info">{t('connectionPending')}</Notice>}
+    {progress.kind === 'authorize' && progress.device && <div className="flex flex-col gap-3">
+      <p className="text-sm">{t('deviceAuthorizeHelp')}</p>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <code className="break-all text-2xl font-semibold tracking-widest">{progress.device.userCode}</code>
+        <Copy value={progress.device.userCode} />
+      </div>
+      <p role="status" className="text-sm text-muted-foreground">{t('deviceAuthorizeWaiting')}</p>
+    </div>}
     {progress.kind === 'authorize' && (authorization ? <Button asChild className={review ? 'w-fit ' + connectionRequestAction : 'w-fit'}>
       <a href={progress.url} target={authorization.newWindow ? '_blank' : undefined} rel={authorization.newWindow ? 'noopener noreferrer' : undefined}>{authorization.label}{review && <ArrowUpRight aria-hidden="true" />}</a>
     </Button> : <ExternalLink href={progress.url}>{t('authorizeService')}</ExternalLink>)}

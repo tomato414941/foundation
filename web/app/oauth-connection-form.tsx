@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { CatalogConnectionMethod } from '../../shared/contracts';
+import { DEVICE_CODE_GRANT } from '../../shared/contracts';
 import { connectionMethod, selectScopes } from '../../shared/connection-methods';
 import { ExternalLink, Notice } from './components';
 import { InputField } from './form-fields';
@@ -28,7 +29,9 @@ export function OAuthConnectionFields(props: ConnectionFieldsProps) {
   const spec = method?.kind === 'oauth' ? method.config : undefined;
   const behavior = method ? connectionMethod(method) : undefined;
   const requiredScopes = spec?.scopes.required ?? [];
-  return <ApplicationConnectionFields {...props} callback={!method || behavior?.browserAuthorization}
+  const device = spec?.grantType === DEVICE_CODE_GRANT;
+  return <ApplicationConnectionFields {...props} callback={!method || !!behavior?.browserAuthorization && !device}
+    secretVisible={!device || spec?.clientAuth !== 'none'}
     secretRequired={spec ? spec.clientAuth !== 'none' : false}>
     {method && spec && <>
       {props.compact && props.preparedScopes ? <PreparedConnectionScopes method={method} scopes={props.preparedScopes} />

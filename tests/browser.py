@@ -2661,6 +2661,90 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(saved["data"]["scopes"], ["GET /vps", "POST /vps/*"])
         page.screenshot(path=str(ARTIFACTS / "ovh-browser-registration-ja.png"), full_page=True)
 
+    def test_GitHubの確認コード用アプリをクライアントIDだけで登録しCLIでの接続へ引き継ぐ(self):
+        page, principal = self.passkey_account("Device application owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/apps/new?method=github:device")
+        page.get_by_role("textbox", name="名前", exact=True).fill("GitHub device application")
+        page.get_by_label("クライアントID", exact=True).fill("browser-device-client")
+        print("Rendered device application: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "github-device-application-ja.png"), full_page=True)
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="GitHub device application", exact=True)).to_be_visible()
+        page.goto(root + "/services/new?method=github:device")
+        expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("確認コードで接続")
+        expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("GitHub device application")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "github-device-cli-ja.png"), full_page=True)
+
+    def test_デバイス認証のリクエストでコードを表示しサービスでの許可と拒否と期限切れを反映する(self):
+        owner, principal = self.passkey_account("Device connection owner")
+        sender, requester = self.passkey_account("Device connection requester")
+        created = owner.request.post(ORIGIN + "/api/principals/" + principal["id"] + "/resources", data={
+            "kind": "method", "name": "Device test", "definition": {"name": "Device test", "kind": "oauth", "config": {
+                "grantType": "urn:ietf:params:oauth:grant-type:device_code", "clientAuth": "none",
+                "deviceAuthorizationUrl": "https://device.example/start", "tokenUrl": "https://device.example/token",
+                "browserTokenExchange": "available",
+            }, "preparation": {"scopeSelection": "hidden"}},
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(created.ok, created.text())
+        method = created.json()
+        for relation in ["reader", "user"]:
+            shared = owner.request.post(ORIGIN + "/api/relations", data={
+                "subjectId": requester["id"], "relation": relation, "objectId": method["id"],
+            }, headers={"origin": ORIGIN})
+            self.assertTrue(shared.ok, shared.text())
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method=" + method["id"])
+        owner.get_by_role("textbox", name="名前", exact=True).fill("Device application")
+        owner.get_by_label("クライアントID", exact=True).fill("browser-device-client")
+        owner.get_by_role("button", name="作成", exact=True).click()
+        expect(owner.get_by_role("heading", name="Device application", exact=True)).to_be_visible()
+        app_id = owner.url.rsplit("/", 1)[1]
+        state = {"result": "pending"}
+        headers = {"access-control-allow-origin": ORIGIN, "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*"}
+        def issue(route):
+            route.fulfill(json={"device_code": "private-browser-device-code", "user_code": "WXYZ-ABCD",
+                                "verification_uri": "https://device.example/activate", "expires_in": 600, "interval": 1}, headers=headers)
+        def poll(route):
+            if state["result"] == "approved":
+                route.fulfill(json={"access_token": "private-browser-device-token", "token_type": "bearer"}, headers=headers)
+            else:
+                route.fulfill(json={"error": "authorization_pending" if state["result"] == "pending" else state["result"]}, status=400, headers=headers)
+        owner.context.route("https://device.example/start", issue)
+        owner.context.route("https://device.example/token", poll)
+        for result, message in [
+            ("approved", "Device testへの接続が完了しました"),
+            ("access_denied", "サービスで接続が拒否されました。"),
+            ("expired_token", "確認コードの有効期限が切れました。接続を最初からやり直してください。"),
+        ]:
+            with self.subTest(result=result):
+                state["result"] = "pending"
+                asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+                    "name": "connection.connect", "input": {"ownerId": "$approver", "methodId": method["id"]},
+                }]}, headers={"origin": ORIGIN})
+                self.assertTrue(asked.ok, asked.text())
+                request = asked.json()
+                owner.goto(ORIGIN + "/requests/" + request["id"])
+                owner.get_by_role("button", name="Device testで接続する", exact=True).click()
+                expect(owner.locator("code").filter(has_text="WXYZ-ABCD")).to_be_visible()
+                expect(owner.get_by_text("サービスでの許可を待っています。", exact=True)).to_be_visible()
+                self.assertEqual(urlparse(owner.url).path, "/requests/" + request["id"])
+                if result == "approved":
+                    print("Rendered device authorization: " + owner.locator("main").inner_text(), flush=True)
+                    owner.screenshot(path=str(ARTIFACTS / "device-code-ja.png"), full_page=True)
+                    owner.set_viewport_size({"width": 390, "height": 844})
+                    self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
+                    owner.screenshot(path=str(ARTIFACTS / "device-code-mobile-ja.png"), full_page=True)
+                state["result"] = result
+                expect(owner.get_by_text(message, exact=True)).to_be_visible(timeout=15000)
+                if result == "approved":
+                    completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+                    self.assertEqual(completed["state"], "succeeded")
+                    saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+                    self.assertEqual(saved["data"]["methodId"], method["id"])
+                    self.assertEqual(saved["data"]["appId"], app_id)
+
     def test_CLIが必要な方式を認可前に案内し暗号化した入力からCLIへ引き継ぐ(self):
         page, principal = self.passkey_account("CLI authorization owner")
         for service in ["github", "vultr"]:

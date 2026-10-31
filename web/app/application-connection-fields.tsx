@@ -11,8 +11,9 @@ import type { ConnectionFieldsProps } from './connection-fields';
 
 export function ApplicationConnectionFields({ purpose, compact = false, method, existing, appMaterial, apps, selectedAppId, clientId,
   preparedFields, fieldValues, onFieldsChange, appSetupUrl, identifierLabel = 'clientId', secretLabel = 'clientSecret',
-  callback = false, secretRequired = false, children }: ConnectionFieldsProps & {
+  callback = false, secretRequired = false, secretVisible = true, children }: ConnectionFieldsProps & {
     identifierLabel?: string; secretLabel?: string; callback?: boolean; secretRequired?: boolean; children?: ReactNode;
+    secretVisible?: boolean;
   }) {
   const { t } = useTranslation(), behavior = method ? connectionMethod(method) : undefined;
   const defaults = method?.kind === 'oauth' ? method.config.defaults : {};
@@ -45,8 +46,8 @@ export function ApplicationConnectionFields({ purpose, compact = false, method, 
     {(purpose === 'app' || inline) && <>
       <InputField name="clientId" required label={t(identifierLabel)}
         defaultValue={clientId ?? (existing?.kind === 'app' ? existing.data.clientId : '')} readOnly={!!clientId} />
-      <InputField name="clientSecret" type="password" autoComplete="new-password" required={(inline || !existing) && secretRequired}
-        label={t(secretLabel)} hint={existing ? t('unchangedSecret') : undefined} />
+      {secretVisible && <InputField name="clientSecret" type="password" autoComplete="new-password" required={(inline || !existing) && secretRequired}
+        label={t(secretLabel)} hint={existing ? t('unchangedSecret') : undefined} />}
       {callback && <InputField label={t('callbackUrl')}
         value={typeof window !== 'undefined' ? window.location.origin + '/oauth/callback' : ''} readOnly />}
       {method && <ServiceFields method={method} fields={behavior!.fields} defaults={defaults} existing={existing}

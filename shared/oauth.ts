@@ -7,6 +7,8 @@ import { basicCredentials, oauthService } from './oauth-service.js';
 import { expandUrl, lifetime, strings } from './oauth-values.js';
 import type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 import { connectionValues, ConnectionFieldError } from './connection-fields.js';
+import { DEVICE_CODE_GRANT } from './contracts.js';
+import { DeviceAuthorization } from './oauth-device.js';
 export { expandUrl } from './oauth-values.js';
 export type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 
@@ -24,8 +26,8 @@ export class OAuth {
     redirectUri: string,
     scopes: string[],
   ) {
-    if (spec.grantType === 'client_credentials' || !spec.authorizeUrl)
-      fail(400, 'wrong_grant', 'This connection exchanges application credentials directly.');
+    if (spec.grantType === 'client_credentials' || spec.grantType === DEVICE_CODE_GRANT || !spec.authorizeUrl)
+      fail(400, 'wrong_grant', 'Choose an authorization code connection method.');
     const url = new URL(expandUrl(spec.authorizeUrl, this.appValues(spec, app)));
     const params: Record<string, string> = {
       ...spec.authorizeParams,
@@ -46,7 +48,7 @@ export class OAuth {
   private configuration(spec: OAuthSpec, app: OAuthApp) {
     const server: oauth.AuthorizationServer = {
       issuer: spec.issuer ?? new URL(expandUrl(
-        spec.grantType === 'client_credentials' ? spec.tokenUrl : spec.authorizeUrl!, this.appValues(spec, app),
+        spec.grantType === 'client_credentials' || spec.grantType === DEVICE_CODE_GRANT ? spec.tokenUrl : spec.authorizeUrl!, this.appValues(spec, app),
       )).origin,
       token_endpoint: expandUrl(spec.tokenUrl, this.appValues(spec, app)),
     };
@@ -116,7 +118,9 @@ export class OAuth {
         ? oauth.processRefreshTokenResponse
         : spec.grantType === 'client_credentials'
           ? oauth.processClientCredentialsResponse
-          : oauth.processAuthorizationCodeResponse;
+          : spec.grantType === DEVICE_CODE_GRANT
+            ? oauth.processDeviceCodeResponse
+            : oauth.processAuthorizationCodeResponse;
       const result = await processResponse(
         server,
         client,
@@ -196,8 +200,8 @@ export class OAuth {
     previous?: OAuthToken,
     checkpoint?: TokenCheckpoint,
   ) {
-    if (spec.grantType === 'client_credentials')
-      fail(400, 'wrong_grant', 'This connection exchanges application credentials directly.');
+    if (spec.grantType === 'client_credentials' || spec.grantType === DEVICE_CODE_GRANT)
+      fail(400, 'wrong_grant', 'Choose an authorization code connection method.');
     let data: Record<string, unknown>;
     const service = oauthService(spec);
     if (service.exchange) {
@@ -236,6 +240,51 @@ export class OAuth {
     const received = this.token(spec, data, scopes, previous);
     await checkpoint?.(received, data);
     return received;
+  }
+
+  async deviceAuthorization(spec: OAuthSpec, app: OAuthApp, scopes: string[]) {
+    if (spec.grantType !== DEVICE_CODE_GRANT || !spec.deviceAuthorizationUrl)
+      fail(400, 'wrong_grant', 'Choose a device authorization connection method.');
+    const { server: metadata, client } = this.configuration(spec, app);
+    const server = { ...metadata, device_authorization_endpoint: expandUrl(spec.deviceAuthorizationUrl, this.appValues(spec, app)) };
+    const response = await oauth.deviceAuthorizationRequest(server, client, this.authentication(app, spec.clientAuth),
+      { ...spec.authorizeParams, ...(scopes.length ? { scope: scopes.join(spec.scopes.separator) } : {}) }, this.options(spec));
+    const received = await this.json(response);
+    if ([200, 400].includes(response.status) && received.error === 'device_flow_disabled')
+      fail(409, 'device_flow_disabled', 'Enable device authorization in the service application settings.');
+    const data = this.checkResponse(spec, response.status, received);
+    let authorization: oauth.DeviceAuthorizationResponse;
+    try {
+      authorization = await oauth.processDeviceAuthorizationResponse(server, client, Response.json(data, { status: response.status }));
+    } catch {
+      fail(502, 'invalid_response', 'The service did not return a valid device authorization.');
+    }
+    const now = Date.now(), intervalSeconds = lifetime(authorization.interval ?? 5);
+    return DeviceAuthorization.parse({ deviceCode: authorization.device_code, userCode: authorization.user_code,
+      verificationUri: publicUrl(authorization.verification_uri).href,
+      ...(authorization.verification_uri_complete ? { verificationUriComplete: publicUrl(authorization.verification_uri_complete).href } : {}),
+      expiresAt: now + lifetime(authorization.expires_in) * 1000, intervalSeconds, nextPollAt: now + intervalSeconds * 1000 });
+  }
+
+  async deviceToken(spec: OAuthSpec, app: OAuthApp, deviceCode: string, scopes: string[]): Promise<
+    { kind: 'pending'; slowDown: boolean; intervalSeconds?: number } | { kind: 'connected'; token: OAuthToken }
+  > {
+    if (spec.grantType !== DEVICE_CODE_GRANT)
+      fail(400, 'wrong_grant', 'Choose a device authorization connection method.');
+    const { server, client } = this.configuration(spec, app);
+    const response = await oauth.deviceCodeGrantRequest(server, client, this.authentication(app, spec.clientAuth), deviceCode,
+      { ...this.options(spec), additionalParameters: spec.tokenParams });
+    const data = await this.json(response);
+    if ([200, 400].includes(response.status) && ['authorization_pending', 'slow_down'].includes(String(data.error)))
+      return { kind: 'pending', slowDown: data.error === 'slow_down',
+        ...(data.interval !== undefined ? { intervalSeconds: lifetime(data.interval) } : {}) };
+    if ([200, 400].includes(response.status)) {
+      if (data.error === 'access_denied') fail(409, 'device_access_denied', 'Device authorization was declined.');
+      if (data.error === 'expired_token') fail(409, 'device_code_expired', 'The device code expired. Start the connection again.');
+      if (data.error === 'device_flow_disabled') fail(409, 'device_flow_disabled', 'Enable device authorization in the service application settings.');
+    }
+    return { kind: 'connected', token: this.token(spec,
+      await this.tokenResponse(spec, app, Response.json(data, { status: response.status })), scopes) };
   }
 
   async clientCredentials(

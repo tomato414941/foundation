@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CustodyClient } from './client.js';
-import { Id, MethodDefinition, Name, Resource } from './contracts.js';
+import { DEVICE_CODE_GRANT, Id, MethodDefinition, Name, Resource } from './contracts.js';
 import type { MethodDescription } from './contracts.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes } from './custody.js';
@@ -12,9 +12,11 @@ import { Execution, WaitingOperation } from './executions.js';
 import { BrowserTransport } from './http.js';
 import type { Transport } from './http.js';
 import { connectionPolicy } from './connection-policy.js';
-import { OvhAuthorization, authorizeRegistration, exchangeRegistration, registrationApplication } from './connection-registration.js';
+import { OvhAuthorization, authorizeRegistration, exchangeRegistration, registrationApplication, registrationMaterial } from './connection-registration.js';
 import { browserExchange } from './connection-methods.js';
 import { RunPodApproval, startRunPodApproval, pollRunPodApproval } from './runpod-authorization.js';
+import { DeviceAuthorization } from './oauth-device.js';
+import { OAuth } from './oauth.js';
 
 export const FlowRecord = z.object({
   id: Id, ownerId: Id, name: Name,
@@ -28,6 +30,7 @@ export const FlowRecord = z.object({
   authorizationState: z.string(), verifier: z.string(), redirectUri: z.url(),
   ovh: OvhAuthorization.optional(), material: ConnectionMaterial.optional(), proof: ProtectedWrite.optional(),
   approval: RunPodApproval.optional(),
+  deviceAuthorization: DeviceAuthorization.optional(),
   error: z.string().optional(),
   exchangeStartedAt: z.number().optional(),
   exchangeDevice: z.enum(['browser', 'cli']),
@@ -36,7 +39,8 @@ export type ConnectionFlow = z.infer<typeof FlowRecord>;
 export interface FlowStore { get(id: string): Promise<ConnectionFlow | null>; put(flow: ConnectionFlow): Promise<void> }
 export const FlowView = FlowRecord.pick({ id: true, ownerId: true, name: true, execution: true, error: true }).strip();
 export type ConnectionFlowView = z.infer<typeof FlowView>;
-export type FlowProgress = { kind: 'authorize'; flow: ConnectionFlowView; url: string }
+export type FlowProgress = { kind: 'authorize'; flow: ConnectionFlowView; url: string;
+    device?: { userCode: string; verificationUri: string; expiresAt: number } }
   | { kind: 'pending'; flow: ConnectionFlowView }
   | { kind: 'failed'; flow: ConnectionFlowView; error: string }
   | { kind: 'cli'; flow: ConnectionFlowView; command: string }
@@ -46,6 +50,7 @@ const nonce = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
 
 export class ConnectionClient {
   private approvalPolls = new Map<string, Promise<FlowProgress>>();
+  private devicePolls = new Map<string, Promise<FlowProgress>>();
   constructor(readonly custody: CustodyClient, readonly store: FlowStore,
     readonly transport: Transport = new BrowserTransport(custody.origin), readonly device: 'browser' | 'cli' = 'browser') {}
   private async flow(id: string) {
@@ -91,7 +96,8 @@ export class ConnectionClient {
       id, ownerId: input.ownerId, name: input.name, registration: { methodId: input.methodId, method: input.method, appId, app,
         fields: input.fields ?? {}, scopes }, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
       step: this.device === 'browser' && browserExchange(input.method) === 'unavailable' ? 'cli' : 'start',
-      createdAt: new Date().toISOString(), expiresAt: Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt)), execution: input.execution,
+      createdAt: new Date().toISOString(), expiresAt: input.method.kind === 'oauth' && input.method.config.grantType === DEVICE_CODE_GRANT
+        ? Date.parse(execution.expiresAt) : Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt)), execution: input.execution,
       url: null, connectionId: null, authorizationState: nonce(), verifier: nonce(), redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback',
       exchangeDevice: this.device,
     };
@@ -106,11 +112,66 @@ export class ConnectionClient {
     return this.progress(id);
   }
   private view(flow: ConnectionFlow) { return FlowView.parse(flow); }
+  private authorizing(flow: ConnectionFlow): FlowProgress {
+    const device = flow.deviceAuthorization;
+    return { kind: 'authorize', flow: this.view(flow), url: flow.url!,
+      ...(device ? { device: { userCode: device.userCode, verificationUri: device.verificationUri, expiresAt: flow.expiresAt } } : {}) };
+  }
   private async awaitingAuthorization(flow: ConnectionFlow) {
     const active = await this.custody.api.json('/api/executions/' + flow.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     if (active.index !== flow.execution.index || active.continuation?.id !== flow.id ||
       active.invocation.input.methodDigest !== await hash(flow.registration.method))
       throw new Error('Continue the connection that is awaiting authorization.');
+  }
+  private async currentApplication(flow: ConnectionFlow) {
+    if (!flow.registration.appId) return;
+    const current = AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(flow.registration.appId))));
+    const previous = flow.registration.app!;
+    if (current.methodId !== previous.methodId || current.generation !== previous.generation ||
+      current.clientId !== previous.clientId || canonical(current.fields) !== canonical(previous.fields))
+      throw new Error('Start authorization again with the current application.');
+    flow.registration.app = current;
+  }
+  private async pollDevice(flow: ConnectionFlow): Promise<FlowProgress> {
+    const authorization = DeviceAuthorization.parse(flow.deviceAuthorization), method = flow.registration.method;
+    if (method.kind !== 'oauth' || method.config.grantType !== DEVICE_CODE_GRANT)
+      throw new Error('Choose a device authorization connection method.');
+    if (flow.expiresAt <= Date.now()) {
+      flow.step = 'failed'; flow.error = 'device_code_expired'; await this.store.put(flow);
+      return { kind: 'failed', flow: this.view(flow), error: flow.error };
+    }
+    if (authorization.nextPollAt > Date.now()) return this.authorizing(flow);
+    await this.awaitingAuthorization(flow);
+    await this.currentApplication(flow);
+    authorization.nextPollAt = Date.now() + authorization.intervalSeconds * 1000;
+    flow.deviceAuthorization = authorization;
+    await this.store.put(flow);
+    let result: Awaited<ReturnType<OAuth['deviceToken']>>;
+    try {
+      result = await new OAuth(this.transport).deviceToken(method.config, flow.registration.app!, authorization.deviceCode, flow.registration.scopes);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'authorization_failed';
+      if (code === 'service_unavailable' || code === 'service_rate_limit') {
+        authorization.intervalSeconds *= 2;
+        authorization.nextPollAt = Date.now() + authorization.intervalSeconds * 1000;
+        await this.store.put(flow);
+        return this.authorizing(flow);
+      }
+      flow.error = code;
+      flow.step = code === 'browser_exchange_unavailable' ? 'cli' : 'failed';
+      await this.store.put(flow);
+      return flow.step === 'cli' ? this.cli(flow) : { kind: 'failed', flow: this.view(flow), error: code };
+    }
+    if (result.kind === 'pending') {
+      authorization.intervalSeconds = Math.max(authorization.intervalSeconds + (result.slowDown ? 5 : 0), result.intervalSeconds ?? 0);
+      authorization.nextPollAt = Date.now() + authorization.intervalSeconds * 1000;
+      await this.store.put(flow);
+      return this.authorizing(flow);
+    }
+    await this.awaitingAuthorization(flow);
+    flow.material = ConnectionMaterial.parse({ ...registrationMaterial(flow.registration), oauth: result.token });
+    flow.step = 'commit'; await this.store.put(flow);
+    return this.accept(flow.id);
   }
   private async pollApproval(flow: ConnectionFlow): Promise<FlowProgress> {
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
@@ -129,6 +190,19 @@ export class ConnectionClient {
   }
   private async authorize(flow: ConnectionFlow) {
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
+    if (flow.registration.method.kind === 'oauth' && flow.registration.method.config.grantType === DEVICE_CODE_GRANT) {
+      try {
+        const device = await new OAuth(this.transport).deviceAuthorization(flow.registration.method.config, flow.registration.app!, flow.registration.scopes);
+        flow.deviceAuthorization = device; flow.expiresAt = Math.min(flow.expiresAt, device.expiresAt);
+        flow.step = 'authorize'; flow.url = device.verificationUriComplete ?? device.verificationUri;
+        await this.store.put(flow);
+        return this.authorizing(flow);
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'code' in error && error.code === 'browser_exchange_unavailable')) throw error;
+        flow.step = 'cli'; flow.error = 'browser_exchange_unavailable'; await this.store.put(flow);
+        return this.cli(flow);
+      }
+    }
     if (flow.registration.method.kind === 'approval') {
       const started = await startRunPodApproval(this.transport);
       flow.approval = started.approval;
@@ -164,11 +238,22 @@ export class ConnectionClient {
     if (flow.step === 'cli') {
       if (this.device === 'browser') return this.cli(flow);
       const execution = await this.custody.api.json('/api/executions/' + flow.execution.id, {}, Execution);
-      flow.step = 'start'; flow.exchangeDevice = 'cli'; flow.authorizationState = nonce(); flow.verifier = nonce(); flow.expiresAt = Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt));
+      flow.step = 'start'; flow.exchangeDevice = 'cli'; flow.authorizationState = nonce(); flow.verifier = nonce();
+      flow.expiresAt = flow.registration.method.kind === 'oauth' && flow.registration.method.config.grantType === DEVICE_CODE_GRANT
+        ? Date.parse(execution.expiresAt) : Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt));
       delete flow.error; await this.store.put(flow);
     }
     if (flow.step === 'start') return this.authorize(flow);
     if (flow.exchangeDevice === 'cli' && this.device === 'browser') return this.cli(flow);
+    if (flow.deviceAuthorization) {
+      let pending = this.devicePolls.get(id);
+      if (!pending) {
+        pending = this.pollDevice(flow);
+        this.devicePolls.set(id, pending);
+      }
+      try { return await pending; }
+      finally { if (this.devicePolls.get(id) === pending) this.devicePolls.delete(id); }
+    }
     if (flow.registration.method.kind === 'approval') {
       let pending = this.approvalPolls.get(id);
       if (!pending) {
@@ -185,26 +270,20 @@ export class ConnectionClient {
       if (response.sealed) return this.complete(id, decode(await open(response.sealed, this.custody.keys.encryption,
         this.custody.binding.id, response.context)));
     }
-    return { kind: 'authorize', flow: this.view(flow), url: flow.url! };
+    return this.authorizing(flow);
   }
   async complete(id: string, parameters: string): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step !== 'authorize') return this.progress(id, false);
     if (flow.exchangeDevice === 'cli' && this.device === 'browser') return this.cli(flow);
+    if (flow.deviceAuthorization) throw new Error('Device authorization completes after the code is approved at the service.');
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
     await this.awaitingAuthorization(flow);
     const query = new URLSearchParams(parameters);
     if (query.getAll('state').length !== 1 || query.get('state') !== flow.authorizationState)
       throw new Error('The authorization response does not match this connection.');
     if (query.has('error')) return this.cancel(id);
-    if (flow.registration.appId) {
-      const current = AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(flow.registration.appId))));
-      const previous = flow.registration.app!;
-      if (current.methodId !== previous.methodId || current.generation !== previous.generation ||
-        current.clientId !== previous.clientId || canonical(current.fields) !== canonical(previous.fields))
-        throw new Error('Start authorization again with the current application.');
-      flow.registration.app = current;
-    }
+    await this.currentApplication(flow);
     flow.step = 'exchange'; flow.exchangeStartedAt = Date.now(); await this.store.put(flow);
     try {
       flow.material = await exchangeRegistration(flow.registration, this.transport, parameters, flow.authorizationState, flow.verifier, flow.redirectUri, flow.ovh);

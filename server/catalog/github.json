@@ -30,6 +30,31 @@
       "docs": "https://docs.github.com/rest",
       "console": "https://github.com/settings/developers"
     },
+    "device": {
+      "name": "GitHub · Connect with device code",
+      "kind": "oauth",
+      "config": {
+        "grantType": "urn:ietf:params:oauth:grant-type:device_code",
+        "issuer": "https://github.com/login/oauth",
+        "deviceAuthorizationUrl": "https://github.com/login/device/code",
+        "tokenUrl": "https://github.com/login/oauth/access_token",
+        "clientAuth": "none",
+        "pkce": false,
+        "tokenFormat": "json",
+        "outputs": { "GH_TOKEN": "/accessToken", "GITHUB_TOKEN": "/accessToken" },
+        "adapter": "github",
+        "browserTokenExchange": "unavailable"
+      },
+      "preparation": {
+        "instructions": [{
+          "ja": "GitHubのOAuthアプリで「Enable Device Flow」を有効にしてください。",
+          "en": "Enable Device Flow in the GitHub OAuth application settings."
+        }],
+        "docs": true
+      },
+      "docs": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow",
+      "console": "https://github.com/settings/developers"
+    },
     "token": {
       "name": "GitHub · Enter access token",
       "kind": "token",

@@ -180,13 +180,15 @@ const Scopes = z.object({
 });
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
+export const DEVICE_CODE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 export const OAuthDefinition = z.object({
   browserTokenExchange: z.enum(['available', 'unavailable', 'unknown']).optional(),
   application: z.enum(['required', 'implicit']).default('required'),
-  grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
+  grantType: z.enum(['authorization_code', 'client_credentials', DEVICE_CODE_GRANT]).optional(),
   issuer: z.url().optional(),
   registrationUrl: z.url().optional(),
   authorizeUrl: UrlTemplate.optional(),
+  deviceAuthorizationUrl: UrlTemplate.optional(),
   tokenUrl: UrlTemplate,
   // Account checks are no longer run. Saved connections keep the method they were created with, so it stays readable.
   identity: z
@@ -222,8 +224,10 @@ export const OAuthDefinition = z.object({
   adapter: z.string().regex(/^[a-z][a-z0-9_-]{0,99}$/).optional(),
   keep: z.array(z.string()).default([]),
   hint: z.string().optional(),
-}).refine(value => value.grantType === 'client_credentials' || Boolean(value.authorizeUrl), {
+}).refine(value => value.grantType === 'client_credentials' || value.grantType === DEVICE_CODE_GRANT || Boolean(value.authorizeUrl), {
   path: ['authorizeUrl'], message: 'An authorization code flow requires an authorization URL.',
+}).refine(value => value.grantType !== DEVICE_CODE_GRANT || Boolean(value.deviceAuthorizationUrl), {
+  path: ['deviceAuthorizationUrl'], message: 'A device flow requires a device authorization URL.',
 });
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),

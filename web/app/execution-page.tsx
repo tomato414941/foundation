@@ -199,7 +199,7 @@ export async function clientAction({ params, request }: PageArgs) {
     } else if (prepared && current) await (await executionClient()).configure(item.id, configuration(current.invocation, prepared.input, item.operations[current.index]!.configure));
     if (item.waiting && prepared) {
       const progress = await (await executionClient()).continue(item.id, prepared.material);
-      if (requestMode && current?.invocation.name === 'connection.connect' && 'kind' in progress && progress.kind === 'authorize') {
+      if (requestMode && current?.invocation.name === 'connection.connect' && 'kind' in progress && progress.kind === 'authorize' && !progress.device) {
         const method = await requestConnectionMethod(String(current.invocation.input.methodId));
         if (method.kind !== 'approval' && ['http:', 'https:'].includes(new URL(progress.url).protocol))
           return redirectDocument(progress.url);
@@ -310,7 +310,7 @@ export default function ExecutionPage() {
     </div>;
   })}</div>;
   const requestState = <>
-    {focusedConnection && progress?.kind === 'authorize' && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
+    {focusedConnection && progress?.kind === 'authorize' && !progress.device && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
     {!pending && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
       transferring && item.delivery?.state === 'declined' ? 'declined' : connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
     } /></p>}
