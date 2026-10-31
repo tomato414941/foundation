@@ -125,12 +125,43 @@ test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻�
   const authorization = await cli.continue(started.flow.execution.id);
   if (!('kind' in authorization) || authorization.kind !== 'authorize') throw new Error('Expected authorization.');
   const state = new URL(authorization.url).searchParams.get('state')!;
-  await f.app.inject('/oauth/callback?state=' + state + '&code=cli-code');
+  const callback = await f.app.inject('/oauth/callback?state=' + state + '&code=cli-code&iss=' + encodeURIComponent('https://github.com/login/oauth'));
+  assert.equal(callback.statusCode, 302);
   const returning = await client.connections.progress(started.flow.id);
   if (returning.kind !== 'cli') throw new Error('Expected CLI continuation.');
   assert.equal(returning.command, 'foundation connect wait ' + started.flow.execution.id);
   const connected = await cli.connections.progress(started.flow.id);
-  assert.equal(connected.kind, 'connected');
+  if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
+  const saved = await f.client.api.json('/api/resources/' + connected.id, {}, Resource);
+  assert.equal(saved.ownerId, f.owner.actor.id);
+  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  assert.equal(material.oauth?.accessToken, 'cli-token');
+});
+
+test('代理のCLIでGitHubの認可応答を受け取り、指定した所有者の接続として保存する', async t => {
+  const f = await flowFixture(request => {
+    assert.equal(request.url, 'https://github.com/login/oauth/access_token');
+    assert.equal(JSON.parse(String(request.body)).code, 'delegate-code');
+    return jsonResponse({ access_token: 'delegate-token', token_type: 'bearer', scope: 'repo' });
+  }); t.after(f.close);
+  const app = await f.saveApp('github:oauth');
+  const identity = f.executorIdentity, trust = new JournalTrust(new MemoryJournal());
+  await trust.rememberBinding(f.owner.binding);
+  const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
+  const cli = new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'cli'));
+  const started = await cli.execute({ name: 'connection.connect', input: {
+    ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id,
+  } });
+  if (!('kind' in started) || started.kind !== 'authorize') throw new Error('Expected authorization.');
+  const parameters = new URLSearchParams({ state: new URL(started.url).searchParams.get('state')!,
+    code: 'delegate-code', iss: 'https://github.com/login/oauth' });
+  assert.equal((await f.app.inject('/oauth/callback?' + parameters)).statusCode, 302);
+  const connected = await cli.connections.progress(started.flow.id);
+  if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
+  const saved = await custody.api.json('/api/resources/' + connected.id, {}, Resource);
+  assert.equal(saved.ownerId, f.owner.actor.id);
+  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  assert.equal(material.oauth?.accessToken, 'delegate-token');
 });
 
 test('認可コードをstateと結び付け、並行して画面を開いても一度の交換で保存する', async t => {

@@ -10,6 +10,7 @@
       "name": "GitHub · Connect in browser",
       "kind": "oauth",
       "config": {
+        "issuer": "https://github.com/login/oauth",
         "authorizeUrl": "https://github.com/login/oauth/authorize",
         "tokenUrl": "https://github.com/login/oauth/access_token",
         "tokenFormat": "json",

@@ -367,7 +367,7 @@ test('eBayのRuNameで認可し、独自のトークン種別で更新する', a
   assert.equal(refreshed.refreshToken, 'ebay-refresh');
 });
 
-test('GitHubのJSON応答からトークンを取得し、そのトークンだけを取り消す', async () => {
+test('GitHubの発行者を確認してトークンを取得し、そのトークンだけを取り消す', async () => {
   const spec = await builtin('github');
   const githubApp = { clientId: 'github-client', clientSecret: 'github-secret', fields: {} };
   const provider = new Provider((request) => {
@@ -388,11 +388,18 @@ test('GitHubのJSON応答からトークンを取得し、そのトークンだ�
     return response('', 204);
   });
   const oauth = new OAuth(provider);
-  const token = await oauth.exchange(spec, githubApp, authorization('github-code'), verifier, redirect, [
-    'repo',
-  ]);
+  const callback = authorization('github-code');
+  callback.parameters.set('iss', 'https://github.com/login/oauth');
+  const token = await oauth.exchange(spec, githubApp, callback, verifier, redirect, ['repo']);
   assert.deepEqual(token.scopes, ['repo']);
   assert.equal(token.scopesStatus, 'reported');
+  for (const changes of [{ state: 'another-flow' }, { iss: 'https://github.com' }]) {
+    const parameters = new URLSearchParams(callback.parameters);
+    for (const [name, value] of Object.entries(changes)) parameters.set(name, value);
+    await assert.rejects(oauth.exchange(spec, githubApp, { parameters, state: callback.state }, verifier, redirect, ['repo']),
+      { code: 'invalid_state' });
+  }
+  assert.equal(provider.requests.length, 1);
   await oauth.revoke(spec, githubApp, token);
 });
 
