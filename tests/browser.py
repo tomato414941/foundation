@@ -1599,6 +1599,22 @@ class BrowserTests(unittest.TestCase):
         for name in ["OpenAI development", "OpenAI production", "OpenAI administration"]:
             expect(page.get_by_role("link", name=name, exact=True)).to_be_visible()
 
+    def test_FlyのAPIトークンを画面で保存し同じ接続を更新する(self):
+        page, principal = self.passkey_account("Fly connection owner")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service=fly")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Fly deployment")
+        page.get_by_label("APIトークン", exact=True).fill("FlyV1 fm2_browser_token,fm2_discharge")
+        print("Rendered Fly connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "fly-token-input-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "Fly deployment")
+        self.assertEqual(saved["data"]["methodId"], "fly:token")
+        self.assertEqual(saved["data"]["services"], [{"id": "fly", "name": "Fly.io"}])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("APIトークン", exact=True).fill("FlyV1 fm2_updated_browser_token")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.assertEqual(self.saved_connection(page, "Fly deployment")["id"], saved["id"])
+
     def test_AnthropicのAPIキーとAdminキーを選んで保存し更新する(self):
         page, principal = self.passkey_account("Anthropic account")
         root = f"{ORIGIN}/p/{principal['id']}"

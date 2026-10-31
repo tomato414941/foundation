@@ -502,6 +502,27 @@ test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端�
   assert.equal(used.stdout, '[redacted]');
 });
 
+test('FlyのトークンをCLIで保存・更新し、FLY_API_TOKENとしてコマンドへ渡す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Fly connection owner', '--origin', c.origin])).code, 0);
+  const started = await c.run(['connect', '--method', 'fly:token', '--name', 'Fly deployment', '--fields', '@-'],
+    JSON.stringify({ token: 'FlyV1 fm2_initial_cli_token' }));
+  assert.equal(started.code, 0, started.stderr);
+  const saved = JSON.parse(started.stdout);
+  const token = 'FlyV1 fm2_updated_cli_token,fm2_discharge';
+  const changed = await c.run(['connect', '--method', 'fly:token', '--connection', saved.connectionId, '--fields', '@-'],
+    JSON.stringify({ token }));
+  assert.equal(changed.code, 0, changed.stderr);
+  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'FLY_API_TOKEN', source: { id: saved.connectionId, output: 'FLY_API_TOKEN' } },
+  ]), '--', process.execPath, '-e',
+    'require("node:assert/strict").equal(process.env.FLY_API_TOKEN,' + JSON.stringify(token) +
+    ');console.log("Fly credentials delivered");process.stdout.write(process.env.FLY_API_TOKEN);']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, 'Fly credentials delivered\n[redacted]');
+});
+
 test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取り承認後に利用できるようにする', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Machine sender', '--origin', c.origin])).code, 0);

@@ -1,0 +1,27 @@
+{
+  "id": "fly",
+  "name": "Fly.io",
+  "api": "https://api.machines.dev/v1",
+  "docs": "https://docs.fly.io/machines/api",
+  "console": "https://fly.io/dashboard",
+  "methods": {
+    "token": {
+      "name": "Fly.io · Enter API token",
+      "kind": "token",
+      "docs": "https://docs.fly.io/security/tokens",
+      "console": "https://fly.io/dashboard",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "FLY_API_TOKEN" }
+      },
+      "config": {
+        "fields": [
+          { "name": "token", "label": "API token", "secret": true, "pattern": "^[^\\r\\n]+$" }
+        ],
+        "constants": { "url": "https://api.machines.dev/v1" },
+        "outputs": { "FLY_API_TOKEN": "/token" },
+        "hint": "Use FLY_API_TOKEN with flyctl. HTTP connections authenticate requests to the Machines API."
+      }
+    }
+  }
+}
