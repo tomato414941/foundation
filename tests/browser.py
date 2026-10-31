@@ -1615,6 +1615,25 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="接続する", exact=True).click()
         self.assertEqual(self.saved_connection(page, "Fly deployment")["id"], saved["id"])
 
+    def test_ResendのAPIキーを画面で保存し同じ接続を更新する(self):
+        page, principal = self.passkey_account("Resend connection owner")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service=resend")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Resend delivery")
+        page.get_by_label("APIキー", exact=True).fill("re_browser_test_key")
+        print("Rendered Resend connection: " + page.locator("main").inner_text(), flush=True)
+        page.screenshot(path=str(ARTIFACTS / "resend-api-key-input-ja.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "resend-api-key-mobile-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        saved = self.saved_connection(page, "Resend delivery")
+        self.assertEqual(saved["data"]["methodId"], "resend:api_key")
+        self.assertEqual(saved["data"]["services"], [{"id": "resend", "name": "Resend"}])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("APIキー", exact=True).fill("re_updated_browser_test_key")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.assertEqual(self.saved_connection(page, "Resend delivery")["id"], saved["id"])
+
     def test_AnthropicのAPIキーとAdminキーを選んで保存し更新する(self):
         page, principal = self.passkey_account("Anthropic account")
         root = f"{ORIGIN}/p/{principal['id']}"

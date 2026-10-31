@@ -523,6 +523,27 @@ test('FlyのトークンをCLIで保存・更新し、FLY_API_TOKENとしてコ�
   assert.equal(used.stdout, 'Fly credentials delivered\n[redacted]');
 });
 
+test('ResendのAPIキーをCLIで保存・更新し、RESEND_API_KEYとしてコマンドへ渡す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Resend connection owner', '--origin', c.origin])).code, 0);
+  const started = await c.run(['connect', '--method', 'resend:api_key', '--name', 'Resend delivery', '--fields', '@-'],
+    JSON.stringify({ token: 're_initial_cli_test_key' }));
+  assert.equal(started.code, 0, started.stderr);
+  const saved = JSON.parse(started.stdout);
+  const token = 're_updated_cli_test_key';
+  const changed = await c.run(['connect', '--method', 'resend:api_key', '--connection', saved.connectionId, '--fields', '@-'],
+    JSON.stringify({ token }));
+  assert.equal(changed.code, 0, changed.stderr);
+  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'RESEND_API_KEY', source: { id: saved.connectionId, output: 'RESEND_API_KEY' } },
+  ]), '--', process.execPath, '-e',
+    'require("node:assert/strict").equal(process.env.RESEND_API_KEY,' + JSON.stringify(token) +
+    ');console.log("Resend credentials delivered");process.stdout.write(process.env.RESEND_API_KEY);']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, 'Resend credentials delivered\n[redacted]');
+});
+
 test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取り承認後に利用できるようにする', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Machine sender', '--origin', c.origin])).code, 0);

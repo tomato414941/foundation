@@ -25,6 +25,7 @@ export const serviceLabels: Record<string, string> = {
   'anthropic.token.adminKey.label': 'Admin APIキー',
   'anthropic.token.adminKey.note': '使用量・費用の取得に加え、組織のリソースも管理できるキーです。',
   'fly.token.token.label': 'APIトークン',
+  'resend.token.token.label': 'APIキー',
   'openai.token.token.label': 'APIキー',
   'openai.token.token.note': 'モデルの呼び出しに使用するAPIキーを入力してください。ChatGPTの月額契約とは別にAPI利用料金がかかります。',
   'openai.token.adminKey.label': 'Admin APIキー',

@@ -1,0 +1,27 @@
+{
+  "id": "resend",
+  "name": "Resend",
+  "api": "https://api.resend.com",
+  "docs": "https://resend.com/docs/api-reference/introduction",
+  "console": "https://resend.com/api-keys",
+  "methods": {
+    "api_key": {
+      "name": "Resend · Enter API key",
+      "kind": "token",
+      "docs": "https://resend.com/docs/dashboard/api-keys/introduction",
+      "console": "https://resend.com/api-keys",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "RESEND_API_KEY" }
+      },
+      "config": {
+        "fields": [
+          { "name": "token", "label": "API key", "secret": true, "pattern": "^\\S+$" }
+        ],
+        "constants": { "url": "https://api.resend.com" },
+        "outputs": { "RESEND_API_KEY": "/token" },
+        "hint": "Use RESEND_API_KEY with the Resend SDK or CLI. HTTP connections use Bearer authentication."
+      }
+    }
+  }
+}
