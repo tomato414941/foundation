@@ -351,6 +351,8 @@ CREATE TABLE key_rotations (
   previous jsonb NOT NULL,
   replacement jsonb NOT NULL,
   previous_signature text NOT NULL,
+  -- The replacement private keys sealed for the previous keys, for the holders of those to follow.
+  handoff jsonb NOT NULL,
   state text NOT NULL DEFAULT 'preparing' CHECK (state IN ('preparing','committed','cancelled')),
   completed_items integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),

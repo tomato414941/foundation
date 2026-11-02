@@ -4,13 +4,14 @@ import { flowFixture } from './flow-support.js';
 import { MemoryJournal } from './delegation-support.js';
 import { CustodyClient, IdentityVerificationRequired, transferResource } from '../shared/client.js';
 import type { RecipientAccess } from '../shared/client.js';
-import { bindKeys, fingerprint, hash, newIdentityKeys, sign, signBinding, verifyBinding } from '../shared/authority.js';
+import { fingerprint, verifyBinding } from '../shared/authority.js';
 import { protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 import { Execution } from '../shared/executions.js';
 import { Resource } from '../shared/contracts.js';
 import { TransferRecipients } from '../shared/protocol.js';
 import { JournalTrust } from '../runtime/trust.js';
+import { resetKeys, rotateKeys } from './key-rotation-support.js';
 
 const transfer = (client: CustodyClient, id: string, to: string) => transferResource(client.api, id, to, () => client);
 
@@ -42,13 +43,10 @@ test('未検証の相手へ渡すときは検証するプリンシパルを知�
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
 });
 
-test('受け取り先の鍵が変わったら検証へ案内し新しい鍵を検証すると渡せるようにする', async t => {
+test('受け取り先が鍵を作り直したら検証へ案内し新しい鍵を検証すると渡せるようにする', async t => {
   const f = await flowFixture(); t.after(f.close);
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
-  const keys = await newIdentityKeys(), binding = { ...bindKeys(f.stranger.actor.id, keys),
-    generation: f.stranger.binding.generation + 1, previous: await hash(f.stranger.binding) };
-  await f.bindings.publish(f.stranger.actor, await signBinding(binding, keys),
-    await sign(binding, f.stranger.keys.signing, 'key-replacement'));
+  const { binding, keys } = await resetKeys(f.db, f.bindings, f.stranger);
   await assert.rejects(transfer(f.client, f.resource.id, f.stranger.actor.id), error => {
     assert.ok(error instanceof IdentityVerificationRequired);
     assert.deepEqual(error.recipient, { id: f.stranger.actor.id, name: 'Other', code: 'identity_changed' });
@@ -208,10 +206,7 @@ test('承認待ちの間に受け取り先の公開鍵が変わったら現在�
   const f = await flowFixture(); t.after(f.close);
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
   const execution = Execution.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
-  const keys = await newIdentityKeys(), binding = { ...bindKeys(f.stranger.actor.id, keys),
-    generation: f.stranger.binding.generation + 1, previous: await hash(f.stranger.binding) };
-  await f.bindings.publish(f.stranger.actor, await signBinding(binding, keys),
-    await sign(binding, f.stranger.keys.signing, 'key-replacement'));
+  await rotateKeys(f.keyRotations, f.stranger);
   await assert.rejects(f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond',
     { method: 'POST', body: {} }), { code: 'key_binding_changed' });
   assert.equal((await f.resources.get(f.resource.id)).owner_id, f.owner.actor.id);

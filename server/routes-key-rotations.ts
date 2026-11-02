@@ -3,7 +3,7 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { Id, Ok } from '../shared/contracts.js';
-import { RotationKind, RotationPreparation, RotationStart, RotationView } from '../shared/key-rotations.js';
+import { RotationHandoff, RotationKind, RotationPreparation, RotationStart, RotationView } from '../shared/key-rotations.js';
 
 const RotationParams = z.object({ id: Id, rotationId: Id });
 const ItemParams = RotationParams.extend({ kind: RotationKind, itemId: Id });
@@ -14,6 +14,9 @@ export async function routesKeyRotations(app: ApiApp, context: Context) {
     schema: { params: z.object({ id: Id }), body: RotationStart, response: { 201: RotationView } },
   }, async (request, reply) => reply.code(201).send(
     await rotations.start(actor(request), request.params.id, request.body)));
+  app.get('/api/principals/:id/key-handoffs/:bindingId', {
+    schema: { params: z.object({ id: Id, bindingId: Id }), response: { 200: RotationHandoff } },
+  }, request => rotations.handoff(actor(request), request.params.id, request.params.bindingId));
   app.get('/api/principals/:id/key-rotations/:rotationId', {
     schema: { params: RotationParams, querystring: z.object({
       limit: z.coerce.number().int().min(1).max(100).default(20),

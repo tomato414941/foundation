@@ -30,12 +30,11 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     return bindings.replacement(request.params.id, request.params.bindingId);
   });
   app.put('/api/principals/:id/binding', {
-    schema: { params: C.IdParams, body: P.PublishBinding, response: { 200: SignedBinding } },
+    schema: { params: C.IdParams, body: SignedBinding, response: { 200: SignedBinding } },
   }, request => {
     if (request.body.binding.principalId !== request.params.id)
       fail(400, 'wrong_principal', 'Publish keys for the selected identity.');
-    const { previousSignature, ...binding } = request.body;
-    return bindings.publish(actor(request), binding, previousSignature);
+    return bindings.publish(actor(request), request.body);
   });
   app.get('/api/principals/:id/keyring', {
     schema: { params: C.IdParams, response: { 200: KeyringState } },

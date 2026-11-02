@@ -92,6 +92,8 @@ export class CustodyClient {
   }
   private async connectedKeys(previous: BoundKeys, next: BoundKeys) {
     if (previous.principalId !== next.principalId) return false;
+    // Each step is one request; an identity rotated more often than this is verified again by hand instead.
+    if (next.generation - previous.generation > 32) return false;
     let current = previous;
     while (current.generation < next.generation) {
       const { replacement } = await this.api.json('/api/identities/' + Id.parse(next.principalId) +

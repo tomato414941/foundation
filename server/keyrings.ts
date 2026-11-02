@@ -30,6 +30,7 @@ export class Keyrings {
       fail(400, 'invalid_keyring', 'Sign the list of verified public keys for this principal on this Foundation server.');
     return this.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [ownerId]);
+      await this.bindings.requireCurrent(binding, connection);
       const row = await this.row(ownerId, connection);
       if (row) await this.authorization.requireResource(actor, row, 'update', connection);
       else if (!(await this.authorization.canCreate(actor, ownerId, 'keyring', connection)))

@@ -1,20 +1,23 @@
 import { z } from 'zod';
-import { Id, Name, Time, WrappedKey } from './contracts.js';
-import { Fingerprint, Signature, SignedBinding, canonical, hash, sign } from './authority.js';
-import type { BoundKeys, KeyMaterial } from './authority.js';
+import { Id, Name, Sealed, Time } from './contracts.js';
+import {
+  Fingerprint, KeyReplacement, PrivateKeys, Signature, SignedBinding, canonical, hash, sign, signBinding, verifiesReplacement,
+} from './authority.js';
+import type { BoundKeys, IdentityKeys, KeyMaterial } from './authority.js';
+import { decode, encode, open, seal } from './encryption.js';
 import { AccessPolicy, ProtectedContent, protect, reveal, verifyContent } from './custody.js';
 import type { CustodyContent, CustodyPolicy } from './custody.js';
 import { SignedEnvironment } from './runtime-protocol.js';
 import { FunctionSettingsApproval } from './function-api.js';
 
-export const RotationKind = z.enum(['content', 'result', 'credential', 'environment', 'keyring', 'functionSettings']);
+export const RotationKind = z.enum(['content', 'result', 'environment', 'keyring', 'functionSettings']);
 export const RotationStart = z.object({
-  id: Id, replacement: SignedBinding, previousSignature: Signature,
+  id: Id, replacement: SignedBinding, previousSignature: Signature, handoff: Sealed,
 }).strict();
+export const RotationHandoff = z.object({ replacement: KeyReplacement, handoff: Sealed }).strict();
 export const RotationPayload = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('content'), content: ProtectedContent }).strict(),
   z.object({ kind: z.literal('result'), content: ProtectedContent }).strict(),
-  z.object({ kind: z.literal('credential'), wrappedKey: WrappedKey }).strict(),
   z.object({ kind: z.literal('environment'), registration: SignedEnvironment }).strict(),
   z.object({ kind: z.literal('keyring'), signature: Signature }).strict(),
   z.object({ kind: z.literal('functionSettings'), approval: FunctionSettingsApproval }).strict(),
@@ -69,7 +72,7 @@ export async function prepareRotatedContent(
   return verifyContent({ ...value, signature: await sign(value, replacementKeys.signing, 'resource') });
 }
 
-// This proof also binds credential wraps to this rotation; possession of an API token alone cannot replace them.
+// Signed with the previous keys, so that possession of an API token alone cannot prepare a rotation.
 export async function rotationPreparationProof(
   rotationId: string, principalId: string, replacementId: string, itemId: string,
   sourceDigest: string, payload: PreparedRotationPayload,
@@ -84,4 +87,25 @@ export async function signRotationPreparation(
   return { sourceDigest, payload, signature: await sign(
     await rotationPreparationProof(rotationId, principalId, replacementId, itemId, sourceDigest, payload),
     key, 'key-rotation-preparation') };
+}
+
+// The replacement private keys, sealed for whoever holds the previous ones. Each passkey, sign-in key and device that
+// opened the previous keys moves to the new ones with it, without the rotating device knowing their unlock secrets. A
+// rotation therefore never excludes a holder of the previous keys; removing one is revocation, not rotation.
+export const handoffContext = (replacement: BoundKeys) => 'key-handoff:' + replacement.principalId + ':' + replacement.id;
+export function sealHandoff(previous: BoundKeys, replacement: BoundKeys, keys: IdentityKeys) {
+  return seal(encode(JSON.stringify(keys)), [{ id: previous.id, publicKey: previous.encryption }], handoffContext(replacement));
+}
+export async function openHandoff(
+  value: z.infer<typeof RotationHandoff>, previous: BoundKeys, key: KeyMaterial['encryption'],
+): Promise<{ binding: BoundKeys; keys: IdentityKeys }> {
+  const { replacement, handoff } = RotationHandoff.parse(value);
+  if (canonical(replacement.previous.binding) !== canonical(previous))
+    throw new Error('This key handoff follows other keys.');
+  const binding = replacement.replacement.binding;
+  if (!(await verifiesReplacement(previous, binding, [replacement])))
+    throw new Error('The previous keys did not authorize these replacement keys.');
+  const keys = PrivateKeys.parse(JSON.parse(decode(await open(handoff, key, previous.id, handoffContext(binding)))));
+  await signBinding(binding, keys);
+  return { binding, keys };
 }

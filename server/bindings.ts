@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import type { Actor, Authorization } from './authorization.js';
 import type { Database, Queryable } from './database.js';
 import type { Audit } from './audit.js';
-import { SignedBinding, canonical, hash, verify, verifyBinding } from '../shared/authority.js';
+import { SignedBinding, canonical, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import type { PublicEncryptionKey } from '../shared/contracts.js';
 import { samePublicKey } from './encryption-validation.js';
@@ -42,7 +42,7 @@ export class Bindings {
       ? { previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature } : null };
   }
 
-  async publish(actor: Actor, input: z.infer<typeof SignedBinding>, previousSignature?: string) {
+  async publish(actor: Actor, input: z.infer<typeof SignedBinding>) {
     const signed = SignedBinding.parse(input);
     const binding = await verifyBinding(signed);
     await this.authorization.requirePrincipal(actor, binding.principalId, 'manage_credentials');
@@ -56,20 +56,7 @@ export class Bindings {
       );
       if (previous) {
         if (canonical(previous.binding) === canonical(binding)) return SignedBinding.parse(previous);
-        if (!previousSignature || binding.generation !== previous.binding.generation + 1 ||
-          binding.previous !== await hash(previous.binding))
-          fail(409, 'key_binding_changed', 'Authorize replacement keys with the current signing key.');
-        await verify(binding, previousSignature, previous.binding.signing, 'key-replacement');
-        const inUse = await this.db.one(
-          `SELECT 1 FROM resource_custody WHERE jsonb_path_exists(content,
-            '$.policy.**.id ? (@ == $binding)', jsonb_build_object('binding',$1::text))
-           UNION ALL SELECT 1 FROM execution_tasks WHERE receipt ? 'content' AND jsonb_path_exists(receipt->'content',
-             '$.policy.**.id ? (@ == $binding)', jsonb_build_object('binding',$1::text))
-           UNION ALL SELECT 1 FROM executor_environments WHERE registration->'manifest'->'executor'->>'id'=$1 LIMIT 1`,
-          [previous.binding.id], connection,
-        );
-        if (inUse) fail(409, 'rekey_required', 'Re-encrypt shared content and update execution environments before replacing these keys.');
-        await connection.query('UPDATE principal_key_bindings SET retired_at=now() WHERE id=$1', [previous.binding.id]);
+        fail(409, 'key_binding_changed', 'Replace the keys of this identity with a key rotation.');
       } else if (binding.generation !== 1 || binding.previous !== null) {
         fail(400, 'invalid_key_binding', 'Start this identity with its first key binding.');
       } else if (principal.public_key && !samePublicKey(principal.public_key, binding.encryption)) {

@@ -6,9 +6,9 @@ import { delegatedFixture, MemoryJournal } from './delegation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { bindKeys, hash, newIdentityKeys, sign, signBinding, verifiesReplacement } from '../shared/authority.js';
-import { decode, encode, unwrap, wrap } from '../shared/encryption.js';
+import { decode, encode, seal, unwrap, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, ProtectedContent, approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
-import { prepareRotatedContent, signRotationPreparation } from '../shared/key-rotations.js';
+import { RotationHandoff, openHandoff, prepareRotatedContent, sealHandoff, signRotationPreparation } from '../shared/key-rotations.js';
 import type { PreparedRotationPayload } from '../shared/key-rotations.js';
 import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, makeReceipt, readReceipt, signEnvironment } from '../shared/runtime-protocol.js';
 import { openKeyring, signKeyring } from '../shared/keyring.js';
@@ -17,6 +17,7 @@ import { FunctionDefinition } from '../shared/contracts.js';
 import { CustodyClient } from '../shared/client.js';
 import { JournalTrust } from '../runtime/trust.js';
 import type { z } from 'zod';
+import { rotationStart } from './key-rotation-support.js';
 
 async function apiFixture() {
   const f = await delegatedFixture();
@@ -32,16 +33,12 @@ async function apiFixture() {
     return response.json();
   }
   async function start() {
-    const keys = await newIdentityKeys();
-    const binding = { ...bindKeys(f.owner.actor.id, keys), generation: f.owner.binding.generation + 1,
-      previous: await hash(f.owner.binding) };
-    const input = { id: randomUUID(), replacement: await signBinding(binding, keys),
-      previousSignature: await sign(binding, f.owner.keys.signing, 'key-replacement') };
+    const { keys, binding, input } = await rotationStart(f.owner);
     const path = '/api/principals/' + f.owner.actor.id + '/key-rotations';
     const result = await ok('POST', path, input);
     return { keys, binding, input, result, path: path + '/' + input.id };
   }
-  async function prepare(rotation: Awaited<ReturnType<typeof start>>, item: any, prfs = new Map<string, Uint8Array>()) {
+  async function prepare(rotation: Awaited<ReturnType<typeof start>>, item: any) {
     let payload: PreparedRotationPayload;
     switch (item.kind) {
       case 'content':
@@ -49,10 +46,6 @@ async function apiFixture() {
         payload = { kind: item.kind, content: await prepareRotatedContent(
           ProtectedContent.parse(item.source.content ?? item.source.receipt.content),
           f.owner.binding, rotation.binding, f.owner.binding, f.owner.keys, rotation.keys) };
-        break;
-      case 'credential':
-        assert.ok(prfs.has(item.id));
-        payload = { kind: 'credential', wrappedKey: await wrap(rotation.keys, prfs.get(item.id)!, f.owner.actor.id) };
         break;
       case 'environment':
         payload = { kind: 'environment', registration: await signEnvironment({ ...item.source.registration.manifest,
@@ -90,21 +83,13 @@ async function apiFixture() {
 
 test('鍵交換APIは旧鍵で利用を続けながら準備し、同じデータと共有範囲を新鍵へ移す', async t => {
   const f = await apiFixture(); t.after(f.close);
-  const prf = crypto.getRandomValues(new Uint8Array(32));
-  await f.authentication.setWrap(f.owner.actor, f.owner.actor.id, f.owner.actor.credentialId!,
-    await wrap(f.owner.keys, prf, f.owner.actor.id), f.owner.binding.encryption);
-  const additional = await f.authentication.issueKey(f.owner.actor.id, 'Another sign-in key');
-  const otherPrf = crypto.getRandomValues(new Uint8Array(32));
-  await f.authentication.setWrap(f.owner.actor, f.owner.actor.id, additional.credential.id,
-    await wrap(f.owner.keys, otherPrf, f.owner.actor.id), f.owner.binding.encryption);
-  const prfs = new Map([[f.owner.actor.credentialId!, prf], [additional.credential.id, otherPrf]]);
   const rotation = await f.start();
-  assert.equal(rotation.result.total, 3);
+  assert.equal(rotation.result.total, 1);
   const pending = await f.ok('GET', rotation.path);
-  assert.equal(pending.items.length, 3);
+  assert.equal(pending.items.length, 1);
   assert.equal((await f.ok('POST', rotation.path.slice(0, rotation.path.lastIndexOf('/')), rotation.input)).id, rotation.input.id);
-  for (const item of pending.items) await f.prepare(rotation, item, prfs);
-  assert.equal((await f.ok('GET', rotation.path)).prepared, 3);
+  for (const item of pending.items) await f.prepare(rotation, item);
+  assert.equal((await f.ok('GET', rotation.path)).prepared, 1);
   const previous = await f.custody.read(f.owner.actor, f.resource.id);
   assert.equal(decode(await reveal(previous.content, f.owner.binding, f.owner.keys.encryption)), 'confidential-value');
   const completed = await f.ok('POST', rotation.path + '/commit');
@@ -115,10 +100,6 @@ test('鍵交換APIは旧鍵で利用を続けながら準備し、同じデー�
   assert.equal(decode(await reveal(current.content, rotation.binding, rotation.keys.encryption)), 'confidential-value');
   assert.equal(decode(await reveal(current.content, f.executor.binding, f.executor.keys.encryption)), 'confidential-value');
   assert.deepEqual(current.content.policy.readers.map(reader => reader.principalId), previous.content.policy.readers.map(reader => reader.principalId));
-  const credential = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [f.owner.actor.credentialId]);
-  assert.deepEqual(await unwrap(credential!.private_wrap, prf, f.owner.actor.id), rotation.keys);
-  const second = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [additional.credential.id]);
-  assert.deepEqual(await unwrap(second!.private_wrap, otherPrf, f.owner.actor.id), rotation.keys);
   assert.equal(await f.authentication.authenticate(f.owner.token).then(actor => actor?.id), f.owner.actor.id);
   await assert.rejects(reveal(current.content, f.owner.binding, f.owner.keys.encryption));
   const ownerClient = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, rotation.binding, rotation.keys,
@@ -323,6 +304,7 @@ test('既存のデータベースへ鍵交換の保存領域を移行し、元�
   const rotation = await context.keyRotations.start(person.actor, person.actor.id, {
     id: randomUUID(), replacement: await signBinding(binding, keys),
     previousSignature: await sign(binding, person.keys.signing, 'key-replacement'),
+    handoff: await sealHandoff(person.binding, binding, keys),
   });
   assert.equal((await context.keyRotations.commit(person.actor, person.actor.id, rotation.id)).state, 'committed');
 });
@@ -368,4 +350,48 @@ test('鍵交換の信頼を引き継ぐときは旧鍵の署名と世代の連�
   await assert.rejects(verifiesReplacement(f.owner.binding, rotation.binding, [{ ...proof,
     previousSignature: await sign(rotation.binding, f.stranger.keys.signing, 'key-replacement') }]));
   assert.equal(await verifiesReplacement(f.stranger.binding, rotation.binding, [proof]), false);
+});
+
+test('旧鍵を開けるサインインキーは、交換後に旧鍵あての受け渡しから新しい鍵を受け取る', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const issued = await f.authentication.issueKey(f.owner.actor.id, 'Laptop');
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  await f.authentication.setWrap(f.owner.actor, f.owner.actor.id, issued.credential.id,
+    await wrap(f.owner.keys, unlock, f.owner.actor.id), f.owner.binding.encryption);
+  const rotation = await f.start();
+  for (const item of (await f.ok('GET', rotation.path)).items) await f.prepare(rotation, item);
+  await f.ok('POST', rotation.path + '/commit');
+  const held = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [issued.credential.id]);
+  const previous = await unwrap(held!.private_wrap, unlock, f.owner.actor.id);
+  assert.deepEqual(previous, f.owner.keys);
+  const response = await f.api('GET', '/api/principals/' + f.owner.actor.id + '/key-handoffs/' + f.owner.binding.id,
+    undefined, issued.token);
+  assert.equal(response.statusCode, 200, response.body);
+  const next = await openHandoff(RotationHandoff.parse(response.json()), f.owner.binding, f.owner.keys.encryption);
+  assert.deepEqual(next, { binding: rotation.binding, keys: rotation.keys });
+  const other = await f.api('GET', '/api/principals/' + f.owner.actor.id + '/key-handoffs/' + f.owner.binding.id,
+    undefined, f.stranger.token);
+  assert.equal(other.statusCode, 403);
+});
+
+test('現在の鍵以外にあてた受け渡しでは鍵交換を開始しない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const { keys, binding, input } = await rotationStart(f.owner);
+  for (const handoff of [await sealHandoff(f.stranger.binding, binding, keys),
+    await seal(encode(JSON.stringify(keys)), [{ id: f.owner.binding.id, publicKey: f.owner.binding.encryption }], 'another context')]) {
+    const response = await f.api('POST', '/api/principals/' + f.owner.actor.id + '/key-rotations', { ...input, handoff });
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'invalid_key_handoff');
+  }
+});
+
+test('受け渡しの鍵が交換証明の公開鍵と合わなければ受け取らない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const rotation = await f.start(), other = await rotationStart(f.owner);
+  const proof = { previous: await signBinding(f.owner.binding, f.owner.keys),
+    replacement: rotation.input.replacement, previousSignature: rotation.input.previousSignature };
+  await assert.rejects(openHandoff({ replacement: proof, handoff: await sealHandoff(f.owner.binding, rotation.binding, other.keys) },
+    f.owner.binding, f.owner.keys.encryption));
+  assert.deepEqual(await openHandoff({ replacement: proof, handoff: rotation.input.handoff }, f.owner.binding, f.owner.keys.encryption),
+    { binding: rotation.binding, keys: rotation.keys });
 });
