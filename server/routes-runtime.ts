@@ -6,7 +6,7 @@ import { fail } from './errors.js';
 import { iso } from './database.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { SignedBinding } from '../shared/authority.js';
+import { KeyReplacement, SignedBinding } from '../shared/authority.js';
 import { KeyringState, KeyringWrite } from '../shared/keyring.js';
 import { ContentTypes } from '../shared/custody.js';
 import { SharedReceipt } from '../shared/runtime-protocol.js';
@@ -22,6 +22,13 @@ export async function routesRuntime(app: ApiApp, context: Context) {
   app.get('/api/identities/:id/binding', {
     schema: { params: C.IdParams, response: { 200: SignedBinding } },
   }, request => { actor(request); return bindings.current(request.params.id); });
+  app.get('/api/identities/:id/key-replacements/:bindingId', {
+    schema: { params: z.object({ id: C.Id, bindingId: C.Id }),
+      response: { 200: z.object({ replacement: KeyReplacement.nullable() }) } },
+  }, request => {
+    actor(request);
+    return bindings.replacement(request.params.id, request.params.bindingId);
+  });
   app.put('/api/principals/:id/binding', {
     schema: { params: C.IdParams, body: P.PublishBinding, response: { 200: SignedBinding } },
   }, request => {

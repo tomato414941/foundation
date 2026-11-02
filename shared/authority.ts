@@ -101,6 +101,29 @@ export async function signedValue(signature: string, key: PublicEncryptionKey, p
 
 export const SignedBinding = z.object({ binding: KeyBinding, signature: Signature }).strict();
 
+export const KeyReplacement = z.object({
+  previous: SignedBinding, replacement: SignedBinding, previousSignature: Signature,
+}).strict();
+
+export async function verifiesReplacement(
+  previous: BoundKeys, replacement: BoundKeys, proofs: Array<z.infer<typeof KeyReplacement>>,
+) {
+  let current = previous;
+  for (const proof of [...proofs].sort((a, b) => a.replacement.binding.generation - b.replacement.binding.generation)) {
+    if (canonical(proof.previous.binding) !== canonical(current)) continue;
+    const next = proof.replacement.binding;
+    if (next.principalId !== current.principalId || next.id === current.id ||
+      next.generation !== current.generation + 1 || next.previous !== await hash(current))
+      return false;
+    await verifyBinding(proof.previous);
+    await verifyBinding(proof.replacement);
+    await verify(next, proof.previousSignature, current.signing, 'key-replacement');
+    current = next;
+    if (canonical(current) === canonical(replacement)) return true;
+  }
+  return false;
+}
+
 export async function signBinding(binding: BoundKeys, keys: IdentityKeys) {
   await validateBinding(binding);
   if (await thumbprint(keys.encryption) !== await thumbprint(binding.encryption) ||

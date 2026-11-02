@@ -139,6 +139,7 @@ export class Functions {
       canonical(publication.definition) !== canonical(spec))
       fail(400, 'invalid_function_publication', 'Sign the current function definition.');
     const row = await this.resources.db.transaction(async connection => {
+      await custody.bindings.requireCurrent(publication.author, connection);
       const data = { ...spec, publication } as unknown as Record<string, JsonValue>;
       const row = previous ? await this.resources.update(previous, { name: input.name, data }, connection)
         : await this.resources.insert(input.ownerId, 'function', input.name, data, { id: proof.functionId }, connection);

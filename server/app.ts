@@ -29,6 +29,7 @@ import { routesRequests } from './routes-requests.js';
 import { routesExecutions } from './routes-executions.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
+import { routesKeyRotations } from './routes-key-rotations.js';
 import { routesMcp } from './mcp.js';
 import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
@@ -510,6 +511,7 @@ export async function buildApp(context: Context) {
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);
   await routesAccounts(app, context);
+  await routesKeyRotations(app, context);
   await routesOAuthServer(app, context);
   await routesMcp(app, config.origin);
   await web(app);

@@ -23,10 +23,23 @@ export class Bindings {
   }
 
   async requireCurrent(binding: BoundKeys, connection: Queryable = this.db.pool) {
+    // A transactional writer keeps its verified keys current until its references have been stored.
+    if (connection !== this.db.pool)
+      await connection.query('SELECT id FROM principal_key_bindings WHERE principal_id=$1 AND retired_at IS NULL FOR SHARE',
+        [binding.principalId]);
     const current = await this.current(binding.principalId, connection);
     if (canonical(current.binding) !== canonical(binding))
       fail(409, 'key_binding_changed', 'This identity changed its keys. Review the new keys before continuing.');
     return current;
+  }
+
+  async replacement(principalId: string, bindingId: string) {
+    const row = await this.db.one<{
+      previous: z.infer<typeof SignedBinding>; replacement: z.infer<typeof SignedBinding>; previous_signature: string;
+    }>("SELECT previous,replacement,previous_signature FROM key_rotations WHERE principal_id=$1 AND state='committed' " +
+      "AND previous#>>'{binding,id}'=$2 LIMIT 1", [principalId, bindingId]);
+    return { replacement: row
+      ? { previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature } : null };
   }
 
   async publish(actor: Actor, input: z.infer<typeof SignedBinding>, previousSignature?: string) {

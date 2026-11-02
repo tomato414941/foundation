@@ -76,6 +76,7 @@ export class Delegation {
     await this.bindings.requireCurrent(manifest.executor);
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [manifest.ownerId]);
+      await this.bindings.requireCurrent(manifest.executor, connection);
       const old = await this.resources.db.one<EnvironmentRow>(
         'SELECT * FROM executor_environments WHERE resource_id=$1 FOR UPDATE', [manifest.id], connection,
       );
@@ -207,6 +208,15 @@ export class Delegation {
           fail(409, 'run_conflict', 'Use a new run ID for a different execution request.');
         return this.view(previous);
       }
+      await this.bindings.requireCurrent(intent.actor, connection);
+      await this.bindings.requireCurrent(intent.executor, connection);
+      for (const reader of intent.resultApproval?.policy.readers ?? [])
+        await this.bindings.requireCurrent(reader, connection);
+      const environment = await this.environment(intent.environmentId, connection);
+      await authorizeEnvironment(environment.registration, intent);
+      for (const pin of intent.sources)
+        if (!await matchesPin(await this.custody.get(pin.id, connection), pin))
+          fail(409, 'changed', 'An input changed. Prepare the execution again.');
       const active = await this.resources.db.one<{ count: string }>(
         "SELECT count(*) FROM execution_tasks WHERE owner_id=$1 AND state IN ('queued','running')", [intent.ownerId], connection,
       );

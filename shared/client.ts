@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Execution } from './executions.js';
 import { Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
-import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
+import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding, verifiesReplacement } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
   AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
@@ -70,12 +70,43 @@ export class CustodyClient {
 
   async trusted(binding: BoundKeys) {
     if (!(await this.verifies(binding))) {
+      const known = binding.principalId === this.binding.principalId ? this.binding : await this.known(binding.principalId);
+      if (known && binding.principalId !== this.binding.principalId && binding.generation > known.generation) {
+        if (await this.connectedKeys(known, binding)) {
+          const verifiedAt = new Date().toISOString();
+          try {
+            await this.changeKeyring(keys => [...keys.filter(entry => entry.binding.principalId !== binding.principalId),
+              { binding, verifiedAt }]);
+          } catch (error) { if (!errorIs(error, 401, 403)) throw error; }
+          (await this.keyring()).set(binding.principalId, { binding, verifiedAt });
+          await this.trust.rememberBinding(binding);
+          return binding;
+        }
+      }
       // Keys verified before and since replaced are told apart from keys never verified, to be verified again.
       if (binding.principalId !== this.binding.principalId && await this.known(binding.principalId))
         throw new ClientFailure('identity_changed', 'Identity ' + binding.principalId + ' replaced the keys verified before. Verify its current keys.');
       throw new ClientFailure('identity_untrusted', 'Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
     }
     return binding;
+  }
+  private async connectedKeys(previous: BoundKeys, next: BoundKeys) {
+    if (previous.principalId !== next.principalId) return false;
+    let current = previous;
+    while (current.generation < next.generation) {
+      const { replacement } = await this.api.json('/api/identities/' + Id.parse(next.principalId) +
+        '/key-replacements/' + Id.parse(current.id), {}, z.object({ replacement: KeyReplacement.nullable() }));
+      if (!replacement || !await verifiesReplacement(current, replacement.replacement.binding, [replacement])) return false;
+      current = replacement.replacement.binding;
+    }
+    return canonical(current) === canonical(next);
+  }
+  // Old signatures attest an immutable execution request; they do not authorize a new request or new content.
+  private async historicalKeys(binding: BoundKeys) {
+    if (await this.verifies(binding)) return binding;
+    const known = binding.principalId === this.binding.principalId ? this.binding : await this.known(binding.principalId);
+    if (known && binding.generation < known.generation && await this.connectedKeys(binding, known)) return binding;
+    return this.trusted(binding);
   }
   // Whether this identity verified the keys: its own, those in its keyring, or those this device verified before
   // keyrings. A keyring's entry for a principal decides over what this device verified earlier.
@@ -534,10 +565,10 @@ export class CustodyClient {
   async result(task: TaskView) {
     if (task.intent.origin !== this.origin || task.intent.id !== task.id)
       throw new Error('This execution belongs to another Foundation server.');
-    await this.trusted(task.intent.actor);
+    await this.historicalKeys(task.intent.actor);
     const signed = await signedValue(task.requestSignature, task.intent.actor.signing, 'run') as { intent: unknown };
     if (canonical(signed.intent) !== canonical(task.intent)) throw new Error('The result belongs to a different signed request.');
-    await this.trusted(task.intent.executor);
+    await this.historicalKeys(task.intent.executor);
     const readers = task.receipt && 'content' in task.receipt ? task.receipt.content.policy.readers : task.intent.resultRecipients;
     if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
       throw new ClientFailure('not_recipient', 'This identity is not a reader of the execution result.');

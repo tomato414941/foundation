@@ -26,6 +26,7 @@ import { Requests } from './requests.js';
 import { Devices } from './devices.js';
 import { Bindings } from './bindings.js';
 import { KeyResets } from './key-resets.js';
+import { KeyRotations } from './key-rotations.js';
 import { Keyrings } from './keyrings.js';
 import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
@@ -84,6 +85,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations = new ConnectionOperations(custody),
     oauthRelays = new OAuthRelays(delegation, () => executions);
   const processes = new Processes(resources, delegation);
+  const keyRotations = new KeyRotations(custody);
   const invocations = new Invocations(functions, custody, delegation);
   principals.keySharing = new KeySharing(custody);
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
@@ -149,6 +151,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     mailer,
     authentication,
     keyResets,
+    keyRotations,
     resources,
     catalog,
     transport,
