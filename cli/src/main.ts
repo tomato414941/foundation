@@ -28,6 +28,7 @@ import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBi
 import { Task } from '../../shared/runtime-protocol.js';
 import type { TaskView } from '../../shared/runtime-protocol.js';
 import { Client, ApiError } from './client.js';
+import { currentIdentity, rotateIdentity } from './keys.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
@@ -65,6 +66,7 @@ Usage: foundation <command> [options]
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
+  keys rotate                          Replace this identity's keys, keeping its items and sign-ins
   agent start [--id ID]                Register this machine as an execution environment
   app NAME --method ID --client-id ID  Encrypt an application (--for ENV to allow use)
   connect --method ID                  Encrypt and save a connection on this device
@@ -453,7 +455,7 @@ async function main(argv: string[]) {
     await identity(args);
     return 0;
   }
-  const client = new Client(await readIdentity(args.values.origin, args.values.principal));
+  const client = new Client(await currentIdentity(await readIdentity(args.values.origin, args.values.principal)));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);
@@ -462,6 +464,11 @@ async function main(argv: string[]) {
     const { wrappedKey: _wrappedKey, ...status } = current;
     await output({ ...status, ...(client.identity.binding ? { fingerprint: await fingerprint(client.identity.binding),
       verificationUrl: await linked(new URL('/account/trust?principal=' + current.principal.id, client.identity.origin).href, client.identity) } : {}) }, args);
+    return 0;
+  }
+  if (command === 'keys') {
+    if (args.positionals[0] !== 'rotate') throw new Error('Use foundation keys rotate.');
+    await output(await rotateIdentity(client.identity), args);
     return 0;
   }
   if (command === 'trust') {

@@ -745,3 +745,33 @@ test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリ�
     { fingerprint: value, verificationUrl: c.origin + '/account/trust?principal=' + principal.id + '#fingerprint=' + value },
   );
 });
+
+test('CLIで鍵を交換すると実行環境と手元の記録を新しい鍵へ移し、旧鍵を持つ別の端末も次の実行で移る', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Rotating machine', '--origin', c.origin])).code, 0);
+  const environmentId = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const other = await mkdtemp(join(tmpdir(), 'foundation-cli-copy-'));
+  t.after(() => rm(other, { recursive: true, force: true }));
+  await cp(c.directory, other, { recursive: true });
+  const before = JSON.parse((await c.run(['status'])).stdout).fingerprint;
+  const rotated = await c.run(['keys', 'rotate']);
+  assert.equal(rotated.code, 0, rotated.stderr);
+  assert.equal(JSON.parse(rotated.stdout).state, 'committed');
+  const after = JSON.parse((await c.run(['status'])).stdout).fingerprint;
+  assert.notEqual(after, before);
+  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
+    JSON.stringify({ command: ['node', '-e', "process.stdout.write('after rotation')"] })]);
+  assert.equal(started.code, 0, started.stderr);
+  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(executed.code, 0, executed.stderr);
+  const inspected = JSON.parse((await c.run(['api', 'GET', '/api/processes/' + JSON.parse(started.stdout).id])).stdout);
+  assert.equal(inspected.state, 'succeeded');
+  assert.equal(inspected.result.stdout, 'after rotation');
+  const copied = await c.run(['status'], undefined, { XDG_CONFIG_HOME: other });
+  assert.equal(copied.code, 0, copied.stderr);
+  assert.equal(JSON.parse(copied.stdout).fingerprint, after);
+  const saved = JSON.parse(await readFile(join(other, 'foundation', 'identity.json'), 'utf8'));
+  assert.equal(await fingerprint(saved.identities[0].binding), after);
+});

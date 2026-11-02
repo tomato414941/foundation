@@ -138,7 +138,10 @@ export async function followKeys(api: JsonApi, held: { binding: BoundKeys; keys:
   }
   return null;
 }
-export class KeysReplaced extends Error { readonly code = 'keys_replaced'; }
+export class KeysReplaced extends Error {
+  readonly code = 'keys_replaced';
+  constructor(message: string, readonly environmentId?: string) { super(message); }
+}
 
 type Item = z.infer<typeof RotationItem>;
 const RotationState = z.object({ rotation: RotationView.nullable() });

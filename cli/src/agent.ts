@@ -1,11 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { z } from 'zod';
 import { privateClient } from './custody.js';
 import type { Client } from './client.js';
-import { canonical, fingerprint } from '../../shared/authority.js';
+import { SignedBinding, canonical, fingerprint } from '../../shared/authority.js';
+import { KeysReplaced } from '../../shared/key-rotations.js';
 import { Id } from '../../shared/contracts.js';
-import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, signEnvironment, verifyEnvironment } from '../../shared/runtime-protocol.js';
+import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, SignedEnvironment, signEnvironment, verifyEnvironment } from '../../shared/runtime-protocol.js';
 import type { RegisteredEnvironment } from '../../shared/runtime-protocol.js';
 import { FileJournal } from '../../runtime/journal.js';
 import { Connections } from '../../runtime/connections.js';
@@ -38,6 +40,18 @@ export async function startAgent(client: Client, options: {
       image: environment.manifest.commandImage, functionImage: environment.manifest.functionImage } : options;
     const execution = { isolation: settings.isolation, ...(settings.image ? { commandImage: settings.image } : {}),
       ...(settings.functionImage ? { functionImage: settings.functionImage } : {}) };
+    if (environment && canonical(environment.manifest.executor) !== canonical(binding)) {
+      // A rotation of the principal's keys signed the registration again for the new keys: take it when it keeps
+      // everything else as this machine registered it.
+      const { registration } = await client.json('/api/environments/' + id + '/registration', {},
+        z.object({ registration: SignedEnvironment }).passthrough());
+      const rotated = await verifyEnvironment(registration).then(() => registration, () => null);
+      if (rotated && canonical(rotated.manifest.executor) === canonical(binding) && canonical({ ...rotated.manifest,
+        executor: environment.manifest.executor, revision: environment.manifest.revision }) === canonical(environment.manifest)) {
+        environment = rotated;
+        await journal.write('environment_' + id, environment);
+      }
+    }
     if (environment) {
       await verifyEnvironment(environment);
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
@@ -76,6 +90,7 @@ export async function startAgent(client: Client, options: {
     const functions = new FunctionExecutor(executor, new FunctionBroker(client), journal);
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
     const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, commands);
+    let checkKeysAt = Date.now() + 60_000;
     do {
       const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await functions.reconcile(), ...await processes.reconcile()];
       if (pending.length) process.stderr.write(JSON.stringify({ event: 'reconciliation_pending', ids: pending }) + '\n');
@@ -84,6 +99,11 @@ export async function startAgent(client: Client, options: {
         claimed = await processes.tick(controller.signal) || claimed; }
       catch (error) { if (!(error instanceof DeliveryPending) || options.once) throw error; }
       if (options.once) break;
+      if (Date.now() >= checkKeysAt) {
+        checkKeysAt = Date.now() + 60_000;
+        const { binding: current } = await client.json('/api/identities/' + binding.principalId + '/binding', {}, SignedBinding);
+        if (canonical(current) !== canonical(binding)) throw new KeysReplaced('This identity uses new keys.', id);
+      }
       if (!claimed) await delay(1000, undefined, { signal: controller.signal });
     } while (!controller.signal.aborted);
   } catch (error) {

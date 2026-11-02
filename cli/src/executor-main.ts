@@ -7,6 +7,8 @@ import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION } from '../../shared/run
 import { Client } from './client.js';
 import { readIdentity } from './config.js';
 import { startAgent } from './agent.js';
+import { currentIdentity } from './keys.js';
+import { KeysReplaced } from '../../shared/key-rotations.js';
 
 async function main() {
   const args = parseArgs({ allowPositionals: true, options: {
@@ -22,12 +24,20 @@ async function main() {
   const supplied = process.env.FOUNDATION_AGENT_OPTIONS;
   delete process.env.FOUNDATION_AGENT_OPTIONS;
   const input = supplied ? JSON.parse(supplied) : { ...args.values, ownerId: args.values.owner };
-  const client = new Client(await readIdentity(input.origin)), session = await client.session();
-  if (!session.principal) throw new Error('The machine identity is no longer valid.');
-  return startAgent(client, { id: input.id ? Id.parse(input.id) : undefined,
-    ownerId: Id.parse(input.ownerId ?? session.principal.id), name: Name.parse(input.name ?? hostname()),
-    isolation: z.enum(['process', 'container']).parse(input.isolation ?? 'process'),
-    image: input.image, once: input.once });
+  // When the principal's keys are replaced while it runs, the agent stops, moves to the new keys and starts again.
+  for (;;) {
+    const client = new Client(await currentIdentity(await readIdentity(input.origin))), session = await client.session();
+    if (!session.principal) throw new Error('The machine identity is no longer valid.');
+    try {
+      return await startAgent(client, { id: input.id ? Id.parse(input.id) : undefined,
+        ownerId: Id.parse(input.ownerId ?? session.principal.id), name: Name.parse(input.name ?? hostname()),
+        isolation: z.enum(['process', 'container']).parse(input.isolation ?? 'process'),
+        image: input.image, once: input.once });
+    } catch (error) {
+      if (!(error instanceof KeysReplaced)) throw error;
+      input.id ??= error.environmentId;
+    }
+  }
 }
 try { process.exitCode = await main(); }
 catch (error) { process.stderr.write((error instanceof Error ? error.message : 'The execution agent failed.') + '\n'); process.exitCode = 1; }
