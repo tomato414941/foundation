@@ -489,3 +489,18 @@ test('鍵交換の確定は、その鍵を使う書き込みだけを待ち、�
     assert.equal((await commit).state, 'committed');
   } finally { writer.release(); }
 });
+
+test('秘密鍵だけを包んだパスキーは、公開鍵から交換の受け渡しをたどって新しい鍵を受け取る', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const first = await rotateKeys(f.jsonApi(f.owner.token), { binding: f.owner.binding, keys: f.owner.keys });
+  assert.equal(first.state, 'committed');
+  if (first.state !== 'committed') return;
+  const second = await rotateKeys(f.jsonApi(f.owner.token), first);
+  assert.equal(second.state, 'committed');
+  if (second.state !== 'committed') return;
+  assert.deepEqual(await followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: f.owner.keys }),
+    { binding: second.binding, keys: second.keys });
+  assert.equal(await followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: second.keys }), null);
+  const other = await rotationStart(f.stranger);
+  await assert.rejects(followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: other.keys }));
+});

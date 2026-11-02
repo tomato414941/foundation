@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { Id, Name, Sealed, Time } from './contracts.js';
 import {
-  Fingerprint, KeyReplacement, PrivateKeys, Signature, SignedBinding, canonical, hash, sign, signBinding, verifiesReplacement,
+  Fingerprint, KeyReplacement, PrivateKeys, Signature, SignedBinding, canonical, hash, publicPart, sign, signBinding, thumbprint,
+  verifiesReplacement,
 } from './authority.js';
 import type { BoundKeys, IdentityKeys, KeyMaterial } from './authority.js';
 import { bindKeys, newIdentityKeys } from './authority.js';
@@ -12,6 +13,7 @@ import { SignedEnvironment, signEnvironment } from './runtime-protocol.js';
 import { FunctionSettingsApproval, approveFunctionSettings } from './function-api.js';
 import { openKeyring, signKeyring } from './keyring.js';
 import type { JsonApi } from './client.js';
+import type { JWK } from 'jose';
 
 export const RotationKind = z.enum(['content', 'result', 'environment', 'keyring', 'functionSettings']);
 export const RotationStart = z.object({
@@ -122,17 +124,28 @@ export async function openHandoff(
 }
 
 // The keys a device holds once it has followed every rotation since the keys it had: each handoff is opened with the
-// keys before it. Keys made again by a key reset have no handoff, and are opened with a passkey that holds them.
-export async function followKeys(api: JsonApi, held: { binding: BoundKeys; keys: KeyMaterial }) {
-  const id = Id.parse(held.binding.principalId);
-  let binding = held.binding, keys: KeyMaterial = held.keys, followed: IdentityKeys | null = null;
+// keys before it. A passkey's wrap holds the private keys alone, so those are found by their public encryption key.
+// Keys made again by a key reset have no handoff, and are opened with a passkey that holds them.
+export async function followKeys(api: JsonApi, held: { binding: BoundKeys; keys: KeyMaterial }
+  | { principalId: string; keys: IdentityKeys }) {
+  const id = Id.parse('binding' in held ? held.binding.principalId : held.principalId);
+  const handoffs = '/api/principals/' + id + '/key-handoffs';
+  let binding: BoundKeys | null = 'binding' in held ? held.binding : null, keys: KeyMaterial = held.keys,
+    followed: IdentityKeys | null = null;
   for (let step = 0; step <= 32; step++) {
     const { binding: current } = await api.json('/api/identities/' + id + '/binding', {}, SignedBinding);
-    if (canonical(current) === canonical(binding)) return followed ? { binding, keys: followed } : null;
-    if (current.generation <= binding.generation || step === 32)
+    if (binding ? canonical(current) === canonical(binding)
+      : await thumbprint(current.encryption) === await thumbprint(publicPart(held.keys.encryption as JWK)))
+      return followed ? { binding: current, keys: followed } : null;
+    if ((binding && current.generation <= binding.generation) || step === 32)
       throw new KeysReplaced('The keys of this identity were made again. Sign in with a passkey that holds them.');
-    const next = await openHandoff(await api.json('/api/principals/' + id + '/key-handoffs/' + Id.parse(binding.id), {},
-      RotationHandoff), binding, keys.encryption);
+    const handoff = await api.json(binding ? handoffs + '/' + Id.parse(binding.id)
+      : handoffs + '?' + new URLSearchParams({ encryption: await thumbprint(publicPart(held.keys.encryption as JWK)) }),
+    {}, RotationHandoff);
+    const previous = binding ?? handoff.replacement.previous.binding;
+    if (!binding && await thumbprint(previous.encryption) !== await thumbprint(publicPart(held.keys.encryption as JWK)))
+      throw new Error('This key handoff follows other keys.');
+    const next = await openHandoff(handoff, previous, keys.encryption);
     ({ binding } = next);
     keys = followed = next.keys;
   }

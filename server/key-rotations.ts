@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { canonical, hash, verify, verifyBinding } from '../shared/authority.js';
+import { canonical, hash, thumbprint, verify, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { continuesPolicy, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
 import { SignedEnvironment, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
@@ -468,11 +468,15 @@ export class KeyRotations {
     }
   }
 
-  // The replacement keys sealed for the given keys of the principal, for a device or passkey that still holds those.
-  async handoff(actor: Actor, principalId: string, bindingId: string) {
+  // The replacement keys sealed for the given keys of the principal, for a device or passkey that still holds those:
+  // found by their binding, or by their public encryption key for a passkey, whose wrap holds the private keys alone.
+  async handoff(actor: Actor, principalId: string, selected: { bindingId: string } | { encryption: string }) {
     await this.authorize(actor, principalId);
-    const row = await this.db.one<RotationRow>("SELECT * FROM key_rotations WHERE principal_id=$1 AND state='committed' " +
-      "AND previous#>>'{binding,id}'=$2", [principalId, bindingId]);
+    const rows = await this.db.all<RotationRow>("SELECT * FROM key_rotations WHERE principal_id=$1 AND state='committed' " +
+      "AND ($2::text IS NULL OR previous#>>'{binding,id}'=$2)", [principalId, 'bindingId' in selected ? selected.bindingId : null]);
+    let row: RotationRow | undefined;
+    for (const value of rows)
+      if ('bindingId' in selected || await thumbprint(value.previous.binding.encryption) === selected.encryption) row = value;
     if (!row) fail(404, 'not_found', 'These keys were not replaced.');
     return { replacement: { previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature },
       handoff: row.handoff };

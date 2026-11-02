@@ -3,6 +3,7 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { Id, Ok } from '../shared/contracts.js';
+import { Fingerprint } from '../shared/authority.js';
 import {
   RotationEndorsement, RotationHandoff, RotationKind, RotationPreparation, RotationRequest, RotationStart, RotationView,
 } from '../shared/key-rotations.js';
@@ -18,7 +19,11 @@ export async function routesKeyRotations(app: ApiApp, context: Context) {
     await rotations.start(actor(request), request.params.id, request.body)));
   app.get('/api/principals/:id/key-handoffs/:bindingId', {
     schema: { params: z.object({ id: Id, bindingId: Id }), response: { 200: RotationHandoff } },
-  }, request => rotations.handoff(actor(request), request.params.id, request.params.bindingId));
+  }, request => rotations.handoff(actor(request), request.params.id, { bindingId: request.params.bindingId }));
+  app.get('/api/principals/:id/key-handoffs', {
+    schema: { params: z.object({ id: Id }), querystring: z.object({ encryption: Fingerprint }).strict(),
+      response: { 200: RotationHandoff } },
+  }, request => rotations.handoff(actor(request), request.params.id, { encryption: request.query.encryption }));
   app.get('/api/principals/:id/key-rotations', {
     schema: { params: z.object({ id: Id }), response: { 200: z.object({ rotation: RotationView.nullable() }) } },
   }, request => rotations.current(actor(request), request.params.id));
