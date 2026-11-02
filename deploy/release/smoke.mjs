@@ -17,6 +17,7 @@ import { FileJournal } from '../../dist/runtime/journal.js';
 import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
 import { encode, decode } from '../../dist/shared/encryption.js';
+import { followKeys, rotateKeys } from '../../dist/shared/key-rotations.js';
 import { cleanupIdentities } from './cleanup.mjs';
 import { OpenSSH } from '../../dist/server/ssh-client.js';
 
@@ -55,6 +56,29 @@ try {
     identities[index] = { id: binding.principalId, client, custody, functions, binding, trust };
   }
   const [owner, caller] = identities;
+  {
+    // A disposable identity replaces its keys; another sign-in key that held the previous keys follows to the new ones,
+    // and both read the same value afterwards.
+    const keys = await newIdentityKeys();
+    const enrollment = await context.authentication.enroll('Release key rotation ' + crypto.randomUUID(), publicPart(keys.encryption));
+    identities.push(enrollment.principal.id);
+    const binding = bindKeys(enrollment.principal.id, keys);
+    const client = new Client({ origin: config.origin, principalId: binding.principalId, token: enrollment.token, keys, binding });
+    await client.json('/api/principals/' + binding.principalId + '/binding', { method: 'PUT', body: await signBinding(binding, keys) });
+    const open = (api, held, name) => new CustodyClient(api, config.origin, held.binding, held.keys,
+      new JournalTrust(new FileJournal(join(directory, name), config.origin, held.binding, held.keys)));
+    const value = crypto.randomUUID(), before = open(client, { binding, keys }, 'rotation-before');
+    const saved = await before.save('Release rotation value', encode(value), await before.policy(binding.principalId, ContentTypes.value));
+    const second = await context.authentication.issueKey(binding.principalId, 'Release second device');
+    const other = new Client({ origin: config.origin, principalId: binding.principalId, token: second.token, keys, binding });
+    const rotated = await rotateKeys(client, { binding, keys });
+    assert.equal(rotated.state, 'committed');
+    assert.equal((await client.json('/api/identities/' + binding.principalId + '/binding')).binding.id, rotated.binding.id);
+    assert.equal(decode(await open(client, rotated, 'rotation-after').reveal(saved.id)), value);
+    const followed = await followKeys(other, { binding, keys });
+    assert.equal(followed.binding.id, rotated.binding.id);
+    assert.equal(decode(await open(other, followed, 'rotation-followed').reveal(saved.id)), value);
+  }
   if (process.env.RELEASE_SMOKE_MODE !== 'attached') {
     const ssh = new OpenSSH(), direct = await ssh.keys();
     const created = await owner.client.json('/api/principals/' + owner.id + '/resources', { method: 'POST', body: {
@@ -191,4 +215,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, keyRotation: true, cleanup: true }));
