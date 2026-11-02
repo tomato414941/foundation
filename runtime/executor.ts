@@ -24,7 +24,7 @@ import type { ConnectionOutputs } from './connection-provider.js';
 import { processInputs, utf8 } from './inputs.js';
 
 export interface ExecutionBroker {
-  claim(environmentId: string): Promise<{ lease: string; request: SealedRun; sources: CustodyContent[] } | null>;
+  claim(environmentId: string, executor: string): Promise<{ lease: string; request: SealedRun; sources: CustodyContent[] } | null>;
   renew(id: string, lease: string): Promise<{ active: boolean }>;
   dispatch(id: string, lease: string): Promise<unknown>;
   finish(lease: string, receipt: SignedReceipt): Promise<TaskView>;
@@ -103,7 +103,7 @@ export class Executor {
 
   async tick(signal: AbortSignal = new AbortController().signal) {
     signal.throwIfAborted();
-    const claim = await this.broker.claim(this.environment.manifest.id);
+    const claim = await this.broker.claim(this.environment.manifest.id, this.environment.manifest.executor.id);
     if (!claim) return false;
     const { intent } = claim.request;
     const id = 'run_' + intent.id, digest = await hash(claim.request);

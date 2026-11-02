@@ -400,8 +400,8 @@ test('所有者の署名で承認したプログラムを確認してから秘�
       bindings: [{ pointer: '/headers/authorization', parts: [{ id: f.resource.id }] }] } } }));
   const invocation = await f.functions.invoke(fn.id);
   class AlteredBroker extends FunctionBroker {
-    override async claim(id: string) {
-      const value = await super.claim(id);
+    override async claim(id: string, executor: string) {
+      const value = await super.claim(id, executor);
       if (value?.publication.definition.program.kind === 'http')
         value.publication.definition.program.request.url = 'https://other.example/action';
       return value;
@@ -443,7 +443,7 @@ test('開始前に期限が切れた処理を別のリースで引き受け、�
   const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
-  const expired = (await broker.claim(f.environment.manifest.id))!;
+  const expired = (await broker.claim(f.environment.manifest.id, f.environment.manifest.executor.id))!;
   await f.db.pool.query("UPDATE function_invocations SET lease_until=now()-interval '1 second' WHERE id=$1", [invocation.id]);
   await f.context.invocations.recover();
   assert.equal((await f.functions.result(invocation.id)).state, 'running');
@@ -457,7 +457,7 @@ test('開始後に実行主体が停止した処理は結果不明として返�
   const f = await flowFixture(() => jsonResponse({ done: true })); t.after(f.close);
   const fn = await save(f, FunctionDefinition.parse({
     program: { kind: 'http', request: { url: 'https://service.example/action', method: 'POST' } } }));
-  const invocation = await f.functions.invoke(fn.id), claim = (await f.functionExecutor.broker.claim(f.environment.manifest.id))!;
+  const invocation = await f.functions.invoke(fn.id), claim = (await f.functionExecutor.broker.claim(f.environment.manifest.id, f.environment.manifest.executor.id))!;
   await f.functionExecutor.broker.dispatch(invocation.id, claim.lease);
   await f.journal.write('invocation_' + invocation.id, { id: invocation.id, digest: await hash(claim.request),
     lease: claim.lease, phase: 'dispatched', delivered: false, completion: null });
@@ -474,7 +474,7 @@ test('呼び出しに対応する実行主体の署名を検証して結果を�
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition());
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
-  const claim = (await broker.claim(f.environment.manifest.id))!;
+  const claim = (await broker.claim(f.environment.manifest.id, f.environment.manifest.executor.id))!;
   await broker.dispatch(invocation.id, claim.lease);
   const value = { id: invocation.id, requestDigest: await hash(claim.request), state: 'succeeded' as const,
     result: { done: true }, error: null, finishedAt: new Date().toISOString() };
@@ -523,7 +523,7 @@ test('中止の応答が途切れた場合は結果不明として確定し、�
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition());
   const invocation = await f.functions.invoke(fn.id), broker = f.functionExecutor.broker;
-  const claim = (await broker.claim(f.environment.manifest.id))!;
+  const claim = (await broker.claim(f.environment.manifest.id, f.environment.manifest.executor.id))!;
   await broker.dispatch(invocation.id, claim.lease);
   await f.functions.cancel(invocation.id);
   assert.equal((await f.functions.result(invocation.id)).error?.code, 'cancellation_pending');

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
 import { environmentConnected } from './environment-status.js';
 import type { Resources } from './resources.js';
+import { claimant } from './delegation.js';
 import type { Delegation } from './delegation.js';
 import { iso } from './database.js';
 import type { Queryable } from './database.js';
@@ -106,10 +107,11 @@ export class Processes {
        AND ($4::uuid IS NULL OR id>$4) ORDER BY id LIMIT $5`, [environmentId, all, actor.id, after ?? null, limit + 1]);
     return { items: rows.slice(0, limit).map(row => this.view(row)), next: rows.length > limit ? rows[limit - 1]!.id : null };
   }
-  async claim(actor: Actor, environmentId: string) {
-    await this.delegation.heartbeat(actor, environmentId);
+  async claim(actor: Actor, environmentId: string, executor?: string) {
+    const keys = claimant(executor);
+    await this.delegation.heartbeat(actor, environmentId, keys);
     const lease = randomUUID();
-    const row = await this.delegation.claimGate(environmentId, connection => this.queue.claim<ProcessRow>(environmentId, lease, connection));
+    const row = await this.delegation.claimGate(environmentId, keys, connection => this.queue.claim<ProcessRow>(environmentId, lease, connection));
     if (!row) return null;
     try { await this.validate(row.actor, environmentId); }
     catch {

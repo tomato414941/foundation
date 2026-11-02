@@ -64,7 +64,7 @@ export async function delegatedFixture() {
   };
   const request = await prepareRun(intent, operation, owner.keys);
   const broker: ExecutionBroker = {
-    claim: id => delegation.claim(executor.actor, id),
+    claim: (id, binding) => delegation.claim(executor.actor, id, binding),
     renew: (id, lease) => delegation.renew(executor.actor, id, lease),
     dispatch: (id, lease) => delegation.dispatch(executor.actor, id, lease),
     finish: (lease, receipt) => delegation.finish(executor.actor, lease, receipt),

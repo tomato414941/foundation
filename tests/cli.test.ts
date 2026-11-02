@@ -775,3 +775,37 @@ test('CLIで鍵を交換すると実行環境と手元の記録を新しい鍵�
   const saved = JSON.parse(await readFile(join(other, 'foundation', 'identity.json'), 'utf8'));
   assert.equal(await fingerprint(saved.identities[0].binding), after);
 });
+
+test('稼働中の実行環境は鍵の交換後に旧鍵で依頼を受け取らず、新しい鍵へ移って交換後の依頼を処理する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Running executor', '--origin', c.origin])).code, 0);
+  const environmentId = randomUUID();
+  assert.equal((await c.run(['agent', 'start', '--id', environmentId, '--once'])).code, 0);
+  const agent = spawn(process.execPath, [resolve('cli/dist', 'agent.mjs'), 'start', '--id', environmentId],
+    { env: { ...process.env, XDG_CONFIG_HOME: c.directory, FOUNDATION_ORIGIN: c.origin }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let agentOutput = '';
+  agent.stdout.on('data', chunk => { agentOutput += chunk; });
+  agent.stderr.on('data', chunk => { agentOutput += chunk; });
+  const exited = new Promise(resolveExit => agent.once('close', resolveExit));
+  t.after(async () => { agent.kill('SIGTERM'); await exited; });
+  const waitFor = async (check: () => Promise<boolean>) => {
+    for (let attempt = 0; attempt < 150; attempt++) {
+      if (await check()) return;
+      await new Promise(resolveWait => setTimeout(resolveWait, 200));
+    }
+    assert.fail('Timed out. Agent output: ' + agentOutput);
+  };
+  await waitFor(async () => agentOutput.includes(environmentId));
+  const rotated = await c.run(['keys', 'rotate']);
+  assert.equal(rotated.code, 0, rotated.stderr);
+  assert.equal(JSON.parse(rotated.stdout).state, 'committed');
+  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
+    JSON.stringify({ command: ['node', '-e', "process.stdout.write('handled with new keys')"] })]);
+  assert.equal(started.code, 0, started.stderr);
+  const id = JSON.parse(started.stdout).id;
+  await waitFor(async () => JSON.parse((await c.run(['api', 'GET', '/api/processes/' + id])).stdout).state === 'succeeded');
+  assert.equal(JSON.parse((await c.run(['api', 'GET', '/api/processes/' + id])).stdout).result.stdout, 'handled with new keys');
+  const saved = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8'));
+  assert.equal(saved.identities[0].binding.generation, 2);
+  assert.equal(agent.exitCode, null);
+});

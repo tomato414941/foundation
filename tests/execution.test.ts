@@ -213,8 +213,8 @@ test('ワーカーが実行を一度だけ取得し、開始後の中断を確�
   const f = await delegatedFixture();
   t.after(f.close);
   await f.delegation.submit(f.owner.actor, f.request);
-  const claims = await Promise.all([f.delegation.claim(f.executor.actor, f.environment.manifest.id),
-    f.delegation.claim(f.executor.actor, f.environment.manifest.id)]);
+  const claims = await Promise.all([f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id),
+    f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id)]);
   assert.equal(claims.filter(Boolean).length, 1);
   await f.delegation.dispatch(f.executor.actor, f.intent.id, claims.find(Boolean)!.lease);
   await f.db.pool.query("UPDATE execution_tasks SET lease_until=now()-interval '1 minute' WHERE id=$1", [f.intent.id]);

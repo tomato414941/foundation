@@ -9,7 +9,9 @@ import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
 import { Operations, matchesPin, operationName, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
-import { Task, authorizeEnvironment, receiptHeader, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
+import {
+  FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, Task, authorizeEnvironment, receiptHeader, verifyEnvironment, verifyReceipt,
+} from '../shared/runtime-protocol.js';
 import type { RegisteredEnvironment, SharedResultReceipt, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { fail, required } from './errors.js';
 
@@ -45,6 +47,12 @@ export interface ClaimedTask {
   sources: CustodyContent[];
 }
 
+// An executor from an earlier release claims without naming its keys: it is told to update, and its claim leaves the
+// environment's heartbeat as it was, so that it does not look ready to run work.
+export function claimant(executor: string | undefined) {
+  if (!executor) fail(426, 'executor_update_required', 'Update the Foundation executor to the current release, then start it again.');
+  return executor;
+}
 export class Delegation {
   readonly queue: TaskQueue;
   readonly queues = new Set<TaskQueue>();
@@ -73,6 +81,11 @@ export class Delegation {
     // Operator attribution is a principal, not an unverified provider label.
     if (manifest.operatorId !== actor.id)
       fail(400, 'invalid_operator', 'Use the registering identity as the execution operator.');
+    // An executor from an earlier release cannot claim work, so it is not registered as if it could. A version is declared
+    // only for what the executor runs; every release that declares an earlier one claims without naming its keys.
+    if ((manifest.functionVersion !== undefined && manifest.functionVersion !== FUNCTION_RUNTIME_VERSION) ||
+      (manifest.httpVersion !== undefined && manifest.httpVersion !== HTTP_RUNTIME_VERSION))
+      fail(426, 'executor_update_required', 'Update the Foundation executor to the current release, then start it again.');
     await this.bindings.requireCurrent(manifest.executor);
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [manifest.ownerId]);
@@ -125,18 +138,22 @@ export class Delegation {
     });
   }
 
-  async heartbeat(actor: Actor, id: string) {
-    const environment = await this.requireExecutor(actor, id);
+  async heartbeat(actor: Actor, id: string, executor?: string) {
+    const environment = await this.requireExecutor(actor, id, executor);
     await this.resources.db.pool.query('UPDATE executor_environments SET heartbeat_at=now() WHERE resource_id=$1', [id]);
     return { registration: environment.registration };
   }
 
-  async requireExecutor(actor: Actor, id: string) {
+  // A claim names the keys the executor holds: one still running with keys a rotation replaced takes no request sealed
+  // for the new keys, and moves to them instead.
+  async requireExecutor(actor: Actor, id: string, executor?: string) {
     await this.resources.authorization.active(actor);
     const environment = await this.environment(id);
     if (environment.executor_id !== actor.id) fail(403, 'forbidden', 'Use the identity registered for this environment.');
     if (environment.stopped_at) fail(409, 'environment_stopped', 'This execution environment has been stopped.');
     await this.bindings.requireCurrent(environment.registration.manifest.executor);
+    if (executor !== undefined && environment.registration.manifest.executor.id !== executor)
+      fail(409, 'key_binding_changed', 'This environment now uses other keys. Start it again with the current keys.');
     return environment;
   }
 
@@ -248,10 +265,11 @@ export class Delegation {
     return { items: rows.slice(0, limit).map(row => this.view(row)), next: rows.length > limit ? rows[limit - 1]!.id : null };
   }
 
-  async claim(actor: Actor, environmentId: string): Promise<ClaimedTask | null> {
-    await this.heartbeat(actor, environmentId);
+  async claim(actor: Actor, environmentId: string, executor?: string): Promise<ClaimedTask | null> {
+    const keys = claimant(executor);
+    await this.heartbeat(actor, environmentId, keys);
     const lease = randomUUID();
-    const row = await this.claimGate(environmentId, connection => this.queue.claim<TaskRow>(environmentId, lease, connection));
+    const row = await this.claimGate(environmentId, keys, connection => this.queue.claim<TaskRow>(environmentId, lease, connection));
     if (!row) return null;
     try {
       const { sources } = await this.validate(row.actor, row.request);
@@ -265,8 +283,17 @@ export class Delegation {
     }
   }
 
-  async claimGate<T>(id: string, claim: (connection: Queryable) => Promise<T | undefined>) {
+  // Work is claimed only by the executor holding the keys the environment is registered with, checked in the claiming
+  // transaction: the current binding is held FOR SHARE until the claim commits, so a rotation that replaces it waits,
+  // and a claim after the rotation finds other keys. It is taken before the environment row, as a rotation takes them.
+  async claimGate<T>(id: string, executor: string, claim: (connection: Queryable) => Promise<T | undefined>) {
     return this.resources.db.transaction(async connection => {
+      const environment = await this.environment(id, connection);
+      const current = await connection.query<{ id: string }>(
+        'SELECT id FROM principal_key_bindings WHERE principal_id=$1 AND retired_at IS NULL FOR SHARE', [environment.executor_id]);
+      const registered = await this.environment(id, connection);
+      if (current.rows[0]?.id !== executor || registered.registration.manifest.executor.id !== executor)
+        fail(409, 'key_binding_changed', 'This environment now uses other keys. Start it again with the current keys.');
       const row = required(await this.resources.db.one<{ data: Record<string, unknown> }>(
         'SELECT data FROM resources WHERE id=$1 FOR UPDATE', [id], connection));
       if (Date.parse(String(row.data.maintenanceUntil)) > Date.now()) return undefined;

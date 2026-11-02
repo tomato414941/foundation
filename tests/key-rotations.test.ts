@@ -224,7 +224,7 @@ test('保存済みの実行結果を、新鍵と共有相手の鍵で元の実�
   });
   const intent = { ...f.intent, resultApproval: await approvePolicy(resultPolicy, f.owner.binding, f.owner.keys) };
   await f.delegation.submit(f.owner.actor, await prepareRun(intent, f.operation, f.owner.keys));
-  const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+  const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
   await f.delegation.dispatch(f.executor.actor, intent.id, claim.lease);
   const receipt = await makeReceipt(intent, 'succeeded', { ok: true, result: 'preserved result', error: null }, f.executor.keys);
   await f.delegation.finish(f.executor.actor, claim.lease, receipt);
@@ -503,4 +503,80 @@ test('秘密鍵だけを包んだパスキーは、公開鍵から交換の受�
   assert.equal(await followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: second.keys }), null);
   const other = await rotationStart(f.stranger);
   await assert.rejects(followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: other.keys }));
+});
+
+test('鍵の交換後は旧鍵を名乗る実行環境に依頼を渡さず、新しい鍵の実行環境に渡す', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const id = f.environment.manifest.id;
+  const result = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
+  assert.equal(result.state, 'committed');
+  if (result.state !== 'committed') return;
+  for (const path of ['/claim', '/invocations/claim', '/processes/claim']) {
+    const stale = await f.api('POST', '/api/environments/' + id + path, { executor: f.executor.binding.id }, f.executor.token);
+    assert.equal(stale.statusCode, 409, path);
+    assert.equal(stale.json().error.code, 'key_binding_changed');
+  }
+  assert.equal((await f.api('POST', '/api/environments/' + id + '/claim', { executor: result.binding.id }, f.executor.token)).statusCode, 200);
+});
+
+test('前のリリースの実行環境は登録も依頼の受け取りもできず、生存確認を更新しない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const id = f.environment.manifest.id;
+  await f.db.pool.query("UPDATE executor_environments SET heartbeat_at=now()-interval '10 minutes' WHERE resource_id=$1", [id]);
+  for (const path of ['/claim', '/invocations/claim', '/processes/claim']) {
+    const response = await f.api('POST', '/api/environments/' + id + path, {}, f.executor.token);
+    assert.equal(response.statusCode, 426, path);
+    assert.equal(response.json().error.code, 'executor_update_required');
+  }
+  const outdated = await signEnvironment({ ...f.environment.manifest, functionVersion: FUNCTION_RUNTIME_VERSION - 1,
+    httpVersion: HTTP_RUNTIME_VERSION - 1, revision: f.environment.manifest.revision + 1 }, f.executor.keys);
+  const registered = await f.api('PUT', '/api/environments/' + id + '/registration', outdated, f.executor.token);
+  assert.equal(registered.statusCode, 426);
+  const row = await f.db.one<{ stale: boolean }>(
+    "SELECT heartbeat_at<now()-interval '5 minutes' AS stale FROM executor_environments WHERE resource_id=$1", [id]);
+  assert.equal(row!.stale, true);
+});
+
+test('鍵の照合直後に交換が確定しても、旧鍵の実行環境は同じ受け取りで依頼を取得しない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const id = f.environment.manifest.id, previous = f.executor.binding;
+  await await f.api('PUT', '/api/environments/' + id + '/processes/registration', { workingDirectory: f.config.dataDirectory }, f.executor.token);
+  const heartbeat = f.context.delegation.heartbeat.bind(f.context.delegation);
+  let rotated = false;
+  f.context.delegation.heartbeat = async (actor, environmentId, executor) => {
+    const value = await heartbeat(actor, environmentId, executor);
+    if (!rotated) {
+      rotated = true;
+      const result = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
+      assert.equal(result.state, 'committed');
+    }
+    return value;
+  };
+  for (const claim of [() => f.context.delegation.claim(f.executor.actor, id, previous.id),
+    () => f.context.processes.claim(f.executor.actor, id, previous.id),
+    () => f.context.invocations.claim(f.executor.actor, id, previous.id)]) {
+    rotated = false;
+    await assert.rejects(claim(), { code: 'key_binding_changed' });
+  }
+});
+
+test('権限の引き継ぎ履歴が上限に達した項目は、理由を示して鍵交換を確定させない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  let held = { binding: f.executor.binding, keys: f.executor.keys };
+  for (let index = 0; index < 16; index++) {
+    const result = await rotateKeys(f.jsonApi(f.executor.token), held);
+    assert.equal(result.state, 'committed');
+    if (result.state !== 'committed') return;
+    held = result;
+  }
+  assert.equal((await f.custody.read(f.owner.actor, f.resource.id)).content.lineage?.length, 16);
+  const blocked = await rotateKeys(f.jsonApi(f.executor.token), held);
+  assert.equal(blocked.state, 'blocked');
+  if (blocked.state !== 'blocked') return;
+  assert.deepEqual(blocked.blockers, [{ kind: 'content', id: f.resource.id, reason: 'authority_history_full' }]);
+  const path = '/api/principals/' + f.executor.actor.id + '/key-rotations/' + blocked.rotationId;
+  const commit = await f.api('POST', path + '/commit', undefined, f.executor.token);
+  assert.equal(commit.json().error.code, 'rotation_blocked');
+  assert.equal((await f.api('DELETE', path, undefined, f.executor.token)).statusCode, 200);
+  assert.deepEqual((await f.bindings.current(f.executor.actor.id)).binding, held.binding);
 });

@@ -31,7 +31,7 @@ async function processFixture(t: TestContext) {
   const caller = { token: enrolled.token, actor: (await f.authentication.authenticate(enrolled.token))! };
   await f.relations.draw(f.owner.actor, { subjectId: caller.actor.id, relation: 'runner', objectId: environmentId });
   await f.relations.draw(f.owner.actor, { subjectId: caller.actor.id, relation: 'reader', objectId: environmentId });
-  const api = f.api(caller.token), journal = new MemoryJournal(), broker = new ProcessBroker(executorApi);
+  const api = f.api(caller.token), journal = new MemoryJournal(), broker = new ProcessBroker(executorApi, f.executor.binding.id);
   const worker = new ProcessExecutor(environmentId, broker, journal, new CommandProcess({ isolation: 'process' }), 20);
   const create = (body: object) => api.json('/api/environments/' + environmentId + '/processes', { method: 'POST', body }, CreatedProcess);
   const get = (id: string) => api.json('/api/processes/' + id, {}, ProcessView);

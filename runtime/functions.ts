@@ -24,7 +24,9 @@ export class FunctionBroker {
       }
     } };
   }
-  claim(id: string) { return this.api.json('/api/environments/' + id + '/invocations/claim', { method: 'POST', body: {} }, ClaimedInvocation); }
+  claim(id: string, executor: string) {
+    return this.api.json('/api/environments/' + id + '/invocations/claim', { method: 'POST', body: { executor } }, ClaimedInvocation);
+  }
   dispatch(id: string, lease: string) { return this.api.json('/api/runtime/functions/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
   renew(id: string, lease: string) { return this.api.json('/api/runtime/functions/' + id + '/renew', { method: 'POST', body: { lease } },
     z.object({ active: z.boolean(), reason: z.enum(['cancelled', 'authorization_changed', 'lease_lost']).optional() })); }
@@ -65,7 +67,7 @@ export class FunctionExecutor {
   }
   async tick(signal: AbortSignal = new AbortController().signal) {
     signal.throwIfAborted();
-    const claim = await this.broker.claim(this.executor.environment.manifest.id);
+    const claim = await this.broker.claim(this.executor.environment.manifest.id, this.executor.environment.manifest.executor.id);
     if (!claim) return false;
     const { request, publication, settings, sources, lease } = claim, digest = await hash(request);
     const key = 'invocation_' + request.id;

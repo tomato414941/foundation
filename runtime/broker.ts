@@ -22,7 +22,9 @@ export class HttpBroker implements ExecutionBroker {
       }
     } };
   }
-  claim(id: string) { return this.api.json('/api/environments/' + id + '/claim', { method: 'POST', body: {} }, ClaimedExecution); }
+  claim(id: string, executor: string) {
+    return this.api.json('/api/environments/' + id + '/claim', { method: 'POST', body: { executor } }, ClaimedExecution);
+  }
   renew(id: string, lease: string) {
     return this.api.json('/api/runtime/runs/' + id + '/renew', { method: 'POST', body: { lease } }, z.object({ active: z.boolean() }));
   }

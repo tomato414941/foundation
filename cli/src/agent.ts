@@ -89,7 +89,7 @@ export async function startAgent(client: Client, options: {
     const executor = new Executor(environment, keys, broker, journal, transport, commands, connections, functionCommands);
     const functions = new FunctionExecutor(executor, new FunctionBroker(client), journal);
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
-    const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, commands);
+    const processes = new ProcessExecutor(id, new ProcessBroker(client, binding.id), journal, commands);
     let checkKeysAt = Date.now() + 60_000;
     do {
       const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await functions.reconcile(), ...await processes.reconcile()];
@@ -97,7 +97,11 @@ export async function startAgent(client: Client, options: {
       let claimed = false;
       try { claimed = await executor.tick(controller.signal); claimed = await functions.tick(controller.signal) || claimed;
         claimed = await processes.tick(controller.signal) || claimed; }
-      catch (error) { if (!(error instanceof DeliveryPending) || options.once) throw error; }
+      catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'key_binding_changed')
+          throw new KeysReplaced('This identity uses new keys.', id);
+        if (!(error instanceof DeliveryPending) || options.once) throw error;
+      }
       if (options.once) break;
       if (Date.now() >= checkKeysAt) {
         checkKeysAt = Date.now() + 60_000;

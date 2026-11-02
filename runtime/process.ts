@@ -7,9 +7,11 @@ import type { Journal } from './journal.js';
 import { DeliveryPending } from './executor.js';
 
 export class ProcessBroker {
-  constructor(readonly api: JsonApi) {}
+  // The broker claims for the executor holding these keys.
+  constructor(readonly api: JsonApi, readonly executor: string) {}
   claim(id: string) {
-    return this.api.json('/api/environments/' + id + '/processes/claim', { method: 'POST', body: {} }, ClaimedProcess);
+    return this.api.json('/api/environments/' + id + '/processes/claim', { method: 'POST', body: { executor: this.executor } },
+      ClaimedProcess);
   }
   dispatch(id: string, lease: string) {
     return this.api.json('/api/processes/' + id + '/dispatch', { method: 'POST', body: { lease } });

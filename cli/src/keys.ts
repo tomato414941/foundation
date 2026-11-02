@@ -72,7 +72,7 @@ export async function rotateIdentity(identity: IdentityConfig) {
   if (process.env.FOUNDATION_TOKEN) throw new Error('Rotate the keys from a machine that saves its identity.');
   const held = { binding: identity.binding, keys: identity.keys };
   const result = await rotateKeys(new Client(identity), held);
-  if (result.state === 'waiting') return result;
+  if (result.state !== 'committed') return result;
   // Until a running executor has moved its records, the previous keys stay saved and lead to the new ones.
   if (await moveCustody(identity.origin, held, result)) await saveIdentity({ ...identity, keys: result.keys, binding: result.binding });
   return { state: result.state, bindingId: result.binding.id, generation: result.binding.generation };

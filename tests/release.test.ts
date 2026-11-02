@@ -91,7 +91,7 @@ test('更新待機中は通常のコマンドも待機させ、再開後に実�
   const process = await api.json('/api/environments/' + environment + '/processes', {
     method: 'POST', body: { command: ['node', '-e', 'console.log("ready")'] },
   }, CreatedProcess);
-  const worker = new ProcessExecutor(environment, new ProcessBroker(executorApi), new MemoryJournal(),
+  const worker = new ProcessExecutor(environment, new ProcessBroker(executorApi, f.executor.binding.id), new MemoryJournal(),
     new CommandProcess({ isolation: 'process' }));
   await f.context.delegation.maintenance(executor, environment, true);
   assert.equal(await worker.tick(), false);

@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { canonical, hash, thumbprint, verify, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
-import { continuesPolicy, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
+import { continuesPolicy, lineageLimit, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
 import { SignedEnvironment, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
 import { openKeyring, keyringClaim } from '../shared/keyring.js';
 import { verifyFunctionSettings } from '../shared/function-api.js';
@@ -133,6 +133,18 @@ export class KeyRotations {
     return items.sort((a, b) => a.kind + ':' + a.id < b.kind + ':' + b.id ? -1 : 1);
   }
   private async blockers(row: RotationRow, items: Item[], connection: Queryable = this.db.pool) {
+    // Replacing an authority's keys changes the item's authorities, which adds a handoff to its signed history; an item
+    // whose history is full keeps the previous keys, so the rotation cannot finish while such an item names them.
+    const full = items.flatMap(item => {
+      if (item.kind !== 'content' && item.kind !== 'result') return [];
+      const content = ProtectedContent.parse(item.kind === 'content' ? item.source.content
+        : (item.source.receipt as { content: unknown }).content);
+      return content.policy.authorities.some(value => value.id === row.previous.binding.id) &&
+        (content.lineage?.length ?? 0) >= lineageLimit ? [{ kind: item.kind, id: item.id, reason: 'authority_history_full' }] : [];
+    });
+    return [...full, ...await this.signedBlockers(row, items, connection)];
+  }
+  private async signedBlockers(row: RotationRow, items: Item[], connection: Queryable) {
     const ids = [row.previous.binding.id, ...items.filter(item => item.kind === 'content').map(item => item.id)];
     const patterns = ids.map(id => '%' + id + '%');
     return this.db.all<{ kind: string; id: string; reason: string }>(

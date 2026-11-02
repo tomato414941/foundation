@@ -94,7 +94,9 @@ const AuthoritySet = z.object({ ownerId: Id, authorities: z.array(KeyBinding).mi
 const HandoffBody = z.object({ origin: Origin, id: Id, revision: z.number().int().positive(),
   from: AuthoritySet, to: AuthoritySet, policyDigest: Fingerprint, previous: Fingerprint.nullable(), signerId: Id }).strict();
 export const AuthorityHandoff = HandoffBody.extend({ signature: Signature });
-const Lineage = z.array(AuthorityHandoff).max(16);
+// Each change of an item's authorities adds a handoff; an item with this many accepts no further change of them.
+export const lineageLimit = 16;
+const Lineage = z.array(AuthorityHandoff).max(lineageLimit);
 export const PolicyApproval = z.object({ policy: AccessPolicy, authorityId: Id, signature: Signature, lineage: Lineage.optional() }).strict();
 export type ApprovedPolicy = z.infer<typeof PolicyApproval>;
 export const ProtectedContent = z.object({

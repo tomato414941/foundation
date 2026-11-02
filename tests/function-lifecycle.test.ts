@@ -149,8 +149,8 @@ test('承認された実行設定の署名を確認し、改ざんされた設�
   await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
   const call = await f.functions.invoke(fn.id), broker = new FunctionBroker(f.api(f.executorIdentity.token));
   const claim = broker.claim.bind(broker);
-  broker.claim = async id => {
-    const value = await claim(id);
+  broker.claim = async (id, executor) => {
+    const value = await claim(id, executor);
     if (value) value.settings.inputAccess.expiresAt = new Date(Date.now() + 100_000).toISOString();
     return value;
   };

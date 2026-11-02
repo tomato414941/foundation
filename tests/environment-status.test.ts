@@ -25,7 +25,7 @@ test('一覧と詳細と共有一覧で通信断と再接続を示し、明示�
   await views(true);
   await f.db.pool.query("UPDATE executor_environments SET heartbeat_at=now()-interval '2 minutes' WHERE resource_id=$1", [id]);
   await views(false);
-  await executor.json('/api/environments/' + id + '/claim', { method: 'POST', body: {} });
+  await executor.json('/api/environments/' + id + '/claim', { method: 'POST', body: { executor: f.environment.manifest.executor.id } });
   await views(true);
   await owner.json('/api/resources/' + id + '/stop', { method: 'POST', body: {} });
   await views(false, 'stopped');
@@ -36,7 +36,7 @@ test('長い処理の実行権の更新を生存確認に反映する', async t 
   t.after(f.close);
   const id = f.environment.manifest.id, executor = f.api(f.executorIdentity.token);
   await f.context.delegation.submit(f.owner.actor, f.request);
-  const claim = (await f.context.delegation.claim(f.executorIdentity.actor, id))!;
+  const claim = (await f.context.delegation.claim(f.executorIdentity.actor, id, f.executorIdentity.binding.id))!;
   await f.context.delegation.dispatch(f.executorIdentity.actor, f.intent.id, claim.lease);
   await f.db.pool.query("UPDATE executor_environments SET heartbeat_at=now()-interval '2 minutes' WHERE resource_id=$1", [id]);
   const renewed = await executor.json('/api/runtime/runs/' + f.intent.id + '/renew', {

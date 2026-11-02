@@ -107,8 +107,8 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     schema: { params: C.IdParams, body: z.object({ paused: z.boolean() }).strict(), response: { 200: maintenance } },
   }, request => delegation.maintenance(actor(request), request.params.id, request.body.paused));
   app.post('/api/environments/:id/claim', {
-    schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: P.ClaimedExecution } },
-  }, request => delegation.claim(actor(request), request.params.id));
+    schema: { params: C.IdParams, body: z.object({ executor: C.Id.optional() }).strict(), response: { 200: P.ClaimedExecution } },
+  }, request => delegation.claim(actor(request), request.params.id, request.body.executor));
   app.post('/api/runtime/runs', {
     schema: { body: P.DelegatedRun, response: { 202: P.Task } },
   }, async (request, reply) => {

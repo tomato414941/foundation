@@ -160,6 +160,7 @@ type Item = z.infer<typeof RotationItem>;
 const RotationState = z.object({ rotation: RotationView.nullable() });
 export type RotationResult =
   | { state: 'committed'; binding: BoundKeys; keys: IdentityKeys }
+  | { state: 'blocked'; rotationId: string; blockers: Array<z.infer<typeof RotationBlocker>> }
   | { state: 'waiting'; rotationId: string; waiting: Array<{ kind: string; id: string; name: string | null; signers: string[] }> };
 
 // Replaces this principal's keys with new ones. It prepares every item the principal signs, and commits once all are
@@ -184,12 +185,13 @@ export async function rotateKeys(api: JsonApi, held: { binding: BoundKeys; keys:
   const path = base + '/' + Id.parse(rotation.id);
   for (let attempt = 0; attempt < 5; attempt++) {
     const waiting: Item[] = [];
-    let after: string | null = null;
+    let after: string | null = null, blockers: Array<z.infer<typeof RotationBlocker>> = [];
     do {
       const page: z.infer<typeof RotationView> = await api.json(path + '?' + new URLSearchParams({ limit: '100',
         ...(after ? { after } : {}) }), {}, RotationView);
+      blockers = page.blockers.filter(blocker => blocker.reason === 'authority_history_full');
       for (const item of page.items) {
-        if (item.state === 'prepared') continue;
+        if (item.state === 'prepared' || blockers.some(blocker => blocker.id === item.id)) continue;
         if (item.signers) { waiting.push(item); continue; }
         const payload = await rotationPayload(item, previous, next, keys);
         await api.json(path + '/items/' + item.kind + '/' + item.id, { method: 'PUT', body: await signRotationPreparation(
@@ -197,6 +199,9 @@ export async function rotateKeys(api: JsonApi, held: { binding: BoundKeys; keys:
       }
       after = page.next;
     } while (after);
+    // An item that accepts no further change of its authorities keeps this rotation from finishing; it stays prepared
+    // as far as it can be, and can be cancelled.
+    if (blockers.length) return { state: 'blocked', rotationId: rotation.id, blockers };
     if (waiting.length) return { state: 'waiting', rotationId: rotation.id,
       waiting: waiting.map(item => ({ kind: item.kind, id: item.id, name: item.name, signers: item.signers! })) };
     try {

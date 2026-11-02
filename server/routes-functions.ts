@@ -70,8 +70,8 @@ export async function routesFunctions(app: ApiApp, context: Context) {
     response: { 200: listOf(Invocation) } } }, request => invocations.list(actor(request), request.params.id, request.query.limit, request.query.after));
   app.get('/api/runtime/functions/:id', { schema: { params: IdParams, response: { 200: Invocation } } },
     request => invocations.get(actor(request), request.params.id));
-  app.post('/api/environments/:id/invocations/claim', { schema: { params: IdParams, body: z.object({}).strict(),
-    response: { 200: ClaimedInvocation } } }, request => invocations.claim(actor(request), request.params.id));
+  app.post('/api/environments/:id/invocations/claim', { schema: { params: IdParams, body: z.object({ executor: Id.optional() }).strict(),
+    response: { 200: ClaimedInvocation } } }, request => invocations.claim(actor(request), request.params.id, request.body.executor));
   const lease = z.object({ lease: Id }).strict();
   app.post('/api/runtime/functions/:id/dispatch', { schema: { params: IdParams, body: lease,
     response: { 200: z.object({ ok: z.literal(true) }) } } }, request => invocations.dispatch(actor(request), request.params.id, request.body.lease));

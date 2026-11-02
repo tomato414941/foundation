@@ -48,9 +48,9 @@ test('暗号化された依頼を指定先が一度取得し、暗号化した�
     const submitted = await f.delegation.submit(f.owner.actor, f.request);
     assert.equal(submitted.state, 'queued');
     assert.equal((await f.delegation.submit(f.owner.actor, f.request)).id, submitted.id);
-    await assert.rejects(f.delegation.claim(f.stranger.actor, f.environment.manifest.id), { code: 'forbidden' });
-    const claims = await Promise.all([f.delegation.claim(f.executor.actor, f.environment.manifest.id),
-      f.delegation.claim(f.executor.actor, f.environment.manifest.id)]);
+    await assert.rejects(f.delegation.claim(f.stranger.actor, f.environment.manifest.id, f.stranger.binding.id), { code: 'forbidden' });
+    const claims = await Promise.all([f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id),
+      f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id)]);
     assert.equal(claims.filter(Boolean).length, 1);
     const claim = claims.find(Boolean)!;
     assert.deepEqual((await openRun(claim.request, f.executor.binding, f.executor.keys)).operation, f.operation);
@@ -69,10 +69,10 @@ test('外部操作前に失われた実行権を引き継ぎ、古い実行権�
   const f = await setup();
   try {
     await f.delegation.submit(f.owner.actor, f.request);
-    const before = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+    const before = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     await f.db.pool.query("UPDATE execution_tasks SET lease_until=now()-interval '1 second' WHERE id=$1", [f.intent.id]);
     await f.delegation.recover();
-    const after = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+    const after = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     assert.notEqual(after.lease, before.lease);
     await assert.rejects(f.delegation.dispatch(f.executor.actor, f.intent.id, before.lease), { code: 'lease_lost' });
     await f.delegation.dispatch(f.executor.actor, f.intent.id, after.lease);
@@ -84,12 +84,12 @@ test('外部操作中の通信断を未確定として記録し、同じ実行�
   const f = await setup();
   try {
     await f.delegation.submit(f.owner.actor, f.request);
-    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     await f.delegation.dispatch(f.executor.actor, f.intent.id, claim.lease);
     await f.db.pool.query("UPDATE execution_tasks SET lease_until=now()-interval '1 second' WHERE id=$1", [f.intent.id]);
     await f.delegation.recover();
     assert.equal((await f.delegation.get(f.owner.actor, f.intent.id)).state, 'uncertain');
-    assert.equal(await f.delegation.claim(f.executor.actor, f.environment.manifest.id), null);
+    assert.equal(await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id), null);
     const receipt = await makeReceipt(f.intent, 'succeeded', { ok: true, result: { created: true }, error: null }, f.executor.keys);
     assert.equal((await f.delegation.finish(f.executor.actor, claim.lease, receipt)).state, 'succeeded');
   } finally { await f.close(); }
@@ -102,7 +102,7 @@ test('待機中の依頼を取り消し、開始後の取り消しは結果の�
     assert.equal((await f.delegation.cancel(f.owner.actor, f.intent.id)).state, 'cancelled');
     const intent = { ...f.intent, id: crypto.randomUUID() };
     await f.delegation.submit(f.owner.actor, await prepareRun(intent, f.operation, f.owner.keys));
-    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     await f.delegation.dispatch(f.executor.actor, intent.id, claim.lease);
     assert.equal((await f.delegation.cancel(f.owner.actor, intent.id)).state, 'uncertain');
     assert.deepEqual(await f.delegation.renew(f.executor.actor, intent.id, claim.lease), { active: false });
@@ -116,7 +116,7 @@ test('権限が変わった依頼を開始前に止め、停止した実行先�
     const content = await protect(encode('value'), { ...f.policy, revision: 2, grants: [] },
       2, f.owner.binding, f.owner.keys);
     await f.custody.put(f.owner.actor, { name: 'Credential', content, data: { bytes: 5 }, version: f.resource.version });
-    assert.equal(await f.delegation.claim(f.executor.actor, f.environment.manifest.id), null);
+    assert.equal(await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id), null);
     assert.equal((await f.delegation.get(f.owner.actor, f.intent.id)).state, 'failed');
     await f.delegation.stop(f.owner.actor, f.environment.manifest.id);
     await assert.rejects(f.delegation.heartbeat(f.executor.actor, f.environment.manifest.id), { code: 'environment_stopped' });

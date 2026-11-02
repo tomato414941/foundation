@@ -100,7 +100,7 @@ test('所有者が承認した出力先へ実行結果を暗号化して保存�
     }] };
     const approval = await approvePolicy(policy, f.owner.binding, f.owner.keys);
     await f.delegation.submit(f.owner.actor, await prepareRun(f.intent, f.operation, f.owner.keys));
-    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
+    const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     await f.delegation.dispatch(f.executor.actor, f.intent.id, claim.lease);
     const content = await produceContent(encode('output'), approval, f.intent.id, f.executor.binding,
       f.executor.keys, { bytes: 6 });

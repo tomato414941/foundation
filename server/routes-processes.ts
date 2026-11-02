@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
-import { IdParams, Ok, PageQuery, listOf } from '../shared/contracts.js';
+import { Id, IdParams, Ok, PageQuery, listOf } from '../shared/contracts.js';
 import { ClaimedProcess, ProcessCompletion, ProcessRegistration, ProcessView } from '../shared/process.js';
 import { Lease } from '../shared/protocol.js';
 
@@ -32,8 +32,8 @@ export async function routesProcesses(app: ApiApp, { processes }: Context) {
     schema: { params: IdParams, body: ProcessRegistration, response: { 200: ProcessRegistration } },
   }, request => processes.register(actor(request), request.params.id, request.body));
   app.post('/api/environments/:id/processes/claim', {
-    schema: { params: IdParams, body: z.object({}).strict(), response: { 200: ClaimedProcess } },
-  }, request => processes.claim(actor(request), request.params.id));
+    schema: { params: IdParams, body: z.object({ executor: Id.optional() }).strict(), response: { 200: ClaimedProcess } },
+  }, request => processes.claim(actor(request), request.params.id, request.body.executor));
   app.post('/api/processes/:id/dispatch', {
     schema: { params: IdParams, body: Lease, response: { 200: Ok } },
   }, request => processes.dispatch(actor(request), request.params.id, request.body.lease));
