@@ -8,7 +8,9 @@ import { buildApp } from '../server/app.js';
 import { bindKeys, hash, newIdentityKeys, sign, signBinding, verifiesReplacement } from '../shared/authority.js';
 import { decode, encode, seal, unwrap, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, ProtectedContent, approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
-import { RotationHandoff, openHandoff, prepareRotatedContent, sealHandoff, signRotationPreparation } from '../shared/key-rotations.js';
+import {
+  RotationHandoff, followKeys, openHandoff, prepareRotatedContent, rotateKeys, sealHandoff, signRotationPreparation,
+} from '../shared/key-rotations.js';
 import type { PreparedRotationPayload } from '../shared/key-rotations.js';
 import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, makeReceipt, readReceipt, signEnvironment } from '../shared/runtime-protocol.js';
 import { openKeyring, signKeyring } from '../shared/keyring.js';
@@ -394,4 +396,96 @@ test('受け渡しの鍵が交換証明の公開鍵と合わなければ受け�
     f.owner.binding, f.owner.keys.encryption));
   assert.deepEqual(await openHandoff({ replacement: proof, handoff: rotation.input.handoff }, f.owner.binding, f.owner.keys.encryption),
     { binding: rotation.binding, keys: rotation.keys });
+});
+
+test('鍵交換を最後まで行い、旧鍵を持つ別の端末は次に使うとき新しい鍵へ移って同じデータを読む', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const laptop = await f.authentication.issueKey(f.owner.actor.id, 'Laptop');
+  const result = await rotateKeys(f.jsonApi(f.owner.token), { binding: f.owner.binding, keys: f.owner.keys });
+  assert.equal(result.state, 'committed');
+  if (result.state !== 'committed') return;
+  assert.deepEqual((await f.bindings.current(f.owner.actor.id)).binding, result.binding);
+  const followed = await followKeys(f.jsonApi(laptop.token), { binding: f.owner.binding, keys: f.owner.keys });
+  assert.deepEqual(followed, { binding: result.binding, keys: result.keys });
+  assert.equal(await followKeys(f.jsonApi(laptop.token), followed!), null);
+  const client = new CustodyClient(f.jsonApi(laptop.token), f.config.origin, followed!.binding, followed!.keys,
+    new JournalTrust(new MemoryJournal()));
+  assert.equal(decode(await client.reveal(f.resource.id)), 'confidential-value');
+});
+
+test('途中で止まった鍵交換は、旧鍵を持つ端末が同じ新しい鍵で続きから確定する', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const rotation = await f.start();
+  const result = await rotateKeys(f.jsonApi(f.owner.token), { binding: f.owner.binding, keys: f.owner.keys });
+  assert.equal(result.state, 'committed');
+  if (result.state === 'committed') assert.deepEqual(result.keys, rotation.keys);
+});
+
+async function readOnlyItem(f: Awaited<ReturnType<typeof apiFixture>>) {
+  const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [f.owner.binding],
+    readers: [f.owner.binding, f.executor.binding], grants: [] });
+  const content = await protect(encode('owner-signed-value'), policy, 1, f.owner.binding, f.owner.keys);
+  return f.custody.put(f.owner.actor, { name: 'Owner signed', content, data: { bytes: 18 } });
+}
+
+test('読み手として含まれるだけの項目は署名者を示して待ち、署名者が自分の鍵で準備すると鍵交換を確定する', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const item = await readOnlyItem(f);
+  const executor = { binding: f.executor.binding, keys: f.executor.keys };
+  const waiting = await rotateKeys(f.jsonApi(f.executor.token), executor);
+  assert.equal(waiting.state, 'waiting');
+  if (waiting.state !== 'waiting') return;
+  assert.deepEqual(waiting.waiting.map(value => [value.id, value.signers]), [[item.id, [f.owner.actor.id]]]);
+  assert.equal((await f.api('POST', '/api/principals/' + f.executor.actor.id + '/key-rotations/' + waiting.rotationId + '/commit',
+    undefined, f.executor.token)).json().error.code, 'rotation_not_ready');
+  const trust = new JournalTrust(new MemoryJournal());
+  await trust.rememberBinding(f.executor.binding);
+  const owner = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys, trust);
+  assert.deepEqual(await owner.endorseKeyRotations(), { done: [item.id], failed: [] });
+  const result = await rotateKeys(f.jsonApi(f.executor.token), executor);
+  assert.equal(result.state, 'committed');
+  if (result.state !== 'committed') return;
+  const content = await f.custody.read(f.executor.actor, item.id);
+  assert.equal(decode(await reveal(content.content, result.binding, result.keys.encryption)), 'owner-signed-value');
+  assert.equal(decode(await owner.reveal(item.id)), 'owner-signed-value');
+});
+
+test('交換される鍵を確かめていない署名者や署名者でない者は、他人の鍵交換の項目を準備しない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const item = await readOnlyItem(f);
+  const waiting = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
+  assert.equal(waiting.state, 'waiting');
+  if (waiting.state !== 'waiting') return;
+  const owner = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys,
+    new JournalTrust(new MemoryJournal()));
+  assert.deepEqual(await owner.endorseKeyRotations(), { done: [], failed: [{ id: item.id, code: 'identity_untrusted' }] });
+  const { items } = await f.ok('GET', '/api/key-rotations/requests');
+  const payload = { sourceDigest: items[0].sourceDigest, payload: { kind: 'content', content: await prepareRotatedContent(
+    ProtectedContent.parse(items[0].source.content), f.executor.binding, items[0].rotation.replacement.binding,
+    f.owner.binding, f.owner.keys) } };
+  const path = '/api/principals/' + f.executor.actor.id + '/key-rotations/' + waiting.rotationId + '/items/content/' + item.id + '/endorsement';
+  assert.equal((await f.api('PUT', path, payload, f.stranger.token)).statusCode, 403);
+  assert.equal((await f.api('PUT', path, payload, f.executor.token)).statusCode, 403);
+  assert.equal((await f.api('GET', '/api/key-rotations/requests', undefined, f.stranger.token)).json().items.length, 0);
+});
+
+test('鍵交換の確定は、その鍵を使う書き込みだけを待ち、他のプリンシパルの書き込みを止めない', async t => {
+  const f = await apiFixture(); t.after(f.close);
+  const rotation = await f.start();
+  for (const item of (await f.ok('GET', rotation.path)).items) await f.prepare(rotation, item);
+  const writer = await f.db.pool.connect();
+  try {
+    await writer.query('BEGIN');
+    await writer.query('SELECT id FROM principal_key_bindings WHERE id=$1 FOR SHARE', [f.owner.binding.id]);
+    let finished = false;
+    const commit = f.ok('POST', rotation.path + '/commit').then(value => { finished = true; return value; });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(finished, false);
+    const other = await f.resources.insert(f.stranger.actor.id, 'variable', 'Other value', {}, {});
+    await f.db.pool.query('UPDATE credentials SET last_used_at=now() WHERE principal_id=$1', [f.stranger.actor.id]);
+    await f.resources.update(other, { name: 'Renamed value' });
+    await writer.query('COMMIT');
+    assert.equal((await commit).state, 'committed');
+  } finally { writer.release(); }
 });

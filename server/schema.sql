@@ -366,6 +366,7 @@ CREATE TABLE key_rotation_items (
   item_id uuid NOT NULL,
   source_digest text NOT NULL,
   payload jsonb NOT NULL,
-  signature text NOT NULL,
+  -- The rotating principal's signature; null when an authority of the item prepared it with its own keys.
+  signature text,
   PRIMARY KEY(rotation_id,kind,item_id)
 );

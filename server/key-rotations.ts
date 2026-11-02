@@ -6,7 +6,9 @@ import { SignedEnvironment, verifyEnvironment, verifyReceipt } from '../shared/r
 import { openKeyring, keyringClaim } from '../shared/keyring.js';
 import { verifyFunctionSettings } from '../shared/function-api.js';
 import { handoffContext, rotationPolicy, rotationPreparationProof, RotationPayload } from '../shared/key-rotations.js';
-import type { RotationKind, RotationPreparation, RotationStart, RotationView } from '../shared/key-rotations.js';
+import type {
+  RotationEndorsement, RotationKind, RotationPreparation, RotationRequest, RotationStart, RotationView,
+} from '../shared/key-rotations.js';
 import { Sealed } from '../shared/contracts.js';
 import type { SealedContent } from '../shared/contracts.js';
 import { base64url, encode } from '../shared/encryption.js';
@@ -28,7 +30,7 @@ interface RotationRow {
 }
 interface Item { kind: Kind; id: string; name: string; source: Record<string, unknown> }
 interface Prepared {
-  kind: Kind; item_id: string; source_digest: string; payload: Payload; signature: string;
+  kind: Kind; item_id: string; source_digest: string; payload: Payload; signature: string | null;
 }
 
 export class KeyRotations {
@@ -157,7 +159,7 @@ export class KeyRotations {
   private summary(row: RotationRow, items: View['items'], blockers: View['blockers'],
     total = row.completed_items, prepared = 0, next: string | null = null): View {
     return { id: row.id, principalId: row.principal_id, state: row.state,
-      previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature,
+      previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature, handoff: row.handoff,
       createdAt: iso(row.created_at), finishedAt: row.finished_at ? iso(row.finished_at) : null,
       total, prepared: row.state === 'committed' ? total : prepared, blockers, items, next };
   }
@@ -168,6 +170,29 @@ export class KeyRotations {
       else await this.custody.resources.authorization.requireResource(actor, await this.custody.resources.get(item.id), 'read');
       return true;
     } catch (error) { if (error instanceof DomainError && error.status === 403) return false; throw error; }
+  }
+  // Who must sign the item for the new keys: null when the rotating principal signs it itself, otherwise the principals
+  // whose keys authorize the item, since the rotating principal only reads it or runs it.
+  private signers(row: RotationRow, item: Item): string[] | null {
+    const before = row.previous.binding;
+    if (item.kind === 'content' || item.kind === 'result') {
+      const { policy } = ProtectedContent.parse(item.kind === 'content' ? item.source.content :
+        (item.source.receipt as { content: unknown }).content);
+      return policy.authorities.some(value => value.id === before.id) ? null
+        : [...new Set(policy.authorities.map(value => value.principalId))];
+    }
+    if (item.kind === 'functionSettings') {
+      const { author } = item.source.approval as { author: BoundKeys };
+      return author.id === before.id ? null : [author.principalId];
+    }
+    return null;
+  }
+  // The rotation being prepared, for a device that started it to continue after an interruption.
+  async current(actor: Actor, principalId: string) {
+    await this.authorize(actor, principalId);
+    const row = await this.db.one<{ id: string }>("SELECT id FROM key_rotations WHERE principal_id=$1 AND state='preparing'",
+      [principalId]);
+    return { rotation: row ? await this.get(actor, principalId, row.id, 1) : null };
   }
   async get(actor: Actor, principalId: string, id: string, limit = 20, after?: string) {
     await this.authorize(actor, principalId);
@@ -183,7 +208,7 @@ export class KeyRotations {
     const visible = await Promise.all(page.map(async ({ item, ...value }) => {
       const readable = await this.canRead(actor, item);
       return { kind: item.kind, id: item.id, name: readable ? item.name : null,
-        ...value, source: readable ? item.source : null };
+        ...value, signers: this.signers(row, item), source: readable ? item.source : null };
     }));
     const last = page.at(-1)?.item, cursor = last ? last.kind + ':' + last.id : null;
     const next = cursor && positions.some(({ item }) => item.kind + ':' + item.id > cursor) ? cursor : null;
@@ -212,11 +237,64 @@ export class KeyRotations {
     });
   }
 
+  // An authority of an item the rotating principal cannot sign prepares it with its own keys, after checking that the
+  // keys it knew for the rotating principal signed the replacement.
+  async endorse(actor: Actor, principalId: string, id: string, kind: Kind, itemId: string,
+    input: z.infer<typeof RotationEndorsement>) {
+    if (actor.requestId) fail(403, 'forbidden', 'Use a principal credential to manage keys.');
+    return this.db.transaction(async connection => {
+      const row = await this.row(principalId, id, connection, true);
+      if (row.state !== 'preparing') fail(409, 'rotation_finished', 'This key rotation is already finished.');
+      await this.checkCurrent(row, connection);
+      const item = (await this.items(row, connection, { kind, id: itemId }))[0];
+      if (!item) fail(404, 'rotation_item_missing', 'This item is no longer part of this key rotation.');
+      if (!this.signers(row, item)?.includes(actor.id))
+        fail(403, 'forbidden', 'Only an authority of this item can prepare it for the new keys.');
+      if (await hash(item.source) !== input.sourceDigest)
+        fail(409, 'changed', 'Read and prepare the current item again.');
+      if (kind !== input.payload.kind) fail(400, 'wrong_kind', 'Prepare the selected kind of rotation item.');
+      await this.checked(() => this.validate(row, item, { ...input, signature: null }, connection, actor.id));
+      await connection.query(
+        'INSERT INTO key_rotation_items(rotation_id,kind,item_id,source_digest,payload,signature) VALUES($1,$2,$3,$4,$5,NULL) ' +
+        'ON CONFLICT(rotation_id,kind,item_id) DO UPDATE SET source_digest=EXCLUDED.source_digest,payload=EXCLUDED.payload,signature=NULL',
+        [id, kind, itemId, input.sourceDigest, JSON.stringify(input.payload)]);
+      return { ok: true as const };
+    });
+  }
+  // The items of other principals' rotations waiting for this principal to sign them.
+  async requests(actor: Actor) {
+    if (actor.requestId) fail(403, 'forbidden', 'Use a principal credential to manage keys.');
+    const rows = await this.db.all<RotationRow>(
+      "SELECT * FROM key_rotations WHERE state='preparing' ORDER BY created_at,id LIMIT 100");
+    const items: Array<z.infer<typeof RotationRequest>> = [];
+    for (const row of rows) {
+      const prepared = await this.preparations(row.id);
+      for (const item of await this.items(row)) {
+        if (!this.signers(row, item)?.includes(actor.id)) continue;
+        const sourceDigest = await hash(item.source);
+        if (prepared.some(value => value.kind === item.kind && value.item_id === item.id && value.source_digest === sourceDigest))
+          continue;
+        if (!await this.canRead(actor, item)) continue;
+        items.push({ rotation: { id: row.id, principalId: row.principal_id, previous: row.previous, replacement: row.replacement,
+          previousSignature: row.previous_signature }, kind: item.kind, id: item.id, name: item.name, sourceDigest,
+          source: item.source });
+        if (items.length === 100) return { items };
+      }
+    }
+    return { items };
+  }
+
   // Checks the signatures and encrypted content once, when the preparation is sent. What is checked is stored as sent.
-  private async validate(row: RotationRow, item: Item, input: z.infer<typeof RotationPreparation>, connection: Queryable) {
+  // The rotating principal signs what it prepares with its previous keys; an authority that endorses an item signs it
+  // as it signs any change to the item.
+  private async validate(row: RotationRow, item: Item, input: { sourceDigest: string; payload: unknown; signature: string | null },
+    connection: Queryable, endorser?: string) {
     const before = row.previous.binding, after = row.replacement.binding, payload = RotationPayload.parse(input.payload);
-    await verify(await rotationPreparationProof(row.id, row.principal_id, after.id, item.id, input.sourceDigest, payload),
-      input.signature, before.signing, 'key-rotation-preparation');
+    if (endorser === undefined)
+      await verify(await rotationPreparationProof(row.id, row.principal_id, after.id, item.id, input.sourceDigest, payload),
+        required(input.signature), before.signing, 'key-rotation-preparation');
+    else if (payload.kind !== 'content' && payload.kind !== 'result' && payload.kind !== 'functionSettings')
+      fail(403, 'forbidden', 'Prepare this item with the keys of the rotating principal.');
     if (payload.kind !== item.kind) fail(400, 'wrong_kind', 'Prepare the selected kind of item.');
     switch (payload.kind) {
       case 'content':
@@ -234,7 +312,8 @@ export class KeyRotations {
         const authority = policyAuthority(content);
         const priorAuthority = authority.id === after.id ? before : authority;
         if (authority.id === before.id || content.signerId !== authority.id ||
-          !previous.policy.authorities.some(value => canonical(value) === canonical(priorAuthority)))
+          !previous.policy.authorities.some(value => canonical(value) === canonical(priorAuthority)) ||
+          (endorser !== undefined && (authority.id === after.id || authority.principalId !== endorser)))
           fail(403, 'forbidden', 'An existing authority must approve re-encryption.');
         if (payload.kind === 'result')
           await verifyReceipt({ ...(item.source.receipt as object), content } as Parameters<typeof verifyReceipt>[0],
@@ -263,7 +342,8 @@ export class KeyRotations {
         const next = await verifyFunctionSettings(payload.approval, after);
         const expected = { ...previous, revision: previous.revision + 1, executor: after,
           author: previous.author.id === before.id ? after : previous.author, signature: next.signature };
-        if (canonical(next) !== canonical(expected))
+        if (canonical(next) !== canonical(expected) ||
+          (endorser !== undefined && (next.author.id === after.id || next.author.principalId !== endorser)))
           fail(400, 'invalid_rotation_settings', 'Preserve the function execution settings while replacing executor keys.');
         break;
       }
@@ -336,20 +416,19 @@ export class KeyRotations {
     await this.authorize(actor, principalId);
     try {
       return await this.db.transaction(async connection => {
-        // Only cutover takes write locks, on the tables that can hold references to keys, and only while it compares
-        // what was prepared with what is stored; the signatures were checked when each item was prepared. Reads
-        // continue, and sign-ins, which write credentials and challenges, are not held up.
+        // Cutover locks rows, not tables: whoever writes something that names keys holds those keys' binding FOR SHARE
+        // until it commits (Bindings.requireCurrent), so locking the previous binding waits for writes in flight, and
+        // later ones find the keys replaced. The signatures were checked when each item was prepared, so the locks
+        // last only while the preparations are compared with what is stored.
         await connection.query("SET LOCAL lock_timeout='3s'");
-        // Protected content is written under this lock before the keys it names are checked; taking it first keeps a
-        // concurrent write from holding those keys while it waits for the tables locked here.
+        // Protected content is written under this lock before the keys it names are checked; taking it first keeps such
+        // a write from holding those keys while it waits for an item locked here.
         await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-        await connection.query('LOCK TABLE principal_key_bindings,resources,resource_custody,execution_tasks,' +
-          'executor_environments,function_settings,function_invocations,connection_operations,oauth_relays,' +
-          'key_rotations,key_rotation_items IN SHARE ROW EXCLUSIVE MODE');
-        // Key resets and other changes to the principal's keys take its row first.
-        await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
         await this.authorize(actor, principalId, connection);
         const row = await this.row(principalId, id, connection, true);
+        // Key resets and other changes to the principal's keys take its row first.
+        await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
+        await connection.query('SELECT id FROM principal_key_bindings WHERE id=$1 FOR UPDATE', [row.previous.binding.id]);
         if (row.state === 'committed') return this.summary(row, [], []);
         if (row.state !== 'preparing') fail(409, 'rotation_finished', 'This key rotation was cancelled.');
         await this.checkCurrent(row, connection);

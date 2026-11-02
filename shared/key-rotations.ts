@@ -4,11 +4,14 @@ import {
   Fingerprint, KeyReplacement, PrivateKeys, Signature, SignedBinding, canonical, hash, sign, signBinding, verifiesReplacement,
 } from './authority.js';
 import type { BoundKeys, IdentityKeys, KeyMaterial } from './authority.js';
+import { bindKeys, newIdentityKeys } from './authority.js';
 import { decode, encode, open, seal } from './encryption.js';
 import { AccessPolicy, ProtectedContent, protect, reveal, verifyContent } from './custody.js';
 import type { CustodyContent, CustodyPolicy } from './custody.js';
-import { SignedEnvironment } from './runtime-protocol.js';
-import { FunctionSettingsApproval } from './function-api.js';
+import { SignedEnvironment, signEnvironment } from './runtime-protocol.js';
+import { FunctionSettingsApproval, approveFunctionSettings } from './function-api.js';
+import { openKeyring, signKeyring } from './keyring.js';
+import type { JsonApi } from './client.js';
 
 export const RotationKind = z.enum(['content', 'result', 'environment', 'keyring', 'functionSettings']);
 export const RotationStart = z.object({
@@ -26,15 +29,23 @@ export type PreparedRotationPayload = z.infer<typeof RotationPayload>;
 export const RotationPreparation = z.object({
   sourceDigest: Fingerprint, payload: RotationPayload, signature: Signature,
 }).strict();
+export const RotationEndorsement = z.object({ sourceDigest: Fingerprint, payload: RotationPayload }).strict();
 export const RotationSource = z.record(z.string(), z.unknown());
 export const RotationItem = z.object({
   kind: RotationKind, id: Id, name: Name.nullable(), sourceDigest: Fingerprint,
-  state: z.enum(['pending', 'prepared', 'stale']), source: RotationSource.nullable(),
+  state: z.enum(['pending', 'prepared', 'stale']),
+  // The principals that must sign the item when the rotating principal cannot: it only reads or runs the item.
+  signers: z.array(Id).nullable(), source: RotationSource.nullable(),
 });
+export const RotationRequest = z.object({
+  rotation: z.object({ id: Id, principalId: Id, previous: SignedBinding, replacement: SignedBinding,
+    previousSignature: Signature }).strict(),
+  kind: RotationKind, id: Id, name: Name, sourceDigest: Fingerprint, source: RotationSource,
+}).strict();
 export const RotationBlocker = z.object({ kind: z.string(), id: Id, reason: z.string() });
 export const RotationView = z.object({
   id: Id, principalId: Id, state: z.enum(['preparing', 'committed', 'cancelled']),
-  previous: SignedBinding, replacement: SignedBinding, previousSignature: Signature,
+  previous: SignedBinding, replacement: SignedBinding, previousSignature: Signature, handoff: Sealed,
   createdAt: Time, finishedAt: Time.nullable(),
   total: z.number().int().nonnegative(), prepared: z.number().int().nonnegative(),
   blockers: z.array(RotationBlocker), items: z.array(RotationItem), next: z.string().nullable(),
@@ -108,4 +119,127 @@ export async function openHandoff(
   const keys = PrivateKeys.parse(JSON.parse(decode(await open(handoff, key, previous.id, handoffContext(binding)))));
   await signBinding(binding, keys);
   return { binding, keys };
+}
+
+// The keys a device holds once it has followed every rotation since the keys it had: each handoff is opened with the
+// keys before it. Keys made again by a key reset have no handoff, and are opened with a passkey that holds them.
+export async function followKeys(api: JsonApi, held: { binding: BoundKeys; keys: KeyMaterial }) {
+  const id = Id.parse(held.binding.principalId);
+  let binding = held.binding, keys: KeyMaterial = held.keys, followed: IdentityKeys | null = null;
+  for (let step = 0; step <= 32; step++) {
+    const { binding: current } = await api.json('/api/identities/' + id + '/binding', {}, SignedBinding);
+    if (canonical(current) === canonical(binding)) return followed ? { binding, keys: followed } : null;
+    if (current.generation <= binding.generation || step === 32)
+      throw new KeysReplaced('The keys of this identity were made again. Sign in with a passkey that holds them.');
+    const next = await openHandoff(await api.json('/api/principals/' + id + '/key-handoffs/' + Id.parse(binding.id), {},
+      RotationHandoff), binding, keys.encryption);
+    ({ binding } = next);
+    keys = followed = next.keys;
+  }
+  return null;
+}
+export class KeysReplaced extends Error { readonly code = 'keys_replaced'; }
+
+type Item = z.infer<typeof RotationItem>;
+const RotationState = z.object({ rotation: RotationView.nullable() });
+export type RotationResult =
+  | { state: 'committed'; binding: BoundKeys; keys: IdentityKeys }
+  | { state: 'waiting'; rotationId: string; waiting: Array<{ kind: string; id: string; name: string | null; signers: string[] }> };
+
+// Replaces this principal's keys with new ones. It prepares every item the principal signs, and commits once all are
+// prepared; items that other principals sign wait for them, and calling it again continues the same rotation.
+export async function rotateKeys(api: JsonApi, held: { binding: BoundKeys; keys: IdentityKeys }): Promise<RotationResult> {
+  const { binding: previous, keys } = held, principalId = Id.parse(previous.principalId);
+  const base = '/api/principals/' + principalId + '/key-rotations';
+  let { rotation } = await api.json(base, {}, RotationState), next: { binding: BoundKeys; keys: IdentityKeys };
+  if (rotation) {
+    next = await openHandoff({ replacement: { previous: rotation.previous, replacement: rotation.replacement,
+      previousSignature: rotation.previousSignature }, handoff: rotation.handoff }, previous, keys.encryption);
+  } else {
+    const replacementKeys = await newIdentityKeys();
+    const binding = { ...bindKeys(principalId, replacementKeys), generation: previous.generation + 1,
+      previous: await hash(previous) };
+    next = { binding, keys: replacementKeys };
+    rotation = await api.json(base, { method: 'POST', body: { id: crypto.randomUUID(),
+      replacement: await signBinding(binding, replacementKeys),
+      previousSignature: await sign(binding, keys.signing, 'key-replacement'),
+      handoff: await sealHandoff(previous, binding, replacementKeys) } }, RotationView);
+  }
+  const path = base + '/' + Id.parse(rotation.id);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const waiting: Item[] = [];
+    let after: string | null = null;
+    do {
+      const page: z.infer<typeof RotationView> = await api.json(path + '?' + new URLSearchParams({ limit: '100',
+        ...(after ? { after } : {}) }), {}, RotationView);
+      for (const item of page.items) {
+        if (item.state === 'prepared') continue;
+        if (item.signers) { waiting.push(item); continue; }
+        const payload = await rotationPayload(item, previous, next, keys);
+        await api.json(path + '/items/' + item.kind + '/' + item.id, { method: 'PUT', body: await signRotationPreparation(
+          rotation.id, principalId, next.binding.id, item.id, item.sourceDigest, payload, keys.signing) });
+      }
+      after = page.next;
+    } while (after);
+    if (waiting.length) return { state: 'waiting', rotationId: rotation.id,
+      waiting: waiting.map(item => ({ kind: item.kind, id: item.id, name: item.name, signers: item.signers! })) };
+    try {
+      await api.json(path + '/commit', { method: 'POST' }, RotationView);
+      return { state: 'committed', ...next };
+    } catch (error) {
+      // An item changed while it was prepared, or another write held the keys: prepare what changed and try again.
+      if (!(error && typeof error === 'object' && 'code' in error &&
+        ['rotation_not_ready', 'rotation_busy', 'changed'].includes(String(error.code)))) throw error;
+    }
+  }
+  throw new Error('The items kept changing during the key rotation. Try again later.');
+}
+
+async function rotationPayload(item: Item, previous: BoundKeys, next: { binding: BoundKeys; keys: IdentityKeys },
+  keys: IdentityKeys): Promise<PreparedRotationPayload> {
+  const source = item.source as Record<string, any> | null;
+  if (!source) throw new Error('This identity cannot read an item it must prepare.');
+  switch (item.kind) {
+    case 'content':
+    case 'result':
+      return { kind: item.kind, content: await prepareRotatedContent(ProtectedContent.parse(
+        item.kind === 'content' ? source.content : source.receipt.content), previous, next.binding, previous, keys, next.keys) };
+    case 'environment': {
+      const { manifest } = SignedEnvironment.parse(source.registration);
+      return { kind: 'environment', registration: await signEnvironment({ ...manifest, executor: next.binding,
+        revision: manifest.revision + 1 }, next.keys) };
+    }
+    case 'keyring': {
+      const keyring = await openKeyring(String(source.signature), previous);
+      return { kind: 'keyring', signature: await signKeyring({ ...keyring, signerId: next.binding.id,
+        revision: keyring.revision + 1, keys: keyring.keys.map(entry => entry.binding.id === previous.id
+          ? { ...entry, binding: next.binding } : entry) }, next.keys.signing) };
+    }
+    case 'functionSettings': {
+      const { signature: _signature, ...approval } = FunctionSettingsApproval.parse(source.approval);
+      return { kind: 'functionSettings', approval: await approveFunctionSettings({ ...approval, revision: approval.revision + 1,
+        executor: next.binding, author: next.binding }, next.keys) };
+    }
+  }
+}
+
+// What an authority of an item signs for another principal's rotation: the item with that principal's keys replaced,
+// signed with the authority's own keys as any change to the item. The caller checks the replacement first.
+export async function endorsementPayload(request: z.infer<typeof RotationRequest>, signer: BoundKeys,
+  keys: KeyMaterial): Promise<PreparedRotationPayload> {
+  const previous = request.rotation.previous.binding, next = request.rotation.replacement.binding;
+  const source = request.source as Record<string, any>;
+  switch (request.kind) {
+    case 'content':
+    case 'result':
+      return { kind: request.kind, content: await prepareRotatedContent(ProtectedContent.parse(
+        request.kind === 'content' ? source.content : source.receipt.content), previous, next, signer, keys) };
+    case 'functionSettings': {
+      const { signature: _signature, ...approval } = FunctionSettingsApproval.parse(source.approval);
+      if (canonical(approval.author) !== canonical(signer)) throw new Error('Another identity approved these settings.');
+      return { kind: 'functionSettings', approval: await approveFunctionSettings({ ...approval,
+        revision: approval.revision + 1, executor: next }, keys) };
+    }
+    default: throw new Error('Only the rotating identity prepares this item.');
+  }
 }

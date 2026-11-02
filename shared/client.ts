@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Execution } from './executions.js';
 import { Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
+import { endorsementPayload, RotationRequest } from './key-rotations.js';
 import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding, verifiesReplacement } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
@@ -442,6 +443,30 @@ export class CustodyClient {
           ? error.code : 'failure' });
       }
       onProgress?.({ completed: ++completed, total: items.length });
+    }
+    const endorsed = await this.endorseKeyRotations();
+    return { done: [...done, ...endorsed.done], failed: [...failed, ...endorsed.failed] };
+  }
+  // Signs the items that other identities' key rotations wait for, as an authority of those items: only for keys this
+  // identity verified, replaced by keys those signed for.
+  async endorseKeyRotations() {
+    const done: string[] = [], failed: Array<{ id: string; code: string }> = [];
+    const { items } = await this.api.json('/api/key-rotations/requests', {}, z.object({ items: z.array(RotationRequest) }));
+    for (const request of items) {
+      try {
+        const { rotation } = request, previous = rotation.previous.binding, next = rotation.replacement.binding;
+        await this.trusted(previous);
+        if (!await verifiesReplacement(previous, next, [{ previous: rotation.previous, replacement: rotation.replacement,
+          previousSignature: rotation.previousSignature }]))
+          throw new ClientFailure('identity_changed', 'The replacement keys were not signed with the verified keys.');
+        await this.api.json('/api/principals/' + Id.parse(rotation.principalId) + '/key-rotations/' + Id.parse(rotation.id) +
+          '/items/' + request.kind + '/' + Id.parse(request.id) + '/endorsement', { method: 'PUT', body: {
+          sourceDigest: request.sourceDigest, payload: await endorsementPayload(request, this.binding, this.keys) } });
+        done.push(request.id);
+      } catch (error) {
+        failed.push({ id: request.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          ? error.code : 'failure' });
+      }
     }
     return { done, failed };
   }

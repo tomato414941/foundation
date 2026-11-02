@@ -3,7 +3,9 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { Id, Ok } from '../shared/contracts.js';
-import { RotationHandoff, RotationKind, RotationPreparation, RotationStart, RotationView } from '../shared/key-rotations.js';
+import {
+  RotationEndorsement, RotationHandoff, RotationKind, RotationPreparation, RotationRequest, RotationStart, RotationView,
+} from '../shared/key-rotations.js';
 
 const RotationParams = z.object({ id: Id, rotationId: Id });
 const ItemParams = RotationParams.extend({ kind: RotationKind, itemId: Id });
@@ -17,6 +19,9 @@ export async function routesKeyRotations(app: ApiApp, context: Context) {
   app.get('/api/principals/:id/key-handoffs/:bindingId', {
     schema: { params: z.object({ id: Id, bindingId: Id }), response: { 200: RotationHandoff } },
   }, request => rotations.handoff(actor(request), request.params.id, request.params.bindingId));
+  app.get('/api/principals/:id/key-rotations', {
+    schema: { params: z.object({ id: Id }), response: { 200: z.object({ rotation: RotationView.nullable() }) } },
+  }, request => rotations.current(actor(request), request.params.id));
   app.get('/api/principals/:id/key-rotations/:rotationId', {
     schema: { params: RotationParams, querystring: z.object({
       limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -28,6 +33,13 @@ export async function routesKeyRotations(app: ApiApp, context: Context) {
     schema: { params: ItemParams, body: RotationPreparation, response: { 200: Ok } },
   }, request => rotations.prepare(actor(request), request.params.id, request.params.rotationId,
     request.params.kind, request.params.itemId, request.body));
+  app.put('/api/principals/:id/key-rotations/:rotationId/items/:kind/:itemId/endorsement', {
+    schema: { params: ItemParams, body: RotationEndorsement, response: { 200: Ok } },
+  }, request => rotations.endorse(actor(request), request.params.id, request.params.rotationId,
+    request.params.kind, request.params.itemId, request.body));
+  app.get('/api/key-rotations/requests', {
+    schema: { response: { 200: z.object({ items: z.array(RotationRequest) }) } },
+  }, request => rotations.requests(actor(request)));
   app.post('/api/principals/:id/key-rotations/:rotationId/commit', {
     schema: { params: RotationParams, response: { 200: RotationView } },
   }, request => rotations.commit(actor(request), request.params.id, request.params.rotationId));
