@@ -69,13 +69,12 @@ function split(content: string, hostId: string) {
     after: lines.slice(ends[0]! + 1) };
 }
 
-// The file with the host's managed lines replaced by those of a plan, or added at the end. A file already holding a
-// newer plan is left alone, and an empty file without managed lines is left empty.
+// The file with the host's managed lines replaced by those of a plan, or added at the end, even with no line, so that
+// the generation applied stays. A file already holding a newer plan is left alone.
 export function withManagedLines(content: string, hostId: string, lines: string[], generation: number) {
   const { begin, end } = markers(hostId), parts = split(content, hostId);
   if (parts.generation !== null && parts.generation > generation)
     throw new NewerAuthorizedKeys('A newer plan was applied to this account.');
-  if (parts.managed === null && !lines.length) return content;
   for (const line of lines) if (line.includes('\n') || line.includes('\r')) throw new InvalidAuthorizedKeys('Use one line for each key.');
   return [...parts.before, begin + generation, ...lines, end, ...parts.after].join('\n') + '\n';
 }

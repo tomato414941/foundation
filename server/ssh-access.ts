@@ -65,7 +65,7 @@ type HostData = z.infer<typeof SSHHostData>;
 
 // The authorizations whose key a server may still let in: until a server shows the key gone, outside the managed lines
 // as well, what was decided for it is followed, and what holds it is kept.
-export const stillLetIn = "NOT (observed='absent' AND NOT unmanaged AND (desired='absent' OR expires_at<=now()))";
+export const stillLetIn = "NOT (observed='absent' AND NOT unmanaged AND (desired='absent' OR coalesce(expires_at<=now(),false)))";
 // Whether an authorization lets its key in now, and how far the server shows what was decided.
 const wanted = (row: AuthorizationRow) => row.desired === 'present' && !(row.expires_at && row.expires_at <= new Date());
 function status(row: AuthorizationRow) {

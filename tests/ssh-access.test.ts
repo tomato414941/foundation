@@ -195,6 +195,29 @@ test('許可が残る間は書込み先ファイルの変更や全ホスト鍵�
   assert.deepEqual(item.host, { name: 'Build server', address: '192.0.2.10', port: 2222 });
 });
 
+test('まだ反映されていない無期限の許可がある間は、鍵・接続先・主体の削除と書込み先の変更を受け付けない', async t => {
+  const s = await setup(); t.after(s.close);
+  const owner = await s.f.person('Owner');
+  const { key, host } = await registered(s, owner);
+  await s.confirmed(owner, 'POST', '/api/ssh-access', { hostId: host.id, keyId: key.id, account: 'deploy' });
+  const [account] = (await s.call(owner, 'GET', '/api/ssh-hosts/' + host.id + '/plan')).json().accounts;
+  const reported = await s.call(owner, 'POST', '/api/ssh-hosts/' + host.id + '/reports',
+    { account: 'deploy', generation: account.generation, outcome: 'verified', managed: [], unmanaged: [] });
+  assert.equal(reported.statusCode, 200, reported.body);
+  const [item] = (await s.call(owner, 'GET', '/api/ssh-access')).json().items;
+  assert.deepEqual([item.desired, item.expiresAt, item.observed, item.unmanaged, item.status], ['present', null, 'absent', false, 'pending']);
+  for (const response of [
+    await s.call(owner, 'DELETE', '/api/resources/' + key.id),
+    await s.call(owner, 'DELETE', '/api/resources/' + host.id),
+    await s.call(owner, 'DELETE', '/api/principals/' + owner.principal.id),
+    await s.confirmed(owner, 'PUT', '/api/ssh-hosts/' + host.id, { version: host.version, authorizedKeysFile: '.ssh/other_keys' }),
+  ]) {
+    assert.equal(response.statusCode, 409, response.body);
+    assert.equal(response.json().error.code, 'ssh_access_remaining');
+  }
+  assert.equal((await s.call(owner, 'GET', '/api/ssh-access')).json().items.length, 1);
+});
+
 test('取り消した鍵が管理外の行に残る間は削除済みとせず、再照合を続ける', async t => {
   const s = await setup(); t.after(s.close);
   const owner = await s.f.person('Owner');
@@ -375,6 +398,30 @@ test('古い計画を持つクライアントは、別のクライアントが�
   assert.doesNotMatch(applied, /foundation:/);
   assert.match(applied, new RegExp('# BEGIN FOUNDATION SSH ACCESS ' + host.id + ' \\d+\n# END FOUNDATION SSH ACCESS ' + host.id + '\n'));
   // The older plan finds the newer one applied, even with no key left, and writes nothing.
+  const [late] = await applyPlan(old, { identity }, false);
+  assert.equal(late!.outcome, 'conflict');
+  assert.equal(await readFile(server.authorizedKeys, 'utf8'), applied);
+  assert.equal((await c.json(['ssh-access', 'list', '--host', host.id])).items[0].status, 'removed');
+});
+
+test('一度も反映しないまま取り消した許可も、空の計画の反映で版を残し、古い計画では書き戻さない', async t => {
+  const server = await sshServer(t), c = await cliSetup(t);
+  const identity = join(c.directory, 'operator-key');
+  await writeFile(identity, server.keys.privateKey, { mode: 0o600 });
+  await writeFile(server.authorizedKeys, server.keys.publicKey, { mode: 0o600 });
+  const host = await c.json(['ssh-host', 'add', 'Test server', '--address', '127.0.0.1', '--port', String(server.port),
+    '--host-key', server.keys.hostPublicKey, '--authorized-keys-file', server.authorizedKeys]);
+  const key = await c.json(['ssh-key', 'add', 'Laptop', '--public-key', publicKey()]);
+  const grant = await c.json(['ssh-access', 'grant', '--host', host.id, '--ssh-key', key.id, '--account', server.username]);
+  // One client reads the plan letting the key in but applies nothing yet; the key is taken out, and another client
+  // applies the plan that is now empty.
+  const old = SSHPlan.parse(await c.json(['api', 'GET', '/api/ssh-hosts/' + host.id + '/plan']));
+  assert.equal(old.accounts[0]!.lines.length, 1);
+  await c.json(['ssh-access', 'revoke', grant.id]);
+  assert.equal((await c.json(['ssh-access', 'apply', host.id, '--identity', identity])).accounts[0].outcome, 'verified');
+  const applied = await readFile(server.authorizedKeys, 'utf8');
+  assert.equal(applied, server.keys.publicKey.trim() + '\n# BEGIN FOUNDATION SSH ACCESS ' + host.id + ' ' + (old.accounts[0]!.generation + 1) +
+    '\n# END FOUNDATION SSH ACCESS ' + host.id + '\n');
   const [late] = await applyPlan(old, { identity }, false);
   assert.equal(late!.outcome, 'conflict');
   assert.equal(await readFile(server.authorizedKeys, 'utf8'), applied);
