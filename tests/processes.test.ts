@@ -8,7 +8,7 @@ import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { flowFixture } from './flow-support.js';
 import { MemoryJournal } from './delegation-support.js';
-import { publicPart } from '../shared/authority.js';
+import { enroll } from './support.js';
 import { CreatedProcess, ProcessView } from '../shared/process.js';
 import { CommandProcess } from '../runtime/command.js';
 import { ProcessBroker, ProcessExecutor } from '../runtime/process.js';
@@ -27,7 +27,7 @@ async function processFixture(t: TestContext) {
   await executorApi.json('/api/environments/' + environmentId + '/processes/registration', {
     method: 'PUT', body: { workingDirectory: directory },
   });
-  const enrolled = await f.authentication.enroll('API principal', publicPart(f.owner.keys.encryption));
+  const enrolled = await enroll(f.authentication, 'API principal');
   const caller = { token: enrolled.token, actor: (await f.authentication.authenticate(enrolled.token))! };
   await f.relations.draw(f.owner.actor, { subjectId: caller.actor.id, relation: 'runner', objectId: environmentId });
   await f.relations.draw(f.owner.actor, { subjectId: caller.actor.id, relation: 'reader', objectId: environmentId });

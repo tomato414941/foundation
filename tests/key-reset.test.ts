@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
+import { addPasskey } from './passkey-support.js';
+import type { ConfirmationOperation } from '../shared/confirmations.js';
 import { bindKeys, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { decode, encode, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
@@ -10,12 +12,24 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 
 // A person signed in with a passkey, as on the page that sets up a device.
 async function signedIn(f: Fixture, name = 'Owner') {
-  const person = await f.person(name), passkey = randomUUID();
-  await f.db.pool.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'passkey','New passkey',$3)",
-    [passkey, person.actor.id, randomUUID()]);
-  const { actor } = await f.authentication.session(person.actor.id, passkey);
+  const person = await f.person(name), passkey = await addPasskey(f.db, person.actor.id, f.config.origin);
+  const { actor } = await f.authentication.session(person.actor.id, passkey.id);
   return { ...person, actor, passkey };
 }
+// Confirms the change with the person's passkey, as a client does through the API.
+async function confirmed(f: Fixture, person: Awaited<ReturnType<typeof signedIn>>, operation: ConfirmationOperation) {
+  const view = await f.confirmations.start(person.actor, operation);
+  const { options } = await f.confirmations.passkeyOptions(person.actor, view.id);
+  await f.confirmations.prove(person.actor, view.id, { method: 'passkey', credential: person.passkey.assert(options) });
+  return { ...person.actor, confirmation: view.id };
+}
+// The new keys, wrapped for the person's passkey.
+async function completion(person: Awaited<ReturnType<typeof signedIn>>, keys: IdentityKeys) {
+  return { binding: await signBinding(bindKeys(person.actor.id, keys), keys),
+    wrappedKey: await wrap(keys, crypto.getRandomValues(new Uint8Array(32)), person.actor.id), credentialId: person.passkey.id };
+}
+const operation = (principalId: string, input: Awaited<ReturnType<typeof completion>>) =>
+  ({ action: 'keyReset.complete', principalId, ...input });
 // Seven days have passed since the request.
 async function wait(f: Fixture, principalId: string) {
   await f.db.pool.query("UPDATE challenges SET data=jsonb_build_object('readyAt',$2::text) WHERE kind='key-reset' AND principal_id=$1",
@@ -23,12 +37,9 @@ async function wait(f: Fixture, principalId: string) {
 }
 // Completes the reset with new keys and publishes them, as the browser does.
 async function reset(f: Fixture, person: Awaited<ReturnType<typeof signedIn>>) {
-  const keys = await newIdentityKeys(), prf = crypto.getRandomValues(new Uint8Array(32));
-  await f.keyResets.complete(person.actor, person.actor.id,
-    { publicKey: publicPart(keys.encryption), wrappedKey: await wrap(keys, prf, person.actor.id) });
-  const binding = bindKeys(person.actor.id, keys);
-  await f.bindings.publish(person.actor, await signBinding(binding, keys));
-  return { binding, keys };
+  const keys = await newIdentityKeys(), input = await completion(person, keys);
+  await f.keyResets.complete(await confirmed(f, person, operation(person.actor.id, input)), person.actor.id, input);
+  return { binding: input.binding.binding, keys };
 }
 
 test('秘密鍵をなくしたプリンシパルは、申請から7日たつと公開鍵と秘密鍵を作り直す', async t => {
@@ -38,21 +49,18 @@ test('秘密鍵をなくしたプリンシパルは、申請から7日たつと�
   const requested = await f.keyResets.request(person.actor, person.actor.id);
   assert.ok(Date.parse(requested.readyAt) - Date.parse(requested.requestedAt) >= 7 * 86_400_000 - 1000);
   assert.deepEqual(await f.keyResets.request(person.actor, person.actor.id), requested);
-  const keys = await newIdentityKeys(), wrappedKey = await wrap(keys, crypto.getRandomValues(new Uint8Array(32)), person.actor.id);
-  await assert.rejects(f.keyResets.complete(person.actor, person.actor.id, { publicKey: publicPart(keys.encryption), wrappedKey }),
-    { code: 'key_reset_waiting' });
+  const keys = await newIdentityKeys(), input = await completion(person, keys);
+  await assert.rejects(f.keyResets.complete(person.actor, person.actor.id, input), { code: 'key_reset_waiting' });
   await wait(f, person.actor.id);
+  await assert.rejects(f.keyResets.complete(person.actor, person.actor.id, input), { code: 'confirmation_required' });
   const { actor: email } = await f.authentication.session(person.actor.id);
-  await assert.rejects(f.keyResets.complete(email, person.actor.id, { publicKey: publicPart(keys.encryption), wrappedKey }),
-    { code: 'forbidden' });
-  await f.keyResets.complete(person.actor, person.actor.id, { publicKey: publicPart(keys.encryption), wrappedKey });
+  await assert.rejects(f.keyResets.complete(email, person.actor.id, input), { code: 'confirmation_required' });
+  await f.keyResets.complete(await confirmed(f, person, operation(person.actor.id, input)), person.actor.id, input);
   assert.deepEqual((await f.principals.get(person.actor.id)).public_key, publicPart(keys.encryption));
-  await assert.rejects(f.bindings.current(person.actor.id), { code: 'key_binding_required' });
+  assert.deepEqual((await f.bindings.current(person.actor.id)).binding, input.binding.binding);
   assert.deepEqual((await f.db.all<{ id: string }>('SELECT id FROM credentials WHERE principal_id=$1 AND private_wrap IS NOT NULL',
-    [person.actor.id])).map(row => row.id), [person.passkey]);
+    [person.actor.id])).map(row => row.id), [person.passkey.id]);
   assert.equal(await f.keyResets.get(person.actor.id), null);
-  await f.bindings.publish(person.actor, await signBinding(bindKeys(person.actor.id, keys), keys));
-  assert.equal((await f.bindings.current(person.actor.id)).binding.generation, 1);
 });
 
 test('作り直しの申請を取り消すと、7日たっても作り直さない', async t => {
@@ -64,9 +72,8 @@ test('作り直しの申請を取り消すと、7日たっても作り直さな�
   await f.keyResets.cancel(device, person.actor.id);
   assert.equal(await f.keyResets.get(person.actor.id), null);
   await wait(f, person.actor.id);
-  const keys = await newIdentityKeys();
-  await assert.rejects(f.keyResets.complete(person.actor, person.actor.id, { publicKey: publicPart(keys.encryption),
-    wrappedKey: await wrap(keys, crypto.getRandomValues(new Uint8Array(32)), person.actor.id) }), { code: 'key_reset_waiting' });
+  await assert.rejects(f.keyResets.complete(person.actor, person.actor.id, await completion(person, await newIdentityKeys())),
+    { code: 'key_reset_waiting' });
   assert.deepEqual((await f.principals.get(person.actor.id)).public_key, person.keys.publicKey);
 });
 

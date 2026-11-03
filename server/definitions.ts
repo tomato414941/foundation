@@ -6,6 +6,7 @@ import { JsonObject } from '../shared/contracts.js';
 import { Invocation } from '../shared/executions.js';
 import type { DefinitionCall } from '../shared/executions.js';
 import type { Queryable } from './database.js';
+import type { ConfirmationOperation } from '../shared/confirmations.js';
 
 type Title = readonly [string, string] | ((input: Record<string, JsonValue>) => readonly [string, string]);
 export class OperationFailed extends DomainError {
@@ -33,6 +34,8 @@ export interface ProcessingDefinition {
   resultView?: (result: JsonValue) => JsonValue;
   continuation?: 'connection' | 'run';
   delegatedOperation?: (input: unknown) => string;
+  // The change the actor confirms before this operation is made, when it takes a confirmation.
+  confirmation?: (input: unknown) => Promise<ConfirmationOperation | null>;
 }
 export interface OperationEndpoint {
   name: string;
@@ -57,7 +60,8 @@ export class DefinitionRegistry {
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
       observe?: ProcessingDefinition['observe']; cancel?: ProcessingDefinition['cancel']; review?: ProcessingDefinition['review'];
       runtimeReference?: ProcessingDefinition['runtimeReference']; resultView?: ProcessingDefinition['resultView'];
-      continuation?: ProcessingDefinition['continuation']; delegatedOperation?: (input: z.output<T>) => string } = {}) {
+      continuation?: ProcessingDefinition['continuation']; delegatedOperation?: (input: z.output<T>) => string;
+      confirmation?: (input: z.output<T>) => Promise<ConfirmationOperation | null> } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
@@ -70,6 +74,7 @@ export class DefinitionRegistry {
       ...(options.resultView ? { resultView: options.resultView } : {}),
       ...(options.continuation ? { continuation: options.continuation } : {}),
       ...(options.delegatedOperation ? { delegatedOperation: (input: unknown) => options.delegatedOperation!(schema.parse(input)) } : {}),
+      ...(options.confirmation ? { confirmation: (input: unknown) => options.confirmation!(schema.parse(input)) } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
       ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) =>
         await options.complete!(actor, schema.parse(input), proof, execution) as JsonValue } : {}),

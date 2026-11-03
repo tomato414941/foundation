@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './support.js';
+import { confirmedCall } from './confirmation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
@@ -33,7 +34,9 @@ test('持ち主としてふるまえる者と一員だけがプリンシパル�
   t.after(f.close);
   const owner = await f.person('Owner'), member = await f.person('Member'), ai = await f.person('Agent');
   const team = await f.principals.create('Team', null, owner.actor.id);
-  await f.relations.draw(owner.actor, { subjectId: member.actor.id, relation: 'member', objectId: team.id });
+  const joining = { subjectId: member.actor.id, relation: 'member', objectId: team.id };
+  await f.relations.draw(await f.confirmed(owner, { action: 'relation.draw', principalId: team.id, subjectId: member.actor.id,
+    relation: 'member' }), joining);
   await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'delegate', objectId: team.id });
   const view = await f.principals.view(owner.actor, await f.principals.get(team.id));
   assert.deepEqual(view.owner, { id: owner.actor.id, name: 'Owner' });
@@ -180,7 +183,7 @@ test('持ち主を所有者の線として一覧し、その線は作ったと�
   const erased = await app.inject({ method: 'DELETE', url: '/api/relations', headers: { authorization: 'Bearer ' + owner.token },
     payload: { subjectId: owner.actor.id, relation: 'owner', objectId: bot.id } });
   assert.equal(erased.statusCode, 400, erased.body);
-  await f.relations.transfer(owner.actor, bot.id, team.id);
+  await f.relations.transfer(await f.confirmed(owner, { action: 'principal.transfer', principalId: bot.id, to: team.id }), bot.id, team.id);
   const passed = await app.inject({ url: '/api/relations?object=' + bot.id, headers: { authorization: 'Bearer ' + owner.token } });
   const transferred = await f.db.one<{ created_at: Date }>(
     "SELECT created_at FROM audit_log WHERE action='principal.transfer' AND owner_id=$1", [bot.id]);
@@ -345,7 +348,8 @@ test('持ち主を移すと、受け取る側でも作れる人ならその場�
   assert.equal((await f.resources.get(file.id)).owner_id, team.id);
   assert.equal((await call(other, '/api/requests/' + asked.json().requests[0] + '/approve')).json().state, 'accepted');
   assert.equal((await f.resources.get(file.id)).owner_id, other.actor.id);
-  const passed = await call(owner, '/api/principals/' + bot.id + '/transfer', { to: other.actor.id });
+  const passed = await confirmedCall(app, owner.keys, { method: 'POST', url: '/api/principals/' + bot.id + '/transfer',
+    headers: { authorization: 'Bearer ' + owner.token }, payload: { to: other.actor.id } });
   assert.equal(passed.statusCode, 202, passed.body);
   assert.equal((await f.principals.get(bot.id)).owner_id, owner.actor.id);
   assert.equal((await call(other, '/api/requests/' + passed.json().requests[0] + '/approve')).json().state, 'accepted');
@@ -374,7 +378,8 @@ test('開始した鍵が取り消されると、その権限による所有者�
   const second = await f.authentication.issueKey(owner.actor.id, 'Second key');
   const asked = await call(second, '/api/resources/' + file.id + '/transfer', { to: other.actor.id, version: file.version });
   assert.equal(asked.statusCode, 202, asked.body);
-  await f.authentication.removeCredential(owner.actor, owner.actor.id, second.credential.id);
+  await f.authentication.removeCredential(await f.confirmed(owner, { action: 'credential.remove', principalId: owner.actor.id,
+    credentialId: second.credential.id }), owner.actor.id, second.credential.id);
   assert.equal((await call(other, '/api/executions/' + asked.json().id + '/respond')).statusCode, 401);
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });

@@ -35,7 +35,7 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
   const line = C.RelationInput;
   definitions.define('relation.draw', line, input => lineTitle(input, false), async (who, input) => {
     await relations.draw(who, input); return ok();
-  });
+  }, { confirmation: input => relations.confirmation(input) });
   definitions.define('relation.erase', line, input => lineTitle(input, true), async (who, input) => {
     await relations.erase(who, input); return ok();
   });
@@ -51,7 +51,7 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
   const transfer = idInput.extend({ to: C.Id, contents: P.KeyUpdates.optional() });
   definitions.define('principal.transfer', transfer, ['プリンシパルを譲る', 'Transfer a principal'], async (who, input) => {
     await principals.get(input.id); await relations.transfer(who, input.id, input.to, input.contents); return ok();
-  });
+  }, { confirmation: input => relations.transferConfirmation(input.id, input.to) });
   bind({ name: 'principal.transfer', method: 'POST', path: '/api/principals/:id/transfer', bodyLimit: 32 * 1024 * 1024,
     schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
 

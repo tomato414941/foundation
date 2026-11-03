@@ -10,7 +10,7 @@ import { configuration } from '../../dist/server/config.js';
 import { createContext } from '../../dist/server/context.js';
 import { Client } from '../../dist/cli/src/client.js';
 import { saveIdentity } from '../../dist/cli/src/config.js';
-import { newIdentityKeys, publicPart, bindKeys, signBinding, canonical } from '../../dist/shared/authority.js';
+import { newIdentityKeys, bindKeys, signBinding, canonical } from '../../dist/shared/authority.js';
 import { CustodyClient } from '../../dist/shared/client.js';
 import { FunctionClient } from '../../dist/shared/function-client.js';
 import { FileJournal } from '../../dist/runtime/journal.js';
@@ -18,6 +18,7 @@ import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
 import { encode, decode } from '../../dist/shared/encryption.js';
 import { followKeys, rotateKeys } from '../../dist/shared/key-rotations.js';
+import { confirmationHeader, signConfirmation } from '../../dist/shared/confirmations.js';
 import { cleanupIdentities } from './cleanup.mjs';
 import { OpenSSH } from '../../dist/server/ssh-client.js';
 
@@ -45,11 +46,10 @@ try {
   assert.ok(asset); await check(asset[1]);
   for (let index = 0; index < 2; index++) {
     const keys = await newIdentityKeys();
-    const enrollment = await context.authentication.enroll('Release verification ' + crypto.randomUUID(), publicPart(keys.encryption));
+    const binding = bindKeys(crypto.randomUUID(), keys);
+    const enrollment = await context.authentication.enroll('Release verification ' + crypto.randomUUID(), await signBinding(binding, keys));
     identities.push(enrollment.principal.id);
-    const binding = bindKeys(enrollment.principal.id, keys);
     const client = new Client({ origin: config.origin, principalId: enrollment.principal.id, token: enrollment.token, keys, binding });
-    await client.json('/api/principals/' + binding.principalId + '/binding', { method: 'PUT', body: await signBinding(binding, keys) });
     const trust = new JournalTrust(new FileJournal(join(directory, String(index)), config.origin, binding, keys));
     const custody = new CustodyClient(client, config.origin, binding, keys, trust);
     const functions = new FunctionClient(client, custody);
@@ -60,11 +60,10 @@ try {
     // A disposable identity replaces its keys; another sign-in key that held the previous keys follows to the new ones,
     // and both read the same value afterwards.
     const keys = await newIdentityKeys();
-    const enrollment = await context.authentication.enroll('Release key rotation ' + crypto.randomUUID(), publicPart(keys.encryption));
+    const binding = bindKeys(crypto.randomUUID(), keys);
+    const enrollment = await context.authentication.enroll('Release key rotation ' + crypto.randomUUID(), await signBinding(binding, keys));
     identities.push(enrollment.principal.id);
-    const binding = bindKeys(enrollment.principal.id, keys);
     const client = new Client({ origin: config.origin, principalId: binding.principalId, token: enrollment.token, keys, binding });
-    await client.json('/api/principals/' + binding.principalId + '/binding', { method: 'PUT', body: await signBinding(binding, keys) });
     const open = (api, held, name) => new CustodyClient(api, config.origin, held.binding, held.keys,
       new JournalTrust(new FileJournal(join(directory, name), config.origin, held.binding, held.keys)));
     const value = crypto.randomUUID(), before = open(client, { binding, keys }, 'rotation-before');
@@ -78,6 +77,28 @@ try {
     const followed = await followKeys(other, { binding, keys });
     assert.equal(followed.binding.id, rotated.binding.id);
     assert.equal(decode(await open(other, followed, 'rotation-followed').reveal(saved.id)), value);
+  }
+  {
+    // A disposable identity cannot issue a sign-in key with its token alone. Signing the change through the
+    // confirmation API lets the same request through once, and the confirmation is not accepted again.
+    const keys = await newIdentityKeys(), binding = bindKeys(crypto.randomUUID(), keys);
+    const enrollment = await context.authentication.enroll('Release confirmation ' + crypto.randomUUID(), await signBinding(binding, keys));
+    identities.push(enrollment.principal.id);
+    const client = new Client({ origin: config.origin, principalId: binding.principalId, token: enrollment.token, keys, binding });
+    const issue = confirmation => fetch(new URL('/api/principals/' + binding.principalId + '/credentials', config.origin), {
+      method: 'POST', redirect: 'error', body: JSON.stringify({ name: 'Release confirmed key' }),
+      headers: { authorization: 'Bearer ' + enrollment.token, 'content-type': 'application/json',
+        ...(confirmation ? { [confirmationHeader]: confirmation } : {}) },
+    });
+    const refused = await issue();
+    const needed = (await refused.json()).error;
+    assert.equal(refused.status, 403); assert.equal(needed.code, 'confirmation_required');
+    const view = await client.json('/api/confirmations', { method: 'POST', body: { operation: needed.details.operation } });
+    await client.json('/api/confirmations/' + view.id + '/proof', { method: 'POST',
+      body: { method: 'signature', signature: await signConfirmation(view, keys.signing) } });
+    assert.equal((await issue(view.id)).status, 201);
+    const reused = await issue(view.id);
+    assert.equal(reused.status, 403); assert.equal((await reused.json()).error.code, 'confirmation_invalid');
   }
   if (process.env.RELEASE_SMOKE_MODE !== 'attached') {
     const ssh = new OpenSSH(), direct = await ssh.keys();
@@ -215,4 +236,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, keyRotation: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, keyRotation: true, confirmation: true, cleanup: true }));

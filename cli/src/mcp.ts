@@ -6,6 +6,7 @@ import { FunctionSave, Execution } from '../../shared/executions.js';
 import { Task } from '../../shared/runtime-protocol.js';
 import type { CustodyClient } from '../../shared/client.js';
 import { mcpCall, registerMetadataTools, ResponseFormat } from '../../runtime/mcp-metadata.js';
+import { ApiError } from './client.js';
 import type { Client } from './client.js';
 import { privateClient } from './custody.js';
 import { executionClient } from './executions.js';
@@ -33,8 +34,13 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
       }
       return execution;
     },
-    async request(method, path, body) {
-      const response = await client.response(path, { method, body });
+    async request(method, path, body, confirmation) {
+      // A change waiting for confirmation names what to confirm and how, so that it can be proved and sent again.
+      const response = await client.response(path, { method, body, ...(confirmation ? { confirmation } : {}) }).catch((error: unknown) => {
+        if (error instanceof ApiError && error.details !== undefined)
+          throw new Error(error.message + ' ' + JSON.stringify({ code: error.code, ...(error.details as object) }));
+        throw error;
+      });
       return { status: response.status, body: response.status === 204 ? null : await response.json() };
     },
   });

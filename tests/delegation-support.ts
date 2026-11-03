@@ -1,4 +1,4 @@
-import { fixture } from './support.js';
+import { enroll, fixture } from './support.js';
 import { Bindings } from '../server/bindings.js';
 import { Custody } from '../server/custody.js';
 import { Delegation } from '../server/delegation.js';
@@ -22,15 +22,13 @@ export class MemoryJournal implements Journal {
 
 export async function delegatedFixture() {
   const f = await fixture();
-  const bindings = new Bindings(f.db, f.authorization, f.audit);
+  const bindings = new Bindings(f.db, f.authorization, f.audit, f.confirmations);
   const custody = new Custody(f.resources, bindings, f.relations, f.config.origin);
   const delegation = new Delegation(f.resources, bindings, custody, f.config.origin);
   async function person(name: string) {
     const keys = await newIdentityKeys();
-    const enrolled = await f.authentication.enroll(name, publicPart(keys.encryption));
+    const { binding, ...enrolled } = await enroll(f.authentication, name, keys);
     const actor = (await f.authentication.authenticate(enrolled.token))!;
-    const binding = bindKeys(actor.id, keys);
-    await bindings.publish(actor, await signBinding(binding, keys));
     return { keys, binding, actor, token: enrolled.token };
   }
   const owner = await person('Owner'), executor = await person('Executor'), stranger = await person('Other');

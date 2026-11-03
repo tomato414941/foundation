@@ -19,6 +19,7 @@ import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
 import { AccessPolicy, PolicyApproval, ProtectedContent, RunIntent } from '../shared/custody.js';
+import { SignedBinding } from '../shared/authority.js';
 import { ExecutionReceipt, LegacyReceipt, SharedReceipt, Task } from '../shared/runtime-protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesRuntime } from './routes-runtime.js';
@@ -30,6 +31,8 @@ import { routesExecutions } from './routes-executions.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesKeyRotations } from './routes-key-rotations.js';
+import { routesConfirmations } from './routes-confirmations.js';
+import { confirmationHeader } from '../shared/confirmations.js';
 import { routesMcp } from './mcp.js';
 import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
@@ -129,6 +132,12 @@ export async function buildApp(context: Context) {
     request.actor =
       (!bearer ? await authentication.authenticate(request.cookies.foundation_request) : null) ??
       (await authentication.authenticate(bearer?.slice(7) ?? request.cookies.foundation_session));
+    const confirmation = request.headers[confirmationHeader];
+    if (confirmation !== undefined) {
+      if (typeof confirmation !== 'string' || !C.Id.safeParse(confirmation).success)
+        fail(400, 'invalid_confirmation', 'Send the ID of one confirmation in the Foundation-Confirmation header.');
+      if (request.actor) request.actor.confirmation = confirmation;
+    }
     if (bearer && !request.actor) {
       if (request.url.split('?')[0] === '/api/mcp')
         reply.header('www-authenticate', 'Bearer error="invalid_token", resource_metadata="' + config.origin + '/.well-known/oauth-protected-resource/api/mcp"');
@@ -205,7 +214,7 @@ export async function buildApp(context: Context) {
     {
       config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
       schema: {
-        body: z.object({ name: C.Name, publicKey: C.PublicKey }).strict(),
+        body: z.object({ name: C.Name, binding: SignedBinding }).strict(),
         response: {
           201: z.object({
             principal: z.object({ id: C.Id, name: C.Name }),
@@ -217,7 +226,7 @@ export async function buildApp(context: Context) {
       },
     },
     async (request, reply) =>
-      reply.code(201).send(await authentication.enroll(request.body.name, request.body.publicKey)),
+      reply.code(201).send(await authentication.enroll(request.body.name, request.body.binding)),
   );
   app.post(
     '/api/auth/signout',
@@ -373,27 +382,6 @@ export async function buildApp(context: Context) {
       return principals.view(who, await principals.get(request.params.id));
     },
   );
-  app.put(
-    '/api/principals/:id/encryption-key',
-    {
-      schema: {
-        params: C.IdParams,
-        body: z
-          .object({ publicKey: C.PublicKey, wraps: z.record(C.Id, C.WrappedKey).default({}) })
-          .strict(),
-        response: { 200: C.Ok },
-      },
-    },
-    async (request) => {
-      await principals.publishKey(
-        actor(request),
-        request.params.id,
-        request.body.publicKey,
-        request.body.wraps,
-      );
-      return { ok: true as const };
-    },
-  );
   // New keys for one who lost every copy of the private key. The request waits before a passkey holding the new keys
   // completes it, and it can be cancelled meanwhile.
   app.post(
@@ -430,19 +418,16 @@ export async function buildApp(context: Context) {
     {
       schema: {
         params: C.IdParams,
-        body: z.object({ name: C.Name, expiresAt: C.Time.nullable().default(null) }).strict(),
+        body: z.object({
+          name: C.Name,
+          expiresAt: C.Time.nullable().default(null),
+          // The private keys wrapped for the new key's unlock code, with the public key they belong to.
+          wrap: z.object({ wrappedKey: C.WrappedKey, publicKey: C.PublicKey }).strict().optional(),
+        }).strict(),
         response: { 201: z.object({ credential: C.Credential, token: z.string() }) },
       },
     },
-    async (request, reply) => {
-      const who = actor(request);
-      await authorization.requirePrincipal(who, request.params.id, 'manage_credentials');
-      if (request.body.expiresAt && new Date(request.body.expiresAt).getTime() <= Date.now())
-        fail(400, 'invalid_expiry', 'Choose a future expiry.');
-      return reply
-        .code(201)
-        .send(await authentication.issueKey(request.params.id, request.body.name, request.body.expiresAt));
-    },
+    async (request, reply) => reply.code(201).send(await authentication.issue(actor(request), request.params.id, request.body)),
   );
   app.delete(
     '/api/principals/:id/credentials/:credentialId',
@@ -512,6 +497,7 @@ export async function buildApp(context: Context) {
   await routesDevices(app, context);
   await routesAccounts(app, context);
   await routesKeyRotations(app, context);
+  await routesConfirmations(app, context);
   await routesOAuthServer(app, context);
   await routesMcp(app, config.origin);
   await web(app);

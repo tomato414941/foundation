@@ -57,7 +57,8 @@ test('メンバーの追加と解除を、所有者の端末が秘密変数と�
   assert.ok(original.receipt && 'content' in original.receipt);
   const header = receiptHeader(original.receipt), signature = original.receipt.signature;
   const line = { subjectId: f.stranger.actor.id, relation: 'member' as const, objectId: f.owner.actor.id };
-  await f.client.api.json('/api/relations', { method: 'POST', body: line });
+  await f.relations.draw(await f.confirmed(f.owner, { action: 'relation.draw', principalId: f.owner.actor.id,
+    subjectId: f.stranger.actor.id, relation: 'member' }), line);
   const added = await f.client.reprotectPending();
   assert.ok(added.done.includes(secret.id) && added.done.includes(task.id), JSON.stringify(added));
   const shared = await f.viewer.api.json('/api/runtime/runs/' + task.id, {}, Task);
@@ -154,7 +155,8 @@ test('アカウントの統合で秘密変数と結果を引き継ぎ、署名�
   assert.ok(original.receipt && 'content' in original.receipt);
   await f.context.delegation.stop(f.owner.actor, f.environment.manifest.id);
   const accounts = new Accounts(f.context);
-  await f.context.authentication.beginEmail('result-merge@example.com', 'browser', '/account', 'en', f.owner.actor, f.owner.actor.id);
+  await f.context.authentication.beginEmail('result-merge@example.com', 'browser', '/account', 'en', await f.confirmed(f.owner,
+    { action: 'credential.addEmail', principalId: f.owner.actor.id, email: 'result-merge@example.com' }), f.owner.actor.id);
   let parameters = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   await f.context.authentication.verifyEmail(parameters.get('challenge')!, parameters.get('token')!);
   await f.context.authentication.beginEmail('result-merge@example.com', 'browser', '/account', 'en', f.stranger.actor,
@@ -170,7 +172,8 @@ test('アカウントの統合で秘密変数と結果を引き継ぎ、署名�
     contents[item.id] = { version: item.version, content: await protect(await f.client.reveal(item.id), policy,
       item.content.materialRevision + 1, f.owner.binding, f.owner.keys, item.content.metadata, item.content) };
   }
-  await accounts.merge(f.stranger.actor, verified.mergeProof, contents);
+  await accounts.merge(await f.confirmed(f.stranger, { action: 'account.merge', principalId: f.stranger.actor.id,
+    mergeId: verified.mergeProof }), verified.mergeProof, contents);
   const current = await f.viewer.api.json('/api/runtime/runs/' + task.id, {}, Task);
   assert.equal(current.ownerId, f.stranger.actor.id);
   assert.equal((await f.viewer.result(current))?.result?.stdout, 'merged-result\n');

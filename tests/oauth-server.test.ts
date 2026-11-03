@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
+import { confirmedCall } from './confirmation-support.js';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
@@ -19,7 +20,7 @@ const initialize = {
 };
 
 test('MCPのOAuthで登録・承認・発行した鍵により、承認したプリンシパルとしてMCPを使う', async t => {
-  const { app, owner, origin, close } = await oauthFixture(); t.after(close);
+  const { app, f, owner, origin, close } = await oauthFixture(); t.after(close);
   const unauthenticated = await app.inject({ method: 'POST', url: '/api/mcp', headers: mcpHeaders, payload: initialize });
   assert.equal(unauthenticated.statusCode, 401);
   assert.match(String(unauthenticated.headers['www-authenticate']), /resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/api\/mcp"/);
@@ -38,9 +39,13 @@ test('MCPのOAuthで登録・承認・発行した鍵により、承認したプ
   const headers = { authorization: 'Bearer ' + owner.token };
   const described = await app.inject({ url: '/api/oauth/client?' + new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri }), headers });
   assert.deepEqual(described.json(), { name: 'Claude', host: 'claude.ai' });
-  const approve = () => app.inject({ method: 'POST', url: '/api/oauth/authorizations', headers, payload: {
-    clientId, redirectUri, codeChallenge, codeChallengeMethod: 'S256', state: 'xyz', resource: origin + '/api/mcp', principalId: owner.actor.id,
-  } });
+  const approve = (by: { token: string } = owner) => confirmedCall(app, owner.keys, { method: 'POST', url: '/api/oauth/authorizations',
+    headers: { authorization: 'Bearer ' + by.token }, payload: {
+      clientId, redirectUri, codeChallenge, codeChallengeMethod: 'S256', state: 'xyz', resource: origin + '/api/mcp', principalId: owner.actor.id,
+    } });
+  const refused = await app.inject({ method: 'POST', url: '/api/oauth/authorizations', headers, payload: {
+    clientId, redirectUri, codeChallenge, codeChallengeMethod: 'S256', state: 'xyz', resource: origin + '/api/mcp', principalId: owner.actor.id } });
+  assert.equal(refused.json().error.code, 'confirmation_required');
   const approved = await approve();
   assert.equal(approved.statusCode, 200, approved.body);
   const returned = new URL(approved.json().redirectTo);
@@ -64,6 +69,12 @@ test('MCPのOAuthで登録・承認・発行した鍵により、承認したプ
 
   const another = new URL((await approve()).json().redirectTo).searchParams.get('code')!;
   assert.equal((await exchange(another, randomBytes(32).toString('base64url'))).json().error, 'invalid_grant');
+  // A code granted by a key removed before the exchange issues nothing.
+  const laptop = await f.authentication.issueKey(owner.actor.id, 'Laptop');
+  const granted = new URL((await approve(laptop)).json().redirectTo).searchParams.get('code')!;
+  assert.equal((await confirmedCall(app, owner.keys, { method: 'DELETE', headers,
+    url: '/api/principals/' + owner.actor.id + '/credentials/' + laptop.credential.id })).statusCode, 200);
+  assert.equal((await exchange(granted, verifier)).json().error, 'invalid_grant');
 });
 
 test('MCPのOAuthは登録していない戻り先と、承認する権限のないプリンシパルを断る', async t => {

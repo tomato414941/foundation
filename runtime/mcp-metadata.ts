@@ -20,7 +20,7 @@ export async function mcpCall(work: () => Promise<unknown>, format: 'json' | 'ma
 }
 export function registerMetadataTools(server: McpServer, gateway: {
   schema(): Promise<unknown>;
-  request(method: string, path: string, body?: unknown): Promise<unknown>;
+  request(method: string, path: string, body?: unknown, confirmation?: string): Promise<unknown>;
   executionResult?(id: string): Promise<unknown>;
 }) {
   server.registerTool('foundation_schema', {
@@ -58,16 +58,20 @@ export function registerMetadataTools(server: McpServer, gateway: {
   }, input.response_format));
   server.registerTool('foundation_api', {
     title: 'Change Foundation',
-    description: 'Create, change, or delete Foundation data as this principal. Find the path and body with foundation_schema. When the response includes a URL for consent or secret input, give it to the user.',
+    description: 'Create, change, or delete Foundation data as this principal. Find the path and body with foundation_schema. When the response includes a URL for consent or secret input, give it to the user. ' +
+      'A change to sign-in methods, keys, or who manages a principal fails with confirmation_required and names the operation and methods: ' +
+      'POST /api/confirmations with that operation, prove it (for email, POST /api/confirmations/{id}/email and ask the user for the code, then POST /api/confirmations/{id}/proof with method email and the code), ' +
+      'and send the same change again with confirmation set to the confirmation ID.',
     inputSchema: z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-      path: z.string().startsWith('/api/').max(2048), body: Json.optional(), response_format: ResponseFormat }).strict(),
+      path: z.string().startsWith('/api/').max(2048), body: Json.optional(), confirmation: Id.optional(),
+      response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, input => mcpCall(async () => {
     const url = new URL(input.path, 'https://foundation.invalid');
     if (url.origin !== 'https://foundation.invalid' || !url.pathname.startsWith('/api/') ||
       /^\/api\/mcp(?:\/|$)/u.test(url.pathname) || /[\\\u0000-\u001f]/u.test(input.path) || url.hash)
       throw new Error('Choose a Foundation resource API path.');
-    return gateway.request(input.method, url.pathname + url.search, input.body);
+    return gateway.request(input.method, url.pathname + url.search, input.body, input.confirmation);
   }, input.response_format));
   server.registerTool('foundation_functions', {
     title: 'Find callable functions', description: 'List saved functions this principal may run, with their declared inputs.',

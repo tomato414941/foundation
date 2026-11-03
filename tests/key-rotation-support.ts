@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Actor } from '../server/authorization.js';
 import type { Database } from '../server/database.js';
 import type { Bindings } from '../server/bindings.js';
+import { bindFirst } from '../server/bindings.js';
 import type { KeyRotations } from '../server/key-rotations.js';
 import { bindKeys, hash, newIdentityKeys, sign, signBinding } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
@@ -33,6 +34,7 @@ export async function resetKeys(db: Database, bindings: Bindings, holder: Holder
   await db.pool.query('UPDATE principal_key_bindings SET retired_at=now() WHERE principal_id=$1 AND retired_at IS NULL',
     [holder.actor.id]);
   await db.pool.query('UPDATE principals SET public_key=$2 WHERE id=$1', [holder.actor.id, JSON.stringify(binding.encryption)]);
-  await bindings.publish(holder.actor, await signBinding(binding, keys));
+  const signed = await signBinding(binding, keys);
+  await db.transaction(connection => bindFirst(connection, db, bindings.audit, holder.actor.id, signed));
   return { keys, binding };
 }

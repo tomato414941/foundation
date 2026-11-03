@@ -14,6 +14,7 @@ import { FunctionDefinition, Resource, RequestInput } from '../shared/contracts.
 import { FunctionPublication, FunctionSettingsApproval } from '../shared/function-api.js';
 import { Execution } from '../shared/executions.js';
 import { z } from 'zod';
+import { confirmedActor } from './confirmation-support.js';
 
 test('他方のメールアドレスを確認してアカウントを統合し、保管した内容を引き継ぐ', async (t) => {
   const f = await fixture(),
@@ -27,7 +28,8 @@ test('他方のメールアドレスを確認してアカウントを統合し�
     'browser',
     '/account',
     'en',
-    source.actor,
+    await confirmedActor(c.confirmations, source.actor, source.keys,
+      { action: 'credential.addEmail', principalId: source.actor.id, email: 'merge@example.com' }),
     source.actor.id,
   );
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
@@ -53,7 +55,11 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   assert.equal(plan.from.id, source.actor.id);
   const moved = await protect(encode('merge-value'), { ...initial.policy, revision: 2, ownerId: target.actor.id,
     authorities: [target.binding], readers: [target.binding] }, 2, source.binding, source.keys, undefined, initial);
-  await accounts.merge(target.actor, verified.mergeProof, { [variable.id]: { version: variable.version, content: moved } });
+  const merging = { action: 'account.merge', principalId: target.actor.id, mergeId: verified.mergeProof };
+  await assert.rejects(() => accounts.merge(target.actor, verified.mergeProof, {
+    [variable.id]: { version: variable.version, content: moved } }), { code: 'confirmation_required' });
+  await accounts.merge(await confirmedActor(c.confirmations, target.actor, target.keys, merging), verified.mergeProof,
+    { [variable.id]: { version: variable.version, content: moved } });
   const row = await c.resources.get(variable.id);
   assert.equal(row.owner_id, target.actor.id);
   assert.equal(
@@ -83,14 +89,16 @@ test('アカウント統合で関数と完了した実行履歴を引き継ぎ�
   const operation = { name: 'principal.create', input: { ownerId: '$approver', name: 'Requested principal' } };
   const outgoing = await c.requests.create(source.actor, RequestInput.parse({ to: f.executorIdentity.actor.id, operations: [operation] }));
   const incoming = await c.requests.create(f.executorIdentity.actor, RequestInput.parse({ to: source.actor.id, operations: [operation] }));
-  await c.authentication.beginEmail('history@example.com', 'browser', '/account', 'en', source.actor, source.actor.id);
+  await c.authentication.beginEmail('history@example.com', 'browser', '/account', 'en', await confirmedActor(c.confirmations,
+    source.actor, source.keys, { action: 'credential.addEmail', principalId: source.actor.id, email: 'history@example.com' }), source.actor.id);
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   await c.authentication.verifyEmail(params.get('challenge')!, params.get('token')!);
   await c.authentication.beginEmail('history@example.com', 'browser', '/account', 'en', target.actor, undefined, target.actor.id);
   params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   const verified = await c.authentication.verifyEmail(params.get('challenge')!, params.get('token')!);
   assert.ok('mergeProof' in verified); if (!('mergeProof' in verified)) return;
-  await accounts.merge(target.actor, verified.mergeProof, {});
+  await accounts.merge(await confirmedActor(c.confirmations, target.actor, target.keys,
+    { action: 'account.merge', principalId: target.actor.id, mergeId: verified.mergeProof }), verified.mergeProof, {});
   const history = await f.functions.result(invocation.id);
   assert.equal(history.state, 'succeeded'); assert.equal(history.ownerId, target.actor.id);
   assert.equal(history.creator.id, source.actor.id); assert.equal(history.results[0], 'result\n');

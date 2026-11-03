@@ -24,7 +24,7 @@ import {
 import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
-import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
+import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, signBinding, SignedBinding } from '../../shared/authority.js';
 import { Task } from '../../shared/runtime-protocol.js';
 import type { TaskView } from '../../shared/runtime-protocol.js';
 import { Client, ApiError } from './client.js';
@@ -114,6 +114,7 @@ Options:
   --output FILE          Write the result to a private file
   --force                Replace an existing output file
   --upload FILE          Send a binary body with the api command
+  --confirmation ID      Send the api command with a confirmation proved through the confirmation API
   --help                 Show this help
   --version              Show the version
 
@@ -146,6 +147,7 @@ const options = {
   to: textOption,
   message: textOption,
   body: textOption,
+  confirmation: textOption,
   file: textOption,
   stdin: booleanOption,
   for: { type: 'string' as const, multiple: true as const },
@@ -338,13 +340,15 @@ async function initialize(args: Arguments) {
   const base = origin(args.values.origin);
   if (args.values.key) throw new Error('Use foundation login --key to sign in with a key.');
   const name = Name.parse(args.values.name || hostname()),
-    keys = await newIdentityKeys();
+    keys = await newIdentityKeys(),
+    binding = bindKeys(randomUUID(), keys);
   let response: Response;
   try {
+    // The identity is registered with the keys it signed for itself, so that nothing else sets them first.
     response = await fetch(base + '/api/auth/enroll', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, publicKey: publicPart(keys.encryption) }),
+      body: JSON.stringify({ name, binding: await signBinding(binding, keys) }),
       redirect: 'error',
       signal: AbortSignal.timeout(30_000),
     });
@@ -355,16 +359,8 @@ async function initialize(args: Arguments) {
   const registered = z
     .object({ principal: z.object({ id: Id, name: Name }), credential: Credential, token: z.string() })
     .parse(await response.json());
-  const binding = bindKeys(registered.principal.id, keys), identity = {
-    origin: base,
-    principalId: registered.principal.id,
-    token: registered.token,
-    keys, binding,
-  };
-  await saveIdentity(identity);
-  await new Client(identity).json('/api/principals/' + registered.principal.id + '/binding', {
-    method: 'PUT', body: await signBinding(binding, keys),
-  }, SignedBinding);
+  if (registered.principal.id !== binding.principalId) throw new Error('Foundation registered a different identity.');
+  await saveIdentity({ origin: base, principalId: registered.principal.id, token: registered.token, keys, binding });
   print({ principal: registered.principal, origin: base, identity: path, fingerprint: await fingerprint(binding) });
 }
 async function identity(args: Arguments) {
@@ -608,6 +604,7 @@ async function main(argv: string[]) {
     if (args.values.body && args.values.upload) throw new Error('Choose --body or --upload.');
     const response = await client.response(path, {
       method,
+      ...(args.values.confirmation ? { confirmation: Id.parse(args.values.confirmation) } : {}),
       ...(args.values.body ? { body: await json(args.values.body) } : {}),
       ...(args.values.upload ? { raw: await readFile(args.values.upload) } : {}),
     });
@@ -788,7 +785,7 @@ try {
         '\nVerify the fingerprint with this principal, then run foundation trust ' + error.recipient.id +
         ' --fingerprint <verified-fingerprint> and repeat this operation.'
       : error instanceof ApiError
-      ? error.code + ': ' + error.message
+      ? error.code + ': ' + error.message + (error.details === undefined ? '' : '\n' + JSON.stringify(error.details))
       : error instanceof z.ZodError
         ? 'Check the command inputs against foundation schema.'
         : error instanceof Error

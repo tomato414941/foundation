@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './support.js';
+import { confirmedCall } from './confirmation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
@@ -19,7 +20,7 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
   const person = await f.person('Person'),
     device = await f.person('Device'),
     headers = { authorization: 'Bearer ' + device.token };
-  const request = await app.inject({
+  const request = await confirmedCall(app, device.keys, {
     method: 'POST',
     url: '/api/requests',
     headers,
@@ -184,7 +185,8 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     device = await f.person('Device'),
     headers = { authorization: 'Bearer ' + device.token };
   const ask = async (operations: unknown[], to?: string) => {
-    const response = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: { ...(to ? { to } : {}), operations } });
+    const response = await confirmedCall(app, device.keys, { method: 'POST', url: '/api/requests', headers,
+      payload: { ...(to ? { to } : {}), operations } });
     assert.equal(response.statusCode, 201, response.body);
     const request = ApprovalRequest.parse(response.json());
     const execution = await app.inject({ url: '/api/executions/' + request.executionId, headers });

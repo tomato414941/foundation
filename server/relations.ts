@@ -12,6 +12,8 @@ import type { RelationQuery, ResourceKindName } from '../shared/contracts.js';
 import type { z } from 'zod';
 import { ProtectedKinds, isProtected } from '../shared/protected.js';
 import { fail } from './errors.js';
+import type { Confirmations } from './confirmations.js';
+import type { ConfirmationOperation } from '../shared/confirmations.js';
 
 export type Line = z.infer<typeof RelationInput>;
 interface LineRow {
@@ -64,7 +66,20 @@ export class Relations {
     readonly principals: Principals,
     readonly resources: Resources,
     readonly billing: Billing,
+    readonly confirmations: Confirmations,
   ) {}
+  // A line that lets its subject act as the object principal or manage how it is reached is confirmed by whoever
+  // draws it, as adding a sign-in would be.
+  async confirmation(line: Line): Promise<ConfirmationOperation | null> {
+    if (!reaches('principal', line.relation).includes('manage_credentials')) return null;
+    const object = await this.target(line.objectId);
+    if ('kind' in object) return null;
+    return { action: 'relation.draw', principalId: line.objectId, subjectId: line.subjectId, relation: line.relation };
+  }
+  // Passing a principal on lets its new owner act as it, and is confirmed by whoever passes it.
+  async transferConfirmation(id: string, to: string): Promise<ConfirmationOperation | null> {
+    return 'kind' in (await this.target(id)) ? null : { action: 'principal.transfer', principalId: id, to };
+  }
   // The principal or thing an id names.
   async target(id: string, connection: Queryable = this.db.pool): Promise<Target & { ownerId: string | null }> {
     const found = await this.db.one<{ type: string; kind: string | null; owner_id: string | null }>(
@@ -143,10 +158,15 @@ export class Relations {
       await this.billing.requireChargeable(line.subjectId);
     await this.agree(actor, { kind: 'line', ...line }, await this.drawing(object, line));
     if (payer) await this.billing.requireChargeable(line.subjectId);
+    const operation = await this.confirmation(line);
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (line.relation === 'member' && (await this.authorization.holds(line.objectId, principal(line.subjectId), 'stands', connection)))
         fail(409, 'relation_cycle', 'This membership would create a cycle.');
+      if (operation) {
+        await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [line.objectId]);
+        await this.confirmations.consume(connection, actor, operation);
+      }
       if (payer) {
         const cycle = await this.db.one(
           `WITH RECURSIVE above(id) AS (
@@ -238,6 +258,8 @@ export class Relations {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.authorization.holds(id, principal(to), 'stands', connection))
         fail(409, 'relation_cycle', 'This transfer would create an ownership cycle.');
+      await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [id]);
+      await this.confirmations.consume(connection, actor, { action: 'principal.transfer', principalId: id, to });
       await this.principals.keySharing.apply(actor, id, to, contents, connection);
       await connection.query('UPDATE principals SET owner_id=$2 WHERE id=$1', [id, to]);
       await this.audit.record(id, actor.id, 'principal.transfer', to, agreed(actor), connection);

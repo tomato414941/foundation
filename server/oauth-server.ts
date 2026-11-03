@@ -28,6 +28,8 @@ const Authorize = z.object({
 const CodeData = z.object({
   codeHash: z.string(), clientId: z.string(), redirectUri: z.string(), codeChallenge: z.string(),
   name: z.string(), resource: z.string().nullable(),
+  // The sign-in that granted the code, which must still manage the principal when the code is exchanged.
+  grantedBy: z.object({ id: z.uuid(), credentialId: z.uuid() }),
 });
 
 function allowedRedirect(value: string) {
@@ -39,7 +41,7 @@ function oauthError(code: string, description: string) {
 }
 
 export async function routesOAuthServer(app: ApiApp, context: Context) {
-  const { config, vault, authentication, authorization, db } = context;
+  const { config, vault, authentication, authorization, db, confirmations } = context;
   const origin = config.origin, resource = origin + '/api/mcp';
   const client = async (clientId: string) => {
     try {
@@ -88,16 +90,24 @@ export async function routesOAuthServer(app: ApiApp, context: Context) {
         return reply.code(400).send(oauthError('unsupported_grant_type', 'Use the authorization_code grant.'));
       if (!body.code || !body.code_verifier || !body.redirect_uri || !body.client_id)
         return reply.code(400).send(oauthError('invalid_request', 'Send code, code_verifier, redirect_uri, and client_id.'));
-      const row = await db.one<{ principal_id: string; data: unknown }>(
-        "DELETE FROM challenges WHERE kind='oauth-code' AND data->>'codeHash'=$1 AND expires_at>now() RETURNING principal_id,data",
-        [digest(body.code)]);
-      const code = row ? CodeData.safeParse(row.data) : null;
       const challenge = createHash('sha256').update(body.code_verifier).digest('base64url');
-      if (!row || !code?.success || code.data.clientId !== body.client_id || code.data.redirectUri !== body.redirect_uri ||
-        code.data.codeChallenge !== challenge || (body.resource && code.data.resource && body.resource !== code.data.resource))
-        return reply.code(400).send(oauthError('invalid_grant', 'The authorization code is invalid or expired.'));
-      const expiresAt = new Date(Date.now() + TOKEN_DAYS * 86400_000).toISOString();
-      const issued = await authentication.issueKey(row.principal_id, code.data.name, expiresAt);
+      const issued = await db.transaction(async connection => {
+        const row = await db.one<{ principal_id: string; data: unknown }>(
+          "DELETE FROM challenges WHERE kind='oauth-code' AND data->>'codeHash'=$1 AND expires_at>now() RETURNING principal_id,data",
+          [digest(body.code!)], connection);
+        const code = row ? CodeData.safeParse(row.data) : null;
+        if (!row || !code?.success || code.data.clientId !== body.client_id || code.data.redirectUri !== body.redirect_uri ||
+          code.data.codeChallenge !== challenge || (body.resource && code.data.resource && body.resource !== code.data.resource))
+          return null;
+        await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [row.principal_id]);
+        const grantor = code.data.grantedBy;
+        if (!await db.one('SELECT 1 FROM credentials WHERE id=$1 AND principal_id=$2 FOR SHARE', [grantor.credentialId, grantor.id], connection) ||
+          !await authorization.holds(grantor.id, { type: 'principal', id: row.principal_id }, 'manage_credentials', connection))
+          return null;
+        const expiresAt = new Date(Date.now() + TOKEN_DAYS * 86400_000).toISOString();
+        return authentication.issueKey(row.principal_id, code.data.name, expiresAt, null, connection);
+      });
+      if (!issued) return reply.code(400).send(oauthError('invalid_grant', 'The authorization code is invalid or expired.'));
       return reply.header('pragma', 'no-cache').send({
         access_token: issued.token, token_type: 'Bearer', expires_in: TOKEN_DAYS * 86400,
       });
@@ -121,12 +131,19 @@ export async function routesOAuthServer(app: ApiApp, context: Context) {
     if (input.resource && input.resource !== resource && input.resource !== origin)
       fail(400, 'invalid_target', 'Request access to Foundation.');
     const code = token();
-    await db.pool.query(
-      "INSERT INTO challenges(id,kind,principal_id,data,expires_at) VALUES($1,'oauth-code',$2,$3,now()+make_interval(secs => $4))",
-      [randomUUID(), input.principalId, JSON.stringify(CodeData.parse({
-        codeHash: digest(code), clientId: input.clientId, redirectUri: input.redirectUri,
-        codeChallenge: input.codeChallenge, name: registered.name, resource: input.resource ?? null,
-      })), CODE_SECONDS]);
+    // Letting an application in issues it a key, which the sign-in granting it confirms.
+    await db.transaction(async connection => {
+      await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [input.principalId]);
+      await authorization.requirePrincipal(who, input.principalId, 'manage_credentials', connection);
+      await confirmations.consume(connection, who, { action: 'oauth.authorize', ...input });
+      await connection.query(
+        "INSERT INTO challenges(id,kind,principal_id,data,expires_at) VALUES($1,'oauth-code',$2,$3,now()+make_interval(secs => $4))",
+        [randomUUID(), input.principalId, JSON.stringify(CodeData.parse({
+          codeHash: digest(code), clientId: input.clientId, redirectUri: input.redirectUri,
+          codeChallenge: input.codeChallenge, name: registered.name, resource: input.resource ?? null,
+          grantedBy: { id: who.id, credentialId: who.credentialId },
+        })), CODE_SECONDS]);
+    });
     const target = new URL(input.redirectUri);
     target.searchParams.set('code', code);
     if (input.state !== undefined) target.searchParams.set('state', input.state);

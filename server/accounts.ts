@@ -226,6 +226,8 @@ export class Accounts {
       await connection.query('SELECT id FROM principals WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [
         [from.id, to.id],
       ]);
+      // The other account's sign-in methods become this one's, which this account's sign-in confirms.
+      await c.confirmations.consume(connection, actor, { action: 'account.merge', principalId: to.id, mergeId: id });
       for (const row of rows) {
         // Trust decisions signed by the source account do not become the target account's decisions.
         if (row.kind === 'keyring') {

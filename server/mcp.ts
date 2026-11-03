@@ -6,6 +6,7 @@ import { actor } from './app.js';
 import { Json } from '../shared/contracts.js';
 import { fail } from './errors.js';
 import { registerMetadataTools } from '../runtime/mcp-metadata.js';
+import { confirmationCodes, confirmationHeader } from '../shared/confirmations.js';
 
 export async function routesMcp(app: ApiApp, origin: string) {
   // Without a token, point the client to the OAuth metadata so it can ask the owner to sign in.
@@ -35,8 +36,9 @@ export async function routesMcp(app: ApiApp, origin: string) {
     );
     registerMetadataTools(server, {
       async schema() { return app.swagger(); },
-      async request(method, path, body) {
+      async request(method, path, body, confirmation) {
         const headers: Record<string, string> = {};
+        if (confirmation) headers[confirmationHeader] = confirmation;
         if (request.headers.authorization) headers.authorization = request.headers.authorization;
         if (request.headers.cookie) headers.cookie = request.headers.cookie;
         if (request.headers.origin) headers.origin = request.headers.origin;
@@ -47,8 +49,12 @@ export async function routesMcp(app: ApiApp, origin: string) {
           headers,
           ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
         });
-        if (result.statusCode >= 400) throw new Error(result.headers['content-type']?.includes('application/json')
-          ? result.json().error?.message ?? 'The API request failed.' : 'The API request failed.');
+        if (result.statusCode >= 400) {
+          const error = result.headers['content-type']?.includes('application/json') ? result.json().error : null;
+          // A change waiting for confirmation names what to confirm and how.
+          throw new Error((error?.message ?? 'The API request failed.') +
+            (confirmationCodes.includes(error?.code) ? ' ' + JSON.stringify({ code: error.code, ...error.details }) : ''));
+        }
         return {
           status: result.statusCode,
           body: result.headers['content-type']?.includes('application/json') ? result.json() : result.body,

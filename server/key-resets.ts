@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { decodeProtectedHeader, importJWK } from 'jose';
+import { decodeProtectedHeader } from 'jose';
 import type { z } from 'zod';
 import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Actor, Authorization } from './authorization.js';
 import type { Audit } from './audit.js';
-import { PublicKey, WrappedKey } from '../shared/contracts.js';
+import { WrappedKey } from '../shared/contracts.js';
+import { verifyBinding } from '../shared/authority.js';
+import { bindFirst } from './bindings.js';
+import type { Confirmations } from './confirmations.js';
 import type { PublicEncryptionKey } from '../shared/contracts.js';
 import type { KeyResetCompletion } from '../shared/session.js';
 import { fail, required } from './errors.js';
@@ -16,7 +19,8 @@ import { fail, required } from './errors.js';
 const waiting = 7 * 86_400_000, lasting = 30 * 86_400_000;
 
 export class KeyResets {
-  constructor(readonly db: Database, readonly authorization: Authorization, readonly audit: Audit) {}
+  constructor(readonly db: Database, readonly authorization: Authorization, readonly audit: Audit,
+    readonly confirmations: Confirmations) {}
   async get(principalId: string, connection: Queryable = this.db.pool) {
     const row = await this.db.one<{ created_at: Date; data: { readyAt: string } }>(
       "SELECT created_at,data FROM challenges WHERE kind='key-reset' AND principal_id=$1 AND expires_at>now()",
@@ -46,27 +50,27 @@ export class KeyResets {
     const removed = await this.db.pool.query("DELETE FROM challenges WHERE kind='key-reset' AND principal_id=$1", [principalId]);
     if (removed.rowCount) await this.audit.record(principalId, actor.id, 'principal.cancelKeyReset', principalId);
   }
-  // Replaces the keys once the request is ready, with the private key wrapped for the passkey this session signed in
-  // with. The one that passkeys and API keys held before no longer belongs to the principal, and what only it opened is
-  // entered again with the new keys; the principal's new signing key is published as for one that had none.
+  // Replaces the keys once the request is ready, with the private key wrapped for the passkey that confirms it. The
+  // keys that passkeys and API keys held before no longer belong to the principal, and what only they opened is
+  // entered again with the new keys, which are bound as an identity's first keys.
   async complete(actor: Actor, principalId: string, input: z.infer<typeof KeyResetCompletion>) {
     await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
-    if (actor.id !== principalId || decodeProtectedHeader(input.wrappedKey).sub !== principalId)
-      fail(403, 'forbidden', 'Sign in as this principal with the passkey that holds its new keys.');
-    await importJWK(PublicKey.parse(input.publicKey), 'ECDH-ES+A256KW');
+    const binding = await verifyBinding(input.binding);
+    if (actor.id !== principalId || binding.principalId !== principalId || decodeProtectedHeader(input.wrappedKey).sub !== principalId)
+      fail(403, 'forbidden', 'Make new keys for this principal while signed in as it.');
     await this.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
-      if (!await this.db.one("SELECT 1 FROM credentials WHERE id=$1 AND principal_id=$2 AND kind='passkey'",
-        [actor.credentialId ?? null, principalId], connection))
-        fail(403, 'forbidden', 'Sign in as this principal with the passkey that holds its new keys.');
       const ready = await this.db.one(
         `DELETE FROM challenges WHERE kind='key-reset' AND principal_id=$1 AND expires_at>now()
          AND (data->>'readyAt')::timestamptz<=now() RETURNING id`, [principalId], connection);
       if (!ready) fail(409, 'key_reset_waiting', 'Wait until the request to make new keys is ready.');
+      await this.confirmations.consume(connection, actor, { action: 'keyReset.complete', principalId,
+        binding: input.binding, wrappedKey: WrappedKey.parse(input.wrappedKey), credentialId: input.credentialId });
       await connection.query('UPDATE principal_key_bindings SET retired_at=now() WHERE principal_id=$1 AND retired_at IS NULL', [principalId]);
-      await connection.query('UPDATE principals SET public_key=$2 WHERE id=$1', [principalId, JSON.stringify(PublicKey.parse(input.publicKey))]);
+      await connection.query('UPDATE principals SET public_key=NULL WHERE id=$1', [principalId]);
+      await bindFirst(connection, this.db, this.audit, actor.id, input.binding);
       await connection.query('UPDATE credentials SET private_wrap=CASE WHEN id=$2 THEN $3 END WHERE principal_id=$1',
-        [principalId, actor.credentialId, WrappedKey.parse(input.wrappedKey)]);
+        [principalId, input.credentialId, WrappedKey.parse(input.wrappedKey)]);
       await this.audit.record(principalId, actor.id, 'principal.resetKeys', principalId, {}, connection);
     });
   }

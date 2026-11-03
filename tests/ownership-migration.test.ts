@@ -9,7 +9,7 @@ test('所有の始まりを、作った時刻と記録に残る最後の受け�
   const team = await f.principals.create('Team', null, owner.actor.id), bot = await f.principals.create('Bot', null, owner.actor.id);
   const item = (name: string) => f.resources.insert(owner.actor.id, 'object', name, { size: 0, contentType: 'text/plain' });
   const kept = await item('kept.txt'), passed = await item('passed.txt'), sealed = await item('sealed.txt');
-  await f.relations.transfer(owner.actor, bot.id, team.id);
+  await f.relations.transfer(await f.confirmed(owner, { action: 'principal.transfer', principalId: bot.id, to: team.id }), bot.id, team.id);
   await f.relations.transfer(owner.actor, passed.id, team.id);
   // A thing a key protects is passed on by sealing it for its new owner, recorded where each owner keeps its audit.
   await f.db.pool.query('UPDATE resources SET owner_id=$2 WHERE id=$1', [sealed.id, team.id]);

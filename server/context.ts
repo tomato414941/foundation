@@ -6,6 +6,7 @@ import { Audit } from './audit.js';
 import { Principals } from './principals.js';
 import { Relations } from './relations.js';
 import { Authentication } from './authentication.js';
+import { Confirmations } from './confirmations.js';
 import { ResendMailer } from './mail.js';
 import type { Mailer } from './mail.js';
 import { Resources } from './resources.js';
@@ -71,14 +72,15 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     principals = new Principals(db, authorization, audit),
     resources = new Resources(db, authorization, audit, principals),
     billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
-    relations = new Relations(db, authorization, audit, principals, resources, billing);
-  const mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
-    authentication = new Authentication(db, principals, authorization, audit, mailer, config),
-    keyResets = new KeyResets(db, authorization, audit);
+    mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
+    confirmations = new Confirmations(db, mailer, config),
+    relations = new Relations(db, authorization, audit, principals, resources, billing, confirmations);
+  const authentication = new Authentication(db, principals, authorization, audit, mailer, config, confirmations),
+    keyResets = new KeyResets(db, authorization, audit, confirmations);
   const catalog = await Catalog.load(resources, config),
     transport = deps.transport ?? new PublicTransport(config.origin),
     functions = new Functions(resources, config.origin);
-  const bindings = new Bindings(db, authorization, audit),
+  const bindings = new Bindings(db, authorization, audit, confirmations),
     keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
     custody = new Custody(resources, bindings, relations, config.origin),
     delegation = new Delegation(resources, bindings, custody, config.origin),
@@ -103,7 +105,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const integrations = new Integrations(db, authorization, config.origin);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
     objects, billing, processes, integrations, custody, delegation, functions, invocations });
-  const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin);
+  const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin, confirmations);
   executions.runtime = {
     get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
     cancel: (actor, reference) => reference.kind === 'run' ? delegation.cancel(actor, reference.id) : invocations.cancel(actor, reference.id),
@@ -149,6 +151,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     principals,
     relations,
     mailer,
+    confirmations,
     authentication,
     keyResets,
     keyRotations,

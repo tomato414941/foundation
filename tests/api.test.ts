@@ -8,6 +8,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
 import { delegatedFixture } from './delegation-support.js';
+import { confirmedCall } from './confirmation-support.js';
 import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
@@ -37,11 +38,12 @@ test('HTTP APIで登録し、変数を保存して同じ権限で一覧を取得
     await f.close();
   });
   const keys = await newIdentityKeys();
+  const binding = bindKeys(randomUUID(), keys);
   const enrolled = await app.inject({ method: 'POST', url: '/api/auth/enroll',
-    payload: { name: 'API caller', publicKey: publicPart(keys.encryption) } });
+    payload: { name: 'API caller', binding: await signBinding(binding, keys) } });
   assert.equal(enrolled.statusCode, 201, enrolled.body);
   const identity = enrolled.json(), headers = { authorization: 'Bearer ' + identity.token }, id = randomUUID();
-  const binding = bindKeys(identity.principal.id, keys);
+  assert.equal(identity.principal.id, binding.principalId);
   const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
     headers, payload: await signBinding(binding, keys) });
   assert.equal(bound.statusCode, 200, bound.body);
@@ -87,7 +89,7 @@ test('JWEで保護した暗号鍵を保存し、不正な更新があっても�
     url: `/api/principals/${owner.actor.id}/credentials/${credentialId}/wrap`,
     headers: { authorization: 'Bearer ' + owner.token },
   };
-  assert.equal((await app.inject({ ...request, payload: { wrappedKey, publicKey: owner.keys.publicKey } })).statusCode, 200);
+  assert.equal((await confirmedCall(app, owner.keys, { ...request, payload: { wrappedKey, publicKey: owner.keys.publicKey } })).statusCode, 200);
   const parts = wrappedKey.split('.');
   parts[0] = Buffer.from(JSON.stringify({ alg: 'dir', enc: 'A128GCM', sub: owner.actor.id })).toString('base64url');
   const malformed = await app.inject({ ...request, payload: { wrappedKey: parts.join('.'), publicKey: owner.keys.publicKey } });
@@ -142,7 +144,7 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   });
   const owner = await f.person();
   const headers = { authorization: 'Bearer ' + owner.token };
-  const issued = await app.inject({
+  const issued = await confirmedCall(app, owner.keys, {
     method: 'POST',
     url: `/api/principals/${owner.actor.id}/credentials`,
     headers,
@@ -155,7 +157,7 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   assert.equal(before.json().wrappedKey, null);
   const unlock = crypto.getRandomValues(new Uint8Array(32));
   const wrappedKey = await wrap(owner.keys.privateKey, unlock, owner.actor.id);
-  const placed = await app.inject({
+  const placed = await confirmedCall(app, owner.keys, {
     method: 'PUT',
     url: `/api/principals/${owner.actor.id}/credentials/${credential.id}/wrap`,
     headers,
@@ -200,9 +202,9 @@ test('デバイスの依頼をブラウザで承認すると、デバイスが�
   const approved = await app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code, principalId: person.actor.id } });
   assert.equal(approved.statusCode, 200, approved.body);
   assert.equal(approved.json().state, 'approving');
-  const issued = await app.inject({ method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } });
+  const issued = await confirmedCall(app, person.keys, { method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } });
   const { credential, token } = issued.json();
-  await app.inject({
+  await confirmedCall(app, person.keys, {
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
     headers,

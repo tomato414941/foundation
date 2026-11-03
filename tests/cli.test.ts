@@ -7,7 +7,8 @@ import { createServer as createHttpServer } from 'node:http';
 import { chmod, cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fixture } from './support.js';
+import { enroll, fixture } from './support.js';
+import { confirmedCall } from './confirmation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
@@ -55,28 +56,32 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}, bun
     });
   }
   // Start a command and resolve as soon as its stderr matches, keeping the finished promise.
+  // Commands still running when a test ends, which closing the fixture stops even if the test failed while they waited.
+  const running = new Set<Promise<unknown> & { stop(): void }>();
   function start(args: string[], until: RegExp) {
     const child = spawn(process.execPath, [resolve(bundleDirectory, 'cli.mjs'), ...args], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     const finished = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult) =>
       child.once('close', (code) => resolveResult({ code, stdout, stderr })));
+    const tracked = Object.assign(finished.then(() => running.delete(tracked)), { stop: () => child.kill('SIGTERM') });
+    running.add(tracked);
     const shown = new Promise<string>((resolveShown) =>
       child.stderr.on('data', (chunk) => { stderr += chunk; if (until.test(stderr)) resolveShown(stderr); }));
     child.stdin.end();
     return { shown, finished };
   }
   async function close() {
+    for (const command of running) command.stop();
+    await Promise.all(running);
     await app.close();
     await f.close();
     await rm(directory, { recursive: true, force: true });
   }
   async function person(name: string) {
     const keys = await newIdentityKeys();
-    const enrolled = await f.authentication.enroll(name, publicPart(keys.encryption));
+    const { binding, keys: _keys, ...enrolled } = await enroll(f.authentication, name, keys);
     const actor = (await f.authentication.authenticate(enrolled.token))!;
-    const binding = bindKeys(actor.id, keys);
-    await context.bindings.publish(actor, await signBinding(binding, keys));
     return { ...enrolled, actor, keys, binding };
   }
   return { f, context, app, origin, directory, run, start, close, person };
@@ -368,7 +373,7 @@ test('発行されたキーでログインした CLI は本人として入り、
   t.after(c.close);
   const person = await c.person('Person');
   const headers = { authorization: 'Bearer ' + person.token };
-  const issued = await c.app.inject({
+  const issued = await confirmedCall(c.app, person.keys, {
     method: 'POST',
     url: `/api/principals/${person.actor.id}/credentials`,
     headers,
@@ -381,7 +386,7 @@ test('発行されたキーでログインした CLI は本人として入り、
   assert.match(refused.stderr, /separate encryption unlock code/);
   const unlock = randomBytes(32);
   const wrappedKey = await wrap(person.keys, unlock, person.actor.id);
-  const placed = await c.app.inject({
+  const placed = await confirmedCall(c.app, person.keys, {
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
     headers,
@@ -423,9 +428,9 @@ test('ブラウザで承認すると、ログインを待つ CLI が本人のキ
   assert.equal(device.name, 'Laptop');
   const approved = await c.app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code, principalId: person.actor.id } });
   assert.equal(approved.statusCode, 200, approved.body);
-  const issued = (await c.app.inject({ method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } })).json();
+  const issued = (await confirmedCall(c.app, person.keys, { method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } })).json();
   const unlock = randomBytes(32);
-  await c.app.inject({
+  await confirmedCall(c.app, person.keys, {
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${issued.credential.id}/wrap`,
     headers,
@@ -808,4 +813,34 @@ test('稼働中の実行環境は鍵の交換後に旧鍵で依頼を受け取�
   const saved = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8'));
   assert.equal(saved.identities[0].binding.generation, 2);
   assert.equal(agent.exitCode, null);
+});
+
+test('CLIは署名で確認できない変更に確認IDを示し、APIで確認した後に同じ操作へその確認を添えて完了する', async (t) => {
+  const c = await cliFixture();
+  t.after(c.close);
+  const person = await c.person('Person');
+  const headers = { authorization: 'Bearer ' + person.token }, unlock = randomBytes(32);
+  const issued = await confirmedCall(c.app, person.keys, { method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers,
+    payload: { name: 'Laptop', wrap: { wrappedKey: await wrap(person.keys, unlock, person.actor.id), publicKey: publicPart(person.keys.encryption) } } });
+  const { token } = issued.json();
+  const keyFile = join(c.directory, 'key.txt');
+  await writeFile(keyFile, token + '.' + unlock.toString('base64url') + '\n', { mode: 0o600 });
+  assert.equal((await c.run(['login', '--key', '@' + keyFile, '--origin', c.origin])).code, 0);
+  const email = randomUUID();
+  await c.f.db.pool.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'email',$3,$3)",
+    [email, person.actor.id, 'cli-person@example.com']);
+  const path = `/api/principals/${person.actor.id}/credentials/${email}`;
+  const refused = await c.run(['api', 'DELETE', path]);
+  assert.equal(refused.code, 1);
+  const details = JSON.parse(refused.stderr.split('\n')[1]!);
+  assert.deepEqual(details.methods, ['email']);
+  assert.deepEqual(details.operation, { action: 'credential.remove', principalId: person.actor.id, credentialId: email });
+  const confirmation = details.confirmationId, cli = { authorization: 'Bearer ' + token };
+  assert.equal((await c.app.inject({ method: 'POST', url: `/api/confirmations/${confirmation}/email`, headers: cli, payload: {} })).statusCode, 200);
+  const proved = await c.app.inject({ method: 'POST', url: `/api/confirmations/${confirmation}/proof`, headers: cli,
+    payload: { method: 'email', code: c.f.mailer.codes.at(-1)!.code } });
+  assert.equal(proved.statusCode, 200, proved.body);
+  const removed = await c.run(['api', 'DELETE', path, '--confirmation', confirmation]);
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.equal(await c.f.db.one('SELECT 1 FROM credentials WHERE id=$1', [email]), undefined);
 });

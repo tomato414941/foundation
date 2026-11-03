@@ -21,6 +21,8 @@ export interface Actor {
   approvalIndex?: number;
   // Who agreed, for the other side of a change the actor makes, to the specific execution it is made under.
   agreedBy?: string;
+  // The confirmation sent with the call, for a change that takes more than its token.
+  confirmation?: string;
 }
 export interface ResourceIdentity {
   id: string;

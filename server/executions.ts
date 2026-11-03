@@ -14,6 +14,7 @@ import { ExecutionInput } from '../shared/executions.js';
 import type { Vault } from './vault.js';
 import { fail, failure, required } from './errors.js';
 import { AgreementNeeded } from './relations.js';
+import type { Confirmations } from './confirmations.js';
 import type { Audit } from './audit.js';
 import type { DefinitionRegistry } from './definitions.js';
 import { OperationFailed } from './definitions.js';
@@ -62,15 +63,25 @@ export class Executions {
     cancel(actor: Actor, reference: NonNullable<Snapshot['runtime']>): Promise<TaskView | InvocationView>;
   };
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
-    readonly definitions: DefinitionRegistry, readonly audit: Audit, readonly principals: Principals, readonly origin: string) {}
+    readonly definitions: DefinitionRegistry, readonly audit: Audit, readonly principals: Principals, readonly origin: string,
+    readonly confirmations: Confirmations) {}
+  // An operation that takes a confirmation is checked before the execution starts making it, so that one sent
+  // without its confirmation is refused instead of being left failed. Each such change is made on its own.
+  private async confirm(actor: Actor, operations: DefinitionCall[]) {
+    const needed = (await Promise.all(operations.map(operation =>
+      this.definitions.get(operation.name).confirmation?.(operation.input) ?? null))).filter(operation => operation !== null);
+    if (needed.length > 1) fail(400, 'confirm_separately', 'Make each change that needs a confirmation on its own.');
+    if (needed[0]) await this.confirmations.check(actor, needed[0]);
+  }
   private async row(id: string) {
     return required(await this.db.one<ExecutionRow>('SELECT * FROM executions WHERE id=$1', [id]));
   }
   private read(row: ExecutionRow) { return this.vault.decrypt<Snapshot>(row.snapshot, 'operation-execution:' + row.id); }
   private authority(actor: Actor) {
     const authority = { ...actor };
-    // A login authenticates a call; the saved execution retains the identity, credential, and consent.
-    delete authority.sessionId;
+    // A login authenticates a call; the saved execution retains the identity, credential, and consent, and the
+    // session a confirmation was made in, which the confirmation holds only with.
+    if (!authority.confirmation) delete authority.sessionId;
     return authority;
   }
   private operationActor(snapshot: Snapshot): Actor {
@@ -306,11 +317,16 @@ export class Executions {
     if (Number(pending?.count) >= 20) fail(429, 'request_limit', 'Wait for an existing operation to finish.');
     const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
     const code = invitation ? Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join('') : undefined;
-    const id = input.id ?? randomUUID();
-    await this.plan(id, actor, input.operations, new Date(Date.now() + input.expiresInMinutes * 60_000), undefined,
+    const id = input.id ?? randomUUID(), expiresAt = new Date(Date.now() + input.expiresInMinutes * 60_000);
+    // An invitation lets whoever answers it take this principal on as its owner, which its sign-in confirms.
+    if (invitation) await this.confirmations.hold(actor, this.invitation(actor.id, submissionDigest), expiresAt);
+    await this.plan(id, actor, input.operations, expiresAt, undefined,
       { responderId: input.responderId ?? (invitation ? undefined : actor.id), message: input.message, code,
         deliver: !!input.responderId || invitation }, submissionDigest);
     return { ...await this.get(actor, id), ...(code ? { code } : {}) };
+  }
+  private invitation(principalId: string, submission: string | null) {
+    return { action: 'principal.invite', principalId, submission };
   }
   async deliver(actor: Actor, id: string, to: string, message: string, expiresInMinutes: number) {
     await this.principals.get(to);
@@ -346,7 +362,8 @@ export class Executions {
     }
     const effectiveId = actor.requestId ? required(row.responder_id) : actor.id;
     const effectiveActor: Actor = row.proposal ? { ...previous.creatorActor, agreedBy: effectiveId, approvalId: id }
-      : { id: effectiveId, ...(actor.credentialId ? { credentialId: actor.credentialId } : {}), approvalId: id };
+      : { id: effectiveId, ...(actor.credentialId ? { credentialId: actor.credentialId } : {}), approvalId: id,
+        ...(actor.confirmation ? { confirmation: actor.confirmation, ...(actor.sessionId ? { sessionId: actor.sessionId } : {}) } : {}) };
     const filled = await Promise.all(previous.operations.map(async (operation, index) => {
       if (index < previous.index) return operation;
       const current = structuredClone(operation), supplied = values[index] ?? {};
@@ -364,11 +381,13 @@ export class Executions {
       const prepared = await this.definitions.prepareFor(row.proposal ? previous.creatorActor : actor, configured);
       return { ...current, ...prepared.invocation };
     }));
+    await this.confirm(effectiveActor, filled.slice(previous.index));
     await this.db.transaction(async connection => {
       await this.authorization.active(actor, connection);
       await this.authorize(effectiveActor, id, filled, connection);
       if (row.code_hash) {
         await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+        await this.confirmations.consume(connection, previous.creatorActor, this.invitation(row.creator_id, previous.submissionDigest));
         const device = await this.principals.get(row.creator_id, connection);
         if (device.owner_id || await this.authorization.holds(row.creator_id, principal(effectiveId), 'stands', connection))
           fail(409, 'already_owned', 'This device has already been taken on.');
@@ -509,6 +528,7 @@ export class Executions {
 
   async start(actor: Actor, operations: DefinitionCall[], options: { id?: string; expiresAt?: Date; results?: Array<JsonValue | null>; message?: string; submissionDigest?: string } = {}) {
     const id = options.id ?? randomUUID();
+    await this.confirm(actor, operations.filter((_operation, index) => options.results?.[index] == null));
     await this.plan(id, actor, operations, options.expiresAt ?? new Date(Date.now() + 86_400_000), options.results,
       options.message ? { message: options.message, pending: false } : undefined, options.submissionDigest);
     return this.locked(id, async () => {
@@ -595,6 +615,9 @@ export class Executions {
       } catch (error) {
         snapshot.inFlight = null;
         if (error instanceof AgreementNeeded && !this.operationActor(snapshot).approvalId) {
+          // The confirmation the change was sent with waits with it for the other side.
+          const confirmation = await definition.confirmation?.(operation.input);
+          if (confirmation) await this.confirmations.hold(snapshot.creatorActor, confirmation, row.expires_at);
           row.responder_id = error.to; row.proposal = error.proposed; row.response = 'pending';
           snapshot.actor = this.authority(snapshot.creatorActor); snapshot.agreementIndex = null;
           await this.save(row, snapshot, 'waiting', 'approval');

@@ -4,9 +4,9 @@ import { iso } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
 import { actionsOf, createPermission, principal } from './authorization.js';
 import type { Audit } from './audit.js';
-import { Name, Principal, PublicKey, WrappedKey } from '../shared/contracts.js';
-import type { PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contracts.js';
-import { fail, required } from './errors.js';
+import { Name, Principal, PublicKey } from '../shared/contracts.js';
+import type { PublicEncryptionKey } from '../shared/contracts.js';
+import { required } from './errors.js';
 import type { KeySharing } from './key-sharing.js';
 import { ResourceKind } from '../shared/contracts.js';
 
@@ -90,23 +90,5 @@ export class Principals {
     await this.audit.record(id, actor.id, 'principal.rename', id);
     return this.view(actor, await this.get(id));
   }
-  async publishKey(actor: Actor, id: string, key: PublicEncryptionKey, wraps: Record<string, WrappedEncryptionKey> = {}) {
-    await this.authorization.requirePrincipal(actor, id, 'manage_credentials');
-    return this.db.transaction(async (connection) => {
-      const row = required(
-        await this.db.one<PrincipalRow>('SELECT * FROM principals WHERE id=$1 FOR UPDATE', [id], connection),
-      );
-      if (row.public_key) fail(409, 'key_exists', 'This principal already has an encryption key.');
-      await connection.query('UPDATE principals SET public_key=$2 WHERE id=$1', [
-        id,
-        JSON.stringify(PublicKey.parse(key)),
-      ]);
-      for (const [credentialId, wrap] of Object.entries(wraps))
-        await connection.query(
-          'UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2',
-          [credentialId, id, WrappedKey.parse(wrap)],
-        );
-      await this.audit.record(id, actor.id, 'principal.publishKey', id, {}, connection);
-    });
-  }
+
 }
