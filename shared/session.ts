@@ -50,5 +50,5 @@ export const PasskeyVerify = z
   })
   .strict();
 // The new keys, and the private key wrapped for the passkey this session signed in with.
-// The new keys, wrapped for the passkey that holds them, which confirms the reset.
-export const KeyResetCompletion = z.object({ binding: SignedBinding, wrappedKey: WrappedKey, credentialId: Id }).strict();
+// The new keys, wrapped for the passkey registered with the reset.
+export const KeyResetCompletion = z.object({ binding: SignedBinding, wrappedKey: WrappedKey }).strict();

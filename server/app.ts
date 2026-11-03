@@ -382,8 +382,8 @@ export async function buildApp(context: Context) {
       return principals.view(who, await principals.get(request.params.id));
     },
   );
-  // New keys for one who lost every copy of the private key. The request waits before a passkey holding the new keys
-  // completes it, and it can be cancelled meanwhile.
+  // New keys for one who lost every copy of the private key. The request waits, and can be cancelled meanwhile; then
+  // the sign-in that asked registers the passkey that will hold the new keys and completes it.
   app.post(
     '/api/principals/:id/key-reset',
     { schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: S.KeyReset } } },
@@ -396,6 +396,19 @@ export async function buildApp(context: Context) {
       await keyResets.cancel(actor(request), request.params.id);
       return { ok: true as const };
     },
+  );
+  app.post(
+    '/api/principals/:id/key-reset/passkey/options',
+    { schema: { params: C.IdParams, body: z.object({ name: C.Name }).strict(), response: { 200: z.object({ options: z.json() }) } } },
+    async (request) => {
+      const { options } = await keyResets.passkeyOptions(actor(request), request.params.id, request.body.name);
+      return { options: JSON.parse(JSON.stringify(options)) as C.JsonValue };
+    },
+  );
+  app.post(
+    '/api/principals/:id/key-reset/passkey',
+    { schema: { params: C.IdParams, body: z.object({ credential: z.json() }).strict(), response: { 200: z.object({ identifier: z.string() }) } } },
+    (request) => keyResets.registerPasskey(actor(request), request.params.id, request.body.credential),
   );
   app.post(
     '/api/principals/:id/key-reset/complete',

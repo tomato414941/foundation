@@ -15,10 +15,9 @@ import type { ConfirmationMethod, ConfirmationProof, ConfirmationView } from '..
 import { digest, token } from './vault.js';
 import { fail, required } from './errors.js';
 
-// What a change takes besides its token: any proof the token alone cannot give; a way in other than the identity's
-// keys where the principal has one, for changes that would let whoever holds its device lock the principal out; or
-// one of its passkeys, for keys only a passkey will hold.
-type Level = 'proof' | 'factor' | 'passkey';
+// What a change takes besides its token: any proof the token alone cannot give, or a way in other than the identity's
+// keys where the principal has one, for changes that would let whoever holds its device lock the principal out.
+type Level = 'proof' | 'factor';
 const levels: Record<string, Level | ((operation: ConfirmationOperation, connection: Queryable, db: Database) => Promise<Level>)> = {
   'credential.issue': 'proof',
   // Replacing what a passkey holds could leave it unable to open the keys; setting it first gives nothing away.
@@ -41,7 +40,6 @@ const levels: Record<string, Level | ((operation: ConfirmationOperation, connect
   'principal.transfer': 'factor',
   'principal.invite': 'factor',
   'keys.bind': 'proof',
-  'keyReset.complete': 'passkey',
 };
 interface Row {
   id: string;
@@ -94,7 +92,6 @@ export class Confirmations {
     const others: ConfirmationMethod[] = [...(ways.has('email') && this.mailer.enabled ? ['email' as const] : []),
       ...(ways.has('passkey') ? ['passkey' as const] : [])];
     const exists = held.length > 0 || ways.size > 0;
-    if (level === 'passkey') return { exists, methods: ways.has('passkey') ? ['passkey' as const] : [] };
     if (level === 'factor' && ways.size) return { exists, methods: others };
     return { exists, methods: [...held, ...others] };
   }
@@ -179,18 +176,13 @@ export class Confirmations {
     catch { fail(502, 'email_failed', 'The email could not be sent. Try again.'); }
     return { email: address.identifier, resendAt: new Date(Date.now() + 60_000).toISOString() };
   }
-  // The passkey a change names as the one that confirms it: keys made again are held by the passkey that confirms them.
-  private passkeyFor(operation: ConfirmationOperation) {
-    return operation.action === 'keyReset.complete' ? String(operation.credentialId) : null;
-  }
   // WebAuthn options for one of the actor's passkeys to confirm the change.
   async passkeyOptions(actor: Actor, id: string) {
     this.bearer(actor);
     const row = await this.row(actor, id);
     if (row.data.state !== 'pending') fail(409, 'confirmation_answered', 'This confirmation is already complete.');
     const passkeys = await this.db.all<{ identifier: string; data: { transports: AuthenticatorTransport[] } }>(
-      "SELECT identifier,data FROM credentials WHERE principal_id=$1 AND kind='passkey' AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at,id",
-      [actor.id, this.passkeyFor(row.data.operation)]);
+      "SELECT identifier,data FROM credentials WHERE principal_id=$1 AND kind='passkey' ORDER BY created_at,id", [actor.id]);
     if (!passkeys.length) fail(400, 'method_unavailable', 'Confirm this change with another method.');
     const options = await generateAuthenticationOptions({ rpID: this.rpId, userVerification: 'required',
       allowCredentials: passkeys.map(passkey => ({ id: passkey.identifier, transports: passkey.data.transports })) });
@@ -235,8 +227,8 @@ export class Confirmations {
   private async passkey(actor: Actor, row: Row, response: unknown, connection: Queryable) {
     const assertion = response as AuthenticationResponseJSON;
     const credential = await this.db.one<{ id: string; identifier: string; data: { publicKey: string; counter: number; transports: AuthenticatorTransport[] } }>(
-      "SELECT id,identifier,data FROM credentials WHERE kind='passkey' AND principal_id=$1 AND identifier=$2 AND ($3::uuid IS NULL OR id=$3) FOR UPDATE",
-      [actor.id, typeof assertion?.id === 'string' ? assertion.id : '', this.passkeyFor(row.data.operation)], connection);
+      "SELECT id,identifier,data FROM credentials WHERE kind='passkey' AND principal_id=$1 AND identifier=$2 FOR UPDATE",
+      [actor.id, typeof assertion?.id === 'string' ? assertion.id : ''], connection);
     if (!credential || !row.data.passkey) return null;
     let verification;
     try {

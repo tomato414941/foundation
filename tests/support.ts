@@ -73,7 +73,7 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     confirmations = new Confirmations(db, mailer, config),
     relations = new Relations(db, authorization, audit, principals, resources, billing, confirmations);
   const authentication = new Authentication(db, principals, authorization, audit, mailer, config, confirmations),
-    keyResets = new KeyResets(db, authorization, audit, confirmations);
+    keyResets = new KeyResets(db, authorization, audit, config);
   const bindings = new Bindings(db, authorization, audit, confirmations), custody = new Custody(resources, bindings, relations, config.origin);
   principals.keySharing = new KeySharing(custody);
   async function person(name = 'Owner') {
