@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fixture } from './support.js';
-import { addPasskey } from './passkey-support.js';
+import { addPasskey, softwarePasskey } from './passkey-support.js';
 import { rotateKeys } from './key-rotation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
@@ -304,4 +304,23 @@ test('鍵も確認手段もない主体はトークンだけでは鍵を束縛�
   assert.equal(alone.json().error.code, 'confirmation_unavailable');
   const refused = await s.call('PUT', path, owner.token, binding);
   assert.equal((await s.call('PUT', path, owner.token, binding, await s.signed(owner, refused))).statusCode, 200);
+});
+
+test('パスキーの追加は確認した登録応答のパスキーにだけ使え、同じ登録への別の応答に差し替えると受け付けない', async t => {
+  const s = await setup(); t.after(s.close);
+  const person = await s.f.person('Holder');
+  const started = await s.call('POST', '/api/auth/passkeys/options', person.token,
+    { intent: 'register', name: 'Added passkey', principalId: person.actor.id });
+  assert.equal(started.statusCode, 200, started.body);
+  const { challengeId, options } = started.json();
+  const confirmed = softwarePasskey(s.f.config.origin), other = softwarePasskey(s.f.config.origin);
+  const verify = (passkey: ReturnType<typeof softwarePasskey>, confirmation?: string) => s.call('POST', '/api/auth/passkeys/verify',
+    person.token, { challengeId, credential: passkey.register(options) }, confirmation);
+  const refused = await verify(confirmed);
+  assert.equal(refused.json().error.details.operation.passkey.id, confirmed.identifier);
+  const confirmation = await s.signed(person, refused);
+  assert.equal((await verify(other, confirmation)).json().error.code, 'confirmation_invalid');
+  assert.equal((await verify(confirmed, confirmation)).statusCode, 200);
+  assert.deepEqual((await s.f.db.all<{ identifier: string }>("SELECT identifier FROM credentials WHERE principal_id=$1 AND kind='passkey'",
+    [person.actor.id])).map(row => row.identifier), [confirmed.identifier]);
 });

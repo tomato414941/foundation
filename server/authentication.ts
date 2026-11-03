@@ -595,8 +595,10 @@ export class Authentication {
         if (row.principal_id) {
           await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
           await this.authorization.requirePrincipal(actor!, principalId, 'manage_credentials', connection);
+          // The confirmation names the passkey being added, as verified, so that another response cannot take its place.
           await this.confirmations.consume(connection, actor!, { action: 'credential.addPasskey', principalId,
-            challengeId: row.id, ...(input.binding ? { binding: input.binding } : {}), ...(wrappedKey ? { wrappedKey } : {}),
+            challengeId: row.id, passkey: { id: info.credential.id, publicKey: digest(Buffer.from(info.credential.publicKey).toString('base64url')) },
+            ...(input.binding ? { binding: input.binding } : {}), ...(wrappedKey ? { wrappedKey } : {}),
             ...(input.existingPublicKey ? { existingPublicKey: input.existingPublicKey } : {}) });
           if (!await this.db.one('DELETE FROM challenges WHERE id=$1 RETURNING id', [row.id], connection))
             fail(400, 'invalid_challenge', 'Start the passkey operation again.');
