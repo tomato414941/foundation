@@ -13,7 +13,9 @@ import { SSHProcess } from '../server/ssh-process.js';
 
 const execute = promisify(execFile);
 
-export async function sshFixture(t: TestContext) {
+// An sshd of its own on a free local port, letting in the current user with a key made for it, whose keys are read
+// from a file in its directory instead of the user's own.
+export async function sshServer(t: TestContext, cleanup: () => Promise<void> = async () => {}) {
   const directory = await mkdtemp(join(homedir(), '.foundation-ssh-process-'));
   const ssh = new OpenSSH(), keys = await ssh.keys(), username = userInfo().username;
   const socket = createServer();
@@ -37,18 +39,25 @@ export async function sshFixture(t: TestContext) {
   daemon.stderr.on('data', chunk => { errors += String(chunk); });
   const destination = { id: randomUUID(), host: '127.0.0.1', port, username,
     privateKey: keys.privateKey, hostKey: keys.hostPublicKey };
-  const ids: string[] = [];
   t.after(async () => {
-    for (const id of ids) await execute('sudo', ['-n', 'systemctl', 'stop', 'foundation-process-' + id + '.service']).catch(() => {});
-    for (const id of ids) await execute('sudo', ['-n', 'systemctl', 'reset-failed', 'foundation-process-' + id + '.service']).catch(() => {});
+    await cleanup();
     daemon.kill();
-    await execute('sudo', ['-n', 'rm', '-rf', '--', join(directory, 'processes')]);
     await rm(directory, { recursive: true, force: true });
   });
   for (let attempt = 0; ; attempt++) {
     try { assert.equal((await ssh.run(destination, 'printf ready')).stdout, 'ready'); break; }
     catch (error) { if (attempt >= 20 || daemon.exitCode !== null) throw new Error(errors, { cause: error }); await delay(50); }
   }
+  return { directory, ssh, keys, destination, port, username, authorizedKeys: join(directory, 'authorized_keys') };
+}
+
+export async function sshFixture(t: TestContext) {
+  const ids: string[] = [];
+  const server = await sshServer(t, async () => {
+    for (const id of ids) await execute('sudo', ['-n', 'systemctl', 'stop', 'foundation-process-' + id + '.service']).catch(() => {});
+    for (const id of ids) await execute('sudo', ['-n', 'systemctl', 'reset-failed', 'foundation-process-' + id + '.service']).catch(() => {});
+    await execute('sudo', ['-n', 'rm', '-rf', '--', join(server.directory, 'processes')]);
+  }), { directory, ssh, destination } = server;
   const runtime = new SSHProcess(ssh, join(directory, 'processes'));
-  return { directory, ssh, keys, destination, ids, runtime, execute };
+  return { directory, ssh, keys: server.keys, destination, ids, runtime, execute };
 }

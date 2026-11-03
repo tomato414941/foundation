@@ -11,6 +11,8 @@ import type { Client } from './client.js';
 import { privateClient } from './custody.js';
 import { executionClient } from './executions.js';
 import { FunctionClient } from '../../shared/function-client.js';
+import { SSHAccount } from '../../shared/ssh.js';
+import { sshAccess } from './ssh-access.js';
 import packageInfo from '../package.json' with { type: 'json' };
 
 const Operation = z.discriminatedUnion('kind', [
@@ -91,6 +93,15 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     return 'kind' in result && result.kind === 'run'
       ? client.json('/api/executions/' + result.task.intent.operationContext!.id, {}, Execution) : result;
   }, input.response_format));
+  server.registerTool('foundation_ssh_access', {
+    title: 'Apply or check SSH access on a host',
+    description: 'Sign in to an SSH host over SSH from this machine, verifying the host keys registered in Foundation, and apply the authorized keys Foundation decided for each account between the lines it manages, leaving other lines as they are; or with check, only read them. Reports what each account shows afterwards. Signs in with a private key file on this machine, an SSH key whose private key is kept in Foundation, or otherwise the agent and keys OpenSSH finds for this user. Decide which keys are let in with foundation_api first.',
+    inputSchema: z.object({ hostId: Id, check: z.boolean().default(false), account: SSHAccount.optional(),
+      identity: z.string().min(1).optional(), sshKeyId: Id.optional(), response_format: ResponseFormat }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, input => mcpCall(() => sshAccess(client, input.hostId, { check: input.check,
+    ...(input.account ? { account: input.account } : {}), ...(input.identity ? { identity: input.identity } : {}),
+    ...(input.sshKeyId ? { keyId: input.sshKeyId } : {}) }), input.response_format));
   return server;
 }
 export async function startMcp(client: Client) {

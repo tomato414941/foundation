@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 import { open as openFile, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -41,6 +42,7 @@ import { startMcp } from './mcp.js';
 import { FunctionClient } from '../../shared/function-client.js';
 import { FunctionDefinition } from '../../shared/contracts.js';
 import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
+import { newSSHKey, sshAccess, withStoredKey } from './ssh-access.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
 const help = `Foundation ${packageInfo.version}
@@ -93,6 +95,16 @@ Usage: foundation <command> [options]
   request --body JSON                  Create an approval request
   request wait ID [--timeout SECONDS]  Wait for an approval request
   export --output FILE                 Download an encrypted account export
+  ssh-key create NAME (--store | --output FILE) Make an SSH key and register its public key
+  ssh-key add NAME (--public-key KEY | --private-key FILE) Register an existing SSH key
+  ssh-key revoke ID                    Take an SSH key out of every host and keep it out
+  ssh-key agent ID -- COMMAND ...      Run a command with a stored SSH key in a temporary agent
+  ssh-host add NAME --address HOST --host-key KEY Register a host and the host keys it proves itself with
+  ssh-access grant --host ID --ssh-key ID --account NAME Let a key into a host account
+  ssh-access revoke ID                 Take a key out of a host account
+  ssh-access list [--host ID] [--ssh-key ID] [--status STATUS] Show where keys are let in
+  ssh-access apply ID [--account NAME] Apply a host's authorized keys over SSH and verify them
+  ssh-access check ID [--account NAME] Read a host's authorized keys over SSH and report them
 
 Options:
   --owner ID             Choose the principal that owns a new item or run
@@ -115,6 +127,21 @@ Options:
   --force                Replace an existing output file
   --upload FILE          Send a binary body with the api command
   --confirmation ID      Send the api command with a confirmation proved through the confirmation API
+  --store                Keep the new SSH private key encrypted in Foundation
+  --public-key KEY       SSH public key text (@FILE accepted)
+  --private-key FILE     SSH private key file to keep encrypted in Foundation
+  --purpose TEXT         What an SSH key is for
+  --address HOST         SSH host name or IP address
+  --port PORT            SSH port (default: 22)
+  --host-key KEY         Host public key the server proves itself with (@FILE accepted, repeatable)
+  --authorized-keys-file PATH  Authorized keys file, relative to the home directory (default: .ssh/authorized_keys)
+  --host ID              SSH host
+  --ssh-key ID           SSH key; for apply and check, sign in with its private key kept in Foundation
+  --account NAME         Account on the SSH host
+  --expires TIME         When an SSH authorization ends (ISO 8601)
+  --from PATTERNS        Hosts an SSH key is accepted from, comma-separated
+  --status STATUS        applied, pending, removed, or remains_unmanaged
+  --identity FILE        Sign in to the SSH host with this private key file
   --help                 Show this help
   --version              Show the version
 
@@ -176,6 +203,21 @@ const options = {
   output: textOption,
   force: booleanOption,
   upload: textOption,
+  store: booleanOption,
+  'public-key': textOption,
+  'private-key': textOption,
+  purpose: textOption,
+  address: textOption,
+  port: textOption,
+  'host-key': { type: 'string' as const, multiple: true as const },
+  'authorized-keys-file': textOption,
+  host: textOption,
+  'ssh-key': textOption,
+  account: textOption,
+  expires: textOption,
+  from: textOption,
+  status: textOption,
+  identity: textOption,
   help: booleanOption,
   version: booleanOption,
 };
@@ -419,6 +461,95 @@ async function keep(client: Client, args: Arguments, owner: string) {
   await output(result, args);
 }
 
+// Saves content as a new variable of the owner, failing when one of that name exists.
+async function newVariable(client: Client, owner: string, name: string, content: Uint8Array) {
+  const completed = await executionClient(client).execute({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
+  if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
+  return completed.resource;
+}
+// The public key a private key file holds, as OpenSSH reads it; a key protected by a passphrase is refused.
+async function derivedPublicKey(file: string) {
+  return new Promise<string>((resolveKey, reject) => {
+    const child = spawn('ssh-keygen', ['-y', '-P', '', '-f', file], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.once('error', () => reject(new Error('Install OpenSSH to read the private key.')));
+    child.once('close', code => code === 0 ? resolveKey(stdout.trim())
+      : reject(new Error('Use an SSH private key file without a passphrase.')));
+  });
+}
+async function sshKeyCommand(client: Client, args: Arguments, owner: string, commandArguments: string[]) {
+  const action = requireArgument(args.positionals[0], 'Choose create, add, revoke, or agent.');
+  const purpose = args.values.purpose ?? '';
+  const register = (name: string, publicKey: string, privateKeyId: string | null) => client.json('/api/principals/' + owner + '/ssh-keys',
+    { method: 'POST', body: { name, publicKey, purpose, privateKeyId } }, Resource);
+  if (action === 'create') {
+    const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
+    if (Boolean(args.values.store) === Boolean(args.values.output))
+      throw new Error('Choose --store to keep the private key in Foundation or --output FILE to keep it on this machine.');
+    const key = newSSHKey(name);
+    if (args.values.output) {
+      await secureWrite(args.values.output, key.privateKey, !!args.values.force);
+      return register(name, key.publicKey, null);
+    }
+    return register(name, key.publicKey, (await newVariable(client, owner, name, Buffer.from(key.privateKey))).id);
+  }
+  if (action === 'add') {
+    const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
+    if (Boolean(args.values['public-key']) === Boolean(args.values['private-key']))
+      throw new Error('Choose --public-key KEY to register only the public key or --private-key FILE to keep the private key as well.');
+    if (args.values['public-key']) return register(name, (await text(args.values['public-key'])).trim(), null);
+    const file = args.values['private-key']!, publicKey = await derivedPublicKey(file);
+    return register(name, publicKey, (await newVariable(client, owner, name, await readFile(file))).id);
+  }
+  const id = Id.parse(requireArgument(args.positionals[1], 'Supply the SSH key ID.'));
+  if (action === 'revoke') return client.json('/api/ssh-keys/' + id + '/revoke', { method: 'POST', body: {} }, Resource);
+  if (action === 'agent') {
+    if (!commandArguments.length) throw new Error('Put the command after --.');
+    return withStoredKey(client, id, agent => new Promise<number>((resolveCode, reject) => {
+      const child = spawn(commandArguments[0]!, commandArguments.slice(1), { stdio: 'inherit', env: { ...process.env, SSH_AUTH_SOCK: agent.socket } });
+      child.once('error', () => reject(new Error('The command could not be started. Check the executable and arguments.')));
+      child.once('close', (code, signal) => resolveCode(code ?? (signal === 'SIGINT' ? 130 : 1)));
+    }));
+  }
+  throw new Error('Choose create, add, revoke, or agent.');
+}
+async function sshHostCommand(client: Client, args: Arguments, owner: string) {
+  if (args.positionals[0] !== 'add') throw new Error('Use foundation ssh-host add.');
+  const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH host name.'));
+  const hostKeys = await Promise.all((args.values['host-key'] ?? []).map(async value => (await text(value)).trim()));
+  if (!hostKeys.length) throw new Error('Supply the host keys the server proves itself with, as from ssh-keyscan, with --host-key.');
+  return client.json('/api/principals/' + owner + '/ssh-hosts', { method: 'POST', body: {
+    name, address: requireArgument(args.values.address, 'Supply the host address with --address.'), hostKeys,
+    ...(args.values.port ? { port: Number(args.values.port) } : {}),
+    ...(args.values['authorized-keys-file'] ? { authorizedKeysFile: args.values['authorized-keys-file'] } : {}),
+  } }, Resource);
+}
+function time(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error('Use an ISO 8601 time, such as 2026-12-31T00:00:00Z.');
+  return parsed.toISOString();
+}
+async function sshAccessCommand(client: Client, args: Arguments) {
+  const action = requireArgument(args.positionals[0], 'Choose grant, revoke, list, apply, or check.');
+  if (action === 'grant') return client.json('/api/ssh-access', { method: 'POST', body: {
+    hostId: Id.parse(requireArgument(args.values.host, 'Choose the host with --host ID.')),
+    keyId: Id.parse(requireArgument(args.values['ssh-key'], 'Choose the key with --ssh-key ID.')),
+    account: requireArgument(args.values.account, 'Choose the account with --account NAME.'),
+    ...(args.values.expires ? { expiresAt: time(args.values.expires) } : {}),
+    ...(args.values.from ? { from: args.values.from } : {}),
+  } });
+  if (action === 'list') return client.json('/api/ssh-access?' + new URLSearchParams({
+    ...(args.values.host ? { hostId: args.values.host } : {}), ...(args.values['ssh-key'] ? { keyId: args.values['ssh-key'] } : {}),
+    ...(args.values.status ? { status: args.values.status } : {}) }));
+  const id = Id.parse(requireArgument(args.positionals[1], action === 'revoke' ? 'Supply the authorization ID.' : 'Supply the host ID.'));
+  if (action === 'revoke') return client.json('/api/ssh-access/' + id, { method: 'DELETE' });
+  if (action !== 'apply' && action !== 'check') throw new Error('Choose grant, revoke, list, apply, or check.');
+  return sshAccess(client, id, { check: action === 'check', ...(args.values.account ? { account: args.values.account } : {}),
+    ...(args.values.identity ? { identity: resolve(args.values.identity) } : {}),
+    ...(args.values['ssh-key'] ? { keyId: Id.parse(args.values['ssh-key']) } : {}) });
+}
+
 async function taskOutput(client: Client, task: TaskView, args: Arguments) {
   const result = await privateClient(client).custody.result(task);
   const execution = await client.json('/api/executions/' + (task.intent.operationContext?.id ?? task.id), {}, Execution);
@@ -638,6 +769,22 @@ async function main(argv: string[]) {
     if ('url' in result) process.stderr.write('The current owner keeps the item until the recipient accepts. Send this link to the recipient: ' + result.url + '\n');
     await output(result, args);
     return 0;
+  }
+  if (command === 'ssh-key') {
+    const result = await sshKeyCommand(client, args, owner, commandArguments);
+    if (typeof result === 'number') return result;
+    await output(result, args);
+    return 0;
+  }
+  if (command === 'ssh-host') {
+    await output(await sshHostCommand(client, args, owner), args);
+    return 0;
+  }
+  if (command === 'ssh-access') {
+    const result = await sshAccessCommand(client, args);
+    await output(result, args);
+    return 'accounts' in (result as object) && (result as { accounts: Array<{ outcome: string }> }).accounts
+      .some(account => account.outcome !== 'verified') ? 1 : 0;
   }
   if (command === 'exec') {
     const inputs = z
