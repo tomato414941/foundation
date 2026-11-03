@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SSHConnection, SSHSettings } from './ssh.js';
+import { AuthorizedKeysFile, SSHAddress, SSHConnection, SSHFingerprint, SSHPublicKey, SSHSettings } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
 import { OvhConnectionInfo } from './ovh.js';
@@ -59,6 +59,8 @@ export const ResourceKind = z.enum([
   'environment',
   'function',
   'keyring',
+  'ssh_key',
+  'ssh_host',
 ]);
 export type ResourceKindName = z.infer<typeof ResourceKind>;
 export const PublicKey = z
@@ -557,6 +559,18 @@ export const KeyringResource = z.object({
   kind: z.literal('keyring'),
   data: z.object({ revision: z.number().int().positive(), signature: z.string() }),
 });
+// An SSH public key, and the private key kept as a variable of the same owner when it is kept here at all.
+export const SSHKeyData = z.object({
+  publicKey: SSHPublicKey, algorithm: z.string(), fingerprint: SSHFingerprint, purpose: z.string().max(500),
+  privateKeyId: Id.nullable(), revokedAt: Time.nullable(),
+});
+export const SSHKeyResource = z.object({ ...resourceBase, kind: z.literal('ssh_key'), data: SSHKeyData });
+// A server whose accounts let SSH keys in, known by the host keys it proves itself with.
+export const SSHHostData = z.object({
+  address: SSHAddress, port: z.number().int().min(1).max(65535), hostKeys: z.array(SSHPublicKey).min(1).max(16),
+  authorizedKeysFile: AuthorizedKeysFile,
+});
+export const SSHHostResource = z.object({ ...resourceBase, kind: z.literal('ssh_host'), data: SSHHostData });
 export const Resource = z.discriminatedUnion('kind', [
   VariableResource,
   ConnectionResource,
@@ -567,6 +581,8 @@ export const Resource = z.discriminatedUnion('kind', [
   EnvironmentResource,
   FunctionResource,
   KeyringResource,
+  SSHKeyResource,
+  SSHHostResource,
 ]);
 export type ResourceView = z.infer<typeof Resource>;
 export type VariableView = z.infer<typeof VariableResource>;

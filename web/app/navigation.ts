@@ -10,6 +10,8 @@ export const sections = {
   apps: 'app',
 } as const;
 export type Section = keyof typeof sections;
+// Kinds without a section, such as SSH keys and hosts, are managed through the API alone.
+export const hasSection = (kind: ResourceKindName) => Object.values(sections).some(value => value === kind);
 export const sectionFor = (kind: ResourceKindName) =>
   Object.entries(sections).find(([, value]) => value === kind)![0] as Section;
 export const resourcePath = (resource: Pick<ResourceView, 'ownerId' | 'kind' | 'id'>) =>

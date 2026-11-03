@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
 import { principal } from './authorization.js';
 import type { Context } from './context.js';
+import { stillLetIn } from './ssh-access.js';
 import type { ResourceRow } from './resources.js';
 import type { CustodyContent } from '../shared/custody.js';
 import { fail } from './errors.js';
@@ -91,6 +92,13 @@ export class Accounts {
       fail(409, 'environment_active', 'Stop all environments before deleting this principal.');
     // The database keeps object cleanup jobs after the owning resource is removed.
     await c.db.transaction(async (connection) => {
+      // Its SSH keys and hosts are held until removal, so that no key is let in with them meanwhile, and they go only
+      // once no server may still let in what they were followed for, here or on another principal's host or key.
+      await connection.query("SELECT id FROM resources WHERE owner_id=$1 AND kind IN ('ssh_key','ssh_host') FOR UPDATE", [id]);
+      if (await c.db.one(
+        `SELECT 1 FROM ssh_authorizations a JOIN resources h ON h.id=a.host_id JOIN resources k ON k.id=a.key_id
+         WHERE (h.owner_id=$1 OR k.owner_id=$1) AND ${stillLetIn} LIMIT 1`, [id], connection))
+        fail(409, 'ssh_access_remaining', 'Remove its SSH authorizations and check the servers before deleting this principal.');
       await connection.query(
         'DELETE FROM resource_references WHERE resource_id IN (SELECT id FROM resources WHERE owner_id=$1)',
         [id],

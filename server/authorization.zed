@@ -52,6 +52,8 @@ definition principal {
   permission create_object = create + use
   permission create_environment = create + use
   permission create_function = create + use
+  permission create_ssh_key = create + use
+  permission create_ssh_host = create + use
   // Only those who act as it keep the list of public keys it verified, so that a delegate cannot vouch for a key.
   permission create_keyring = stands
 }
@@ -202,6 +204,36 @@ definition function {
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
   permission execute = owner->use + runner->stands
+  permission rename = update
+}
+
+// An SSH public key. Its readers see it and where it lets someone in; its users take it out of servers it was let into.
+// The private key, when kept here, is a variable of the same owner, shared on its own. It stays with its owner.
+definition ssh_key {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use
+  permission share = owner->stands
+  permission use = owner->use + user->stands
+  permission rename = update
+}
+
+// A server whose accounts let SSH keys in. Its editors decide which keys each account lets in and apply that to the
+// server; its readers see what is let in and what the server last showed. It stays with its owner.
+definition ssh_host {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use
+  permission share = owner->stands
   permission rename = update
 }
 

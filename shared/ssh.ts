@@ -50,3 +50,22 @@ export function sshCommand(value: Pick<SSHConnectionInfo, 'host' | 'port' | 'use
   if (!value.host) throw new Error('Wait for the SSH address.');
   return 'ssh -p ' + value.port + ' ' + value.username + '@' + value.host;
 }
+
+// The algorithm and key of an OpenSSH public key, without its comment.
+export function sshKeyText(value: string) {
+  if (!sshKeyBytes(value)) throw new Error('Use an OpenSSH public key from a .pub file.');
+  const [algorithm, key] = value.trim().split(/[ \t]+/);
+  return { algorithm: algorithm!, key: key!, publicKey: algorithm + ' ' + key };
+}
+// An account on a server, named as OpenSSH signs in as it.
+export const SSHAccount = z.string().max(32).regex(/^[a-z_][a-z0-9_-]*$/, 'Use a lowercase account name.');
+export const SSHAddress = z.string().min(1).max(253).regex(/^[A-Za-z0-9_.:]+(?:-[A-Za-z0-9_.:]+)*$/, 'Use a host name or IP address.');
+// Where the server reads an account's authorized keys: relative to its home directory or absolute, with %u for the
+// account, as in sshd's AuthorizedKeysFile.
+export const AuthorizedKeysFile = z.string().min(1).max(1024).regex(/^[A-Za-z0-9._/%-]+$/)
+  .refine(value => !value.split('/').includes('..') && !/%(?!u)/.test(value) && !value.endsWith('/'),
+    'Use a file path, with %u for the account.');
+// Hosts the authorized key line accepts connections from, as in its from option.
+export const SSHFrom = z.string().min(1).max(500).regex(/^[A-Za-z0-9.:*?/!_-]+(?:,[A-Za-z0-9.:*?/!_-]+)*$/,
+  'Use comma-separated host or address patterns.');
+export const SSHFingerprint = z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/);

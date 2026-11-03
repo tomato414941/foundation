@@ -12,6 +12,7 @@ import type { Custody } from './custody.js';
 import type { Delegation } from './delegation.js';
 import type { Functions } from './functions.js';
 import type { Invocations } from './invocations.js';
+import type { SSHAccess } from './ssh-access.js';
 import { DefinitionRegistry } from './definitions.js';
 import { definePrincipals } from './operation-definitions/principals.js';
 import { defineResources } from './operation-definitions/resources.js';
@@ -22,11 +23,13 @@ import { defineBilling } from './operation-definitions/billing.js';
 import { defineFunctions } from './operation-definitions/functions.js';
 import { defineConnections } from './operation-definitions/connections.js';
 import { defineRuns } from './operation-definitions/runs.js';
+import { defineSSH } from './operation-definitions/ssh.js';
 
 export interface OperationServices {
   authorization: Authorization; principals: Principals; relations: Relations; resources: Resources;
   catalog: Catalog; environments: Environments; objects: Objects; billing: Billing;
   processes: Processes; integrations: Integrations; custody: Custody; delegation: Delegation; functions: Functions; invocations: Invocations;
+  sshAccess: SSHAccess;
 }
 
 export function builtinDefinitions(services: OperationServices) {
@@ -40,5 +43,6 @@ export function builtinDefinitions(services: OperationServices) {
   defineFunctions(definitions, services);
   defineConnections(definitions, services);
   defineRuns(definitions, services);
+  defineSSH(definitions, services);
   return definitions;
 }

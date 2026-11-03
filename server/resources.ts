@@ -17,6 +17,7 @@ import type {
 } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
 import { environmentConnected } from './environment-status.js';
+import { stillLetIn } from './ssh-access.js';
 import type { EnvironmentHeartbeat } from './environment-status.js';
 
 export interface ResourceRow extends ResourceIdentity {
@@ -221,6 +222,9 @@ export class Resources {
       "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
       [row.id], connection);
     if (pending) fail(409, 'connection_busy', 'Resolve the current token update or reconnect before deleting this connection.');
+    const letIn = await this.db.one('SELECT 1 FROM ssh_authorizations WHERE (host_id=$1 OR key_id=$1) AND ' + stillLetIn + ' LIMIT 1',
+      [row.id], connection);
+    if (letIn) fail(409, 'ssh_access_remaining', 'Remove its SSH authorizations and check the servers before deleting it.');
     await connection.query('DELETE FROM resources WHERE id=$1', [row.id]);
     await this.audit.record(
       row.owner_id,

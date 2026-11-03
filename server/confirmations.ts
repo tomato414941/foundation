@@ -40,6 +40,11 @@ const levels: Record<string, Level | ((operation: ConfirmationOperation, connect
   'principal.transfer': 'factor',
   'principal.invite': 'factor',
   'keys.bind': 'proof',
+  // Which keys a server lets in, where it is reached and how it proves itself decide who gets into it.
+  'ssh.grant': 'factor',
+  'ssh.revoke': 'factor',
+  'ssh.keyRevoke': 'factor',
+  'ssh.hostChange': 'factor',
 };
 interface Row {
   id: string;

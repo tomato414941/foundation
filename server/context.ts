@@ -22,6 +22,7 @@ import type { ObjectStore } from './objects.js';
 import { EC2Runner } from './ec2-runner.js';
 import type { Runner } from './runner.js';
 import { Environments } from './environments.js';
+import { SSHAccess } from './ssh-access.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
 import { Devices } from './devices.js';
@@ -103,8 +104,9 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const managedProcesses = new ManagedProcesses(processes, environments);
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
+  const sshAccess = new SSHAccess(db, resources, audit, confirmations);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
-    objects, billing, processes, integrations, custody, delegation, functions, invocations });
+    objects, billing, processes, integrations, custody, delegation, functions, invocations, sshAccess });
   const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin, confirmations);
   executions.runtime = {
     get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
@@ -155,6 +157,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     authentication,
     keyResets,
     keyRotations,
+    sshAccess,
     resources,
     catalog,
     transport,

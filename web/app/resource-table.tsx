@@ -4,12 +4,12 @@ import { useTranslation } from 'react-i18next';
 import type { ResourceView } from '../../shared/contracts';
 import { Bytes, DateText, Empty, State, usePolling } from './components';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
-import { resourcePath, sectionFor } from './navigation';
+import { hasSection, resourcePath, sectionFor } from './navigation';
 import { connectionMethodName } from './connection-method-labels';
 import { environmentState } from './environments';
 
 export function ResourceTable({
-  items,
+  items: listed,
   kinds = false,
   search = false,
   ownerId,
@@ -22,6 +22,7 @@ export function ResourceTable({
   ownerNames?: Record<string, string>;
 }) {
   const { t } = useTranslation();
+  const items = listed.filter(item => hasSection(item.kind));
   const changing = items.some(item => item.kind === 'environment' && (item.data.deletion
     ? item.data.deletion.state === 'pending' : ['starting', 'stopping'].includes(item.data.state)));
   usePolling(changing || items.some(item => item.kind === 'environment' && !item.data.deletion && item.data.state === 'running'),
