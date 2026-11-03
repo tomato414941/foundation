@@ -381,6 +381,58 @@ test('古い計画を持つクライアントは、別のクライアントが�
   assert.equal((await c.json(['ssh-access', 'list', '--host', host.id])).items[0].status, 'removed');
 });
 
+test('CLIはローカルで作ったSSH秘密鍵を結果とは別のファイルに保存し、登録した公開鍵と一致させる', async t => {
+  const c = await cliSetup(t);
+  const keyFile = join(c.directory, 'keys', 'laptop'), result = join(c.directory, 'result.json');
+  const derived = (file: string) => new Promise<string>((done, reject) => {
+    const child = spawn('ssh-keygen', ['-y', '-P', '', '-f', file], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? done(stdout.trim().split(' ').slice(0, 2).join(' ')) : reject(new Error('ssh-keygen ' + code)));
+  });
+  const created = await c.run(['ssh-key', 'create', 'Laptop', '--private-key-output', keyFile, '--output', result]);
+  assert.equal(created.code, 0, created.stderr);
+  const key = JSON.parse(await readFile(result, 'utf8'));
+  assert.equal(key.data.privateKeyId, null);
+  assert.equal(await derived(keyFile), key.data.publicKey);
+
+  // Replacing the key file writes the new private key there, and the result goes only to its own file.
+  const replaced = await c.run(['ssh-key', 'create', 'Replacement', '--private-key-output', keyFile, '--force', '--output', result]);
+  assert.equal(replaced.code, 0, replaced.stderr);
+  const replacement = JSON.parse(await readFile(result, 'utf8'));
+  assert.equal(await derived(keyFile), replacement.data.publicKey);
+  assert.notEqual(replacement.data.publicKey, key.data.publicKey);
+
+  const same = await c.run(['ssh-key', 'create', 'Same', '--private-key-output', keyFile, '--output', keyFile, '--force']);
+  assert.equal(same.code, 1);
+  assert.match(same.stderr, /different files/);
+  assert.equal(await derived(keyFile), replacement.data.publicKey);
+  const keys = await c.json(['api', 'GET', '/api/principals/' + key.ownerId + '/resources?kind=ssh_key']);
+  assert.deepEqual(keys.items.map((item: { name: string }) => item.name).sort(), ['Laptop', 'Replacement']);
+});
+
+test('CLIはSSH鍵の登録に失敗したとき、新しく作った秘密鍵の変数だけを片付ける', async t => {
+  const c = await cliSetup(t);
+  const purpose = 'x'.repeat(501);
+  const failed = await c.run(['ssh-key', 'create', 'Automation', '--store', '--purpose', purpose]);
+  assert.equal(failed.code, 1);
+  const status = await c.json(['status']);
+  const variables = async () => (await c.json(['api', 'GET', '/api/principals/' + status.principal.id + '/resources?kind=variable'])).items
+    .map((item: { name: string }) => item.name);
+  assert.deepEqual(await variables(), []);
+  const keyFile = join(c.directory, 'unregistered');
+  assert.equal((await c.run(['ssh-key', 'create', 'Local', '--private-key-output', keyFile, '--purpose', purpose])).code, 1);
+  await assert.rejects(readFile(keyFile));
+
+  // A variable of that name already there is neither replaced nor removed.
+  assert.equal((await c.run(['keep', 'Automation', '--stdin'], 'kept value')).code, 0);
+  assert.equal((await c.run(['ssh-key', 'create', 'Automation', '--store'])).code, 1);
+  assert.deepEqual(await variables(), ['Automation']);
+  const [kept] = (await c.json(['api', 'GET', '/api/principals/' + status.principal.id + '/resources?kind=variable'])).items;
+  assert.equal((await c.run(['read', kept.id])).stdout, 'kept value');
+});
+
 test('CLIは秘密鍵を読み込めないとき、待ち続けずに後片付けしてエラーで終わる', async t => {
   const c = await cliSetup(t);
   const kept = await c.run(['keep', 'not-a-key', '--stdin'], 'not an SSH private key');

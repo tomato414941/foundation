@@ -95,11 +95,11 @@ Usage: foundation <command> [options]
   request --body JSON                  Create an approval request
   request wait ID [--timeout SECONDS]  Wait for an approval request
   export --output FILE                 Download an encrypted account export
-  ssh-key create NAME (--store | --output FILE) Make an SSH key and register its public key
+  ssh-key create NAME (--store | --private-key-output FILE) Make an SSH key and register its public key
   ssh-key add NAME (--public-key KEY | --private-key FILE) Register an existing SSH key
   ssh-key revoke ID                    Take an SSH key out of every host and keep it out
   ssh-key agent ID -- COMMAND ...      Run a command with a stored SSH key in a temporary agent
-  ssh-host add NAME --address HOST --host-key KEY Register a host and the host keys it proves itself with
+  ssh-host add NAME --address HOST --host-key KEY Register a host with its verified OpenSSH host public keys
   ssh-access grant --host ID --ssh-key ID --account NAME Let a key into a host account
   ssh-access revoke ID                 Take a key out of a host account
   ssh-access list [--host ID] [--ssh-key ID] [--status STATUS] Show where keys are let in
@@ -130,10 +130,12 @@ Options:
   --store                Keep the new SSH private key encrypted in Foundation
   --public-key KEY       SSH public key text (@FILE accepted)
   --private-key FILE     SSH private key file to keep encrypted in Foundation
+  --private-key-output FILE  Write a new SSH private key to this private file on this machine
   --purpose TEXT         What an SSH key is for
   --address HOST         SSH host name or IP address
   --port PORT            SSH port (default: 22)
-  --host-key KEY         Host public key the server proves itself with (@FILE accepted, repeatable)
+  --host-key KEY         The server's OpenSSH host public key, such as ssh-ed25519 AAAA..., verified with its
+                         administrator or console (@FILE accepted, repeatable)
   --authorized-keys-file PATH  Authorized keys file, relative to the home directory (default: .ssh/authorized_keys)
   --host ID              SSH host
   --ssh-key ID           SSH key; for apply and check, sign in with its private key kept in Foundation
@@ -206,6 +208,7 @@ const options = {
   store: booleanOption,
   'public-key': textOption,
   'private-key': textOption,
+  'private-key-output': textOption,
   purpose: textOption,
   address: textOption,
   port: textOption,
@@ -461,11 +464,18 @@ async function keep(client: Client, args: Arguments, owner: string) {
   await output(result, args);
 }
 
-// Saves content as a new variable of the owner, failing when one of that name exists.
-async function newVariable(client: Client, owner: string, name: string, content: Uint8Array) {
+// Saves a private key as a new variable of the owner, failing when one of that name exists, and registers the SSH
+// key with it. When registering fails, the variable just made is removed again.
+async function withNewVariable(client: Client, owner: string, name: string, content: Uint8Array,
+  register: (variableId: string) => Promise<ResourceView>) {
   const completed = await executionClient(client).execute({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
-  return completed.resource;
+  const variable = completed.resource;
+  try { return await register(variable.id); } catch (error) {
+    await client.json('/api/resources/' + variable.id, { method: 'DELETE' }).catch(() => process.stderr.write(
+      'foundation: the private key was saved as variable ' + variable.id + ', which could not be removed after the SSH key failed to register.\n'));
+    throw error;
+  }
 }
 // The public key a private key file holds, as OpenSSH reads it; a key protected by a passphrase is refused.
 async function derivedPublicKey(file: string) {
@@ -485,14 +495,18 @@ async function sshKeyCommand(client: Client, args: Arguments, owner: string, com
     { method: 'POST', body: { name, publicKey, purpose, privateKeyId } }, Resource);
   if (action === 'create') {
     const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
-    if (Boolean(args.values.store) === Boolean(args.values.output))
-      throw new Error('Choose --store to keep the private key in Foundation or --output FILE to keep it on this machine.');
+    const keyFile = args.values['private-key-output'];
+    if (Boolean(args.values.store) === Boolean(keyFile))
+      throw new Error('Choose --store to keep the private key in Foundation or --private-key-output FILE to keep it on this machine.');
+    if (keyFile && args.values.output && resolve(keyFile) === resolve(args.values.output))
+      throw new Error('Write the private key and the result to different files.');
     const key = newSSHKey(name);
-    if (args.values.output) {
-      await secureWrite(args.values.output, key.privateKey, !!args.values.force);
-      return register(name, key.publicKey, null);
+    if (keyFile) {
+      await secureWrite(keyFile, key.privateKey, !!args.values.force);
+      // A private key whose public key was not registered is of no use, so it does not stay behind.
+      return register(name, key.publicKey, null).catch(async (error: unknown) => { await rm(keyFile, { force: true }); throw error; });
     }
-    return register(name, key.publicKey, (await newVariable(client, owner, name, Buffer.from(key.privateKey))).id);
+    return withNewVariable(client, owner, name, Buffer.from(key.privateKey), id => register(name, key.publicKey, id));
   }
   if (action === 'add') {
     const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
@@ -500,7 +514,7 @@ async function sshKeyCommand(client: Client, args: Arguments, owner: string, com
       throw new Error('Choose --public-key KEY to register only the public key or --private-key FILE to keep the private key as well.');
     if (args.values['public-key']) return register(name, (await text(args.values['public-key'])).trim(), null);
     const file = args.values['private-key']!, publicKey = await derivedPublicKey(file);
-    return register(name, publicKey, (await newVariable(client, owner, name, await readFile(file))).id);
+    return withNewVariable(client, owner, name, await readFile(file), id => register(name, publicKey, id));
   }
   const id = Id.parse(requireArgument(args.positionals[1], 'Supply the SSH key ID.'));
   if (action === 'revoke') return client.json('/api/ssh-keys/' + id + '/revoke', { method: 'POST', body: {} }, Resource);
@@ -518,7 +532,7 @@ async function sshHostCommand(client: Client, args: Arguments, owner: string) {
   if (args.positionals[0] !== 'add') throw new Error('Use foundation ssh-host add.');
   const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH host name.'));
   const hostKeys = await Promise.all((args.values['host-key'] ?? []).map(async value => (await text(value)).trim()));
-  if (!hostKeys.length) throw new Error('Supply the host keys the server proves itself with, as from ssh-keyscan, with --host-key.');
+  if (!hostKeys.length) throw new Error("Supply the server's OpenSSH host public keys, verified with its administrator or console, with --host-key.");
   return client.json('/api/principals/' + owner + '/ssh-hosts', { method: 'POST', body: {
     name, address: requireArgument(args.values.address, 'Supply the host address with --address.'), hostKeys,
     ...(args.values.port ? { port: Number(args.values.port) } : {}),
