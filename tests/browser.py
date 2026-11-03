@@ -947,8 +947,9 @@ class BrowserTests(unittest.TestCase):
 
     def test_秘密鍵を取り出せないパスキーでは最初の画面で理由を表示する(self):
         page, principal = self.passkey_account("Passkey without PRF", prf=False)
-        cdp, authenticator_id = self.authenticators[page]
-        cdp.send("WebAuthn.clearCredentials", {"authenticatorId": authenticator_id})
+        cdp, _ = self.authenticators[page]
+        # A second authenticator adds the passkey, while the first one, still held, confirms adding it.
+        self.authenticator(cdp, prf=False, transport="usb")
         page.get_by_role("textbox", name="名前", exact=True).fill("Passkey without PRF")
         page.get_by_role("button", name="パスキーを追加", exact=True).click()
         expect(page.get_by_text("このパスキーかブラウザでは、秘密鍵を取り出せません。", exact=True)).to_be_visible()
@@ -1077,7 +1078,10 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="パスキーを追加", exact=True).click()
         page.wait_for_url(re.compile(r"/credentials/new\?"))
         page.get_by_role("textbox", name="名前", exact=True).fill("Additional passkey")
-        page.get_by_role("button", name="追加", exact=True).click()
+        # The new passkey is made on the second authenticator; the original one then confirms adding it.
+        with self.passkey_asked(page):
+            page.get_by_role("button", name="追加", exact=True).click()
+        cdp.send("WebAuthn.setAutomaticPresenceSimulation", {"authenticatorId": authenticator_id, "enabled": True})
         page.wait_for_url("**/account")
         expect(page.get_by_role("listitem").filter(has_text="Additional passkey")).to_contain_text("秘密鍵を取り出せる")
         cdp.send("WebAuthn.removeCredential", {"authenticatorId": authenticator_id, "credentialId": original_credential})
@@ -1209,6 +1213,40 @@ class BrowserTests(unittest.TestCase):
         expect(key_row.get_by_text("暗号化された値を開ける", exact=False)).to_be_visible()
         expect(key_row.get_by_role("button", name="削除", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "credentials-desktop-ja.png"), full_page=True)
+        key_row.get_by_role("button", name="削除", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
+        expect(page.get_by_role("listitem").filter(has_text="Issued key")).to_have_count(0)
+
+    def test_メールとパスキーを持つと削除の確認方法を選びメールに届いたコードで削除する(self):
+        page, principal = self.passkey_account("Confirming owner")
+        address = "confirming-owner@example.com"
+        credentials = f"{ORIGIN}/p/{principal['id']}/settings/credentials"
+        page.goto(credentials + "/new?kind=email")
+        page.get_by_role("textbox", name="メールアドレス", exact=True).fill(address)
+        with page.expect_response(lambda response: "/api/confirmations/" in response.url and response.url.endswith("/proof")):
+            page.get_by_role("button", name="サインインリンクを送信", exact=True).click()
+        expect(page.get_by_text("にリンクを送りました", exact=False)).to_be_visible()
+        page.goto(page.request.get(ORIGIN + "/__test/mail/" + address).json()["link"])
+        page.get_by_role("button", name="メールを確認して続ける", exact=True).click()
+        page.wait_for_url(lambda url: "/signin/email" not in url)
+        page.goto(credentials)
+        row = page.get_by_role("listitem").filter(has_text=address)
+        row.get_by_role("button", name="削除", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
+        prompt = page.get_by_role("dialog").filter(has_text="変更の確認")
+        expect(prompt.get_by_text("「サインイン方法の削除」を行うには", exact=False)).to_be_visible()
+        expect(prompt.get_by_role("button", name="パスキーで確認", exact=True)).to_be_visible()
+        prompt.get_by_role("button", name="メールで確認", exact=True).click()
+        expect(prompt.get_by_text(address, exact=False)).to_be_visible()
+        expect(prompt.get_by_role("button", name="パスキーで確認", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "confirmation-code-desktop-ja.png"), full_page=True)
+        prompt.get_by_role("textbox", name="確認コード", exact=True).fill("WRONGCODE")
+        prompt.get_by_role("button", name="確認する", exact=True).click()
+        expect(prompt.get_by_text("コードが一致しません", exact=False)).to_be_visible()
+        code = page.request.get(ORIGIN + "/__test/mail/" + address).json()["code"]
+        prompt.get_by_role("textbox", name="確認コード", exact=True).fill(code)
+        prompt.get_by_role("button", name="確認する", exact=True).click()
+        expect(page.get_by_role("listitem").filter(has_text=address)).to_have_count(0)
 
     def test_期限の切れた許可が残る変数を鍵を持つブラウザが開いたときに外して封じ直す(self):
         import re, tempfile

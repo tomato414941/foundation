@@ -209,12 +209,13 @@ app.post<{ Params: { id: string } }>('/__test/credentials/:id/unwrap', async req
 });
 // A week has passed since the principal asked for new keys.
 app.post<{ Params: { id: string } }>('/__test/key-reset/:id/ready', async request => {
-  await context.db.pool.query("UPDATE challenges SET data=jsonb_build_object('readyAt',$2::text) WHERE kind='key-reset' AND principal_id=$1",
+  await context.db.pool.query("UPDATE challenges SET data=data||jsonb_build_object('readyAt',$2::text) WHERE kind='key-reset' AND principal_id=$1",
     [request.params.id, new Date(Date.now() - 1000).toISOString()]);
   return { ok: true };
 });
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,
+  code: fixtureData.mailer.codes.findLast((item) => item.address === request.params.address)?.code ?? null,
 }));
 app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) => {
   await context.db.pool.query(

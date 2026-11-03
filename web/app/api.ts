@@ -7,6 +7,8 @@ import { ClientFailure, SubmissionPending } from '../../shared/client';
 import { Execution } from '../../shared/executions';
 import type { PrincipalView } from '../../shared/contracts';
 import { heldKeys } from './keys';
+import { confirmChange } from './confirm';
+import { ConfirmationNeeded, confirmationCodes, confirmationHeader } from '../../shared/confirmations';
 
 export class ApiFailure extends Error {
   constructor(
@@ -16,9 +18,10 @@ export class ApiFailure extends Error {
     super(code);
   }
 }
+// A change that takes a confirmation is confirmed with what this browser can use and sent again with it.
 export async function api<T = unknown>(
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  options: { method?: string; body?: unknown; signal?: AbortSignal; confirmation?: string } = {},
   schema?: z.ZodType<T>,
 ): Promise<T> {
   let response: Response;
@@ -27,15 +30,22 @@ export async function api<T = unknown>(
       method: options.method ?? 'GET',
       credentials: 'same-origin',
       signal: options.signal,
-      ...(options.body !== undefined
-        ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(options.body) }
-        : {}),
+      headers: {
+        ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(options.confirmation ? { [confirmationHeader]: options.confirmation } : {}),
+      },
+      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiFailure('network', 0);
   }
   const value: unknown = response.status === 204 ? null : await response.json();
+  const failed = (value as { error?: { code?: string; details?: unknown } } | null)?.error;
+  if (!response.ok && !options.confirmation && confirmationCodes.includes(failed?.code ?? '')) {
+    const needed = ConfirmationNeeded.safeParse(failed?.details);
+    if (needed.success) return api(path, { ...options, confirmation: await confirmChange(needed.data) }, schema);
+  }
   if (!response.ok)
     throw new ApiFailure(
       response.status === 429
