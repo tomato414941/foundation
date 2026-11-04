@@ -7,17 +7,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/tmp/browser-cache
 
-# APT verifies the pinned archive's signatures before installing its CA certificates.
-RUN printf '%s\n' \
+# APT verifies the pinned archive's signatures before installing its CA certificates. Packages listed in the pinned
+# indexes are fetched from the current mirror while it still serves them, and from the pinned archive otherwise.
+RUN printf '%s\t%s\t%s\n%s\t%s\n' \
+      'http://deb.debian.org/debian/' 'priority:1' 'type:deb' \
+      'http://snapshot.debian.org/archive/debian/20261029T000000Z/' 'priority:2' > /etc/apt/debian.mirrors \
+    && printf '%s\t%s\t%s\n%s\t%s\n' \
+      'http://deb.debian.org/debian-security/' 'priority:1' 'type:deb' \
+      'http://snapshot.debian.org/archive/debian-security/20261029T000000Z/' 'priority:2' > /etc/apt/debian-security.mirrors \
+    && printf '%s\n' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian/20261029T000000Z/' \
+      'URIs: mirror+file:/etc/apt/debian.mirrors' \
       'Suites: trixie trixie-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       '' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian-security/20261029T000000Z/' \
+      'URIs: mirror+file:/etc/apt/debian-security.mirrors' \
       'Suites: trixie-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \

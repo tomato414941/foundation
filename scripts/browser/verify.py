@@ -68,7 +68,7 @@ with sync_playwright() as playwright:
         raise RuntimeError("Could not verify the native WebKit engine version")
 
 packages = dict(line.split("\t", 1) for line in (directory / "packages.tsv").read_text().splitlines())
-snapshot = re.search(r"/archive/debian/(\d+T\d+Z)/", Path("/etc/apt/sources.list.d/debian.sources").read_text()).group(1)
+snapshot = re.search(r"/archive/debian/(\d+T\d+Z)/", Path("/etc/apt/debian.mirrors").read_text()).group(1)
 report = {
     "playwright": configuration["playwright"], "node": node, "browsers": versions,
     "webkitRevision": configuration["webkit"]["revision"], "webkitPlaywrightRevision": configuration["webkit"]["playwrightRevision"],
