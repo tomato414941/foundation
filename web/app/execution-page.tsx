@@ -233,7 +233,7 @@ export default function ExecutionPage() {
     ? item.state === 'succeeded' ? 'requestReconnected' : connectionCancelled ? 'requestReconnectCancelled' : 'requestReconnect'
     : item.state === 'succeeded' ? 'requestConnected' : connectionCancelled ? 'requestConnectCancelled' : 'requestConnect';
   // Once a request is carried out, its heading says what was done, in the words it was asked in.
-  const done = recipientRequest && item.state === 'succeeded' && item.operations.length === 1 && i18n.exists('done.' + item.operations[0]!.name)
+  const done = recipientRequest && !transferring && !focusedConnection && item.state === 'succeeded' && item.operations.length === 1 && i18n.exists('done.' + item.operations[0]!.name)
     ? t('done.' + item.operations[0]!.name) : null;
   // A request that ended otherwise says how it ended, naming what was asked below.
   const ended = recipientRequest && !transferring && !focusedConnection && !pending && item.state !== 'succeeded'
