@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import os
 import re
@@ -2359,6 +2361,36 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
+
+    def test_SSH接続先の登録リクエストで接続先と鍵の指紋を確認して承認する(self):
+        sender, _ = self.passkey_account("SSH requester")
+        receiver, principal = self.passkey_account("SSH approver")
+        name = b"ssh-ed25519"
+        key = os.urandom(32)
+        blob = len(name).to_bytes(4, "big") + name + len(key).to_bytes(4, "big") + key
+        host_key = "ssh-ed25519 " + base64.b64encode(blob).decode()
+        fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "検証用サーバーを登録してください。", "operations": [{"name": "ssh.host.create", "input": {
+                "ownerId": "$approver", "name": "Staging server", "address": "staging.example.test", "port": 22,
+                "hostKeys": [host_key], "authorizedKeysFile": ".ssh/authorized_keys"}}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        receiver.goto(response.json()["url"])
+        expect(receiver.get_by_role("heading", name="SSH接続先を登録する", exact=True)).to_be_visible()
+        main = receiver.locator("main")
+        for label, value in [("所有者", "あなた（SSH approver）"), ("名前", "Staging server"), ("接続先", "staging.example.test"),
+                             ("ポート", "22"), ("鍵を書き込むファイル", ".ssh/authorized_keys")]:
+            expect(main.locator("dl", has=receiver.get_by_text(label, exact=True)).locator("dd")).to_have_text(value)
+        keys = main.locator("dl", has=receiver.get_by_text("サーバーの本人確認に使う鍵", exact=True)).locator("dd")
+        expect(keys).to_contain_text("ED25519")
+        expect(keys).to_contain_text(fingerprint)
+        print("Rendered SSH host request: " + main.inner_text(), flush=True)
+        for internal in ["ownerId", "$approver", "hostKeys", "{", host_key.split(" ")[1][:24]]:
+            self.assertNotIn(internal, main.inner_text())
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-host-request-ja.png"), full_page=True)
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_role("status")).to_have_text("完了")
+        expect(main.get_by_text("Staging server", exact=True)).to_be_visible()
 
     def test_通常のログインがある端末でリクエスト専用リンクを開いてリクエストを承認する(self):
         sender, _ = self.passkey_account("Link requester")

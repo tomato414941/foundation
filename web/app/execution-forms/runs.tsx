@@ -1,19 +1,25 @@
-import { useTranslation } from 'react-i18next';
+import type { JsonValue } from '../../../shared/contracts';
 import type { DefinitionCall } from '../../../shared/executions';
 import { formText } from '../api';
-import { Detail, JsonView } from '../components';
 import { defineForm } from './types';
 import { EnvironmentFields, loadOwner, OwnerFields } from './common';
 import type { OwnedForm } from './common';
+import { reviewer, ReviewRows } from '../operation-review';
+import type { ReviewRow } from '../operation-review';
 
-export const runForm = defineForm({ load: (invocation: DefinitionCall) => loadOwner(invocation, undefined, true),
-  submit: (data: OwnedForm, form: FormData) => ({ input: { ...data.invocation.input,
+type RunData = OwnedForm & { review: ReviewRow[] };
+async function load(invocation: DefinitionCall): Promise<RunData> {
+  const { name, input } = invocation;
+  const rows = reviewer({ approver: null, principals: [], inspect: true, signal: new AbortController().signal });
+  const [owned, review] = await Promise.all([loadOwner(invocation, undefined, true),
+    rows(name === 'connection.revoke' ? { connectionId: input.connectionId ?? null } : input.operation as Record<string, JsonValue>)]);
+  return { ...owned, review };
+}
+export const runForm = defineForm({ load,
+  submit: (data: RunData, form: FormData) => ({ input: { ...data.invocation.input,
     environmentId: data.invocation.input.environmentId ?? formText(form, 'environmentId') }, material: {} }),
-  Fields: ({ data }: { data: OwnedForm }) => {
-    const { t } = useTranslation(), { name, input } = data.invocation;
-    return <><OwnerFields data={data} />
-      {name === 'connection.revoke' ? <Detail label={t('connectionTarget')}>{String(input.connectionId)}</Detail> : <JsonView value={input.operation} />}
-      <EnvironmentFields data={data} />
-    </>;
-  },
+  Fields: ({ data }: { data: RunData }) => <><OwnerFields data={data} />
+    <ReviewRows rows={data.review} />
+    <EnvironmentFields data={data} />
+  </>,
 });

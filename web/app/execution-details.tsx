@@ -13,7 +13,8 @@ import { Task } from '../../shared/runtime-protocol';
 import type { RunKindName } from '../../shared/runtime-protocol';
 import { api, errorCode } from './api';
 import { custodyClient } from './custody';
-import { resourcePath } from './navigation';
+import { hasSection, resourcePath } from './navigation';
+import { CommandArguments } from './operation-review';
 import { Button } from './components/ui/button';
 import { DateText, Detail, ErrorNotice, JsonView, Notice } from './components';
 
@@ -113,7 +114,7 @@ export function ExecutionFacts({ details, environments }: { details: StepDetails
     {details.environmentId && <Detail label={t('executionDestination')}>
       {environment ? <Link className="underline underline-offset-4" to={resourcePath(environment)}>{environment.name}</Link> : details.environmentId}
     </Detail>}
-    {details.program?.kind === 'command' && <Detail label={t('command')}><code className="text-sm whitespace-pre-wrap wrap-anywhere">{details.program.command.map(value => /^[\w./:=+-]+$/.test(value) ? value : JSON.stringify(value)).join(' ')}</code></Detail>}
+    {details.program?.kind === 'command' && <Detail label={t('command')}><CommandArguments parts={details.program.command} /></Detail>}
     {details.program?.kind === 'http' && <Detail label={t('http')}>{details.program.request.method} {details.program.request.url}</Detail>}
     {details.program?.kind === 'http' && details.program.request.connectionId && <Detail label={t('connection')}>
       {details.connection ? <Link className="underline underline-offset-4" to={resourcePath(details.connection)}>{details.connection.name}</Link>
@@ -165,7 +166,9 @@ export function ExecutionOutput({ output, invocation }: { output: Output; invoca
 export function ExecutionResult({ invocation, value }: { invocation: DefinitionCall; value: JsonValue }) {
   const { t } = useTranslation();
   const resource = Resource.safeParse(value);
-  if (resource.success) return <Button asChild variant="outline"><Link to={resourcePath(resource.data)}>{resource.data.name}</Link></Button>;
+  if (resource.success) return hasSection(resource.data.kind)
+    ? <Button asChild variant="outline"><Link to={resourcePath(resource.data)}>{resource.data.name}</Link></Button>
+    : <p className="font-medium wrap-anywhere">{resource.data.name}</p>;
   const principal = Principal.safeParse(value);
   if (principal.success) return <Button asChild variant="outline"><Link to={'/p/' + principal.data.id}>{principal.data.name}</Link></Button>;
   if (value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'connected' &&
