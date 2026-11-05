@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { reviewer } from '../web/app/operation-review.js';
+import { knownResult, reviewer } from '../web/app/operation-review.js';
 
 const approver = { id: randomUUID(), name: 'Approver' }, requester = { id: randomUUID(), name: 'Requester' };
 const rows = reviewer({ approver, requester, principals: [], inspect: false, signal: new AbortController().signal });
@@ -44,4 +44,14 @@ test('SSH公開鍵は形式と指紋で示し、鍵として読めない文字�
 test('コマンドはシェルで展開せず、渡す引数を1つずつそのまま示す', async () => {
   const command = ['printf', '%s\n', '$HOME', '`date`', 'two words'];
   assert.deepEqual(field(await rows({ command }), 'command'), { kind: 'command', parts: command });
+});
+
+test('SSH鍵での接続許可の結果はその操作の結果として示し、同じ形の値を別の操作が返したときはそのまま扱う', () => {
+  const authorization = { id: randomUUID(), hostId: randomUUID(), keyId: randomUUID(), account: 'deploy', status: 'pending',
+    key: { name: 'Laptop', fingerprint: 'SHA256:abc' }, host: { name: 'Staging', address: 'staging.example.test', port: 22 } };
+  assert.equal(knownResult('ssh.access.grant', authorization), true);
+  assert.equal(knownResult('ssh.access.revoke', authorization), true);
+  assert.equal(knownResult('function.invoke', authorization), false);
+  assert.equal(knownResult('run.execute', { ...authorization, rows: [1, 2] }), false);
+  assert.equal(knownResult('ssh.access.grant', { account: 'deploy', status: 'paid' }), false);
 });

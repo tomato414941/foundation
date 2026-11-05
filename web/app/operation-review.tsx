@@ -127,6 +127,15 @@ export function CommandArguments({ parts }: { parts: string[] }) {
   </ol>;
 }
 
+// An item by its name, with what tells it apart from others of the same name where its name alone would not.
+function ResourceName({ resource }: { resource: ResourceView }) {
+  const name = hasSection(resource.kind)
+    ? <Link className="underline underline-offset-4" to={resourcePath(resource)}>{resource.name}</Link> : resource.name;
+  const detail = resource.kind === 'ssh_host' ? resource.data.address + ':' + resource.data.port
+    : resource.kind === 'ssh_key' ? resource.data.fingerprint : null;
+  return detail ? <span className="flex min-w-0 flex-col">{name}<code className="text-xs wrap-anywhere">{detail}</code></span> : <>{name}</>;
+}
+
 function Value({ field, value }: { field: string; value: ReviewValue }) {
   const { t } = useTranslation();
   switch (value.kind) {
@@ -139,9 +148,7 @@ function Value({ field, value }: { field: string; value: ReviewValue }) {
     case 'approver': return <>{t('reviewApprover')}</>;
     case 'identifier': return <span>{t(value.approver ? 'reviewYourId' : 'reviewIdOf', { name: value.name })} <code className="text-xs">{value.id}</code></span>;
     case 'approverId': return <>{t('reviewApproverId')}</>;
-    case 'resource': return hasSection(value.resource.kind)
-      ? <Link className="underline underline-offset-4" to={resourcePath(value.resource)}>{value.resource.name}</Link>
-      : <>{value.resource.name}</>;
+    case 'resource': return <ResourceName resource={value.resource} />;
     case 'unknown': return <span>{t('reviewUnknownItem')} <code className="text-xs text-muted-foreground">{value.id}</code></span>;
     case 'key': return <span className="flex min-w-0 flex-col">
       <span>{value.algorithm}{value.comment && <span className="text-muted-foreground"> · {value.comment}</span>}</span>
@@ -161,8 +168,52 @@ export function ReviewRows({ rows }: { rows: ReviewRow[] }) {
   </Fragment>)}</>;
 }
 
+// Settings left as they usually are stay folded until someone looks for them; any other value is shown.
+const usual: Record<string, JsonValue> = { authorizedKeysFile: '.ssh/authorized_keys', timeoutSeconds: 60 };
+const folded = (row: ReviewRow) => row.field in usual && row.value.kind === 'text' && row.value.text === String(usual[row.field]);
+
+// What holds whatever an operation does, said once for all the operations of a request: before approval what approving
+// alone does not do, and once done what is left to do. Registering a host leaves allowing a key and applying it, unless
+// the same request also allowed one, which leaves only applying it.
+const notes: Record<string, [string, string]> = { 'ssh.host.create': ['noteSSHHost', 'nextSSHHost'],
+  'ssh.access.grant': ['noteSSHApply', 'noteSSHApply'], 'ssh.access.revoke': ['noteSSHApply', 'noteSSHApply'],
+  'ssh.key.revoke': ['noteSSHApply', 'noteSSHApply'] };
+export function OperationNotes({ operations, done = false }: { operations: Array<{ name: string }>; done?: boolean }) {
+  const { t } = useTranslation();
+  let keys = [...new Set(operations.flatMap(operation => notes[operation.name] ? [notes[operation.name]![done ? 1 : 0]] : []))];
+  if (done && keys.includes('noteSSHApply')) keys = keys.filter(key => key !== 'nextSSHHost');
+  return keys.length ? <>{keys.map(key => <p key={key} className={done ? 'leading-relaxed' : 'text-sm leading-relaxed text-muted-foreground'}>{t(key)}</p>)}</> : null;
+}
+
+const SSHAuthorization = z.object({ account: z.string(), status: z.enum(['applied', 'pending', 'removed', 'remains_unmanaged']),
+  key: z.object({ name: z.string(), fingerprint: z.string() }).nullable(),
+  host: z.object({ name: z.string(), address: z.string(), port: z.number() }).nullable() });
+// Only the operations that return an SSH authorization have their results read as one.
+const authorizations = new Set(['ssh.access.grant', 'ssh.access.revoke']);
+export const knownResult = (name: string, value: JsonValue) => authorizations.has(name) && SSHAuthorization.safeParse(value).success;
+// A result read as what it is, for the results knownResult recognizes.
+export function KnownResult({ value }: { value: JsonValue }) {
+  const { t } = useTranslation();
+  const authorization = SSHAuthorization.safeParse(value);
+  if (!authorization.success) return null;
+  const { host, key, account, status } = authorization.data;
+  return <div className="flex min-w-0 flex-col gap-3">
+    {host && <Detail label={t('reviewField.hostId')}><span className="flex min-w-0 flex-col">{host.name}<code className="text-xs wrap-anywhere">{host.address + ':' + host.port}</code></span></Detail>}
+    {key && <Detail label={t('reviewField.keyId')}><span className="flex min-w-0 flex-col">{key.name}<code className="text-xs wrap-anywhere">{key.fingerprint}</code></span></Detail>}
+    <Detail label={t('reviewField.account')}>{account}</Detail>
+    <Detail label={t('sshApplied')}>{t('sshStatus.' + status)}</Detail>
+  </div>;
+}
+
 export function OperationReview({ rows }: { rows: ReviewRow[] }) {
   const { t } = useTranslation();
-  return rows.length ? <div className="flex min-w-0 flex-col gap-3"><ReviewRows rows={rows} /></div>
-    : <p className="text-muted-foreground">{t('reviewNothingToShow')}</p>;
+  const main = rows.filter(row => !folded(row)), more = rows.filter(folded);
+  if (!rows.length) return <p className="text-muted-foreground">{t('reviewNothingToShow')}</p>;
+  return <div className="flex min-w-0 flex-col gap-3">
+    <ReviewRows rows={main} />
+    {more.length > 0 && <details className="group min-w-0">
+      <summary className="w-fit cursor-pointer text-sm text-muted-foreground">{t('reviewMore')}</summary>
+      <div className="mt-3 flex min-w-0 flex-col gap-3"><ReviewRows rows={more} /></div>
+    </details>}
+  </div>;
 }

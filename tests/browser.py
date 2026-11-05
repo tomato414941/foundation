@@ -2336,7 +2336,7 @@ class BrowserTests(unittest.TestCase):
         receiver.screenshot(path=str(ARTIFACTS / "variable-request-mobile-en.png"), full_page=True)
         self.select(receiver, "Language", "日本語")
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("status")).to_have_text("完了", timeout=15000)
+        expect(receiver.get_by_role("heading", name="変数を保存しました", exact=True)).to_be_visible(timeout=15000)
         expect(receiver.get_by_role("link", name="Requested variable", exact=True)).to_be_visible()
         result = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["results"][0]
         receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
@@ -2357,7 +2357,7 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("heading", name="プリンシパルを作る", exact=True)).to_be_visible()
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("status")).to_have_text("完了")
+        expect(receiver.get_by_role("heading", name="プリンシパルを作りました", exact=True)).to_be_visible()
         expect(receiver.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
@@ -2378,6 +2378,8 @@ class BrowserTests(unittest.TestCase):
         receiver.goto(response.json()["url"])
         expect(receiver.get_by_role("heading", name="SSH接続先を登録する", exact=True)).to_be_visible()
         main = receiver.locator("main")
+        expect(main).to_contain_text("SSH接続先を登録するだけでは、まだSSHで接続できません。")
+        receiver.get_by_text("詳細な設定", exact=True).click()
         for label, value in [("所有者", "あなた（SSH approver）"), ("名前", "Staging server"), ("接続先", "staging.example.test"),
                              ("ポート", "22"), ("鍵を書き込むファイル", ".ssh/authorized_keys")]:
             expect(main.locator("dl", has=receiver.get_by_text(label, exact=True)).locator("dd")).to_have_text(value)
@@ -2389,8 +2391,65 @@ class BrowserTests(unittest.TestCase):
             self.assertNotIn(internal, main.inner_text())
         receiver.screenshot(path=str(ARTIFACTS / "ssh-host-request-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("status")).to_have_text("完了")
+        expect(receiver.get_by_role("heading", name="SSH接続先を登録しました", exact=True)).to_be_visible()
         expect(main.get_by_text("Staging server", exact=True)).to_be_visible()
+        expect(main).to_contain_text("SSHで接続するには、この接続先にSSH鍵での接続を許可し、その許可をサーバーへ反映してください。")
+        print("Rendered SSH host result: " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-host-result-ja.png"), full_page=True)
+        approved = sender.request.get(ORIGIN + "/api/requests/" + receiver.url.rsplit("/", 1)[1]).json()
+        self.assertEqual(approved["state"], "accepted")
+
+    def test_SSH鍵での接続許可のリクエストで接続先と鍵を見分けて承認し反映前であることを確認する(self):
+        sender, _ = self.passkey_account("Access requester")
+        receiver, principal = self.passkey_account("Access approver")
+        def public_key():
+            name, key = b"ssh-ed25519", os.urandom(32)
+            blob = len(name).to_bytes(4, "big") + name + len(key).to_bytes(4, "big") + key
+            return "ssh-ed25519 " + base64.b64encode(blob).decode(), "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+        host_key, _ = public_key()
+        laptop, fingerprint = public_key()
+        owned = ORIGIN + "/api/principals/" + principal["id"]
+        host = receiver.request.post(owned + "/ssh-hosts", data={"name": "Staging server", "address": "staging.example.test",
+            "port": 2222, "hostKeys": [host_key]}, headers={"origin": ORIGIN})
+        key = receiver.request.post(owned + "/ssh-keys", data={"name": "Laptop", "publicKey": laptop}, headers={"origin": ORIGIN})
+        self.assertTrue(host.ok and key.ok, host.text() + key.text())
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "ssh.access.grant",
+            "input": {"hostId": host.json()["id"], "keyId": key.json()["id"], "account": "deploy"}}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        receiver.goto(response.json()["url"])
+        expect(receiver.get_by_role("heading", name="SSH鍵での接続を許可する", exact=True)).to_be_visible()
+        main = receiver.locator("main")
+        row = lambda label: main.locator("dl", has=receiver.get_by_text(label, exact=True)).locator("dd")
+        expect(row("SSH接続先")).to_have_text("Staging serverstaging.example.test:2222")
+        expect(row("SSH鍵")).to_have_text("Laptop" + fingerprint)
+        expect(row("ログインするアカウント")).to_have_text("deploy")
+        expect(main).to_contain_text("SSHでの接続の許可や取消しは、サーバーへ反映したときに適用されます。")
+        print("Rendered SSH access request: " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-access-request-ja.png"), full_page=True)
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_role("heading", name="SSH鍵での接続を許可しました", exact=True)).to_be_visible()
+        expect(row("SSH接続先")).to_have_text("Staging serverstaging.example.test:2222")
+        expect(row("SSH鍵")).to_have_text("Laptop" + fingerprint)
+        expect(row("ログインするアカウント")).to_have_text("deploy")
+        expect(row("サーバーへの反映")).to_have_text("未反映")
+        self.assertNotIn("{", main.inner_text())
+        print("Rendered SSH access result: " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-access-result-ja.png"), full_page=True)
+
+    def test_取り消されたリクエストを開くと取り消されたことと依頼された処理を示す(self):
+        sender, _ = self.passkey_account("Cancelling requester")
+        receiver, principal = self.passkey_account("Cancelled approver")
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
+            {"name": "principal.create", "input": {"ownerId": "$approver", "name": "Withdrawn project"}}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        cancelled = sender.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/cancel", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(cancelled.ok, cancelled.text())
+        receiver.goto(asked["url"])
+        expect(receiver.get_by_role("heading", name="リクエストはキャンセルされました", exact=True)).to_be_visible()
+        expect(receiver.locator("main")).to_contain_text("プリンシパルを作る")
+        expect(receiver.get_by_role("button", name="承認", exact=True)).to_have_count(0)
+        receiver.screenshot(path=str(ARTIFACTS / "request-cancelled-ja.png"), full_page=True)
 
     def test_通常のログインがある端末でリクエスト専用リンクを開いてリクエストを承認する(self):
         sender, _ = self.passkey_account("Link requester")
@@ -2411,7 +2470,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(current["principal"]["id"], principal["id"])
         self.assertEqual(current["requestId"], sender.url.rsplit("/", 1)[1])
         viewer.get_by_role("button", name="承認", exact=True).click()
-        expect(viewer.get_by_role("status")).to_have_text("完了")
+        expect(viewer.get_by_role("heading", name="プリンシパルを作りました", exact=True)).to_be_visible()
         projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Link project", [item["name"] for item in projects])
 

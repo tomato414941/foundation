@@ -14,7 +14,7 @@ import type { RunKindName } from '../../shared/runtime-protocol';
 import { api, errorCode } from './api';
 import { custodyClient } from './custody';
 import { hasSection, resourcePath } from './navigation';
-import { CommandArguments } from './operation-review';
+import { CommandArguments, KnownResult, knownResult } from './operation-review';
 import { Button } from './components/ui/button';
 import { DateText, Detail, ErrorNotice, JsonView, Notice } from './components';
 
@@ -174,6 +174,7 @@ export function ExecutionResult({ invocation, value }: { invocation: DefinitionC
   if (value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'connected' &&
     typeof value.id === 'string' && typeof invocation.input.ownerId === 'string')
     return <Button asChild variant="outline"><Link to={resourcePath({ ownerId: invocation.input.ownerId, kind: 'connection', id: value.id })}>{t('executionOpenConnection')}</Link></Button>;
+  if (knownResult(invocation.name, value)) return <KnownResult value={value} />;
   if (typeof value === 'string') return value ? <OutputText text={value} /> : <p className="text-muted-foreground">{t('executionNoTextOutput')}</p>;
   return <JsonView value={value} />;
 }

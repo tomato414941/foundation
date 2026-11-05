@@ -19,7 +19,7 @@ import { ConnectionUsers } from './connection-users';
 import { ConnectionRequestReview, connectionRequestAction } from './connection-request-review';
 import { loadRequestConnection, requestConnectionMethod } from './request-connection';
 import { DelegationReview, loadDelegationReviews } from './delegation-review';
-import { loadOperationReviews, OperationReview } from './operation-review';
+import { loadOperationReviews, OperationNotes, OperationReview } from './operation-review';
 import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
@@ -232,10 +232,17 @@ export default function ExecutionPage() {
   const connectionTitle = requestConnection?.reconnecting
     ? item.state === 'succeeded' ? 'requestReconnected' : connectionCancelled ? 'requestReconnectCancelled' : 'requestReconnect'
     : item.state === 'succeeded' ? 'requestConnected' : connectionCancelled ? 'requestConnectCancelled' : 'requestConnect';
+  // Once a request is carried out, its heading says what was done, in the words it was asked in.
+  const done = recipientRequest && item.state === 'succeeded' && item.operations.length === 1 && i18n.exists('done.' + item.operations[0]!.name)
+    ? t('done.' + item.operations[0]!.name) : null;
+  // A request that ended otherwise says how it ended, naming what was asked below.
+  const ended = recipientRequest && !transferring && !focusedConnection && !pending && item.state !== 'succeeded'
+    ? item.delivery?.state === 'expired' ? 'requestExpiredTitle' : item.state === 'failed' ? 'requestFailedTitle'
+      : item.state === 'uncertain' ? 'requestUncertainTitle' : 'requestCancelledTitle' : null;
   const title = transferring ? t('transferTitle') : focusedConnection && service ? t(connectionTitle, { name: service })
     : focusedConnection ? t(connectionAction)
-    : recipientRequest && !item.proposal && item.operations.length === 1 ? executionTitle(item.operations[0]!, i18n.language)
-    : t(requestMode ? 'requests' : 'executionDetail');
+    : done ?? (ended ? t(ended) : null) ?? (recipientRequest && !item.proposal && item.operations.length === 1 ? executionTitle(item.operations[0]!, i18n.language)
+      : t(requestMode ? 'requests' : 'executionDetail'));
   const showSteps = pending || !recipientRequest && item.operations.length > 1;
   const completedResults = item.steps.filter(step => {
     const value = item.results[step.index];
@@ -275,6 +282,7 @@ export default function ExecutionPage() {
           </div>
         </Container>;
       })}
+      {recipientRequest && awaitingApproval && pending && <OperationNotes operations={item.operations} />}
       {focusedConnection && pending && requestConnection?.usersConfigured && <ConnectionUsers users={requestConnection.users} review />}
       {focusedConnection && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" review
         authorization={{ label: t('requestContinueAtService', { name: service }), newWindow: requestConnection?.method?.kind === 'approval' }} />}
@@ -285,16 +293,17 @@ export default function ExecutionPage() {
       {unverified && <Notice tone="warning">{t('approvalUnverified', { name: unverified })}</Notice>}
       {pending && item.canRespond && !needsKeys && !item.waiting?.continuation && (awaitingApproval || current) && <div className="flex flex-wrap items-center gap-4">
         <Button className={focusedConnection ? connectionRequestAction : transferring ? 'min-h-11 px-4' : undefined} type="submit" name="intent" value={awaitingApproval ? 'approve' : 'continue'}
-          loading={focusedConnection && navigation.state !== 'idle'} disabled={navigation.state !== 'idle' || (awaitingApproval && !!unverified)}>
+          loading={navigation.state !== 'idle' && (focusedConnection || navigation.formData?.get('intent') !== 'decline' && navigation.formData?.get('intent') !== 'cancel')} disabled={navigation.state !== 'idle' || (awaitingApproval && !!unverified)}>
           {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
             ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
             : t(connectionAction)
             : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           {focusedConnection && requestConnection?.method?.registration.kind === 'authorization' && <ArrowUpRight aria-hidden="true" />}
         </Button>
-        {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : transferring ? 'min-h-11 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost">{t(transferring ? 'transferDecline' : 'cancel')}</Button>}
+        {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : transferring ? 'min-h-11 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost" disabled={navigation.state !== 'idle'}>{t(transferring ? 'transferDecline' : 'cancel')}</Button>}
+        {recipientRequest && !focusedConnection && !transferring && <span className="text-sm text-muted-foreground">{t('expires')} <DateText value={item.delivery?.expiresAt ?? item.expiresAt} /></span>}
       </div>}
-      {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate
+      {pending && item.canCancel && !progress && !canDecline && <Button type="submit" name="intent" value="cancel" formNoValidate disabled={navigation.state !== 'idle'}
         variant={transferring ? 'ghost' : 'destructive'} className={transferring ? 'min-h-11 w-fit px-4 text-muted-foreground' : undefined}>
         {t(transferring || requestMode && item.delivery?.state === 'pending' ? 'cancelRequest' : 'cancelOperation')}
       </Button>}
@@ -312,7 +321,7 @@ export default function ExecutionPage() {
   })}</div>;
   const requestState = <>
     {focusedConnection && progress?.kind === 'authorize' && !progress.device && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
-    {!pending && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
+    {!pending && !done && !ended && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
       transferring && item.delivery?.state === 'declined' ? 'declined' : connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
     } /></p>}
     {pending && !approvalAccepted && !progress && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{
@@ -332,7 +341,8 @@ export default function ExecutionPage() {
   </ConnectionRequestReview>;
   const requestSummary = <>
     {pending && <p className="text-sm text-muted-foreground">{t('requestFrom', { name: item.from.name })}</p>}
-    {pending && item.message && <p className="leading-relaxed whitespace-pre-wrap wrap-anywhere">{item.message}</p>}
+    {ended && <p className="font-medium">{new Intl.ListFormat(i18n.language).format(item.operations.map(operation => executionTitle(operation, i18n.language)))}</p>}
+    {pending && item.message && <blockquote className="border-l-2 pl-3 leading-relaxed whitespace-pre-wrap wrap-anywhere">{item.message}</blockquote>}
     {item.proposal && <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p>}
     {requestState}
   </>;
@@ -357,7 +367,8 @@ export default function ExecutionPage() {
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
     <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
-    {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}</Panel> : <>
+    {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}
+      {item.state === 'succeeded' && <OperationNotes operations={item.operations} done />}</Panel> : <>
       <Panel>
         <Detail label={t('status')}><State value={transferring && item.delivery?.state === 'declined' ? 'declined' : requestMode ? item.delivery!.state : item.state} /></Detail>
         {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}
