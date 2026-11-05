@@ -1867,7 +1867,8 @@ class BrowserTests(unittest.TestCase):
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
             owner.get_by_role("button", name="承認", exact=True).click()
-            expect(owner.get_by_text("完了", exact=True).first).to_be_visible()
+            expect(owner.get_by_role("heading", name="接続の使用を許可しました", exact=True)).to_be_visible()
+            expect(owner.get_by_role("status")).to_have_text("接続の使用を許可しました")
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
             self.assertEqual(connection["ownerId"], principal["id"])
             used = subprocess.run(["node", "cli/dist/cli.mjs", "exec", "--inputs", json.dumps([
@@ -1895,7 +1896,7 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_text("Allow use, renewal, and disconnection. These recipients can read the credentials.", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-en.png"), full_page=True)
             owner.get_by_role("button", name="Cancel", exact=True).click()
-            expect(owner.get_by_role("status")).to_have_text("Cancelled")
+            expect(owner.get_by_role("status")).to_have_text("The request was cancelled")
             self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + limited_request["id"]).json()["state"], "declined")
             self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()["version"], connection["version"])
             self.select(owner, "Language", "日本語")
