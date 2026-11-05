@@ -176,6 +176,31 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   assert.equal(missing.statusCode, 404);
 });
 
+test('サインイン方法の名前を変更し、管理権限のないプリンシパルには変更させない', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person('Owner'), other = await f.person('Other'), credentialId = randomUUID();
+  await f.db.pool.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'passkey','Passkey',$3)",
+    [credentialId, owner.actor.id, 'renamedPasskey']);
+  const url = `/api/principals/${owner.actor.id}/credentials/${credentialId}`;
+  const renamed = await app.inject({ method: 'PATCH', url, headers: { authorization: 'Bearer ' + owner.token },
+    payload: { name: 'Work laptop' } });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  assert.equal(renamed.json().name, 'Work laptop');
+  const listed = await app.inject({ url: `/api/principals/${owner.actor.id}/credentials`, headers: { authorization: 'Bearer ' + owner.token } });
+  assert.equal(listed.json().items.find((item: { id: string }) => item.id === credentialId).name, 'Work laptop');
+  const refused = await app.inject({ method: 'PATCH', url, headers: { authorization: 'Bearer ' + other.token },
+    payload: { name: 'Taken over' } });
+  assert.equal(refused.statusCode, 403, refused.body);
+  const empty = await app.inject({ method: 'PATCH', url, headers: { authorization: 'Bearer ' + owner.token }, payload: { name: '' } });
+  assert.equal(empty.statusCode, 400);
+});
+
 test('デバイスの依頼をブラウザで承認すると、デバイスがそのプリンシパルの鍵を受け取る', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),

@@ -181,6 +181,16 @@ export function Bytes({ value }: { value: number }) {
   );
 }
 
+// One rarely used operation: what it does on the left, its button on the right.
+export function Operation({ title, help, children }: { title: string; help: string; children: ReactNode }) {
+  return <div className="flex flex-wrap items-center gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0">
+    <div className="min-w-0 flex-1 basis-64 space-y-1">
+      <h3 className="font-medium">{title}</h3>
+      <p className="text-xs leading-relaxed text-muted-foreground">{help}</p>
+    </div>
+    {children}
+  </div>;
+}
 export function Detail({ label, children }: { label: string; children: ReactNode }) {
   return (
     <dl className="grid min-w-0 gap-1.5 sm:grid-cols-[160px_minmax(0,1fr)] sm:items-baseline sm:gap-4">

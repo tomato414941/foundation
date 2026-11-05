@@ -442,6 +442,13 @@ export async function buildApp(context: Context) {
     },
     async (request, reply) => reply.code(201).send(await authentication.issue(actor(request), request.params.id, request.body)),
   );
+  app.patch(
+    '/api/principals/:id/credentials/:credentialId',
+    { schema: { params: z.object({ id: C.Id, credentialId: C.Id }), body: z.object({ name: C.Name }).strict(),
+      response: { 200: C.Credential } } },
+    async (request) =>
+      authentication.renameCredential(actor(request), request.params.id, request.params.credentialId, request.body.name),
+  );
   app.delete(
     '/api/principals/:id/credentials/:credentialId',
     { schema: { params: z.object({ id: C.Id, credentialId: C.Id }), response: { 200: C.Ok } } },

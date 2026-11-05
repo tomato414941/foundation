@@ -229,6 +229,13 @@ export class Authentication {
       return { credential: { ...issued.credential, canOpen: !!input.wrap }, token: issued.token };
     });
   }
+  async renameCredential(actor: Actor, principalId: string, id: string, name: string) {
+    await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
+    const row = required(await this.db.one<CredentialRow>(
+      'UPDATE credentials SET name=$3 WHERE id=$1 AND principal_id=$2 RETURNING *', [id, principalId, name]));
+    await this.audit.record(principalId, actor.id, 'credential.rename', id);
+    return this.credentialView(row);
+  }
   // Removes a sign-in method, with a confirmation made by a way in other than the identity's keys where the principal
   // has one when it removes such a way in.
   async removeCredential(actor: Actor, principalId: string, id: string) {
