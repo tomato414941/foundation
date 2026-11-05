@@ -664,7 +664,7 @@ const words: Record<string, [string, string]> = {
   reviewNone: ['なし', 'None'],
   reviewMore: ['詳細な設定', 'More settings'],
   noteSSHHost: ['SSH接続先を登録するだけでは、まだSSHで接続できません。', 'Registering an SSH host alone does not let anyone sign in.'],
-  nextSSHHost: ['SSHで接続するには、この接続先にSSH鍵での接続を許可し、その許可をサーバーへ反映してください。', 'To sign in over SSH, allow an SSH key into this host and apply that to the server.'],
+  nextSSHHost: ['接続するには、SSH鍵での接続を許可し、サーバーへ反映してください。', 'To sign in, allow an SSH key and apply it to the server.'],
   noteSSHApply: ['SSHでの接続の許可や取消しは、サーバーへ反映したときに適用されます。', 'Allowing or removing SSH access takes effect once it is applied to the server.'],
   requestFailedTitle: ['処理できませんでした', 'The request could not be completed'],
   requestUncertainTitle: ['結果を確認できていません', 'The result has not been confirmed'],

@@ -341,6 +341,7 @@ export default function ExecutionPage() {
   </ConnectionRequestReview>;
   const requestSummary = <>
     {pending && <p className="text-sm text-muted-foreground">{t('requestFrom', { name: item.from.name })}</p>}
+    {(done || ended) && <p role="status" className="sr-only">{title}</p>}
     {ended && <p className="font-medium">{new Intl.ListFormat(i18n.language).format(item.operations.map(operation => executionTitle(operation, i18n.language)))}</p>}
     {pending && item.message && <blockquote className="border-l-2 pl-3 leading-relaxed whitespace-pre-wrap wrap-anywhere">{item.message}</blockquote>}
     {item.proposal && <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p>}
