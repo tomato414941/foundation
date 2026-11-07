@@ -549,6 +549,27 @@ test('ResendのAPIキーをCLIで保存・更新し、RESEND_API_KEYとしてコ
   assert.equal(used.stdout, 'Resend credentials delivered\n[redacted]');
 });
 
+test('CloudRiftのAPIキーをCLIで保存・更新し、CLOUDRIFT_API_KEYとしてコマンドへ渡す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'CloudRift connection owner', '--origin', c.origin])).code, 0);
+  const started = await c.run(['connect', '--method', 'cloudrift:api_key', '--name', 'CloudRift compute', '--fields', '@-'],
+    JSON.stringify({ token: 'cloudrift_initial_cli_test_key' }));
+  assert.equal(started.code, 0, started.stderr);
+  const saved = JSON.parse(started.stdout);
+  const token = 'cloudrift_updated_cli_test_key';
+  const changed = await c.run(['connect', '--method', 'cloudrift:api_key', '--connection', saved.connectionId, '--fields', '@-'],
+    JSON.stringify({ token }));
+  assert.equal(changed.code, 0, changed.stderr);
+  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'CLOUDRIFT_API_KEY', source: { id: saved.connectionId, output: 'CLOUDRIFT_API_KEY' } },
+  ]), '--', process.execPath, '-e',
+    'require("node:assert/strict").equal(process.env.CLOUDRIFT_API_KEY,' + JSON.stringify(token) +
+    ');console.log("CloudRift credentials delivered");']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, 'CloudRift credentials delivered\n');
+});
+
 test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取り承認後に利用できるようにする', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Machine sender', '--origin', c.origin])).code, 0);

@@ -1,0 +1,27 @@
+{
+  "id": "cloudrift",
+  "name": "CloudRift",
+  "api": "https://api.cloudrift.ai/api/v1",
+  "docs": "https://docs.cloudrift.ai/extras/rest-api",
+  "console": "https://console.cloudrift.ai/console",
+  "methods": {
+    "api_key": {
+      "name": "CloudRift · Enter API key",
+      "kind": "token",
+      "docs": "https://docs.cloudrift.ai/extras/rest-api",
+      "console": "https://console.cloudrift.ai/console",
+      "http": {
+        "urlField": "url",
+        "authentication": { "kind": "bearer", "token": "CLOUDRIFT_API_KEY" }
+      },
+      "config": {
+        "fields": [
+          { "name": "token", "label": "API key", "secret": true, "pattern": "^\\S+$" }
+        ],
+        "constants": { "url": "https://api.cloudrift.ai" },
+        "outputs": { "CLOUDRIFT_API_KEY": "/token" },
+        "hint": "Use CLOUDRIFT_API_KEY with API clients. HTTP connections use Bearer authentication for the CloudRift management API."
+      }
+    }
+  }
+}
