@@ -314,6 +314,7 @@ const words: Record<string, [string, string]> = {
   deleteTitle: ['「{{name}}」を削除しますか？', 'Delete “{{name}}”?'],
   deleteBody: ['削除すると元に戻せません。', 'This action cannot be undone.'],
   disconnect: ['接続を解除', 'Disconnect'],
+  disconnectHelp: ['この接続と、保存した認証情報を削除します。', 'Delete this connection and its saved credentials.'],
   reconnect: ['再接続', 'Reconnect'],
   reveal: ['内容を表示', 'Reveal content'],
   hide: ['内容を隠す', 'Hide content'],

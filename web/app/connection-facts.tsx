@@ -9,6 +9,8 @@ export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
   return <>
     <ConnectionSettings methodId={value.methodId} settings={value.settings} />
     {value.aws && <AwsConnectionFacts value={value.aws} />}
-    {value.scopesStatus === 'requested' && value.scopes.length > 0 && <Detail label={t('requestedPermissions')}>{value.scopes.join(', ')}</Detail>}
+    {value.scopesStatus === 'requested' && value.scopes.length > 0 && <Detail label={t('requestedPermissions')}>
+      <ul>{value.scopes.map(scope => <li key={scope}>{scope}</li>)}</ul>
+    </Detail>}
   </>;
 }

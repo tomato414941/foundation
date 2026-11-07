@@ -17,6 +17,7 @@ import {
   DateText,
   Detail,
   ErrorNotice,
+  Operation,
   Page,
   Panel,
   State,
@@ -106,6 +107,7 @@ export default function ResourceDetail() {
   const [minutes, setMinutes] = useState(15);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   const environment = item.kind === 'environment' ? item : null;
+  const connection = item.kind === 'connection' ? item : null;
   const status = environment ? environmentState(environment) : null;
   usePolling(
     item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
@@ -118,6 +120,7 @@ export default function ResourceDetail() {
   return (
     <Page
       title={item.name}
+      narrow={!!connection}
       back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t(item.kind === 'environment' ? 'backToEnvironments' : 'backToList') }}
       actions={
         <>
@@ -138,15 +141,15 @@ export default function ResourceDetail() {
               <Link to="edit">{t('edit')}</Link>
             </Button>
           )}
-          {can('update') && item.kind === 'connection' && <Button variant="outline" asChild>
-            <Link to="access">{t('authorizeConnection')}</Link>
+          {can('update') && connection && <Button asChild>
+            <Link to={`../new?connection=${item.id}`} relative="path">{t('reconnect')}</Link>
           </Button>}
-          {can('share') && (
+          {can('share') && !connection && (
             <Button variant="ghost" asChild>
               <Link to="share">{t('share')}</Link>
             </Button>
           )}
-          {can('transfer') && item.kind !== 'environment' && (
+          {can('transfer') && !environment && !connection && (
             <Button variant="ghost" asChild>
               <Link to="transfer">{t('transfer')}</Link>
             </Button>
@@ -156,7 +159,47 @@ export default function ResourceDetail() {
     >
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
       <RecipientAccessNotice principalId={session.principal?.id} id={item.id} />
+      {connection && connection.data.state !== 'ready' && (
+        <Notice tone={'warning'}>{t('state.' + connection.data.state)}</Notice>
+      )}
       {!environment && <Panel><BoxDetails item={item} /></Panel>}
+      {connection && (can('update') || can('share') || can('transfer') || can('delete')) && (
+        <Panel title={t('rarelyUsed')}>
+          <div className="divide-y divide-border">
+            {can('update') && (
+              <Operation title={t('authorizeConnection')} help={t('connectionPermissionHelp')}>
+                <Button variant="outline" asChild>
+                  <Link to="access">{t('authorizeConnection')}</Link>
+                </Button>
+              </Operation>
+            )}
+            {can('share') && (
+              <Operation title={t('share')} help={t('connectionUseHelp')}>
+                <Button variant="outline" asChild>
+                  <Link to="share">{t('share')}</Link>
+                </Button>
+              </Operation>
+            )}
+            {can('transfer') && (
+              <Operation title={t('transfer')} help={t('transferHelp')}>
+                <Button variant="outline" asChild>
+                  <Link to="transfer">{t('transfer')}</Link>
+                </Button>
+              </Operation>
+            )}
+            {can('delete') && (
+              <Operation title={t('disconnect')} help={t('disconnectHelp')}>
+                <Confirm label={t('disconnect')} name={item.name}>
+                  {environments.length > 0 && (
+                    <><input type="hidden" name="intent" value="disconnect" />
+                      <EnvironmentChoice items={environments} /></>
+                  )}
+                </Confirm>
+              </Operation>
+            )}
+          </div>
+        </Panel>
+      )}
       {item.kind === 'variable' && can('reveal') && (
         <Panel>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -186,21 +229,6 @@ export default function ResourceDetail() {
               />
               <Copy value={decode(content)} />
             </>
-          )}
-        </Panel>
-      )}
-      {item.kind === 'connection' && (
-        <Panel>
-          {item.data.state !== 'ready' && (
-            <Notice tone={'warning'}>{t('state.' + item.data.state)}</Notice>
-          )}
-          <p className="leading-relaxed text-muted-foreground text-sm">{t('connectionUseHelp')}</p>
-          {can('update') && (
-            <Button variant="outline" asChild>
-              <Link to={`../new?connection=${item.id}`} relative="path">
-                {t('reconnect')}
-              </Link>
-            </Button>
           )}
         </Panel>
       )}
@@ -292,14 +320,9 @@ export default function ResourceDetail() {
         </Button>
       )}
       {item.kind === 'environment' && can('delete') && <EnvironmentDelete item={item} />}
-      {item.kind !== 'environment' && can('delete') && (
+      {!environment && !connection && can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
-          <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
-            {item.kind === 'connection' && environments.length > 0 && (
-              <><input type="hidden" name="intent" value="disconnect" />
-                <EnvironmentChoice items={environments} /></>
-            )}
-          </Confirm>
+          <Confirm label={t('delete')} name={item.name} />
         </div>
       )}
     </Page>
@@ -307,6 +330,14 @@ export default function ResourceDetail() {
 }
 function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['resource'] }) {
   const { t } = useTranslation();
+  if (item.kind === 'connection') return <>
+    <Detail label={t('status')}><State value={item.data.state} /></Detail>
+    <Detail label={t('service')}>{item.data.services.map((service) => service.name).join(', ') || '—'}</Detail>
+    <Detail label={t('method')}>{connectionMethodName(item.data.methodName, t)}</Detail>
+    <ConnectionFacts value={item.data} />
+    <Detail label={t('updated')}><DateText value={item.updatedAt} /></Detail>
+    <Detail label={t('id')}>{item.id}<Copy value={item.id} /></Detail>
+  </>;
   return (
     <>
       <Detail label={t('id')}>
@@ -319,20 +350,6 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
       <Detail label={t('updated')}>
         <DateText value={item.updatedAt} />
       </Detail>
-      {item.kind !== 'environment' && 'state' in item.data && (
-        <Detail label={t('status')}>
-          <State value={item.data.state} />
-        </Detail>
-      )}
-      {item.kind === 'connection' && (
-        <>
-          <Detail label={t('service')}>
-            {item.data.services.map((service) => service.name).join(', ') || '—'}
-          </Detail>
-          <Detail label={t('method')}>{connectionMethodName(item.data.methodName, t)}</Detail>
-          <ConnectionFacts value={item.data} />
-        </>
-      )}
       {item.kind === 'variable' && (
         <Detail label={t('size')}>
           <Bytes value={item.data.bytes} />
