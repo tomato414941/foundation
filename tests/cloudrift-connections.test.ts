@@ -5,9 +5,10 @@ import { HttpRequest } from '../shared/contracts.js';
 import { Task } from '../shared/runtime-protocol.js';
 
 type Fixture = Awaited<ReturnType<typeof flowFixture>>;
-async function inspect(f: Fixture, connectionId: string, url = 'https://api.cloudrift.ai/api/v1/auth/me') {
+async function inspect(f: Fixture, connectionId: string, url = 'https://api.cloudrift.ai/api/v1/account/info') {
   const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, {
-    kind: 'http', request: HttpRequest.parse({ connectionId, url, method: 'POST' }), save: {},
+    kind: 'http', request: HttpRequest.parse({ connectionId, url, method: 'POST',
+      json: { version: '2025-02-10', data: {} } }), save: {},
   });
   await f.executor.tick();
   const completed = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
@@ -16,8 +17,9 @@ async function inspect(f: Fixture, connectionId: string, url = 'https://api.clou
 
 test('CloudRiftのAPIキーを暗号化して保存し、同じ接続を更新して管理APIを使用する', async t => {
   const f = await flowFixture(request => {
-    assert.equal(request.url, 'https://api.cloudrift.ai/api/v1/auth/me');
+    assert.equal(request.url, 'https://api.cloudrift.ai/api/v1/account/info');
     assert.equal(request.method, 'POST');
+    assert.deepEqual(JSON.parse(Buffer.from(request.body!).toString()), { version: '2025-02-10', data: {} });
     return jsonResponse({ user: { id: 'test-user' } });
   }); t.after(f.close);
   const key = 'cloudrift_initial_test_key';
@@ -34,14 +36,19 @@ test('CloudRiftのAPIキーを暗号化して保存し、同じ接続を更新�
   assert.equal(updated.name, original.name);
   const reused = await inspect(f, updated.id);
   assert.equal(reused.task.state, 'succeeded', JSON.stringify(reused.result));
-  assert.deepEqual(f.requests.map(request => request.headers?.Authorization),
-    ['Bearer cloudrift_initial_test_key', 'Bearer cloudrift_updated_test_key']);
+  const reconnected = await f.saveConnection({ methodId: 'cloudrift:api_key', connectionId: updated.id,
+    name: updated.name, fields: {} });
+  assert.equal(reconnected.id, original.id);
+  const retained = await inspect(f, reconnected.id);
+  assert.equal(retained.task.state, 'succeeded', JSON.stringify(retained.result));
+  assert.deepEqual(f.requests.map(request => request.headers?.['X-API-Key']),
+    ['cloudrift_initial_test_key', 'cloudrift_updated_test_key', 'cloudrift_updated_test_key']);
 });
 
 test('CloudRiftのHTTP接続でAPIキーの送信先を管理APIのホストに限定する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const connection = await f.saveConnection({ methodId: 'cloudrift:api_key', fields: { token: 'cloudrift_private_test_key' } });
-  for (const url of ['https://other.example/api/v1/auth/me', 'https://api.cloudrift.ai.other.example/api/v1/auth/me']) {
+  for (const url of ['https://other.example/api/v1/account/info', 'https://api.cloudrift.ai.other.example/api/v1/account/info']) {
     const { task, result } = await inspect(f, connection.id, url);
     assert.equal(task.state, 'failed');
     assert.equal(result?.error?.code, 'invalid_destination');
