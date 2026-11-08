@@ -13,3 +13,4 @@ cli/dist/
 *.pem
 *.p12
 *.log
+**/.claude/settings.local.json
