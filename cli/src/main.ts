@@ -41,7 +41,9 @@ import { OperationMaterial } from '../../shared/execution-client.js';
 import { startMcp } from './mcp.js';
 import { FunctionClient } from '../../shared/function-client.js';
 import { FunctionDefinition } from '../../shared/contracts.js';
-import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
+import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOutput, connectionOwner, existingConnection, flowOutput,
+  requestConnection, saveApp, startConnection } from './connections.js';
+import { connectionMethod } from '../../shared/connection-methods.js';
 import { newSSHKey, sshAccess, withStoredKey } from './ssh-access.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
@@ -71,8 +73,11 @@ Usage: foundation <command> [options]
   keys rotate                          Replace this identity's keys, keeping its items and sign-ins
   agent start [--id ID]                Register this machine as an execution environment
   app NAME --method ID --client-id ID  Encrypt an application (--for ENV to allow use)
-  connect --method ID                  Encrypt and save a connection on this device
+  connect SERVICE [--needs NAME] [--why TEXT] Ask the owner to connect a service in a browser,
+                                       or return their ready connection that gives NAME
+  connect --method ID --fields JSON    Encrypt and save a connection on this device
   connect wait ID                      Continue after service authorization
+  connect wait-request ID              Wait for the owner to finish a requested connection
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
   transfer ID --to ID                  Transfer an item after the recipient accepts it
   read ID [--output FILE]               Decrypt a variable you can reveal
@@ -107,7 +112,11 @@ Usage: foundation <command> [options]
   ssh-access check ID [--account NAME] Read a host's authorized keys over SSH and report them
 
 Options:
-  --owner ID             Choose the principal that owns a new item or run
+  --owner ID             Choose the principal that owns a new item or run (for connect without
+                         --fields: the principal asked, by default the one delegating to this machine)
+  --needs NAME           Output a requested connection must give, such as RUNPOD_API_KEY (repeatable)
+  --why TEXT             Why a connection is requested, shown to its owner
+  --new                  Ask for another connection even if the owner has one
   --to ID                Principal receiving a transfer or access request
   --principal ID         Act as this saved identity for one command
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
@@ -186,6 +195,9 @@ const options = {
   image: textOption,
   once: booleanOption,
   method: textOption,
+  needs: { type: 'string' as const, multiple: true as const },
+  why: textOption,
+  new: booleanOption,
   'client-id': textOption,
   'client-secret': textOption,
   app: textOption,
@@ -694,10 +706,47 @@ async function main(argv: string[]) {
   }
   if (command === 'connect') {
     if (args.values.environment || args.values.for) throw new Error('Register on this device. Select an execution environment when running a program.');
-    const flowClient = connectionClient(client), action = args.positionals[0] ?? 'start';
+    const flowClient = connectionClient(client), actions = ['start', 'status', 'wait', 'complete', 'cancel', 'wait-request'];
+    const service = args.positionals[0] && !actions.includes(args.positionals[0]) ? args.positionals[0] : undefined;
+    const action = service ? 'start' : args.positionals[0] ?? 'start';
+    if (action === 'wait-request') {
+      const request = await client.json('/api/requests/' + Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.')), {}, ApprovalRequest);
+      const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
+      await output(result, args);
+      return result.kind === 'connected' ? 0 : 1;
+    }
+    // Without the values themselves, the owner is asked to enter them in a browser instead.
+    if (action === 'start' && args.values.fields === undefined && args.values.aws === undefined) {
+      const needs = args.values.needs ?? [];
+      const chosen = service || needs.length || args.values.method
+        ? await chooseMethod(client, { service, methodId: args.values.method, needs }) : null;
+      if (!chosen) throw new Error('Name a service, such as foundation connect cloudrift, or choose --method ID.');
+      if (service || chosen.method.registration.kind === 'input') {
+        const connectionOwnerId = await connectionOwner(client, current.principal.id, args.values.owner);
+        const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
+        const found = args.values.new || args.values.connection ? null
+          : await existingConnection(client, connectionOwnerId, chosen.service, wanted);
+        if (found) {
+          await output({ kind: 'existing', ...connectionOutput(found),
+            next: 'Use this connection, or add --new to ask for another.' }, args);
+          return 0;
+        }
+        const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
+          name: args.values.name, appId: args.values.app, connectionId: args.values.connection,
+          scopes: args.values.scopes === undefined ? undefined : z.array(z.string()).parse(await json(args.values.scopes, [])) });
+        await output({ kind: 'requested', requestId: request.id, executionId: request.executionId, to: request.to,
+          method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: await linked(request.url, client.identity),
+          expiresAt: request.expiresAt,
+          next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait-request ' + request.id }, args);
+        if (!args.values.wait) return 0;
+        const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
+        await output(result, { ...args, values: { ...args.values, force: true } });
+        return result.kind === 'connected' ? 0 : 1;
+      }
+    }
     let progress: FlowProgress | Awaited<ReturnType<typeof startConnection>>;
     if (action === 'start') progress = await startConnection(client, { ownerId: owner,
-      methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
+      methodId: requireArgument(args.values.method, 'Choose --method ID, or name a service.'), name: args.values.name,
       appId: args.values.app, connectionId: args.values.connection,
       fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
       aws: args.values.aws ? await json(args.values.aws) : undefined,

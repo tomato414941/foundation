@@ -73,6 +73,11 @@ const words: Record<string, [string, string]> = {
   requestConnectionPermissionsHelp: ['接続の使用・更新・解除を許可します。相手は認証情報の内容を読めます。', 'Allow use, renewal, and disconnection. These recipients can read the credentials.'],
   requestConnectionNoUsers: ['ほかの相手への実行許可を解除します。', 'Remove execution permissions granted to other recipients.'],
   requestWaitingForRecipient: ['依頼を受けた方の操作を待っています。', 'Waiting for the recipient to continue.'],
+  executionBlocked: ['この実行は{{name}}だけが続けられます。', 'Only {{name}} can continue this execution.'],
+  executionNotRequested: [
+    '承認の依頼はまだ届いていません。あなたが入力や承認をするには、{{name}}に承認の依頼を送ってもらってください（CLI では foundation request）。',
+    'No approval request has been sent. To enter input or approve, ask {{name}} to send you one (foundation request in the CLI).',
+  ],
   requestSignInHelp: ['続けるには、Foundationにサインインしてください。', 'Sign in to Foundation to continue.'],
   connectionPermissions: ['許可する内容', 'Permissions to allow'],
   'errors.function_not_approved': ['所有者が関数の実行設定を承認してください。', 'The owner must approve the function execution settings.'],

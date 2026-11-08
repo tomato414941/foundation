@@ -15,6 +15,11 @@ import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, protect, reveal } from '../shared/custody.js';
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
+import { CustodyClient } from '../shared/client.js';
+import { ConnectionClient } from '../shared/connection-client.js';
+import { ExecutionClient } from '../shared/execution-client.js';
+import { JournalTrust } from '../runtime/trust.js';
+import { MemoryJournal } from './delegation-support.js';
 
 async function cliFixture(environmentOverrides: Record<string, string> = {}, bundleDirectory = resolve('cli/dist')) {
   const reserved = createServer();
@@ -568,6 +573,72 @@ test('CloudRiftのAPIキーをCLIで保存・更新し、CLOUDRIFT_API_KEYとし
     ');console.log("CloudRift credentials delivered");']);
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, 'CloudRift credentials delivered\n');
+});
+
+// A machine delegated to by one owner, and that owner's own client for answering what the machine asks.
+async function delegatedMachine(c: Awaited<ReturnType<typeof cliFixture>>) {
+  const owner = await c.person('Key owner');
+  const machine = JSON.parse((await c.run(['init', '--name', 'Asking machine', '--origin', c.origin])).stdout);
+  await c.context.relations.draw(owner.actor, { subjectId: machine.principal.id, relation: 'delegate', objectId: owner.actor.id });
+  const api = { async json<T>(path: string, options: { method?: string; body?: unknown } = {}) {
+    const result = await c.app.inject({ method: (options.method ?? 'GET') as 'GET', url: path,
+      headers: { authorization: 'Bearer ' + owner.token }, ...(options.body !== undefined ? { payload: options.body as object } : {}) });
+    assert.ok(result.statusCode < 400, result.body);
+    return result.json() as T;
+  } };
+  const custody = new CustodyClient(api, c.origin, owner.binding, owner.keys, new JournalTrust(new MemoryJournal()));
+  const flows = new Map();
+  const operations = new ExecutionClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
+    async put(flow) { flows.set(flow.id, flow); } }, { async send() { throw new Error('No service calls are expected.'); } }, 'cli'));
+  return { owner, machine, api, operations };
+}
+
+test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入力された接続と出力名を返して次からはその接続を返す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { owner, api, operations } = await delegatedMachine(c);
+  const asked = await c.run(['connect', 'cloudrift', '--why', 'Rent a GPU for training']);
+  assert.equal(asked.code, 0, asked.stderr);
+  const request = JSON.parse(asked.stdout);
+  assert.equal(request.kind, 'requested');
+  assert.equal(request.to.id, owner.actor.id);
+  assert.equal(request.method, 'cloudrift:api_key');
+  assert.deepEqual(request.outputs, ['CLOUDRIFT_API_KEY']);
+  const received = await api.json<{ message: string; state: string }>('/api/requests/' + request.requestId);
+  assert.deepEqual([received.message, received.state], ['Rent a GPU for training', 'pending']);
+  const waiting = c.run(['connect', 'wait-request', request.requestId, '--timeout', '30']);
+  await api.json('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
+  const saved = await operations.continue(request.executionId, { fields: { token: 'cloudrift_requested_key' } });
+  if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
+  const waited = await waiting;
+  assert.equal(waited.code, 0, waited.stderr);
+  const connected = JSON.parse(waited.stdout);
+  assert.deepEqual([connected.kind, connected.connectionId, connected.ownerId, connected.outputs],
+    ['connected', saved.resource.id, owner.actor.id, ['CLOUDRIFT_API_KEY']]);
+  const again = await c.run(['connect', 'CloudRift']);
+  assert.equal(again.code, 0, again.stderr);
+  assert.deepEqual([JSON.parse(again.stdout).kind, JSON.parse(again.stdout).connectionId], ['existing', saved.resource.id]);
+  const another = await c.run(['connect', 'cloudrift', '--new']);
+  assert.equal(another.code, 0, another.stderr);
+  assert.equal(JSON.parse(another.stdout).kind, 'requested');
+});
+
+test('CLIの接続依頼は必要な出力名で接続方法を選び、決まらない方法や依頼先は候補を示して止める', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { owner, machine } = await delegatedMachine(c);
+  const ambiguous = await c.run(['connect', 'runpod']);
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.stderr, /--needs NAME or --method ID: .*runpod:token \(RUNPOD_API_KEY\)/);
+  const chosen = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY']);
+  assert.equal(chosen.code, 0, chosen.stderr);
+  assert.equal(JSON.parse(chosen.stdout).method, 'runpod:token');
+  const second = await c.person('Second owner');
+  await c.context.relations.draw(second.actor, { subjectId: machine.principal.id, relation: 'delegate', objectId: second.actor.id });
+  const unchosen = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY']);
+  assert.equal(unchosen.code, 1);
+  assert.match(unchosen.stderr, new RegExp('Choose one with --owner: .*' + owner.actor.id));
+  const named = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY', '--owner', second.actor.id]);
+  assert.equal(named.code, 0, named.stderr);
+  assert.equal(JSON.parse(named.stdout).to.id, second.actor.id);
 });
 
 test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取り承認後に利用できるようにする', async t => {

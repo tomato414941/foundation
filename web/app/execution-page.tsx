@@ -155,7 +155,17 @@ export async function clientLoader({ params, request }: PageArgs) {
   const unverified = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
     ['waiting', 'running'].includes(item.state) && await getIdentity(account.principal.id)
     ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
-  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified };
+  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified,
+    blocked: account.principal && !account.requestId ? await blockedBy(item, account.principal.id, request.signal) : null };
+}
+// Who alone can move a waiting execution on, when the one viewing it can neither continue, approve, nor cancel it, and
+// whether anyone has been asked to.
+async function blockedBy(item: PageExecution, viewerId: string, signal: AbortSignal) {
+  if (item.state !== 'waiting' || item.canRespond || item.canCancel) return null;
+  const asked = item.delivery?.state === 'pending' ? item.delivery.to : null;
+  const name = asked?.name ?? (item.actorId === item.creator.id ? item.creator.name
+    : await api<{ name: string }>('/identities/' + item.actorId, { signal }).then(identity => identity.name, () => item.actorId));
+  return { name, requester: !asked && !item.requests.length && item.creator.id !== viewerId ? item.creator.name : null };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -210,7 +220,7 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified, blocked } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const transferring = resourceTransfer(item);
@@ -319,12 +329,16 @@ export default function ExecutionPage() {
         <ExecutionResult invocation={item.operations[index]!} value={value!} />}
     </div>;
   })}</div>;
+  const blockedNotice = blocked && <Notice tone="info">
+    <span role="status" className="block">{t('executionBlocked', { name: blocked.name })}</span>
+    {blocked.requester && <span className="block">{t('executionNotRequested', { name: blocked.requester })}</span>}
+  </Notice>;
   const requestState = <>
     {focusedConnection && progress?.kind === 'authorize' && !progress.device && <p role="status" className="text-sm text-muted-foreground">{t('requestAuthorize', { name: service })}</p>}
     {!pending && !done && !ended && (!focusedConnection || item.state !== 'succeeded' && !connectionCancelled) && <p role="status"><State value={
       transferring && item.delivery?.state === 'declined' ? 'declined' : connectionCancelled ? 'cancelled' : item.delivery?.state === 'expired' ? 'expired' : item.state
     } /></p>}
-    {pending && !approvalAccepted && !progress && !item.canRespond && <p role="status" className="text-sm text-muted-foreground">{
+    {pending && !approvalAccepted && !progress && !item.canRespond && !blocked && <p role="status" className="text-sm text-muted-foreground">{
       item.wait === 'execution' ? <State value="running" /> : t('requestWaitingForRecipient')
     }</p>}
   </>;
@@ -333,6 +347,7 @@ export default function ExecutionPage() {
     name={requestConnection.name !== service || !pending ? requestConnection.name : undefined}
     message={pending ? item.message : undefined}>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
+    {blockedNotice}
     {requestState}
     {form}
     {!account.principal && pending && <Button className={connectionRequestAction} asChild><Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + (item.delivery?.id ?? item.id))}>{t('signinToApprove')}</Link></Button>}
@@ -366,6 +381,7 @@ export default function ExecutionPage() {
   </Page>;
   return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
+    {blockedNotice}
     <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={pageId} />}
     {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={pageId} />{form}{output}

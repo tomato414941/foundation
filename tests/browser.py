@@ -542,6 +542,26 @@ class BrowserTests(unittest.TestCase):
         relations = owner.request.get(ORIGIN + "/api/relations?object=" + workspace["id"] + "&relation=delegate").json()["items"]
         self.assertIn(recipient["id"], [item["subjectId"] for item in relations])
 
+    def test_続けられない実行を開くと続けられるプリンシパルと承認の依頼が届いていないことを示す(self):
+        owner, principal = self.passkey_account("Chancellor Rigel")
+        response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "dev-ovh-sg"}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        agent = response.json()
+        owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
+        owner.get_by_role("textbox", name="名前", exact=True).fill("Machine key")
+        owner.get_by_role("button", name="追加", exact=True).click()
+        token = owner.get_by_role("textbox", name="APIキー", exact=True).input_value().split(".")[0]
+        started = urllib.request.urlopen(urllib.request.Request(ORIGIN + "/api/executions", method="POST",
+            headers={"authorization": "Bearer " + token, "content-type": "application/json"},
+            data=json.dumps({"operations": [{"name": "connection.connect", "input": {
+                "ownerId": agent["id"], "methodId": "cloudrift:api_key", "name": "CloudRift"}}]}).encode()), timeout=10)
+        execution = json.load(started)
+        self.assertEqual(execution["state"], "waiting")
+        owner.goto(ORIGIN + "/executions/" + execution["id"])
+        expect(owner.get_by_role("status").filter(has_text="この実行はdev-ovh-sgだけが続けられます。")).to_be_visible()
+        expect(owner.get_by_text("承認の依頼はまだ届いていません。あなたが入力や承認をするには、dev-ovh-sgに承認の依頼を送ってもらってください（CLI では foundation request）。")).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "execution-blocked-ja.png"), full_page=True)
+
     def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
         owner, principal = self.passkey_account("Chancellor Rigel")
         paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
