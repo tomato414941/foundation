@@ -14,8 +14,8 @@ const CREATED: Record<string, readonly [string, string]> = {
   environment: ['実行環境を作る', 'Create an environment'],
 };
 
-export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'environments' | 'objects' | 'relations' | 'custody'>) {
-  const { authorization, resources, catalog, environments, objects, relations, custody } = services;
+export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'environments' | 'objects' | 'relations' | 'custody' | 'sshAccess'>) {
+  const { authorization, resources, catalog, environments, objects, relations, custody, sshAccess } = services;
   const bind = definitions.bind.bind(definitions);
   definitions.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
     input => CREATED[String((input.resource as Record<string, C.JsonValue>)?.kind)] ?? ['項目を作る', 'Create an item'],
@@ -69,9 +69,11 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
   definitions.define('resource.delete', idInput, ['項目を削除する', 'Delete an item'], async (who, input) => {
     const row = await resources.get(input.id);
     if (row.kind === 'environment') return environments.remove(who, row);
-    if (row.kind === 'object') await objects.remove(who, row); else await resources.delete(who, row);
+    if (row.kind === 'object') await objects.remove(who, row);
+    else if (row.kind === 'ssh_host') await sshAccess.deleteHost(who, row.id);
+    else await resources.delete(who, row);
     return ok();
-  });
+  }, { confirmation: input => sshAccess.deleteConfirmation(input.id) });
   bind({ name: 'resource.delete', method: 'DELETE', path: '/api/resources/:id', schema: { params: C.IdParams,
     querystring: z.object({}).strict(), response: { 200: C.Ok, 202: C.EnvironmentDeletion } }, input: params => params,
     status: result => result && typeof result === 'object' && 'ok' in result ? 200 : 202 });

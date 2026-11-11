@@ -249,6 +249,29 @@ test('取り消した鍵が管理外の行に残る間は削除済みとせず�
   assert.equal((await s.call(owner, 'GET', '/api/ssh-access')).json().items.length, 0);
 });
 
+test('取り消した許可がサーバーで確かめられないまま残る接続先は、本人の確認があれば許可ごと削除する', async t => {
+  const s = await setup(); t.after(s.close);
+  const owner = await s.f.person('Owner');
+  const { key, host } = await registered(s, owner);
+  const authorization = (await s.confirmed(owner, 'POST', '/api/ssh-access', { hostId: host.id, keyId: key.id, account: 'deploy' })).json();
+  await s.confirmed(owner, 'DELETE', '/api/ssh-access/' + authorization.id);
+  const [account] = (await s.call(owner, 'GET', '/api/ssh-hosts/' + host.id + '/plan')).json().accounts;
+  await s.call(owner, 'POST', '/api/ssh-hosts/' + host.id + '/reports',
+    { account: 'deploy', generation: account.generation, outcome: 'verified', managed: [], unmanaged: [key.data.fingerprint] });
+  assert.equal((await s.call(owner, 'GET', '/api/ssh-access')).json().items[0].status, 'remains_unmanaged');
+
+  const refused = await s.call(owner, 'DELETE', '/api/resources/' + host.id);
+  assert.equal(refused.statusCode, 403, refused.body);
+  assert.equal(refused.json().error.code, 'confirmation_required');
+  assert.deepEqual(refused.json().error.details.operation, { action: 'ssh.hostDelete', principalId: owner.principal.id, hostId: host.id });
+  assert.equal((await s.call(owner, 'GET', '/api/ssh-access')).json().items.length, 1);
+  const deleted = await s.confirmed(owner, 'DELETE', '/api/resources/' + host.id);
+  assert.equal(deleted.statusCode, 200, deleted.body);
+  assert.equal((await s.call(owner, 'GET', '/api/resources/' + host.id)).statusCode, 404);
+  assert.deepEqual((await s.call(owner, 'GET', '/api/ssh-access')).json().items, []);
+  assert.equal((await s.call(owner, 'DELETE', '/api/resources/' + key.id)).statusCode, 200);
+});
+
 test('鍵の持ち主と接続先の持ち主のどちらも、サーバーに残りうる許可がある間は主体を削除できない', async t => {
   const s = await setup(); t.after(s.close);
   const keyOwner = await s.f.person('Key owner'), hostOwner = await s.f.person('Host owner');
@@ -492,6 +515,18 @@ test('CLIは秘密鍵を読み込めないとき、待ち続けずに後片付�
   assert.equal(result.code, 1);
   assert.match(result.stderr, /could not be loaded into an SSH agent/);
   assert.ok(Date.now() - started < 30_000);
+});
+
+test('SSH鍵が使う秘密鍵の変数は、使っている鍵を示して削除を断る', async t => {
+  const c = await cliSetup(t);
+  const variable = JSON.parse((await c.run(['keep', 'automation-key', '--stdin'], newSSHKey('automation').privateKey)).stdout);
+  const key = await c.json(['api', 'POST', '/api/principals/' + variable.ownerId + '/ssh-keys', '--body',
+    JSON.stringify({ name: 'Automation', publicKey: publicKey(), privateKeyId: variable.id })]);
+  const refused = await c.run(['api', 'DELETE', '/api/resources/' + variable.id]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, new RegExp('in_use: .*Automation \\(ssh_key ' + key.id + '\\)'));
+  assert.equal((await c.run(['api', 'DELETE', '/api/resources/' + key.id])).code, 0);
+  assert.equal((await c.run(['api', 'DELETE', '/api/resources/' + variable.id])).code, 0);
 });
 
 test('CLIは保存された秘密鍵が選んだSSH鍵の公開鍵と一致しないとき、その鍵を使わない', async t => {

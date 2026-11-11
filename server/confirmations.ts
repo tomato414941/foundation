@@ -45,6 +45,7 @@ const levels: Record<string, Level | ((operation: ConfirmationOperation, connect
   'ssh.revoke': 'factor',
   'ssh.keyRevoke': 'factor',
   'ssh.hostChange': 'factor',
+  'ssh.hostDelete': 'factor',
 };
 interface Row {
   id: string;

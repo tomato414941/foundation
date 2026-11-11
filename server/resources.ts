@@ -225,6 +225,18 @@ export class Resources {
     const letIn = await this.db.one('SELECT 1 FROM ssh_authorizations WHERE (host_id=$1 OR key_id=$1) AND ' + stillLetIn + ' LIMIT 1',
       [row.id], connection);
     if (letIn) fail(409, 'ssh_access_remaining', 'Remove its SSH authorizations and check the servers before deleting it.');
+    // What still uses it is named where the actor can read it, so that it can be deleted or changed first.
+    const users = await this.db.all<ResourceRow>(
+      'SELECT r.* FROM resource_references ref JOIN resources r ON r.id=ref.resource_id WHERE ref.referenced_id=$1 ORDER BY r.name,r.id',
+      [row.id], connection);
+    if (users.length) {
+      const seen: ResourceRow[] = [];
+      for (const user of users) if (await this.authorization.can(actor, user, 'read', connection)) seen.push(user);
+      fail(409, 'in_use', seen.length
+        ? 'Delete or change what uses this item first: ' + seen.map(user => user.name + ' (' + user.kind + ' ' + user.id + ')').join(', ') +
+          (seen.length < users.length ? ', and items you cannot read.' : '.')
+        : 'Other items you cannot read still use this item.');
+    }
     await connection.query('DELETE FROM resources WHERE id=$1', [row.id]);
     await this.audit.record(
       row.owner_id,

@@ -88,6 +88,9 @@ const revokeOperation = (host: ResourceRow, row: AuthorizationRow): Confirmation
   action: 'ssh.revoke', principalId: host.owner_id, authorizationId: row.id, hostId: row.host_id, keyId: row.key_id, account: row.account,
 });
 const keyRevokeOperation = (key: ResourceRow): ConfirmationOperation => ({ action: 'ssh.keyRevoke', principalId: key.owner_id, keyId: key.id });
+// A server that no longer exists cannot be checked, so a host whose authorizations were all taken out is deleted with
+// them once whoever deletes it confirms that, without the server showing the keys gone.
+const hostDeleteOperation = (host: ResourceRow): ConfirmationOperation => ({ action: 'ssh.hostDelete', principalId: host.owner_id, hostId: host.id });
 // Letting a key into a server account is confirmed by whoever lets it in, as adding a way in is.
 const grantOperation = (host: ResourceRow, value: z.output<typeof SSHGrant>): ConfirmationOperation => ({
   action: 'ssh.grant', principalId: host.owner_id, hostId: host.id, keyId: value.keyId, account: value.account,
@@ -191,6 +194,29 @@ export class SSHAccess {
         { hostKeys: JSON.stringify(data.hostKeys) !== JSON.stringify(previous.hostKeys), location: data.address !== previous.address || data.port !== previous.port ||
           data.authorizedKeysFile !== previous.authorizedKeysFile }, connection);
       return updated;
+    });
+  }
+
+  private unchecked(hostId: string, connection: Queryable) {
+    return this.db.all<AuthorizationRow>('SELECT * FROM ssh_authorizations WHERE host_id=$1 AND ' + stillLetIn, [hostId], connection);
+  }
+  async deleteConfirmation(id: string) {
+    const row = await this.db.one<ResourceRow>("SELECT * FROM resources WHERE id=$1 AND kind='ssh_host'", [id]);
+    const remaining = row ? await this.unchecked(id, this.db.pool) : [];
+    return remaining.length && !remaining.some(wanted) ? hostDeleteOperation(row!) : null;
+  }
+  async deleteHost(actor: Actor, id: string) {
+    return this.db.transaction(async connection => {
+      const row = await this.row(id, 'ssh_host', connection, ' FOR UPDATE');
+      await this.authorization.requireResource(actor, row, 'delete', connection);
+      const remaining = await this.unchecked(id, connection);
+      if (remaining.some(wanted)) fail(409, 'ssh_access_remaining', 'Remove its SSH authorizations before deleting it.');
+      if (remaining.length) {
+        await this.confirmations.consume(connection, actor, hostDeleteOperation(row));
+        await connection.query('DELETE FROM ssh_authorizations WHERE host_id=$1', [id]);
+        await this.audit.record(row.owner_id, actor.id, 'ssh.host.forget', id, { authorizations: remaining.length }, connection);
+      }
+      await this.resources.delete(actor, row, connection);
     });
   }
 

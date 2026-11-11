@@ -19,7 +19,7 @@ export function failure(error: unknown): DomainError {
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
   if (code === '23505')
     return new DomainError(409, 'already_exists', 'An item with this name or identity already exists.');
-  if (code === '23503') return new DomainError(409, 'in_use', 'Another item still uses this item.');
+  if (code === '23503' || code === '23001') return new DomainError(409, 'in_use', 'Another item still uses this item.');
   if (code === '23514' || code === '22P02')
     return new DomainError(400, 'invalid_input', 'Check the supplied values.');
   return new DomainError(500, 'internal_error', 'The operation could not be completed.');
