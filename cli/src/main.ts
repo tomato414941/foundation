@@ -512,7 +512,7 @@ async function sshKeyCommand(client: Client, args: Arguments, owner: string, com
       throw new Error('Choose --store to keep the private key in Foundation or --private-key-output FILE to keep it on this machine.');
     if (keyFile && args.values.output && resolve(keyFile) === resolve(args.values.output))
       throw new Error('Write the private key and the result to different files.');
-    const key = newSSHKey(name);
+    const key = newSSHKey();
     if (keyFile) {
       await secureWrite(keyFile, key.privateKey, !!args.values.force);
       // A private key whose public key was not registered is of no use, so it does not stay behind.

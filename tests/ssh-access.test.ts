@@ -519,7 +519,7 @@ test('CLIは秘密鍵を読み込めないとき、待ち続けずに後片付�
 
 test('SSH鍵が使う秘密鍵の変数は、使っている鍵を示して削除を断る', async t => {
   const c = await cliSetup(t);
-  const variable = JSON.parse((await c.run(['keep', 'automation-key', '--stdin'], newSSHKey('automation').privateKey)).stdout);
+  const variable = JSON.parse((await c.run(['keep', 'automation-key', '--stdin'], newSSHKey().privateKey)).stdout);
   const key = await c.json(['api', 'POST', '/api/principals/' + variable.ownerId + '/ssh-keys', '--body',
     JSON.stringify({ name: 'Automation', publicKey: publicKey(), privateKeyId: variable.id })]);
   const refused = await c.run(['api', 'DELETE', '/api/resources/' + variable.id]);
@@ -529,9 +529,37 @@ test('SSH鍵が使う秘密鍵の変数は、使っている鍵を示して削�
   assert.equal((await c.run(['api', 'DELETE', '/api/resources/' + variable.id])).code, 0);
 });
 
+// Why: an SSH key is named by its label in Foundation, which its owner may change; the private key kept for it is
+// sealed and is not rewritten on a rename. Intent: the agent lists the key by the name it has when it is used.
+test('SSH鍵の名前を変えると、ssh-add -l に新しい名前が出る', async t => {
+  const c = await cliSetup(t);
+  const key = await c.json(['ssh-key', 'create', 'First name', '--store']);
+  const renamed = await c.json(['api', 'PATCH', '/api/resources/' + key.id, '--body', JSON.stringify({ version: key.version, name: 'Second name' })]);
+  assert.equal(renamed.name, 'Second name');
+  const listed = await c.run(['ssh-key', 'agent', key.id, '--', 'ssh-add', '-l']);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.match(listed.stdout, / Second name \(ED25519\)\n$/);
+});
+
+// Why: keys kept before their comment was left empty hold the name they were made with, and their sealed private key
+// is not rewritten to change it. Intent: such a key, of each type OpenSSH makes, is listed by its current name too.
+test('名前を中に持つ秘密鍵も、書き換えずに ssh-add -l へ今の名前で出す', async t => {
+  const c = await cliSetup(t);
+  for (const type of ['ed25519', 'ecdsa', 'rsa']) {
+    const file = join(c.directory, type);
+    await new Promise<void>((done, reject) => spawn('ssh-keygen', ['-q', '-t', type, '-N', '', '-C', 'name made with', '-f', file], { stdio: 'ignore' })
+      .once('error', reject).once('close', code => code === 0 ? done() : reject(new Error('ssh-keygen ' + code))));
+    const key = await c.json(['ssh-key', 'add', 'Current ' + type, '--private-key', file]);
+    const listed = await c.run(['ssh-key', 'agent', key.id, '--', 'ssh-add', '-l']);
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.match(listed.stdout, new RegExp(' Current ' + type + ' \\([A-Z0-9-]+\\)\n$'), type);
+    assert.equal((await c.run(['read', key.data.privateKeyId])).stdout, await readFile(file, 'utf8'), type);
+  }
+});
+
 test('CLIは保存された秘密鍵が選んだSSH鍵の公開鍵と一致しないとき、その鍵を使わない', async t => {
   const c = await cliSetup(t);
-  const kept = JSON.parse((await c.run(['keep', 'another-key', '--stdin'], newSSHKey('another').privateKey)).stdout);
+  const kept = JSON.parse((await c.run(['keep', 'another-key', '--stdin'], newSSHKey().privateKey)).stdout);
   const key = await c.json(['api', 'POST', '/api/principals/' + kept.ownerId + '/ssh-keys', '--body',
     JSON.stringify({ name: 'Mismatched', publicKey: publicKey(), privateKeyId: kept.id })]);
   const result = await c.run(['ssh-key', 'agent', key.id, '--', 'node', '-e', 'process.stdout.write("ran")']);
