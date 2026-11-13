@@ -1,2 +1,2 @@
 - Do not change this file unless the user asks.
-- Names, addresses and product terms are labels, each kept in one place. Seals, signatures, grants and anything written outside Foundation refer to things by id alone and hold only what they need.
+- Names and product terms are labels, each kept in one place. Seals, signatures, grants and anything written outside Foundation refer to things only by what identifies them (an id, a key or an origin) and hold only what they need.
