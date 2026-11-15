@@ -19,6 +19,9 @@ export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', '
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();
+// An executor's signed registration, with the name its environment gets in Foundation when it is new. A later
+// registration keeps the name the environment has.
+export const EnvironmentRegistration = z.object({ name: Name, registration: SignedEnvironment }).strict();
 export const Registration = z.object({ registration: SignedEnvironment, stoppedAt: z.iso.datetime().nullable(),
   heartbeatAt: z.iso.datetime().nullable() }).strict();
 export const ClaimedExecution = z.object({ lease: Id, request: DelegatedRun,

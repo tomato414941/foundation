@@ -237,10 +237,11 @@ test('実行先が名乗るAWSの身元を実行環境に載せ、名乗らな�
   const f = await delegatedFixture();
   t.after(f.close);
   const awsPrincipal = 'arn:aws:iam::123456789012:role/' + 'project/'.repeat(35) + 'own-server';
-  const manifest = { format: 3 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
-    name: 'Own server', executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
+  const manifest = { format: 4 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
+    executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
     capabilities: [Operations.http, Operations.connect], isolation: 'process' as const };
-  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, awsPrincipal, revision: 1 }, f.executor.keys));
+  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, awsPrincipal, revision: 1 }, f.executor.keys),
+    'Own server');
   assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, awsPrincipal);
   await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, revision: 2 }, f.executor.keys));
   assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, undefined);

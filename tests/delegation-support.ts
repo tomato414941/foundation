@@ -34,12 +34,12 @@ export async function delegatedFixture() {
   const owner = await person('Owner'), executor = await person('Executor'), stranger = await person('Other');
   await f.relations.draw(owner.actor, { subjectId: executor.actor.id, relation: 'delegate', objectId: owner.actor.id });
   const environment = await signEnvironment({
-    format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
-    name: 'Own server', executor: executor.binding, operatorId: executor.actor.id,
+    format: 4, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    executor: executor.binding, operatorId: executor.actor.id,
     driver: 'attached', capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION,
     isolation: 'process', revision: 1,
   }, executor.keys);
-  await delegation.register(executor.actor, environment);
+  await delegation.register(executor.actor, environment, 'Own server');
   const policy = AccessPolicy.parse({
     format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, executor.binding], readers: [owner.binding, executor.binding],

@@ -73,7 +73,8 @@ export class Delegation {
     ));
   }
 
-  async register(actor: Actor, input: RegisteredEnvironment) {
+  // The name is the label a new environment gets; an environment already registered keeps the name it has.
+  async register(actor: Actor, input: RegisteredEnvironment, name?: string) {
     await this.resources.authorization.active(actor);
     const environment = await verifyEnvironment(input), { manifest } = environment;
     if (manifest.origin !== this.origin || manifest.executor.principalId !== actor.id)
@@ -124,9 +125,10 @@ export class Delegation {
         size: metadata.size ?? 'small', lifetime: metadata.lifetime ?? { idleSeconds: null, maxSeconds: null },
         state: 'running', startedAt: metadata.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
       };
+      if (!previous && !name) fail(400, 'name_required', 'Name the new execution environment.');
       const row = previous
-        ? await this.resources.update(previous, { name: manifest.name, data }, connection)
-        : await this.resources.insert(manifest.ownerId, 'environment', manifest.name, data, { id: manifest.id }, connection);
+        ? await this.resources.update(previous, { data }, connection)
+        : await this.resources.insert(manifest.ownerId, 'environment', name!, data, { id: manifest.id }, connection);
       await connection.query(
         `INSERT INTO executor_environments(resource_id,executor_id,registration,heartbeat_at) VALUES($1,$2,$3,now())
          ON CONFLICT(resource_id) DO UPDATE SET registration=EXCLUDED.registration,heartbeat_at=now(),stopped_at=NULL`,

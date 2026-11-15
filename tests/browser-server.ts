@@ -41,11 +41,11 @@ class BrowserRunner extends MemoryRunner {
     const { keys, binding, token } = principal;
     await context.relations.draw({ id: ownerId }, { subjectId: principal.actor.id, relation: 'delegate', objectId: ownerId });
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
-    const registration = await signEnvironment({ format: 3, id, origin, ownerId,
-      name, executor: binding, operatorId: binding.principalId, driver: 'attached',
+    const registration = await signEnvironment({ format: 4, id, origin, ownerId,
+      executor: binding, operatorId: binding.principalId, driver: 'attached',
       capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, resultVersion: 1,
       isolation: 'process', awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
-    await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
+    await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: { name, registration } });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
     const transport: Transport = { async send(request) {
       if (request.url === 'https://receiver.example/private-webhook' && request.method === 'POST') {

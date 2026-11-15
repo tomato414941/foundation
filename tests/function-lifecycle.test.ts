@@ -30,9 +30,9 @@ async function removeEnvironment(f: Fixture) {
 async function anotherEnvironment(f: Fixture) {
   const identity = await f.personWithKeys('Replacement executor');
   await f.relations.draw(f.owner.actor, { subjectId: identity.actor.id, relation: 'delegate', objectId: f.owner.actor.id });
-  const environment = await signEnvironment({ ...f.environment.manifest, id: crypto.randomUUID(), name: 'Replacement environment',
+  const environment = await signEnvironment({ ...f.environment.manifest, id: crypto.randomUUID(),
     executor: identity.binding, operatorId: identity.actor.id }, identity.keys);
-  await f.context.delegation.register(identity.actor, environment);
+  await f.context.delegation.register(identity.actor, environment, 'Replacement environment');
   await f.client.trust.rememberBinding(identity.binding);
   const broker = new HttpBroker(f.api(identity.token)), journal = new MemoryJournal();
   const extension = new Connections(identity.binding, identity.keys, broker.connections(), journal, f.transport);

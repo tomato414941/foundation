@@ -7,6 +7,7 @@ import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
+import { signEnvironment } from '../shared/runtime-protocol.js';
 
 type Flow = Awaited<ReturnType<typeof flowFixture>>;
 
@@ -84,4 +85,22 @@ for (const way of Object.keys(ways) as Way[]) {
 test('封をする種類のそれぞれを、その種類を作る預け方で確かめる', () => {
   assert.deepEqual(Object.keys(madeBy).sort(), [...ProtectedKinds].sort());
   for (const kind of ProtectedKinds) assert.equal(ways[madeBy[kind]].kind, kind);
+});
+
+// Why: the user decided that signatures, like seals, name things only by what identifies them; an item's name is a
+// label kept in one place, Foundation. An executor once signed the name of its environment into its registration, so
+// each registration it signed again, as after an update, put that name back over the one given in Foundation.
+// Intent: rename an environment in Foundation, have its executor sign its registration again as it does after an
+// update, and read the name back.
+test('作業用の機械が登録し直しても、Foundation で付けた名前のまま変わらない', async () => {
+  const f = await flowFixture();
+  try {
+    const { manifest } = f.environment;
+    const current = await f.client.api.json('/api/resources/' + manifest.id, {}, Resource);
+    await f.client.api.json('/api/resources/' + manifest.id, { method: 'PATCH',
+      body: { version: current.version, name: 'Renamed in Foundation' } }, Resource);
+    await f.context.delegation.register(f.executorIdentity.actor,
+      await signEnvironment({ ...manifest, revision: manifest.revision + 1 }, f.executorIdentity.keys));
+    assert.equal((await f.client.api.json('/api/resources/' + manifest.id, {}, Resource)).name, 'Renamed in Foundation');
+  } finally { await f.close(); }
 });

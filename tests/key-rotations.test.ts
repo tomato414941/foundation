@@ -171,12 +171,12 @@ test('他人や旧鍵の署名を持たない呼出しは鍵交換を開始ま�
 test('実行環境と関数設定と検証済み鍵一覧を、設定と信頼先を維持して新しい署名へ切り替える', async t => {
   const f = await apiFixture(); t.after(f.close);
   const environment = await signEnvironment({
-    format: 3, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
-    name: 'Local execution environment', executor: f.owner.binding, operatorId: f.owner.actor.id,
+    format: 4, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
+    executor: f.owner.binding, operatorId: f.owner.actor.id,
     driver: 'attached', capabilities: [Operations.function, Operations.http],
     functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, isolation: 'process', revision: 1,
   }, f.owner.keys);
-  await f.context.delegation.register(f.owner.actor, environment);
+  await f.context.delegation.register(f.owner.actor, environment, 'Local execution environment');
   const verifiedAt = new Date().toISOString();
   await f.context.keyrings.put(f.owner.actor, f.owner.actor.id, { version: null, signature: await signKeyring({
     origin: f.config.origin, ownerId: f.owner.actor.id, signerId: f.owner.binding.id, revision: 1,
@@ -532,7 +532,8 @@ test('前のリリースの実行環境は登録も依頼の受け取りもで�
   }
   const outdated = await signEnvironment({ ...f.environment.manifest, functionVersion: FUNCTION_RUNTIME_VERSION - 1,
     httpVersion: HTTP_RUNTIME_VERSION - 1, revision: f.environment.manifest.revision + 1 }, f.executor.keys);
-  const registered = await f.api('PUT', '/api/environments/' + id + '/registration', outdated, f.executor.token);
+  const registered = await f.api('PUT', '/api/environments/' + id + '/registration',
+    { name: 'Outdated executor', registration: outdated }, f.executor.token);
   assert.equal(registered.statusCode, 426);
   const row = await f.db.one<{ stale: boolean }>(
     "SELECT heartbeat_at<now()-interval '5 minutes' AS stale FROM executor_environments WHERE resource_id=$1", [id]);

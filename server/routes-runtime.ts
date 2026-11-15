@@ -80,11 +80,11 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     return reply.code(201).send({ id: row.id });
   });
   app.put('/api/environments/:id/registration', {
-    schema: { params: C.IdParams, body: P.SignedEnvironment, response: { 200: z.object({ id: C.Id }) } },
+    schema: { params: C.IdParams, body: P.EnvironmentRegistration, response: { 200: z.object({ id: C.Id }) } },
   }, async request => {
-    if (request.params.id !== request.body.manifest.id)
+    if (request.params.id !== request.body.registration.manifest.id)
       fail(400, 'wrong_environment', 'Register the selected execution environment.');
-    const row = await delegation.register(actor(request), request.body);
+    const row = await delegation.register(actor(request), request.body.registration, request.body.name);
     return { id: row.id };
   });
   app.get('/api/environments/:id/registration', {

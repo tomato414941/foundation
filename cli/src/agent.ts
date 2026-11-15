@@ -68,14 +68,15 @@ export async function startAgent(client: Client, options: {
         await journal.write('environment_' + id, environment);
       }
     } else {
-      environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
-        name: options.name, executor: binding, operatorId: binding.principalId, driver: 'attached',
+      environment = await signEnvironment({ format: 4, id, origin: client.identity.origin, ownerId: options.ownerId,
+        executor: binding, operatorId: binding.principalId, driver: 'attached',
         capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, resultVersion: 1,
         ...execution,
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);
     }
-    await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: environment });
+    await client.json('/api/environments/' + id + '/registration', { method: 'PUT',
+      body: { name: options.name, registration: environment } });
     process.stdout.write(JSON.stringify({ environmentId: id, identityId: binding.principalId,
       fingerprint: await fingerprint(binding), isolation: environment.manifest.isolation,
       ...(environment.manifest.awsPrincipal ? { awsPrincipal: environment.manifest.awsPrincipal } : {}),

@@ -12,9 +12,10 @@ export const FUNCTION_RUNTIME_VERSION = 6;
 export const HTTP_RUNTIME_VERSION = 2;
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
+// What an executor signs about its environment. The environment's name is a label kept by Foundation, not signed here.
 export const EnvironmentManifest = z.object({
-  format: z.literal(3), id: Id, origin: Origin, ownerId: Id,
-  name: Name, executor: KeyBinding, operatorId: Id,
+  format: z.literal(4), id: Id, origin: Origin, ownerId: Id,
+  executor: KeyBinding, operatorId: Id,
   driver: z.literal('attached'),
   capabilities: z.array(Operation).min(1).max(6),
   functionVersion: z.number().int().positive().optional(),

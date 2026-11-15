@@ -24,10 +24,10 @@ test('本番確認用の関数とコマンドの履歴とプリンシパルを�
     caller = await f.personWithKeys('Disposable verification caller');
   await f.context.db.pool.query('UPDATE principals SET owner_id=$2 WHERE id=$1', [executor.actor.id, owner.actor.id]);
   await f.relations.draw(owner.actor, { subjectId: executor.actor.id, relation: 'delegate', objectId: owner.actor.id });
-  const environment = await signEnvironment({ format: 3, id: crypto.randomUUID(), origin: f.config.origin,
-    ownerId: owner.actor.id, name: 'Disposable environment', executor: executor.binding, operatorId: executor.actor.id,
+  const environment = await signEnvironment({ format: 4, id: crypto.randomUUID(), origin: f.config.origin,
+    ownerId: owner.actor.id, executor: executor.binding, operatorId: executor.actor.id,
     driver: 'attached', capabilities: Object.values(Operations), functionVersion: FUNCTION_RUNTIME_VERSION, isolation: 'process', revision: 1 }, executor.keys);
-  await f.context.delegation.register(executor.actor, environment);
+  await f.context.delegation.register(executor.actor, environment, 'Disposable environment');
   await f.context.processes.register(executor.actor, environment.manifest.id, { workingDirectory: '/tmp' });
   const verificationProcess = await f.context.processes.create(executor.actor, environment.manifest.id, ProcessInput.parse({ command: ['true'] }));
   await f.context.processes.cancel(executor.actor, verificationProcess.id);
