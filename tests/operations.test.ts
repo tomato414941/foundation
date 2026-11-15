@@ -144,6 +144,19 @@ test('承認したHTTP操作と署名した実行を結び付け、実行先が�
   assert.equal((await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution)).state, 'failed');
 });
 
+test('応答の値を、レビューした実行が付けた名前の新しい変数として暗号化して保存する', async t => {
+  const f = await flowFixture(() => jsonResponse({ value: 'kept-value' })); t.after(f.close);
+  const started = await f.operations.execute({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
+    environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://api.example.com/value',
+      method: 'GET' } }, save: { '/value': 'Kept value' } } });
+  if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected a run.');
+  await f.executor.tick();
+  const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + started.task.id, {}, Task));
+  const id = (result?.result as { saved: Record<string, string> }).saved['/value']!;
+  assert.equal((await f.client.api.json('/api/resources/' + id, {}, Resource)).name, 'Kept value');
+  assert.equal(decode(await f.client.reveal(id)), 'kept-value');
+});
+
 test('HTTPの秘密情報を封をしたまま再開し、同じ実行先の処理と完了通知を一度だけ反映する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const operations = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));

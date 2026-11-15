@@ -53,7 +53,7 @@ export class Invocations {
   }
   async create(actor: Actor, functionId: string, input: z.infer<typeof InvocationInput>) {
     const id = input.id ?? randomUUID(), ownerId = input.ownerId ?? actor.id;
-    const inputDigest = await hash({ functionId, ownerId, arguments: input.arguments, outputs: input.outputs });
+    const inputDigest = await hash({ functionId, ownerId, arguments: input.arguments, outputs: input.outputs, names: input.names });
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['invocation:' + id]);
       await this.resources.authorization.active(actor, connection);
@@ -78,7 +78,7 @@ export class Invocations {
         'SELECT binding FROM principal_key_bindings WHERE principal_id=$1 AND retired_at IS NULL', [actor.id], connection);
       for (const [pointer, output] of Object.entries(input.outputs)) {
         try { pointerParts(pointer); } catch { fail(400, 'invalid_pointer', 'Use a valid JSON pointer for the output.'); }
-        const approval = await verifyPolicyApproval(output.approval), policy = approval.policy;
+        const approval = await verifyPolicyApproval(output), policy = approval.policy;
         if (!binding || policy.origin !== this.functions.origin || policy.ownerId !== ownerId || policy.contentType !== ContentTypes.value ||
           canonical(policy.authorities.find(value => value.id === approval.authorityId)) !== canonical(binding.binding) ||
           !policy.producers.some(value => value.runId === id && canonical(value.executor) === canonical(current.settings.executor) &&
@@ -99,9 +99,11 @@ export class Invocations {
       if (Number(active?.count) >= 20) fail(429, 'invocation_limit', 'Wait for an existing invocation to finish.');
       const row = required(await this.resources.db.one<InvocationRow>(
         `INSERT INTO function_invocations(id,function_id,function_owner_id,owner_id,actor_id,executor_id,environment_id,
-          executor,actor,input_digest,request,publication,settings,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued') RETURNING *`,
+          executor,actor,input_digest,request,publication,settings,output_names,state)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'queued') RETURNING *`,
         [id, functionId, current.row.owner_id, ownerId, actor.id, environment.executor_id, environmentId,
-          JSON.stringify(current.settings.executor), JSON.stringify(actor), inputDigest, JSON.stringify(request), JSON.stringify(current.publication), JSON.stringify(current.settings)], connection));
+          JSON.stringify(current.settings.executor), JSON.stringify(actor), inputDigest, JSON.stringify(request), JSON.stringify(current.publication),
+          JSON.stringify(current.settings), JSON.stringify(input.names)], connection));
       await this.resources.audit.record(current.row.owner_id, actor.id, 'function.invoke', id, { functionId }, connection);
       return this.view(row);
     });

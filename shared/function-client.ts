@@ -99,7 +99,7 @@ export class FunctionClient {
   async invoke(id: string, arguments_: Record<string, JsonValue> = {}, options: {
     id?: string; ownerId?: string; save?: Record<string, string>;
   } = {}) {
-    const invocationId = options.id ?? crypto.randomUUID(), outputs: Record<string, unknown> = {};
+    const invocationId = options.id ?? crypto.randomUUID(), outputs: Record<string, unknown> = {}, names = options.save ?? {};
     if (Object.keys(options.save ?? {}).length) {
       if (!this.custody) throw new Error('Use your keys to approve encrypted output destinations.');
       const { executor } = await this.api.json('/api/functions/' + Id.parse(id) + '/output-recipient', {}, z.object({ executor: KeyBinding }));
@@ -110,7 +110,7 @@ export class FunctionClient {
     }
     try {
       return await this.api.json('/api/functions/' + Id.parse(id) + '/executions', { method: 'POST',
-        body: { id: invocationId, arguments: arguments_, outputs, ...(options.ownerId ? { ownerId: options.ownerId } : {}) } }, Execution);
+        body: { id: invocationId, arguments: arguments_, outputs, names, ...(options.ownerId ? { ownerId: options.ownerId } : {}) } }, Execution);
     } catch (error) {
       if (error instanceof Error && 'status' in error) throw error;
       throw new InvocationSubmissionError(invocationId, error);

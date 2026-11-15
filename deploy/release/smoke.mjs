@@ -196,8 +196,9 @@ try {
   const capture = await caller.functions.invoke(fn.id, arguments_, { save: { '/output': 'Release output' } });
   const captured = await wait(() => caller.functions.result(capture.id), value => !['waiting', 'running'].includes(value.state));
   assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.results[0]), ['saved']);
-  const output = captured.results[0].saved['Release output']; resources.push(output);
+  const output = captured.results[0].saved['/output']; resources.push(output);
   assert.match(decode(await caller.custody.reveal(output)), /^[a-f0-9]{48}$/);
+  assert.equal((await caller.client.json('/api/resources/' + output)).name, 'Release output');
   finished = true;
 } finally {
   const failures = [];

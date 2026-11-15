@@ -212,7 +212,7 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
   const output = result.results[0] as { saved: Record<string, string> };
-  assert.equal(decode(await client.reveal(output.saved.Count!)), '7');
+  assert.equal(decode(await client.reveal(output.saved['/body/count']!)), '7');
   assert.equal(f.requests[0]!.headers!.authorization, 'Bearer confidential-value');
   assert.equal(new URL(f.requests[0]!.url).searchParams.get('query'), 'hello world');
 });
@@ -289,8 +289,8 @@ test('関数の非公開の出力を元の値のまま暗号化して保存し�
   await f.functionExecutor.tick();
   const result = await f.functions.result(call.id), output = result.results[0] as { saved: Record<string, string> };
   assert.equal(result.state, 'succeeded');
-  assert.deepEqual(result.results[0], { saved: { 'Private credential': output.saved['Private credential'] } });
-  assert.equal(decode(await f.client.reveal(output.saved['Private credential']!)), 'confidential-value');
+  assert.deepEqual(result.results[0], { saved: { '/credential': output.saved['/credential'] } });
+  assert.equal(decode(await f.client.reveal(output.saved['/credential']!)), 'confidential-value');
 });
 
 test('継続許可された関数の入力を30日後も使い、所有者が撤回した許可を確認する', async t => {
@@ -327,9 +327,10 @@ test('関数で生成した秘密を暗号化して保存し、呼び出す人�
   await f.functionExecutor.tick();
   const result = await f.functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
-  const output = result.results[0] as { saved: Record<string, string> }, id = output.saved['Generated credential']!;
-  assert.deepEqual(result.results[0], { saved: { 'Generated credential': id } });
+  const output = result.results[0] as { saved: Record<string, string> }, id = output.saved['/credential']!;
+  assert.deepEqual(result.results[0], { saved: { '/credential': id } });
   assert.match(decode(await f.client.reveal(id)), /^[a-f0-9]{32}$/);
+  assert.equal((await f.client.api.json('/api/resources/' + id, {}, Resource)).name, 'Generated credential');
 });
 
 test('処理の終了コードと結果の形式を検証し、失敗の理由を返す', async t => {

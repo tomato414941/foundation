@@ -140,11 +140,11 @@ test('コマンドへ指定した入力だけを渡し、終了結果とマス�
 test('HTTP応答の指定した値を、事前に承認した宛先へ暗号化して保存する', async () => {
   const f = await delegatedFixture();
   try {
-    const output = { ...f.policy, id: crypto.randomUUID(), grants: [], producers: [{
-      executor: f.executor.binding, runId: f.intent.id, expiresAt: f.intent.expiresAt, materialRevision: 1,
+    const output = { ...f.policy, revision: f.policy.revision + 1, producers: [{
+      executor: f.executor.binding, runId: f.intent.id, expiresAt: f.intent.expiresAt, materialRevision: 2,
     }] };
-    const approval = await approvePolicy(output, f.owner.binding, f.owner.keys);
-    const operation = { ...f.operation, save: { '/token': { name: 'Captured', approval } } };
+    const approval = await approvePolicy(output, f.owner.binding, f.owner.keys, f.content);
+    const operation = { ...f.operation, save: { '/token': approval } };
     const intent = { ...f.intent, operationDigest: await hash(operation) };
     await f.delegation.submit(f.owner.actor, await prepareRun(intent, operation, f.owner.keys));
     const executor = new Executor(f.environment, f.executor.keys, f.broker, new MemoryJournal(), {
@@ -154,7 +154,7 @@ test('HTTP応答の指定した値を、事前に承認した宛先へ暗号化�
     const task = await f.delegation.get(f.owner.actor, intent.id);
     assert.equal(task.state, 'succeeded');
     assert.deepEqual((await readReceipt(task.receipt!, intent, f.owner.binding.id, f.owner.keys)).result,
-      { status: 200, saved: { Captured: output.id } });
+      { status: 200, saved: { '/token': output.id } });
     const saved = await f.custody.read(f.owner.actor, output.id);
     assert.equal(decode(await reveal(saved.content, f.owner.binding, f.owner.keys.encryption)), 'captured-secret');
   } finally { await f.close(); }

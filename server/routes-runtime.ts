@@ -74,7 +74,7 @@ export async function routesRuntime(app: ApiApp, context: Context) {
     return custody.read(actor(request), request.params.id);
   });
   app.post('/api/executor/outputs', {
-    schema: { body: P.ProtectedWrite.omit({ version: true }), response: { 201: z.object({ id: C.Id }) } },
+    schema: { body: P.ProducedOutput, response: { 201: z.object({ id: C.Id }) } },
   }, async (request, reply) => {
     const row = await custody.putProduced(actor(request), request.body);
     return reply.code(201).send({ id: row.id });

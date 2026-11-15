@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { FunctionDefinition, FunctionInputAccess, Id, Json, JsonObject, Name, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, sign, validateBinding, verify } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
-import { ProtectedContent } from './custody.js';
-import { OutputDestination, TaskState } from './runtime-protocol.js';
+import { PolicyApproval, ProtectedContent } from './custody.js';
+import { TaskState } from './runtime-protocol.js';
 
 export const FunctionPublication = z.object({
   format: z.literal(2), functionId: Id, ownerId: Id, revision: z.number().int().positive(),
@@ -46,7 +46,9 @@ export const CreateFunction = z.object({ name: Name, definition: FunctionDefinit
 export const UpdateFunction = CreateFunction.extend({ version: z.number().int().positive() });
 
 export const InvocationInput = z.object({ id: Id.optional(), ownerId: Id.optional(), arguments: JsonObject.default({}),
-  outputs: z.record(z.string().max(500), OutputDestination).default({}),
+  outputs: z.record(z.string().max(500), PolicyApproval).default({}),
+  // The name each new output gets, by its pointer: a label Foundation keeps, not sent to the executor.
+  names: z.record(z.string().max(500), Name).default({}),
 }).strict();
 export const InvocationError = z.object({ code: z.string().max(100), message: z.string().max(1000) }).strict();
 export const Invocation = z.object({

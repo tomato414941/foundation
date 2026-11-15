@@ -491,7 +491,7 @@ export class CustodyClient {
       : await this.policy(ownerId, ContentTypes.value, [], { replacing: previous?.policy });
     policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
       materialRevision: (previous?.materialRevision ?? 0) + 1 }];
-    return { name, approval: await approvePolicy(policy, this.binding, this.keys, latest?.replaced ? undefined : previous) };
+    return approvePolicy(policy, this.binding, this.keys, latest?.replaced ? undefined : previous);
   }
   async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
     options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;
@@ -507,6 +507,9 @@ export class CustodyClient {
       throw new ClientFailure('http_runtime_required', 'Update this execution environment to use HTTP connections.');
     if (operation.kind === 'http') {
       const save = options.save ?? {};
+      // A new output is named as the reviewed run names it.
+      if (Object.keys(save).length && !options.operationContext)
+        throw new ClientFailure('review_required', 'Keep outputs from a reviewed run, which names them.');
       const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, name]) =>
         [pointer, await this.output(ownerId, name, id, environment, expiresAt)])));
       operation.save = outputs;

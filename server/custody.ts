@@ -19,6 +19,7 @@ import { fail } from './errors.js';
 import { SharedReceipt, verifyReceipt } from '../shared/runtime-protocol.js';
 import type { SharedResultReceipt } from '../shared/runtime-protocol.js';
 import type { SealedRun } from '../shared/custody.js';
+import { RunOperation } from '../shared/executions.js';
 
 export interface ProtectedWrite {
   name: string;
@@ -371,7 +372,7 @@ export class Custody {
     return transaction ? persist(transaction) : this.resources.db.transaction(persist);
   }
 
-  async putProduced(actor: Actor, input: ProtectedWrite) {
+  async putProduced(actor: Actor, input: { content: CustodyContent; pointer: string }) {
     const content = await verifyContent(input.content), policy = content.policy;
     if (policy.contentType === ContentTypes.executionResult)
       fail(400, 'wrong_kind', 'Deliver protected results together with their execution receipts.');
@@ -388,21 +389,26 @@ export class Custody {
     if (!producer) fail(403, 'forbidden', 'Approve this execution before saving its output.');
     const authority = policyAuthority(content);
     await this.bindings.requireCurrent(authority);
-    const task = await this.resources.db.one<{ request: { intent: { actor: BoundKeys; ownerId: string; executor: BoundKeys } } }>(
+    const task = await this.resources.db.one<{ request: SealedRun }>(
       "SELECT request FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
       [content.creationRunId],
     );
-    const invocation = !task ? await this.resources.db.one<{ owner_id: string; executor: BoundKeys;
-      request: { actor: BoundKeys | null; outputs: Record<string, { approval: { policy: CustodyPolicy; signature: string } }> } }>(
-      "SELECT owner_id,executor,request FROM function_invocations WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
+    const invocation = !task ? await this.resources.db.one<{ owner_id: string; executor: BoundKeys; output_names: Record<string, string>;
+      request: { actor: BoundKeys | null; outputs: Record<string, { policy: CustodyPolicy; signature: string }> } }>(
+      "SELECT owner_id,executor,output_names,request FROM function_invocations WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
       [content.creationRunId]) : null;
     const authorized = task ? task.request.intent.ownerId === policy.ownerId &&
       canonical(task.request.intent.actor) === canonical(authority) && canonical(task.request.intent.executor) === canonical(binding)
       : invocation && invocation.owner_id === policy.ownerId && canonical(invocation.request.actor) === canonical(authority) &&
-        canonical(invocation.executor) === canonical(binding) && Object.values(invocation.request.outputs).some(output =>
-          canonical(output.approval.policy) === canonical(policy) && output.approval.signature === content.authorization);
+        canonical(invocation.executor) === canonical(binding) && Object.hasOwn(invocation.request.outputs, input.pointer) &&
+        canonical(invocation.request.outputs[input.pointer]!.policy) === canonical(policy) &&
+        invocation.request.outputs[input.pointer]!.signature === content.authorization;
     if (!authorized)
       fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
+    // A new output takes the name the request that keeps it gave: the run as it was reviewed, or the invocation. An
+    // output that exists keeps its own.
+    const reviewed = RunOperation.safeParse(task?.request.intent.operationContext?.invocation.input);
+    const name = task ? reviewed.data?.save[input.pointer] : invocation!.output_names[input.pointer];
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
@@ -427,12 +433,13 @@ export class Custody {
       for (const recipient of await this.required(policy.ownerId, connection))
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
-      const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
+      const data = { ...keptLabels(current?.data), ...content.metadata,
         recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))], custodyRevision: policy.revision };
+      if (!current && !name) fail(400, 'output_name_required', 'Name each new output in the request that keeps it.');
       const row = current
-        ? await this.resources.update(current, { name: input.name, data }, connection)
-        : await this.resources.insert(policy.ownerId, kindOf(policy.contentType), input.name, data, { id: policy.id }, connection);
+        ? await this.resources.update(current, { data }, connection)
+        : await this.resources.insert(policy.ownerId, kindOf(policy.contentType), name!, data, { id: policy.id }, connection);
       await this.projectGrants(content, connection);
       await connection.query(
         'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',

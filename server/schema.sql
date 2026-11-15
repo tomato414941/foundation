@@ -307,6 +307,7 @@ CREATE TABLE function_invocations (
   request jsonb NOT NULL,
   publication jsonb NOT NULL,
   settings jsonb,
+  output_names jsonb NOT NULL DEFAULT '{}'::jsonb,
   state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
   completion jsonb,
   error jsonb,

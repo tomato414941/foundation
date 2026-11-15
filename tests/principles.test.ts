@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { flowFixture } from './flow-support.js';
+import { flowFixture, jsonResponse } from './flow-support.js';
 import { encode } from '../shared/encryption.js';
 import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
-import { signEnvironment } from '../shared/runtime-protocol.js';
+import { canonical } from '../shared/authority.js';
+import { Task, signEnvironment } from '../shared/runtime-protocol.js';
 
 type Flow = Awaited<ReturnType<typeof flowFixture>>;
 
@@ -17,23 +18,35 @@ type Flow = Awaited<ReturnType<typeof flowFixture>>;
 // Intent: deposit the same thing twice under different names, each way Foundation makes sealed content, and open
 // both. The whole contents are compared, so that no knowledge of their formats and no exceptions are needed.
 
-// Each way Foundation makes sealed content, depositing the same thing under the name given and returning the item.
+// Each way Foundation makes sealed content, depositing the same thing under the name given and returning what its
+// readers open.
 const ways = {
   // A value entered by its owner, kept as a variable.
-  variable: { kind: 'variable', deposit: async (f: Flow, name: string) => saved(await f.operations.execute(
-    { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode('the same value') })) },
+  variable: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
+    { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode('the same value') }))) },
   // A private key made by the CLI and kept as a variable, as foundation ssh-key create --store does.
-  sshKey: { kind: 'variable', deposit: async (f: Flow, name: string) => saved(await f.operations.execute(
-    { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode(newSSHKey().privateKey) })) },
+  sshKey: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
+    { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode(newSSHKey().privateKey) }))) },
   // An API key entered for a connection.
   connection: { kind: 'connection', deposit: async (f: Flow, name: string) =>
-    (await f.saveConnection({ methodId: 'cloudrift:api_key', name, fields: { token: 'the-same-token' } })).id },
+    item(f, (await f.saveConnection({ methodId: 'cloudrift:api_key', name, fields: { token: 'the-same-token' } })).id) },
   // An application's client secret.
-  app: { kind: 'app', deposit: async (f: Flow, name: string) => saved(await f.operations.execute(
+  app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
     { name: 'app.save', input: { ownerId: f.owner.actor.id, name, methodId: 'github:oauth', clientId: 'the-same-client' } },
-    { clientSecret: 'the-same-secret', fields: {} })) },
-} satisfies Record<string, { kind: ProtectedKindName; deposit: (f: Flow, name: string) => Promise<string> }>;
+    { clientSecret: 'the-same-secret', fields: {} }))) },
+  // What a run returns when it keeps a value of the response it got as a variable of the name given.
+  result: { kind: 'result', deposit: async (f: Flow, name: string) => {
+    const started = await f.operations.execute({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
+      environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://service.example/value',
+        method: 'GET' } }, save: { '/value': name } } });
+    if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected a run.');
+    await f.executor.tick();
+    const task = await f.client.api.json('/api/runtime/runs/' + started.task.id, {}, Task);
+    return { kind: 'result', content: encode(canonical(await f.client.result(task))) };
+  } },
+} satisfies Record<string, { kind: ProtectedKindName | 'result'; deposit: (f: Flow, name: string) => Promise<Opened> }>;
 type Way = keyof typeof ways;
+type Opened = { kind: string; content: Uint8Array };
 // A way of making each kind of item that keeps sealed content: a new kind does not compile until one is given above.
 const madeBy: Record<ProtectedKindName, Way> = { variable: 'variable', connection: 'connection', app: 'app' };
 
@@ -42,10 +55,16 @@ function saved(result: unknown) {
   if ((result as { kind?: string }).kind !== 'saved' || !resource) throw new Error('Expected a saved item.');
   return resource.id;
 }
+// An item as its reader opens it: its kind, and the content sealed for it.
+async function item(f: Flow, id: string): Promise<Opened> {
+  const resource = await f.client.api.json('/api/resources/' + id, {}, Resource);
+  return { kind: resource.kind, content: await f.client.reveal(id) };
+}
 // Deposits in a database of its own, with the randomness the client draws fixed, so that two deposits differ only in
-// the name. Ids drawn this way repeat between the two deposits, which is why they never share a database.
-async function depositAlone(deposit: (f: Flow, name: string) => Promise<string>, name: string) {
-  const f = await flowFixture();
+// the name. Ids drawn this way repeat between the two deposits, which is why they never share a database. Every request
+// sent out gets the same response, carrying a value a run can keep.
+async function depositAlone(deposit: (f: Flow, name: string) => Promise<Opened>, name: string) {
+  const f = await flowFixture(() => jsonResponse({ value: 'the same value' }));
   const random = globalThis.crypto, counter = { value: 0 };
   const bytes = (length: number) => {
     const out = Buffer.alloc(length);
@@ -64,9 +83,8 @@ async function depositAlone(deposit: (f: Flow, name: string) => Promise<string>,
   };
   try {
     Object.assign(random, { getRandomValues, randomUUID });
-    const id = await deposit(f, name);
-    const item = await f.client.api.json('/api/resources/' + id, {}, Resource);
-    return { kind: item.kind, content: Buffer.from(await f.client.reveal(id)) };
+    const opened = await deposit(f, name);
+    return { kind: opened.kind, content: Buffer.from(opened.content) };
   } finally {
     delete (random as Partial<Crypto>).getRandomValues; delete (random as Partial<Crypto>).randomUUID;
     await f.close();

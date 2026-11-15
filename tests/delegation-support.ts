@@ -66,7 +66,7 @@ export async function delegatedFixture() {
     renew: (id, lease) => delegation.renew(executor.actor, id, lease),
     dispatch: (id, lease) => delegation.dispatch(executor.actor, id, lease),
     finish: (lease, receipt) => delegation.finish(executor.actor, lease, receipt),
-    capture: (name, content) => custody.putProduced(executor.actor, { name, content }),
+    capture: (content, pointer) => custody.putProduced(executor.actor, { content, pointer }),
   };
   return { ...f, bindings, custody, delegation, owner, executor, stranger, environment, policy, content,
     resource, intent, request, operation, broker, personWithKeys: person };

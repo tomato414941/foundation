@@ -33,6 +33,6 @@ export async function authorizeOperationContext(intent: ExecutionIntent, operati
     if (canonical(operation.request) !== canonical(expected.operation.request))
       throw new Error('Run the reviewed HTTP request and output destinations.');
   } else if (canonical(operation) !== canonical(RuntimeOperation.parse(expected.operation))) throw new Error('Run the reviewed command.');
-  if (operation.kind === 'http' && canonical(Object.fromEntries(Object.entries(operation.save).map(([pointer, output]) => [pointer, output.name]))) !== canonical(expected.save))
+  if (operation.kind === 'http' && canonical(Object.keys(operation.save).sort()) !== canonical(Object.keys(expected.save).sort()))
     throw new Error('Use the reviewed output destinations.');
 }

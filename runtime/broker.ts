@@ -1,4 +1,3 @@
-import type { ConnectionLabelValues } from '../shared/connections.js';
 import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
 import { Id } from '../shared/contracts.js';
@@ -32,9 +31,8 @@ export class HttpBroker implements ExecutionBroker {
   finish(lease: string, receipt: SignedReceipt) {
     return this.api.json('/api/runtime/runs/' + receipt.id + '/finish', { method: 'POST', body: { lease, receipt } }, Task);
   }
-  capture(name: string, content: CustodyContent, labels?: ConnectionLabelValues) {
-    return this.api.json('/api/executor/outputs', { method: 'POST', body: { name, content, ...(labels ? { labels } : {}) } },
-      z.object({ id: Id }));
+  capture(content: CustodyContent, pointer: string) {
+    return this.api.json('/api/executor/outputs', { method: 'POST', body: { content, pointer } }, z.object({ id: Id }));
   }
   connections(): ConnectionBroker {
     const api = this.api;

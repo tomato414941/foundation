@@ -95,20 +95,20 @@ test('結果が不明な古い更新を新しく承認した接続に置き換�
 test('所有者が承認した出力先へ実行結果を暗号化して保存する', async () => {
   const f = await delegatedFixture();
   try {
-    const policy = { ...f.policy, id: crypto.randomUUID(), grants: [], producers: [{
-      executor: f.executor.binding, runId: f.intent.id, expiresAt: f.intent.expiresAt, materialRevision: 1,
+    const policy = { ...f.policy, revision: f.policy.revision + 1, producers: [{
+      executor: f.executor.binding, runId: f.intent.id, expiresAt: f.intent.expiresAt, materialRevision: 2,
     }] };
-    const approval = await approvePolicy(policy, f.owner.binding, f.owner.keys);
+    const approval = await approvePolicy(policy, f.owner.binding, f.owner.keys, f.content);
     await f.delegation.submit(f.owner.actor, await prepareRun(f.intent, f.operation, f.owner.keys));
     const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
     await f.delegation.dispatch(f.executor.actor, f.intent.id, claim.lease);
     const content = await produceContent(encode('output'), approval, f.intent.id, f.executor.binding,
       f.executor.keys, { bytes: 6 });
-    const saved = await f.custody.putProduced(f.executor.actor, { name: 'Output', content });
+    const saved = await f.custody.putProduced(f.executor.actor, { content, pointer: '/output' });
     assert.equal(saved.id, policy.id);
     assert.equal(decode(await reveal((await f.custody.read(f.owner.actor, saved.id)).content,
       f.owner.binding, f.owner.keys.encryption)), 'output');
-    assert.equal((await f.custody.putProduced(f.executor.actor, { name: 'Output', content })).id, saved.id);
+    assert.equal((await f.custody.putProduced(f.executor.actor, { content, pointer: '/output' })).id, saved.id);
     await assert.rejects(produceContent(encode('output'), approval, crypto.randomUUID(), f.executor.binding,
       f.executor.keys, { bytes: 6 }));
   } finally { await f.close(); }

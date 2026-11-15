@@ -28,7 +28,7 @@ export interface ExecutionBroker {
   renew(id: string, lease: string): Promise<{ active: boolean }>;
   dispatch(id: string, lease: string): Promise<unknown>;
   finish(lease: string, receipt: SignedReceipt): Promise<TaskView>;
-  capture?(name: string, content: CustodyContent): Promise<{ id: string }>;
+  capture?(content: CustodyContent, pointer: string): Promise<{ id: string }>;
 }
 export interface ExecutionExtension {
   validate(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]): Promise<void>;
@@ -222,7 +222,7 @@ export class Executor {
     for (const [pointer, output] of Object.entries(save)) {
       pointerParts(pointer);
       if (!this.broker.capture) throw new Error('This executor cannot save encrypted outputs.');
-      const approval = await verifyPolicyApproval(output.approval);
+      const approval = await verifyPolicyApproval(output);
       if (canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
         approval.policy.origin !== intent.origin ||
         approval.policy.contentType !== ContentTypes.value || approval.policy.ownerId !== intent.ownerId ||
@@ -330,8 +330,8 @@ export class Executor {
           if (value === undefined) throw new DomainError(400, 'invalid_pointer', 'The response value was not found.');
           bytes = encode(typeof value === 'string' ? value : JSON.stringify(value));
         }
-        const content = await produceContent(bytes, destination.approval, intent.id, this.binding, this.keys, { bytes: bytes.length });
-        saved[destination.name] = (await this.broker.capture!(destination.name, content)).id;
+        const content = await produceContent(bytes, destination, intent.id, this.binding, this.keys, { bytes: bytes.length });
+        saved[pointer] = (await this.broker.capture!(content, pointer)).id;
       }
       return { status: response.status, saved };
     }
@@ -347,8 +347,8 @@ export class Executor {
       const selected = pointer === '' ? value : atPointer(value, pointer);
       if (selected === undefined) throw new DomainError(400, 'invalid_pointer', 'The function result value was not found.');
       const bytes = encode(typeof selected === 'string' ? selected : JSON.stringify(selected));
-      const content = await produceContent(bytes, destination.approval, intent.id, this.binding, this.keys, { bytes: bytes.length });
-      saved[destination.name] = (await this.broker.capture!(destination.name, content)).id;
+      const content = await produceContent(bytes, destination, intent.id, this.binding, this.keys, { bytes: bytes.length });
+      saved[pointer] = (await this.broker.capture!(content, pointer)).id;
     }
     return Object.keys(saved).length ? { saved } : value;
   }

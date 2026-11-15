@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Command, FunctionDefinition, HttpRequest, Id, Json, JsonObject, Name, Sealed, Time } from './contracts.js';
+import { Command, FunctionDefinition, HttpRequest, Id, Json, JsonObject, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify } from './authority.js';
 import type { KeyMaterial } from './authority.js';
 import { ContentTypes, Operation, Operations, Origin, PolicyApproval, ProtectedContent, RunIntent, contentContext,
@@ -7,9 +7,10 @@ import { ContentTypes, Operation, Operations, Origin, PolicyApproval, ProtectedC
 import type { ApprovedPolicy, ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
-// Raised together when executors change how they talk to the server; 6 and 2 name their keys when they claim work.
-export const FUNCTION_RUNTIME_VERSION = 6;
-export const HTTP_RUNTIME_VERSION = 2;
+// Raised together when executors change how they talk to the server; 7 and 3 keep outputs by the destinations approved
+// for them, leaving their names to Foundation.
+export const FUNCTION_RUNTIME_VERSION = 7;
+export const HTTP_RUNTIME_VERSION = 3;
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
 // What an executor signs about its environment. The environment's name is a label kept by Foundation, not signed here.
@@ -196,12 +197,13 @@ export const Task = z.object({
 }).strict();
 export type TaskView = z.infer<typeof Task>;
 
-export const OutputDestination = z.object({ name: Name, approval: PolicyApproval }).strict();
+// A value of a result kept as a variable goes to the destination its requester approved, by the JSON pointer of the
+// value. The name a new variable gets is a label Foundation keeps; it is not part of what the executor is asked to do.
 export const FunctionOperation = z.object({ kind: z.literal('function'), functionId: Id, definition: FunctionDefinition,
-  arguments: JsonObject.default({}), outputs: z.record(z.string(), OutputDestination).default({}) }).strict();
+  arguments: JsonObject.default({}), outputs: z.record(z.string(), PolicyApproval).default({}) }).strict();
 export const RuntimeOperation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
-    save: z.record(z.string(), OutputDestination).default({}) }).strict(),
+    save: z.record(z.string(), PolicyApproval).default({}) }).strict(),
   z.object({ kind: z.literal('command'), ...Command.shape }).strict(),
   z.object({ kind: z.enum(['connect', 'refresh', 'revoke']), input: Json }).strict(),
 ]);
