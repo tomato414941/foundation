@@ -575,7 +575,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   const material = ConnectionMaterial.parse({ format: 3, methodId: method.id, method: spec,
     generation: crypto.randomUUID(), appId: app.id, appGeneration: app.data.generation,
     oauth: { accessToken: 'expired-token', refreshToken: 'refresh-token', expiresAt: Date.now() - 1000,
-      scopes: ['read'], account: 'account', accountName: 'Account', accountVerified: true,
+      scopes: ['read'], account: 'account', accountVerified: true,
       scopesStatus: 'reported', extra: {}, facts: {} } });
   const connectionPolicy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet, [], { id: connectionId });
   await f.context.custody.put(f.owner.actor, { name: 'Function connection',

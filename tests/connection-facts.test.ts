@@ -15,7 +15,7 @@ const materials = () => [
     method: { name: 'OAuth', kind: 'oauth', config: { application: 'implicit',
       authorizeUrl: 'https://example.com/authorize', tokenUrl: 'https://example.com/token' } },
     oauth: { accessToken: 'private-access-token', refreshToken: 'private-refresh-token', expiresAt: null,
-      account: 'account-1', accountName: 'Account', accountVerified: true,
+      account: 'account-1', accountVerified: true,
       scopes: ['write', 'read'], scopesStatus: 'reported', extra: { secret: 'private-extra' }, facts: {} } }),
   ConnectionMaterial.parse({ ...base, methodId: 'example:token',
     method: { name: 'Token', kind: 'token', config: { fields: [{ name: 'token', label: 'Token' }], outputs: { TOKEN: '/token' } } },

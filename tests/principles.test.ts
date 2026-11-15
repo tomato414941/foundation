@@ -7,7 +7,8 @@ import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
-import { canonical } from '../shared/authority.js';
+import { canonical, hash } from '../shared/authority.js';
+import { ContentTypes, protect } from '../shared/custody.js';
 import { Task, signEnvironment } from '../shared/runtime-protocol.js';
 
 type Flow = Awaited<ReturnType<typeof flowFixture>>;
@@ -35,6 +36,24 @@ const ways = {
     const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
       body: { kind: 'method', name, definition: await f.method('cloudrift:api_key') } }, Resource);
     return item(f, (await f.saveConnection({ methodId: method.id, fields: { token: 'the-same-token' } })).id);
+  } },
+  // An OAuth token of a connection sealed in the earlier format, with its method of the name given and its account's
+  // display name, as its owner's device seals it again.
+  earlier: { kind: 'connection', deposit: async (f: Flow, name: string) => {
+    const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet), generation = crypto.randomUUID();
+    const material = { format: 2, methodId: 'openrouter:oauth', method: { ...await f.method('openrouter:oauth'), name },
+      generation, appId: null, appGeneration: null, oauth: { accessToken: 'the-same-token', expiresAt: null, scopes: [],
+        scopesStatus: 'unknown', account: '', accountName: name, accountVerified: false, extra: {}, facts: {} } };
+    // What the earlier format signed beside it, which named the method by id alone.
+    const metadata = { methodId: 'openrouter:oauth', methodKind: 'oauth', generation, authorizationDigest: await hash({ generation }),
+      appId: null, accountId: null, accountVerified: false, scopes: [], scopesStatus: 'unknown', outputs: ['OPENROUTER_API_KEY'],
+      state: 'ready' };
+    const content = await protect(encode(canonical(material)), policy, 1, f.owner.binding, f.owner.keys, metadata);
+    await f.resources.insert(f.owner.actor.id, 'connection', 'Earlier connection', { ...metadata, methodName: name, account: '' },
+      { id: policy.id });
+    await f.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [policy.id, JSON.stringify(content)]);
+    await f.client.reprotectPending();
+    return item(f, policy.id);
   } },
   // An application's client secret.
   app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(

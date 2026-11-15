@@ -178,7 +178,6 @@ export class OAuth {
               ? 'requested'
               : 'unknown',
       account: previous?.account ?? '',
-      accountName: previous?.accountName ?? '',
       accountVerified: previous?.accountVerified ?? false,
       extra,
       facts: {},

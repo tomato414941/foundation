@@ -19,7 +19,6 @@ export interface OAuthToken {
   scopes: string[];
   requestedScopes?: string[];
   account: string;
-  accountName: string;
   accountVerified?: boolean;
   scopesStatus?: 'unknown' | 'requested' | 'reported';
   extra: Record<string, string>;

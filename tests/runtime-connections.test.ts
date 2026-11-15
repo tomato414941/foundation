@@ -62,7 +62,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
       ...(state ? { state } : {}),
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
-        scopes: ['read'], scopesStatus: 'reported', account: 'account-1', accountName: 'Account',
+        scopes: ['read'], scopesStatus: 'reported', account: 'account-1',
         accountVerified: true, extra: {}, facts: {} } });
     const connectionPolicy = policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh, Operations.revoke]);
     if (grants) connectionPolicy.grants = grants;

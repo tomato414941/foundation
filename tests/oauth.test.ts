@@ -52,7 +52,6 @@ function existing(overrides: Partial<OAuthToken> = {}): OAuthToken {
       scopes: ['read'],
       scopesStatus: 'reported',
       account: 'account-1',
-      accountName: 'Existing account',
       accountVerified: true,
       extra: { instance_url: 'https://instance.test' },
       facts: {},
