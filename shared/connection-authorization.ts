@@ -2,6 +2,7 @@ import type { ConnectionState } from './connections.js';
 import { connectionFacts } from './connection-facts.js';
 import type { ConnectionFactValues } from './connection-facts.js';
 import { visibleConnectionFields } from './connection-fields.js';
+import { methodRules } from './connection-methods.js';
 
 export function connectionAccount(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
   return facts.accountVerified ? facts.accountId : null;
@@ -14,7 +15,7 @@ export function connectionAuthorization(state: ConnectionState, facts: Connectio
     ? visibleConnectionFields(state.method.config.fields, state.fields ?? {}) : {};
   return {
     format: state.format,
-    generation: state.generation, methodId: state.methodId, method: state.method,
+    generation: state.generation, methodId: state.methodId, method: methodRules(state.method),
     appId: state.appId, appGeneration: state.appGeneration,
     ...('implicitApp' in state && state.implicitApp ? { implicitApp: {
       clientId: state.implicitApp.clientId, generation: state.implicitApp.generation, fields: state.implicitApp.fields,

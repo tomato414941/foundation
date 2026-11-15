@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-
+import { z } from 'zod';
 import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Authorization, Actor, ResourceIdentity } from './authorization.js';
@@ -12,9 +12,11 @@ import type {
   ResourceView,
   ActionName,
   JsonValue,
+  MethodDescription,
   PublicEncryptionKey,
   SealedContent,
 } from '../shared/contracts.js';
+import { connectionSettings } from '../shared/connections.js';
 import { fail, required } from './errors.js';
 import { environmentConnected } from './environment-status.js';
 import { stillLetIn } from './ssh-access.js';
@@ -32,6 +34,7 @@ export interface ResourceRow extends ResourceIdentity {
 export class Resources {
   readonly ownership = new Map<ResourceKindName, (row: ResourceRow) => Record<string, JsonValue>>();
   connectionServices?: (actor: Actor, methodId: string) => Promise<Array<{ id: string; name: string }>>;
+  connectionMethod?: (methodId: string) => Promise<MethodDescription | null>;
   constructor(
     readonly db: Database,
     readonly authorization: Authorization,
@@ -124,10 +127,13 @@ export class Resources {
       row.kind === 'service' || row.kind === 'method'
           ? { ...row.data, name: row.name }
           : row.kind === 'connection'
-            ? {
-                ...row.data,
-                services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [],
-              }
+            ? await (async () => {
+                // What the method and the settings are called is read from the method, where these labels are kept.
+                const method = await this.connectionMethod?.(String(row.data.methodId)) ?? null;
+                const fields = z.record(z.string(), z.string()).catch({}).parse(row.data.fields);
+                return { ...row.data, methodName: method?.name ?? '', settings: method ? connectionSettings(method, fields) : [],
+                  services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [] };
+              })()
             : row.kind === 'function'
               ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
                 ...(permissions.includes('read') ? { program: row.data.program } : {}) }

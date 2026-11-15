@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
-import { Id } from '../shared/contracts.js';
+import { CatalogMethod, Id } from '../shared/contracts.js';
+import { catalogDefinition } from '../shared/connection-methods.js';
 import type { CustodyContent } from '../shared/custody.js';
 import type { SignedReceipt } from '../shared/runtime-protocol.js';
 import { ClaimedExecution, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
@@ -37,6 +38,7 @@ export class HttpBroker implements ExecutionBroker {
   connections(): ConnectionBroker {
     const api = this.api;
     return {
+      method: async id => catalogDefinition(await api.json('/api/connections/' + id + '/method', {}, CatalogMethod)),
       prepare: (id, resourceId, expectedRevision) => api.json('/api/connection-operations', {
         method: 'POST', body: { id, resourceId, expectedRevision },
       }, RenewalOperation),

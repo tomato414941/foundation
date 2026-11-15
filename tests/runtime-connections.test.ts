@@ -10,7 +10,7 @@ import { DeliveryPending, Executor } from '../runtime/executor.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MethodDefinition } from '../shared/contracts.js';
 import type { JsonValue } from '../shared/contracts.js';
-import { AppMaterial, ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
+import { AppMaterial, ConnectionMaterial, connectionMetadata, openConnection, sealedConnection } from '../shared/connections.js';
 import { hash, canonical } from '../shared/authority.js';
 import { ContentTypes, Operations, approvePolicy, prepareRun, protect, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
@@ -37,7 +37,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   await f.custody.put(f.owner.actor, { name: 'Application', content: appContent });
   const operations = new ConnectionOperations(f.custody), journal = new MemoryJournal();
   const broker: ConnectionBroker = {
-    capture: (name, content, labels) => f.custody.putProduced(f.executor.actor, { name, content, labels }),
+    method: async () => method,
     prepare: (id, resourceId, revision) => operations.prepare(f.executor.actor, id, resourceId, revision),
     dispatch: (id, fence) => operations.dispatch(f.executor.actor, id, fence),
     commit: (id, fence, content) => operations.commit(f.executor.actor, id, fence, content),
@@ -58,7 +58,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
       }))) };
   }
   async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants'], state?: 'reconnect') {
-    const material = ConnectionMaterial.parse({ format: 2, methodId: 'provider:oauth', method,
+    const material = ConnectionMaterial.parse({ format: 3, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
       ...(state ? { state } : {}),
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
@@ -66,7 +66,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
         accountVerified: true, extra: {}, facts: {} } });
     const connectionPolicy = policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh, Operations.revoke]);
     if (grants) connectionPolicy.grants = grants;
-    const content = await protect(encode(canonical(material)), connectionPolicy,
+    const content = await protect(sealedConnection(material), connectionPolicy,
       1, f.owner.binding, f.owner.keys, await connectionMetadata(material));
     await f.custody.put(f.owner.actor, { name, content });
     const authorization = await intent({ kind: 'http' }, [content, appContent], Operations.http);
@@ -106,8 +106,8 @@ test('更新したトークンを実行先に記録し、管理サーバーへ�
     await f.connections.reconcile();
     const updated = (await f.custody.read(f.owner.actor, c.content.policy.id)).content;
     assert.equal(updated.materialRevision, 2);
-    assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await reveal(updated, f.owner.binding,
-      f.owner.keys.encryption)))).oauth!.refreshToken, 'new-refresh');
+    assert.equal(openConnection(await reveal(updated, f.owner.binding, f.owner.keys.encryption), updated.metadata,
+      f.method).oauth!.refreshToken, 'new-refresh');
     assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
   } finally { await f.close(); }
 });

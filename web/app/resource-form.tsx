@@ -9,7 +9,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { CatalogEntry, CatalogMethod, FunctionDefinition, Resource, Payment, Usage, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod } from '../../shared/contracts';
 import { decode } from '../../shared/encryption';
-import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
+import { AppMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
@@ -99,7 +99,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       pinnedMethod = methods?.items.find(method => method.id === methodId) ?? null;
     }
     if (resource.kind === 'connection' && !replaced) {
-      const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+      const state = await client.connection(resource.id);
       pinnedMethod = methods?.items.find(method => method.id === state.methodId) ?? { ...state.method, id: state.methodId, builtin: false, availability: 'ready', defaultName: state.method.name,
         registration: { kind: connectionMethod(state.method).browserAuthorization ? 'authorization' : 'input', device: 'browser', browserExchange: 'unknown', tokenAlternatives: [] } };
       connection = connectionInitialValues(state);
@@ -166,7 +166,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const connectionId = formText(form, 'connectionId');
       let previous: ConnectionState | undefined;
       if (connectionId && connectionNeedsMaterial(selected, form) && !(await client.custody.latest(connectionId)).replaced)
-        previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
+        previous = await client.custody.connection(connectionId);
       const prepared = connectionSubmission({ ownerId: owner, methodId,
         name: name || existing?.name || selected.defaultName,
         ...(connectionId ? { connectionId } : {}) }, form, selected, previous);

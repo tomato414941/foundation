@@ -1,14 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { canonical } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { HttpRequestInput, JsonValue, MethodDescription } from '../shared/contracts.js';
-import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata, requiresApp } from '../shared/connections.js';
+import { AppMaterial, ConnectionAction, connectionMetadata, openConnection, requiresApp, sealedConnection } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
-import { connectionMethod } from '../shared/connection-methods.js';
+import { connectionMethod, methodDigest } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
 import { ContentTypes, Operations, authorizeUse, renewContent, useContent } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
-import { encode } from '../shared/encryption.js';
 import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
@@ -22,6 +20,7 @@ import { utf8 } from './inputs.js';
 import { authenticateHttp, connectionDestination } from '../shared/http-connections.js';
 
 export interface ConnectionBroker {
+  method(connectionId: string): Promise<MethodDescription>;
   prepare(id: string, resourceId: string, expectedRevision: number): Promise<ConnectionOperation>;
   dispatch(id: string, fence: string): Promise<unknown>;
   commit(id: string, fence: string, content: CustodyContent): Promise<CustodyContent>;
@@ -59,13 +58,21 @@ export class Connections implements ExecutionExtension {
     if (!content) fail(409, 'input_required', 'Include the connection and its application in this execution.');
     return content;
   }
+  // The method a connection names, as the server hands it over, once its rules match the digest in the connection's
+  // signed metadata: the server cannot change what a connection does.
+  private async method(content: CustodyContent) {
+    if (typeof content.metadata.methodDigest !== 'string')
+      fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
+    const method = await this.broker.method(content.policy.id);
+    if (await methodDigest(method) !== content.metadata.methodDigest)
+      fail(409, 'reconnect_required', 'Reconnect this service: its connection method changed.');
+    return method;
+  }
   private async material(content: CustodyContent, intent: ExecutionIntent,
     destination?: string | ((state: ConnectionState) => string)) {
-    const target = typeof destination === 'function'
-      ? (bytes: Uint8Array) => destination(ConnectionMaterial.parse(JSON.parse(utf8(bytes)))) : destination;
-    const material = ConnectionMaterial.safeParse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination: target }))));
-    if (!material.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
-    const result = material.data;
+    const method = await this.method(content), open = (bytes: Uint8Array) => openConnection(bytes, content.metadata, method);
+    const target = typeof destination === 'function' ? (bytes: Uint8Array) => destination(open(bytes)) : destination;
+    const result = open(await useContent(content, intent, this.keys, { destination: target }));
     if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
     if (result.state === 'reconnect' && intent.operation !== Operations.revoke)
@@ -141,7 +148,7 @@ export class Connections implements ExecutionExtension {
     if (metadata.authorizationDigest !== record.previous.metadata.authorizationDigest)
       fail(409, 'connection_review', 'Review the changed service account or permissions before sharing the updated connection.');
     record.material = material;
-    record.content = await renewContent(record.previous, encode(canonical(material)), this.binding, this.keys, metadata);
+    record.content = await renewContent(record.previous, sealedConnection(material), this.binding, this.keys, metadata);
     record.phase = 'settled';
     await this.journal.write('refresh_' + record.operation.id, record);
     await this.broker.commit(record.operation.id, record.operation.fence, record.content);

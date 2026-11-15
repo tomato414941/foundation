@@ -1,7 +1,10 @@
 import { z } from 'zod';
-import { ApprovalMethod, AuthKind, AwsMethod, HttpConnection, Id, JsonObject, MethodDefinition, Name, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
-import { Fingerprint, hash } from './authority.js';
-import { connectionMethod, requiresApp } from './connection-methods.js';
+import { ApprovalMethod, AuthKind, AwsMethod, HttpConnection, Id, JsonObject, MethodDefinition, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
+import type { MethodDescription } from './contracts.js';
+import { Fingerprint, canonical, hash } from './authority.js';
+import { connectionMethod, methodDigest, requiresApp } from './connection-methods.js';
+import { decode, encode } from './encryption.js';
+import { fail } from './errors.js';
 import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
 import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
 import { ConnectionFacts, connectionFacts } from './connection-facts.js';
@@ -23,8 +26,10 @@ export const TokenMaterial = z.object({
   account: z.string(), accountName: z.string(), accountVerified: z.boolean().optional(),
   scopesStatus: z.enum(['unknown', 'requested', 'reported']).optional(), extra: Fields, facts: JsonObject,
 }).strict();
+// A connection as its holders use it. What is sealed of it leaves out its method: the signed metadata names the method by
+// id and by the digest of its rules, and the method itself is read from where it is kept.
 const materialMetadata = {
-  format: z.literal(2), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
+  format: z.literal(3), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
   appId: Id.nullable(), appGeneration: Id.nullable(),
   state: z.literal('reconnect').optional(),
 };
@@ -63,9 +68,10 @@ export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
 export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
   clientId: z.string().max(1000), generation: Id, fields: Fields.optional() }).strict();
-// Signed with the encrypted content. Display names are not part of it: they travel as labels.
+// Signed with the encrypted content. It names the method by id and by the digest of the method's rules; display names
+// are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
-  methodId: z.string().min(1).max(200), methodKind: AuthKind,
+  methodId: z.string().min(1).max(200), methodDigest: Fingerprint, methodKind: AuthKind,
   http: HttpConnection.optional(),
   generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
@@ -82,7 +88,7 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
   const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(state.method.config.fields, state.fields) : {};
   const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
-    methodId: state.methodId, methodKind: state.method.kind,
+    methodId: state.methodId, methodDigest: await methodDigest(state.method), methodKind: state.method.kind,
     ...(state.method.http ? { http: state.method.http } : {}),
     generation: state.generation, authorizationDigest, appId: state.appId,
     accountId: connectionAccount(state, facts),
@@ -95,18 +101,36 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
   });
 }
 
-// What people read about a connection. The server stores these as given; they carry no authority.
-export const ConnectionSettings = z.array(z.object({ name: z.string(), label: z.string(), value: z.string() }).strict());
-export const ConnectionLabels = z.object({ methodName: Name, account: z.string().max(2000), settings: ConnectionSettings.optional() }).strict();
+// The account a connection's sealed document names, which only its holders can read. The server stores it as given; it
+// carries no authority. What a connection's method and settings are called is read from the method.
+export const ConnectionLabels = z.object({ account: z.string().max(2000) }).strict();
 export type ConnectionLabelValues = z.infer<typeof ConnectionLabels>;
 export function connectionLabels(state: ConnectionState): ConnectionLabelValues {
-  const definitions = connectionMethod(state.method).fields;
-  const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(definitions, state.fields) : {};
-  const settings = definitions.filter(field => fields[field.name]).map(field => ({ name: field.name, label: field.label,
-    value: field.choices?.find(choice => choice.value === fields[field.name])?.label ?? fields[field.name]! }));
   const account = state.method.kind === 'token' && state.method.config.account && state.fields
     ? documentAccount(state.method.config.account, state.fields) : '';
-  return { methodName: state.method.name, account, ...(settings.length ? { settings } : {}) };
+  return { account };
+}
+// The settings of a connection as people read them: its visible fields, with the labels its method gives them.
+export const ConnectionSettings = z.array(z.object({ name: z.string(), label: z.string(), value: z.string() }).strict());
+export function connectionSettings(method: MethodDescription, fields: Record<string, string>): z.infer<typeof ConnectionSettings> {
+  const definitions = connectionMethod(method).fields;
+  return definitions.filter(field => fields[field.name]).map(field => ({ name: field.name, label: field.label,
+    value: field.choices?.find(choice => choice.value === fields[field.name])?.label ?? fields[field.name]! }));
+}
+
+// What is sealed of a connection: everything but its method.
+export function sealedConnection(state: ConnectionState) {
+  const { methodId: _methodId, method: _method, ...sealed } = state;
+  return encode(canonical(sealed));
+}
+// A connection opened with the method its signed metadata names. Whoever uses it first checks the method's rules against
+// the digest there; whoever changes it signs the method it then names.
+export function openConnection(bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) {
+  const sealed: unknown = JSON.parse(decode(bytes));
+  const state = sealed && typeof sealed === 'object' && !('methodId' in sealed) && !('method' in sealed)
+    ? ConnectionMaterial.safeParse({ ...sealed, methodId: metadata.methodId, method }) : null;
+  if (!state?.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
+  return state.data;
 }
 
 export const ConnectionAction = z.discriminatedUnion('action', [

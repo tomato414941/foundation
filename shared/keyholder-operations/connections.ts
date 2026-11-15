@@ -2,12 +2,12 @@ import { z } from 'zod';
 import { AppSave, AuthorizeConnection, ConnectService, Execution } from '../executions.js';
 import { CatalogMethod, Id, Resource, listOf } from '../contracts.js';
 import type { JsonValue } from '../contracts.js';
-import { canonical, hash } from '../authority.js';
+import { canonical } from '../authority.js';
 import { AccessPolicy, ContentTypes, permittedOperations } from '../custody.js';
-import { AppMaterial, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from '../connections.js';
+import { AppMaterial, connectionLabels, connectionMetadata, requiresApp, sealedConnection } from '../connections.js';
 import { suppliedConnectionFields, visibleConnectionFields } from '../connection-fields.js';
 import { decode, encode } from '../encryption.js';
-import { connectionMethod, selectScopes } from '../connection-methods.js';
+import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from '../connection-methods.js';
 import { connectionPolicy } from '../connection-policy.js';
 import { registrationMaterial, registrationApplication } from '../connection-registration.js';
 import type { ExecutionResultView, PrivateOperationInput } from '../execution-client.js';
@@ -20,8 +20,7 @@ class ConnectionOperations {
     const selected = (await this.client.custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod))).items.find(item => item.id === id);
     if (!selected) throw new Error('Choose an available connection method.');
     this.connectionNames.set(id, selected.defaultName);
-    const { id: _id, builtin: _builtin, availability: _availability, registration: _registration, defaultName: _defaultName, ...definition } = selected;
-    return definition;
+    return catalogDefinition(selected);
   }
   private async userPolicy(policy: z.infer<typeof AccessPolicy>, users: string[], expiresAt?: string, advance = true) {
     const expiry = expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
@@ -126,19 +125,18 @@ class ConnectionOperations {
       appId = saved.id;
     }
     if (!connectionMethod(method).browserAuthorization) {
-      if (await hash(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
+      if (await methodDigest(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
       const previous = connection.connectionId ? await this.client.custody.latest(connection.connectionId) : undefined;
       if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
         throw new Error('Choose a connection belonging to this owner.');
-      const old = previous && !previous.replaced
-        ? ConnectionMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(connection.connectionId!)))) : undefined;
+      const old = previous && !previous.replaced ? await this.client.custody.connection(connection.connectionId!) : undefined;
       const app = registrationApplication({ methodId: connection.methodId, method, appId,
         app: appId ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(appId)))) : null });
       const state = registrationMaterial({ methodId: connection.methodId, method, appId: appId ?? null, app,
         fields: suppliedConnectionFields(connectionMethod(method).fields, connection.fields ?? {}, material.fields ?? {}),
         scopes: method.kind === 'oauth' ? selectScopes(method.config.scopes, connection.scopes) : [], aws: material.aws }, old);
       const policy = await connectionPolicy(this.client.custody, connection.ownerId, previous, connection.users);
-      const resource = await this.client.custody.save(connection.name ?? method.name, encode(canonical(state)), policy,
+      const resource = await this.client.custody.save(connection.name ?? method.name, sealedConnection(state), policy,
         { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
           commit: async write => {
             const completed = await this.client.complete(id, plan.index, write as unknown as JsonValue);

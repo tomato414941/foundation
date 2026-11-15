@@ -41,7 +41,7 @@ test('OVHのAPI Keysを各地域で暗号化して保存し、利用時に署名
   for (const apiRegion of ['eu', 'ca', 'us'] as const) await t.test(apiRegion, async t => {
     const f = await flowFixture(); t.after(f.close);
     const saved = await f.saveConnection({ methodId: 'ovh:api_key', fields: { apiRegion, ...keys } });
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+    const material = await f.client.connection(saved.id);
     assert.equal(material.fields!.consumerKey, keys.consumerKey);
     assert.equal(material.fields!.applicationSecret, keys.applicationSecret);
     const metadata = await connectionMetadata(material);
@@ -69,7 +69,7 @@ test('OVHのブラウザ認可で指定したAPI権限のConsumer Keyを取得�
   assert.equal(started.url, 'https://auth.ca.ovhcloud.com/api/auth?credentialToken=test');
   assert.equal((await f.app.inject('/oauth/callback?' + new URL(redirect).searchParams)).statusCode, 302);
   const saved = await f.saved(started.flow.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   assert.equal(material.appId, app.id); assert.equal(material.fields!.consumerKey, 'approved-consumer');
   assert.deepEqual((await connectionMetadata(material)).scopes, selected);
 });

@@ -50,7 +50,7 @@ test('S3接続を暗号化して保存し、その保存先と認証情報でフ
       fields: { endpoint, region, accessKeyId: 'test-access-key', secretAccessKey: 'test-storage-secret' } });
     assert.equal(resource.kind, 'connection');
     assert.equal(JSON.stringify(resource).includes('test-storage-secret'), false);
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(resource.id))));
+    const material = await f.client.connection(resource.id);
     const outputs = await new TokenConnection().outputs(material);
     const client = new S3Client({ endpoint: outputs.AWS_ENDPOINT_URL_S3, region: outputs.AWS_REGION,
       forcePathStyle: true, credentials: { accessKeyId: outputs.AWS_ACCESS_KEY_ID!, secretAccessKey: outputs.AWS_SECRET_ACCESS_KEY! } });
@@ -68,7 +68,7 @@ test('RobotのWebサービス用認証情報を暗号化して保存し、Basic�
   t.after(f.close);
   const resource = await f.saveConnection({ methodId: 'hetzner:robot-basic',
     fields: { username: 'web-service-user', password: 'robot-test-password' } });
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(resource.id))));
+  const material = await f.client.connection(resource.id);
   const outputs = await new TokenConnection().outputs(material);
   const authorization = 'Basic ' + Buffer.from(outputs.HETZNER_ROBOT_USERNAME + ':' + outputs.HETZNER_ROBOT_PASSWORD).toString('base64');
   assert.equal(Buffer.from(authorization.slice(6), 'base64').toString(), 'web-service-user:robot-test-password');
@@ -202,7 +202,7 @@ test('VultrのOIDC認証元を再取得し、有効期限に応じてロール�
   const saved = await f.saveConnection({ methodId: 'vultr:role', fields: {
     authentication: 'oidc', issuerId: 'issuer-1', roleId: 'role-1',
   } });
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   let identities = 0, sessions = 0;
   const provider = new VultrRoleConnection({ async send(request) {
     sessions++;
@@ -226,7 +226,7 @@ test('異なる認証元の接続には、それぞれのロールセッショ�
   const saved = await f.saveConnection({ methodId: 'vultr:role', fields: {
     roleId: 'role-1', userId: 'user-1', token: 'source-one',
   } });
-  const first = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const first = await f.client.connection(saved.id);
   const second = ConnectionMaterial.parse({ ...first, fields: { ...first.fields, token: 'source-two' } });
   const provider = new VultrRoleConnection({ async send(request) {
     const source = request.headers!.authorization!.slice(7);
@@ -306,7 +306,7 @@ test('VultrでPKCE付きの認可を行い、更新したトークンでAPIを�
 
   for (let index = 0; index < 2; index++)
     assert.equal((await f.http(completed.id, 'VULTR_ACCESS_TOKEN', 'https://api.vultr.com/v2/instances'))?.ok, true);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(completed.id))));
+  const material = await f.client.connection(completed.id);
   assert.equal(material.method.kind, 'oauth');
   if (material.method.kind !== 'oauth') return;
   assert.equal(material.oauth?.refreshToken, 'vultr-rotated-refresh');

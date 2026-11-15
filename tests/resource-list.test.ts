@@ -11,7 +11,7 @@ test('接続一覧で所有するプリンシパルの接続を検索し、持�
   const owner = await f.person('Owner'), other = await f.person('Other owner'),
     child = await f.principals.create('AI', null, owner.actor.id),
     nested = await f.principals.create('Nested AI', null, child.id);
-  const data = { methodId: 'shopify:client_credentials', methodName: 'Shopify · Sign in with app credentials',
+  const data = { methodId: 'shopify:client_credentials',
     methodKind: 'oauth', account: 'Nipponika', accountVerified: true,
     scopes: [], outputs: ['SHOPIFY_ACCESS_TOKEN'], state: 'ready', appId: null };
   const ids = [1, 2, 3, 4].map(n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`);
@@ -51,7 +51,7 @@ test('所有範囲の一覧でも接続ごとの読み取り権限を確認す�
   const owner = await f.person('Owner'), reader = await f.person('Principal reader'), stranger = await f.person('Stranger'),
     child = await f.principals.create('Owned AI', null, owner.actor.id);
   await f.resources.insert(child.id, 'connection', 'AI connection', { methodId: 'shopify:client_credentials',
-    methodName: 'Shopify · Sign in with app credentials', methodKind: 'oauth', account: 'Nipponika',
+    methodKind: 'oauth', account: 'Nipponika',
     scopes: [], outputs: ['SHOPIFY_ACCESS_TOKEN'], state: 'ready', appId: null });
   await f.relations.draw(owner.actor, { subjectId: reader.actor.id, relation: 'reader', objectId: owner.actor.id });
   const url = `/api/principals/${owner.actor.id}/resources?kind=connection&includeOwned=true`;

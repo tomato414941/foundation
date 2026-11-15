@@ -63,6 +63,7 @@ export class Catalog {
         if (!methods.has(methodId))
           throw new Error('A catalog service references an unknown connection method.');
     resources.connectionServices = (actor, methodId) => catalog.servicesForMethod(actor, methodId);
+    resources.connectionMethod = methodId => catalog.connectionMethod(methodId);
     return catalog;
   }
   private checkTargets(input: ServiceDefinitionInput) {
@@ -87,6 +88,13 @@ export class Catalog {
       if (!existing) return candidate;
     }
     fail(409, 'name_taken', 'Choose another connection method name.');
+  }
+  // The method a connection names, for one who may already see or use that connection.
+  async connectionMethod(id: string): Promise<MethodDescription | null> {
+    const builtin = this.methods.get(id);
+    if (builtin) return builtin;
+    const row = uuid(id) ? await this.resources.db.one<ResourceRow>("SELECT * FROM resources WHERE id=$1 AND kind='method'", [id]) : null;
+    return row ? MethodDefinition.parse({ ...row.data, name: row.name }) : null;
   }
   async method(
     actor: Actor,

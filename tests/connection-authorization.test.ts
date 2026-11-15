@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
 
-const material = () => ConnectionMaterial.parse({ format: 2, methodId: 'aws:authentication',
+const material = () => ConnectionMaterial.parse({ format: 3, methodId: 'aws:authentication',
   method: { name: 'AWS', kind: 'aws', config: {} },
   generation: 'f109ab1d-bdc6-4eb6-bb2a-3adfc8e831e3', appId: null, appGeneration: null,
   aws: { authentication: { kind: 'session', accessKeyId: 'source-key', secretAccessKey: 'source-secret',

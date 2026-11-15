@@ -79,7 +79,7 @@ test('代理のCLIで確認コードを表示し、確認間隔を守って続�
   assert.equal(polls, 3);
   const resource = await f.client.api.json('/api/resources/' + connected.id, {}, Resource);
   assert.equal(resource.ownerId, f.owner.actor.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  const material = await f.client.connection(connected.id);
   assert.equal(material.oauth?.accessToken, token.access_token);
   assert.deepEqual(material.oauth?.scopes, ['gist', 'repo']);
   assert.equal((await f.http(resource.id, 'GH_TOKEN', 'https://api.github.com/user'))?.ok, true);

@@ -10,7 +10,7 @@ import { ContentTypes, grantActive, ProtectedContent, contentLimit, continuesPol
 import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
-import { AppMetadata, ConnectionMetadata, ConnectionSettings } from '../shared/connections.js';
+import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
 import type { ConnectionLabelValues } from '../shared/connections.js';
 import { kindOf } from '../shared/protected.js';
 import { project } from './relations.js';
@@ -45,11 +45,8 @@ export const succeeds = (policy: CustodyPolicy, signer: BoundKeys) =>
   !policy.authorities.some(authority => canonical(authority) === canonical(signer)) &&
   policy.authorities.some(authority => authority.principalId === signer.principalId);
 // Labels stay with the item until a writer gives new ones.
-const keptLabels = (data: Record<string, JsonValue> | undefined) => {
-  const settings = ConnectionSettings.safeParse(data?.settings);
-  return { ...Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!])),
-    ...(settings.success ? { settings: settings.data } : {}) };
-};
+const keptLabels = (data: Record<string, JsonValue> | undefined): Record<string, JsonValue> =>
+  typeof data?.account === 'string' ? { account: data.account } : {};
 
 export class Custody {
   constructor(
@@ -107,22 +104,23 @@ export class Custody {
   // Items this identity can seal again without anyone deciding anything: those still encrypted for executors whose
   // grants have expired and, where it uses what the owner holds, those whose readers no longer match who may open them: not
   // yet sealed for everyone who uses what the owner holds, as for a new delegate, still sealed for one that may no
-  // longer open them, as for a delegate whose line was erased, or sealed for keys that someone has since replaced. The
-  // server cannot do it, because only the item's readers can open it. The list only says where to look, and each item
-  // is sealed again on its own.
+  // longer open them, as for a delegate whose line was erased, or sealed for keys that someone has since replaced; and
+  // connections still sealed in the earlier format. The server cannot do it, because only the item's readers can open it.
+  // The list only says where to look, and each item is sealed again on its own.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
     type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[]; authorities: BoundKeys[];
-      grants: Array<{ executor: BoundKeys; actor?: BoundKeys; expiresAt: string | null }> };
+      grants: Array<{ executor: BoundKeys; actor?: BoundKeys; expiresAt: string | null }>; current: boolean };
     const rows = await this.resources.db.all<Row>(
       `SELECT c.resource_id AS id, r.kind, r.owner_id, c.content->'policy'->'readers' AS readers,
-         c.content->'policy'->'authorities' AS authorities, c.content->'policy'->'grants' AS grants
+         c.content->'policy'->'authorities' AS authorities, c.content->'policy'->'grants' AS grants,
+         r.kind<>'connection' OR c.content->'metadata' ? 'methodDigest' AS current
        FROM resource_custody c JOIN resources r ON r.id=c.resource_id
        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
        UNION ALL
        SELECT t.id, 'result', t.owner_id, t.receipt->'content'->'policy'->'readers',
-         t.receipt->'content'->'policy'->'authorities', t.receipt->'content'->'policy'->'grants'
+         t.receipt->'content'->'policy'->'authorities', t.receipt->'content'->'policy'->'grants', true
        FROM execution_tasks t WHERE t.receipt ? 'content'
          AND EXISTS (SELECT 1 FROM jsonb_array_elements(t.receipt->'content'->'policy'->'authorities') a WHERE a->>'id'=$1)
        ORDER BY 1`, [binding.id]);
@@ -143,8 +141,10 @@ export class Custody {
       if (!found.has(key)) found.set(key, new Set(await this.resources.authorization.find(principal, type, name)));
       return found.get(key)!.has(row.kind === 'result' ? row.owner_id : row.id);
     };
-    const items: Array<{ id: string; reason: 'grantExpired' | 'recipients'; remove: string[] }> = [];
+    const items: Array<{ id: string; reason: 'grantExpired' | 'recipients' | 'format'; remove: string[] }> = [];
     for (const row of rows) {
+      // A connection still sealed in the earlier format, with its method inside, is sealed again without it first.
+      if (!row.current) { items.push({ id: row.id, reason: 'format', remove: [] }); continue; }
       const grants = row.grants ?? [], expired = grants.some(grant => !grantActive(grant));
       if (!owners.has(row.owner_id)) {
         if (expired) items.push({ id: row.id, reason: 'grantExpired', remove: [] });

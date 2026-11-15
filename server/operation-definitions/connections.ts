@@ -2,8 +2,8 @@ import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import * as P from '../../shared/protocol.js';
 import { AppSave, AuthorizeConnection, ConnectService, Execution, RevokeConnection, ValueSave } from '../../shared/executions.js';
-import { canonical, hash } from '../../shared/authority.js';
-import { connectionMethod, selectScopes } from '../../shared/connection-methods.js';
+import { canonical } from '../../shared/authority.js';
+import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
 import { ContentTypes, Operations, permittedOperations } from '../../shared/custody.js';
 import type { CustodyPolicy } from '../../shared/custody.js';
@@ -111,7 +111,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       prepareInput: async (who, input, proof, connection) => {
         const method = await catalog.method(who, input.methodId);
-        if (!requiresApp(method) || !input.clientId || input.appId || await hash(method) !== input.methodDigest)
+        if (!requiresApp(method) || !input.clientId || input.appId || await methodDigest(method) !== input.methodDigest)
           fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
         const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
           name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
@@ -119,24 +119,25 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
         return { ...input, appId: app.id, fields: app.kind === 'app' ? app.data.fields : input.fields };
       },
       review: async (who, input) => {
-        const methodDigest = await hash(await catalog.method(who, z.string().parse(input.methodId)));
-        if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        const digest = await methodDigest(await catalog.method(who, z.string().parse(input.methodId)));
+        if (input.methodDigest && input.methodDigest !== digest) fail(409, 'changed', 'The connection method changed. Review it again.');
         await sameService(who, z.object({ connectionId: C.Id.optional(), methodId: z.string() }).parse(input));
-        return { ...await reviewFields(who, input), methodDigest };
+        return { ...await reviewFields(who, input), methodDigest: digest };
       },
       resolve: async (who, input) => {
-        const methodDigest = await hash(await catalog.method(who, input.methodId));
-        if (input.methodDigest && input.methodDigest !== methodDigest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        const digest = await methodDigest(await catalog.method(who, input.methodId));
+        if (input.methodDigest && input.methodDigest !== digest) fail(409, 'changed', 'The connection method changed. Review it again.');
         await sameService(who, input);
-        return { ...await reviewFields(who, input), methodDigest };
+        return { ...await reviewFields(who, input), methodDigest: digest };
       },
       complete: async (who, input, proof) => {
         await sameService(who, input);
         const method = await catalog.method(who, input.methodId), write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
         const previous = input.connectionId ? await custody.get(input.connectionId) : null;
-        if (await hash(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
+        if (await methodDigest(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
           write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
-          write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== method.kind ||
+          write.content.metadata.methodId !== input.methodId || write.content.metadata.methodDigest !== input.methodDigest ||
+          write.content.metadata.methodKind !== method.kind ||
           write.content.metadata.appId !== (input.appId ?? null) || write.content.metadata.state !== 'ready')
           fail(409, 'operation_changed', 'Save the connection approved by this execution.');
         await requireFields(who, input, write.content.metadata);

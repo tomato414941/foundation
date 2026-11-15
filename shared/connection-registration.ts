@@ -31,7 +31,7 @@ export function registrationApplication(input: { methodId: string; method: Metho
   return app;
 }
 export function registrationMaterial(input: RegistrationInput, previous?: ConnectionState) {
-  const base = { format: 2, methodId: input.methodId, method: input.method, generation: crypto.randomUUID(),
+  const base = { format: 3, methodId: input.methodId, method: input.method, generation: crypto.randomUUID(),
     appId: input.appId, appGeneration: input.appId ? input.app!.generation : null };
   if (input.method.kind === 'aws') return ConnectionMaterial.parse({ ...base, aws: AwsConnectionInput.parse(input.aws) });
   if (input.method.kind === 'oauth') return ConnectionMaterial.parse({ ...base, requestedScopes: input.scopes,
@@ -80,7 +80,7 @@ export async function exchangeRegistration(input: RegistrationInput, transport: 
   const query = new URLSearchParams(parameters);
   if (query.getAll('state').length !== 1 || query.get('state') !== state) throw new Error('The authorization response does not match this connection.');
   if (query.has('error')) throw new Error('The service authorization was cancelled.');
-  const base = { format: 2, methodId: input.methodId, method: input.method, generation: crypto.randomUUID(),
+  const base = { format: 3, methodId: input.methodId, method: input.method, generation: crypto.randomUUID(),
     appId: input.appId, appGeneration: input.appId ? input.app!.generation : null,
     fields: visibleConnectionFields(connectionMethod(input.method).fields, input.app!.fields), requestedScopes: input.scopes };
   if (input.method.kind === 'ovh') return ConnectionMaterial.parse({ ...base, fields: { ...base.fields, consumerKey: OvhAuthorization.parse(ovh).consumerKey } });

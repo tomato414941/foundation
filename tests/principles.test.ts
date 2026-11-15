@@ -30,6 +30,12 @@ const ways = {
   // An API key entered for a connection.
   connection: { kind: 'connection', deposit: async (f: Flow, name: string) =>
     item(f, (await f.saveConnection({ methodId: 'cloudrift:api_key', name, fields: { token: 'the-same-token' } })).id) },
+  // An API key entered for a connection through a connection method of the name given.
+  method: { kind: 'connection', deposit: async (f: Flow, name: string) => {
+    const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
+      body: { kind: 'method', name, definition: await f.method('cloudrift:api_key') } }, Resource);
+    return item(f, (await f.saveConnection({ methodId: method.id, fields: { token: 'the-same-token' } })).id);
+  } },
   // An application's client secret.
   app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
     { name: 'app.save', input: { ownerId: f.owner.actor.id, name, methodId: 'github:oauth', clientId: 'the-same-client' } },

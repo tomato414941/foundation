@@ -10,8 +10,6 @@ import { ConnectionUsers } from '../connection-users';
 import { connectionMethodName } from '../connection-method-labels';
 import { connectionMethod } from '../../../shared/connection-methods';
 import { visibleConnectionFields } from '../../../shared/connection-fields';
-import { ConnectionMaterial } from '../../../shared/connections';
-import { decode } from '../../../shared/encryption';
 import { custodyClient } from '../custody';
 import { connectionInitialValues } from '../connection-form';
 import { defineForm } from './types';
@@ -36,7 +34,7 @@ async function load(invocation: DefinitionCall) {
     item.data.methodId === invocation.input.methodId && item.permissions.includes('use') &&
     Object.entries(preparedFields ?? {}).every(([name, value]) => !value || item.data.fields[name] === value))
     .map(item => [item.id, item])).values()];
-  const initial = connecting && connection ? connectionInitialValues(ConnectionMaterial.parse(JSON.parse(decode(await (await custodyClient()).reveal(connection.id))))) : undefined;
+  const initial = connecting && connection ? connectionInitialValues(await (await custodyClient()).connection(connection.id)) : undefined;
   return { ...base, method, apps, connection, users, initial };
 }
 type Data = Awaited<ReturnType<typeof load>>;

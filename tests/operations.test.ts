@@ -13,7 +13,7 @@ import { Task } from '../shared/runtime-protocol.js';
 import { decode, encode } from '../shared/encryption.js';
 import { canonical } from '../shared/authority.js';
 import { ContentTypes } from '../shared/custody.js';
-import { ConnectionMaterial, connectionLabels, connectionMetadata } from '../shared/connections.js';
+import { ConnectionMaterial, connectionLabels, connectionMetadata, sealedConnection } from '../shared/connections.js';
 import { DomainError } from '../server/errors.js';
 import type { JsonApi } from '../shared/client.js';
 import { CustodyClient, SubmissionPending } from '../shared/client.js';
@@ -81,7 +81,7 @@ test('依頼でOVHのIDとSecretを暗号化して保存し、同じ実行に結
   } }, ApprovalRequest);
   const saved = await f.operations.continue(asked.executionId, { clientSecret: 'ovh-service-secret' });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected saved credentials.');
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.resource.id))));
+  const material = await f.client.connection(saved.resource.id);
   const app = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(material.appId!))));
   assert.equal(app.clientId, 'ovh-service-account'); assert.equal(app.clientSecret, 'ovh-service-secret');
   const completed = await sender.json('/api/executions/' + asked.executionId, {}, Execution);
@@ -101,11 +101,11 @@ test('準備した接続設定を維持して不足する設定を補い、秘�
   assert.deepEqual(configured.waiting?.invocation.input.fields, { subdomain: 'workspace', email: 'owner@example.com' });
   await assert.rejects(handler.configure(execution.id, { fields: { subdomain: 'other' } }), { code: 'operation_changed' });
   await assert.rejects(handler.configure(execution.id, { fields: { token: 'private-token' } }), { code: 'encrypted_input_required' });
-  const altered = ConnectionMaterial.parse({ format: 2, methodId: 'zendesk:token', method: await f.method('zendesk:token'),
+  const altered = ConnectionMaterial.parse({ format: 3, methodId: 'zendesk:token', method: await f.method('zendesk:token'),
     generation: crypto.randomUUID(), appId: null, appGeneration: null,
     fields: { subdomain: 'other', email: 'owner@example.com', token: 'private-token' } });
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet);
-  await assert.rejects(f.client.save('Support account', encode(canonical(altered)), policy, {
+  await assert.rejects(f.client.save('Support account', sealedConnection(altered), policy, {
     metadata: await connectionMetadata(altered), labels: connectionLabels(altered),
     commit: async write => {
       const completed = await handler.complete(execution.id, 0, write as unknown as JsonValue);

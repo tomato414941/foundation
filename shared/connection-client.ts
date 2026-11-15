@@ -5,9 +5,9 @@ import type { MethodDescription } from './contracts.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes } from './custody.js';
 import { OAuthRelay, ProtectedWrite, relayContext } from './protocol.js';
-import { decode, open, encode, base64url } from './encryption.js';
-import { AppMaterial, ConnectionMaterial, connectionMetadata, connectionLabels } from './connections.js';
-import { connectionMethod, selectScopes } from './connection-methods.js';
+import { decode, open, base64url } from './encryption.js';
+import { AppMaterial, ConnectionMaterial, connectionMetadata, connectionLabels, sealedConnection } from './connections.js';
+import { connectionMethod, methodDigest, selectScopes } from './connection-methods.js';
 import { Execution, WaitingOperation } from './executions.js';
 import { BrowserTransport } from './http.js';
 import type { Transport } from './http.js';
@@ -68,7 +68,7 @@ export class ConnectionClient {
     const active = await this.custody.api.json('/api/executions/' + input.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     if (active.index !== input.execution.index || active.invocation.name !== 'connection.connect' ||
       active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
-      active.invocation.input.methodDigest !== await hash(input.method) ||
+      active.invocation.input.methodDigest !== await methodDigest(input.method) ||
       active.invocation.input.appId && active.invocation.input.appId !== input.appId ||
       active.invocation.input.name && active.invocation.input.name !== input.name)
       throw new Error('Use the connection prepared by this operation.');
@@ -120,7 +120,7 @@ export class ConnectionClient {
   private async awaitingAuthorization(flow: ConnectionFlow) {
     const active = await this.custody.api.json('/api/executions/' + flow.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
     if (active.index !== flow.execution.index || active.continuation?.id !== flow.id ||
-      active.invocation.input.methodDigest !== await hash(flow.registration.method))
+      active.invocation.input.methodDigest !== await methodDigest(flow.registration.method))
       throw new Error('Continue the connection that is awaiting authorization.');
   }
   private async currentApplication(flow: ConnectionFlow) {
@@ -179,7 +179,7 @@ export class ConnectionClient {
     const token = await pollRunPodApproval(this.transport, RunPodApproval.parse(flow.approval));
     if (!token) return { kind: 'authorize', flow: this.view(flow), url: flow.url! };
     await this.awaitingAuthorization(flow);
-    flow.material = ConnectionMaterial.parse({ format: 2, methodId: flow.registration.methodId,
+    flow.material = ConnectionMaterial.parse({ format: 3, methodId: flow.registration.methodId,
       method: flow.registration.method, generation: crypto.randomUUID(), appId: null, appGeneration: null,
       fields: { token } });
     flow.step = 'commit'; await this.store.put(flow);
@@ -309,7 +309,7 @@ export class ConnectionClient {
       return this.custody.api.json('/api/resources/' + flow.policy.id, {}, Resource);
     };
     if (flow.proof) await commit(flow.proof);
-    else await this.custody.save(flow.name, encode(canonical(flow.material)), flow.policy,
+    else await this.custody.save(flow.name, sealedConnection(flow.material), flow.policy,
       { previous, metadata: await connectionMetadata(flow.material), labels: connectionLabels(flow.material), commit });
     flow.step = 'connected'; flow.connectionId = flow.policy.id; await this.store.put(flow);
     return { kind: 'connected', flow: this.view(flow), id: flow.connectionId };

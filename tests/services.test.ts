@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { publicAddress, publicUrl } from '../server/transport.js';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { ConnectionMaterial } from '../shared/connections.js';
-import { decode } from '../shared/encryption.js';
+import { HttpRequest, Resource } from '../shared/contracts.js';
 import { Task } from '../shared/runtime-protocol.js';
 
 test('公開HTTPSの送信先を受け入れ、プライベートアドレスへの送信を拒否する', () => {
@@ -94,10 +93,10 @@ test('入力待ちの更新を取り消すと元のキーを保ち、再登録�
   const update = await f.operations.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
     methodId: 'render:token', connectionId: saved.id, name: saved.name } });
   await f.client.api.json('/api/executions/' + update.id + '/cancel', { method: 'POST', body: {} });
-  assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id)))).fields!.token, 'original');
+  assert.equal((await f.client.connection(saved.id)).fields!.token, 'original');
   const replacement = await f.saveConnection({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'updated' } });
   assert.equal(replacement.id, saved.id);
-  assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id)))).fields!.token, 'updated');
+  assert.equal((await f.client.connection(saved.id)).fields!.token, 'updated');
 });
 
 test('OpenRouterの公開PKCEフローでAPIキーを取得し、そのキーでAPIを呼び出す', async t => {
@@ -117,7 +116,7 @@ test('OpenRouterの公開PKCEフローでAPIキーを取得し、そのキーで
     state: url.searchParams.get('state')!, code: 'openrouter-code',
   }).toString());
   const saved = await f.saved(started.flow.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   assert.equal(material.oauth!.accessToken, 'openrouter-private-key');
   assert.equal((await f.http(saved.id, 'OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/chat/completions'))?.ok, true);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer openrouter-private-key');
@@ -142,4 +141,26 @@ test('選択した実行先のワークロード権限でIAMロールを引き�
   assert.equal((await f.http(saved.id, 'AWS_ACCESS_KEY_ID'))?.ok, true);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer role-key');
   assert.ok(obtained.every(item => item === role.arn + ':' + role.externalId));
+});
+
+test('使っている接続方式は、名前や説明を変えると接続にも新しい名前で出てそのまま使え、決まりは変えられない', async t => {
+  const f = await flowFixture(() => jsonResponse({ ok: true })); t.after(f.close);
+  const definition = await f.method('cloudrift:api_key');
+  const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
+    body: { kind: 'method', name: 'Own CloudRift', definition } }, Resource);
+  const connection = await f.saveConnection({ methodId: method.id, fields: { token: 'own-method-token' } });
+  if (definition.kind !== 'token') throw new Error('Expected a token method.');
+  const relabeled = await f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: method.version,
+    name: 'Renamed CloudRift', definition: { ...definition, config: { ...definition.config, hint: 'Explained again.' } } } }, Resource);
+  assert.equal((await f.client.api.json('/api/resources/' + connection.id, {}, Resource)).data.methodName, 'Renamed CloudRift');
+
+  const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'http',
+    request: HttpRequest.parse({ connectionId: connection.id, url: 'https://api.cloudrift.ai/api/v1/account/info', method: 'POST' }), save: {} });
+  await f.executor.tick();
+  assert.equal((await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task)))?.ok, true);
+  assert.equal(f.requests.at(-1)?.headers['X-API-Key'], 'own-method-token');
+
+  await assert.rejects(f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: relabeled.version,
+    definition: { ...definition, http: { urlField: 'url', authentication: { kind: 'bearer', token: 'CLOUDRIFT_API_KEY' } } } } }, Resource),
+  { code: 'in_use' });
 });

@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ConnectionMaterial, connectionLabels, connectionMetadata } from '../shared/connections.js';
+import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
+import { methodDigest } from '../shared/connection-methods.js';
 import { connectionAuthorization } from '../shared/connection-authorization.js';
 import { connectionFacts } from '../shared/connection-facts.js';
 import { AwsConnection } from '../runtime/aws-connection.js';
 import { OAuthConnection } from '../runtime/oauth-connection.js';
 import { TokenConnection } from '../runtime/token-connection.js';
 
-const base = { format: 2, generation: 'f109ab1d-bdc6-4eb6-bb2a-3adfc8e831e3', appId: null, appGeneration: null };
+const base = { format: 3, generation: 'f109ab1d-bdc6-4eb6-bb2a-3adfc8e831e3', appId: null, appGeneration: null };
 const identity = { accountId: '123456789012', principalId: 'EXAMPLE', arn: 'arn:aws:iam::123456789012:user/Example' };
 const materials = () => [
   ConnectionMaterial.parse({ ...base, methodId: 'example:oauth',
@@ -49,7 +50,7 @@ test('各方式のProviderが秘密を含まないメタデータを認証情報
     assert.deepEqual(facts, connectionFacts(state));
     assert.equal(JSON.stringify(facts).includes('private-'), false);
     assert.equal(connectionAuthorization(state, facts).account, metadata.accountId);
-    assert.equal(connectionLabels(state).methodName, state.method.name);
+    assert.equal(metadata.methodDigest, await methodDigest(state.method));
     assert.deepEqual(metadata.scopes, facts.scopes);
   });
 });

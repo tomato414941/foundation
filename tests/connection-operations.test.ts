@@ -12,11 +12,11 @@ async function setup() {
   const policy: CustodyPolicy = { ...f.policy, id: crypto.randomUUID(), contentType: ContentTypes.tokenSet,
     grants: [{ ...f.policy.grants[0]!, operations: [Operations.http, Operations.refresh] }] };
   const metadata = { state: 'ready', authorizationDigest: await hash({ account: 'account-1', scopes: ['read'] }),
-    methodId: 'provider:oauth', methodKind: 'oauth', generation: crypto.randomUUID(),
+    methodId: 'provider:oauth', methodDigest: await hash({ method: 'provider:oauth' }), methodKind: 'oauth', generation: crypto.randomUUID(),
     appId: null, accountId: 'account-1', accountVerified: true,
     scopes: ['read'], scopesStatus: 'reported', outputs: ['ACCESS_TOKEN'] };
   const content = await protect(encode('old-refresh-token'), policy, 1, f.owner.binding, f.owner.keys, metadata);
-  const resource = await f.custody.put(f.owner.actor, { name: 'Connection', content, labels: { methodName: 'Provider', account: 'Account' } });
+  const resource = await f.custody.put(f.owner.actor, { name: 'Connection', content, labels: { account: 'Account' } });
   return { ...f, connection: { policy, content, resource }, operations: new ConnectionOperations(f.custody) };
 }
 

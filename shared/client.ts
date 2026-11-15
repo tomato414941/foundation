@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { Execution } from './executions.js';
-import { Id, Resource, listOf } from './contracts.js';
+import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
+import { catalogDefinition } from './connection-methods.js';
+import { connectionLabels, connectionMetadata, openConnection, sealedConnection } from './connections.js';
+import { earlierConnection } from './connection-legacy.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { endorsementPayload, RotationRequest } from './key-rotations.js';
 import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding, verifiesReplacement } from './authority.js';
@@ -303,6 +306,14 @@ export class CustodyClient {
   async reveal(id: string) {
     return reveal((await this.read(id)).content, this.binding, this.keys.encryption);
   }
+  // A connection as its holder reads it to change it: what is sealed of it, with its method as the method now is. One
+  // still in the earlier format is read with the method it holds, so that it can be changed before it is sealed again.
+  async connection(id: string) {
+    const { content } = await this.read(id), bytes = await reveal(content, this.binding, this.keys.encryption);
+    if (typeof content.metadata.methodDigest !== 'string') return earlierConnection(bytes);
+    const method = catalogDefinition(await this.api.json('/api/connections/' + Id.parse(id) + '/method', {}, CatalogMethod));
+    return openConnection(bytes, content.metadata, method);
+  }
   async sharing(input: string | Array<z.infer<typeof KeySharingItem>>) {
     const items = typeof input === 'string' ? (await this.api.json(input, {}, listOf(KeySharingItem))).items : input;
     const updates: Record<string, { version: number; content: CustodyContent }> = {};
@@ -382,6 +393,7 @@ export class CustodyClient {
   // and, when asked, for whoever now uses what its owner holds and whose keys this device has verified, unless an
   // execution may still write to it. An execution result is written once it exists, so nothing waits on it.
   async reprotect(id: string, reason: z.infer<typeof Reprotection>['reason'] = 'grantExpired', remove: string[] = []) {
+    if (reason === 'format') return this.reformat(id);
     const previous = await this.read(id);
     const { policy } = previous.content, now = Date.now(), removed = new Set(remove);
     const current = reason === 'recipients' ? await this.recipients(policy.ownerId) : [];
@@ -426,6 +438,15 @@ export class CustodyClient {
     }
     const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
     return this.save(resource.name, bytes, next, { metadata: previous.content.metadata, previous });
+  }
+  // A connection sealed in the earlier format, with its method inside, sealed again without it. Its signed metadata names
+  // the method by id and by the digest of the rules it was made with; nothing else about it changes.
+  private async reformat(id: string) {
+    const previous = await this.read(id), resource = await this.api.json('/api/resources/' + id, {}, Resource);
+    const state = earlierConnection(await reveal(previous.content, this.binding, this.keys.encryption));
+    await this.save(resource.name, sealedConnection(state), previous.content.policy,
+      { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state) });
+    return id;
   }
   // Seals each listed item again on its own: one that cannot change now is left, with the reason, for another time.
   async reprotectPending(onProgress?: (progress: { completed: number; total: number }) => void) {

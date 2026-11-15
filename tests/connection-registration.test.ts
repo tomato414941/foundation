@@ -50,7 +50,7 @@ test('サービスへアクセスできない端末でも入力式の認証情�
         authentication: { kind: 'access_key', accessKeyId: 'AKIATESTREGISTRATION', secretAccessKey: 'private-aws-secret' }, region: 'ap-northeast-1',
       } } : {}) });
     if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected encrypted credentials.');
-    const material = ConnectionMaterial.parse(JSON.parse(decode(await custody.reveal(saved.resource.id))));
+    const material = await custody.connection(saved.resource.id);
     assert.equal(material.methodId, method.id);
     if (method.kind === 'aws') assert.equal(material.aws!.authentication.kind, 'access_key');
     else if (method.kind === 'oauth') {
@@ -85,7 +85,7 @@ test('アプリ認証を登録し、利用時にトークンを取得して同�
   const used = await f.client.read(saved.id);
   assert.equal(grants, 2);
   assert.equal(used.content.metadata.authorizationDigest, registered.content.metadata.authorizationDigest);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   assert.equal(material.oauth?.accessToken, 'use-token-2');
 });
 
@@ -106,7 +106,7 @@ test('ブラウザの認可応答を暗号化して中継し、別のブラウ�
   assert.equal(JSON.stringify(row).includes('browser-code'), false);
   const second = browser(f), connected = await second.continue(started.flow.execution.id);
   if (!('kind' in connected) || connected.kind !== 'connected') throw new Error('Expected a saved connection.');
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  const material = await f.client.connection(connected.id);
   assert.equal(material.oauth?.accessToken, 'browser-token');
   assert.equal(material.oauth?.refreshToken, 'browser-refresh');
   assert.equal((await f.client.api.json('/api/executions/' + started.flow.execution.id, {}, Execution)).state, 'succeeded');
@@ -134,7 +134,7 @@ test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻�
   if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
   const saved = await f.client.api.json('/api/resources/' + connected.id, {}, Resource);
   assert.equal(saved.ownerId, f.owner.actor.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  const material = await f.client.connection(connected.id);
   assert.equal(material.oauth?.accessToken, 'cli-token');
 });
 
@@ -160,7 +160,7 @@ test('代理のCLIでGitHubの認可応答を受け取り、指定した所有�
   if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
   const saved = await custody.api.json('/api/resources/' + connected.id, {}, Resource);
   assert.equal(saved.ownerId, f.owner.actor.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connected.id))));
+  const material = await f.client.connection(connected.id);
   assert.equal(material.oauth?.accessToken, 'delegate-token');
 });
 
@@ -252,7 +252,7 @@ test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接�
     apiRegion: 'ca', applicationKey: '', applicationSecret: '', consumerKey: '',
   } });
   assert.equal(saved.id, original.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   assert.equal(material.method.kind, 'ovh'); assert.equal(material.fields!.applicationSecret, 'saved-secret');
   const current = await f.client.read(saved.id);
   assert.deepEqual(current.content.policy.grants, previous.content.policy.grants);
@@ -267,6 +267,6 @@ test('既存の接続を同じサービスの別の方式で保存し直し、�
   const moved = await f.saveConnection({ methodId: 'ovh:api_key', connectionId: saved.id, name: 'OVHcloud', fields: {
     apiRegion: 'ca', applicationKey: 'application-key', applicationSecret: 'application-secret', consumerKey: 'consumer-key' } });
   assert.equal(moved.id, saved.id);
-  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  const material = await f.client.connection(saved.id);
   assert.equal(material.methodId, 'ovh:api_key');
 });

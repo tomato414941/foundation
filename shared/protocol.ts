@@ -14,7 +14,7 @@ export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, 
   version: z.number().int().positive().optional() }).strict();
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
 // An item to seal again, why, and the principals no longer to seal it for.
-export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', 'recipients']),
+export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', 'recipients', 'format']),
   remove: z.array(Id).max(1000).default([]) }).strict();
 // What an executor keeps for a run: the content it sealed for the approved destination, and the JSON pointer of the value
 // in the run's result. A new output takes its name from the request that keeps it.

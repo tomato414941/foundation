@@ -673,7 +673,7 @@ test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取�
   const content = (await c.context.custody.read(recipient.actor, id)).content;
   const material = JSON.parse(new TextDecoder().decode(await reveal(content, recipient.binding, recipient.keys.encryption)));
   assert.equal(material.fields.token, 'tskey-api-cli-transfer-test');
-  assert.equal(material.method.config.constants.url, 'https://api.tailscale.com');
+  assert.equal(content.metadata.methodId, 'tailscale:api-access-token');
 });
 
 test('秘密鍵のないCLIから暗号化していない項目を渡し相手の承認後に所有者を変更する', async t => {

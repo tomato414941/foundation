@@ -571,16 +571,16 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   const app = await f.saveApp(method.id, 'Function application');
   if (app.kind !== 'app') throw new Error('Expected an application.');
   const spec = await f.method(method.id), connectionId = crypto.randomUUID();
-  const { ConnectionMaterial, connectionMetadata } = await import('../shared/connections.js');
-  const material = ConnectionMaterial.parse({ format: 2, methodId: method.id, method: spec,
+  const { ConnectionMaterial, connectionMetadata, sealedConnection } = await import('../shared/connections.js');
+  const material = ConnectionMaterial.parse({ format: 3, methodId: method.id, method: spec,
     generation: crypto.randomUUID(), appId: app.id, appGeneration: app.data.generation,
     oauth: { accessToken: 'expired-token', refreshToken: 'refresh-token', expiresAt: Date.now() - 1000,
       scopes: ['read'], account: 'account', accountName: 'Account', accountVerified: true,
       scopesStatus: 'reported', extra: {}, facts: {} } });
   const connectionPolicy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet, [], { id: connectionId });
   await f.context.custody.put(f.owner.actor, { name: 'Function connection',
-    content: await protect(encode(canonical(material)), connectionPolicy, 1, f.owner.binding, f.owner.keys, await connectionMetadata(material)),
-    labels: { methodName: 'Function OAuth', account: 'Account' } });
+    content: await protect(sealedConnection(material), connectionPolicy, 1, f.owner.binding, f.owner.keys, await connectionMetadata(material)),
+    labels: { account: 'Account' } });
   const fn = await save(f, FunctionDefinition.parse({  result: 'json',
     program: { kind: 'command', command: ['node', '-e', 'console.log(JSON.stringify({configured:!!process.env.TOKEN}))'],
       inputs: [{ name: 'TOKEN', source: { id: connectionId, output: 'ACCESS_TOKEN' } }], timeoutSeconds: 5 } }));
@@ -591,7 +591,7 @@ test('共有した関数がOAuth接続を更新して使用し、認証情報を
   const result = await functions.result(task.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
   assert.deepEqual(result!.results[0], { configured: true });
-  const renewed = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(connectionId))));
+  const renewed = await f.client.connection(connectionId);
   assert.equal(renewed.oauth?.accessToken, 'renewed-token');
   await assert.rejects(client.read(app.id));
 });
