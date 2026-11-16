@@ -25,6 +25,8 @@ export type ReviewValue =
   | { kind: 'identifier'; name: string; id: string; approver: boolean }
   | { kind: 'approverId' }
   | { kind: 'resource'; resource: ResourceView }
+  | { kind: 'newVariable'; name: string }
+  | { kind: 'replacedValue'; resource: ResourceView }
   | { kind: 'unknown'; id: string }
   | { kind: 'key'; algorithm: string; fingerprint: string; comment: string }
   | { kind: 'list'; items: ReviewValue[] }
@@ -149,6 +151,10 @@ function Value({ field, value }: { field: string; value: ReviewValue }) {
     case 'identifier': return <span>{t(value.approver ? 'reviewYourId' : 'reviewIdOf', { name: value.name })} <code className="text-xs">{value.id}</code></span>;
     case 'approverId': return <>{t('reviewApproverId')}</>;
     case 'resource': return <ResourceName resource={value.resource} />;
+    case 'newVariable': return <span className="flex min-w-0 flex-col">{value.name}
+      <span className="text-sm text-muted-foreground">{t('reviewNewVariable')}</span></span>;
+    case 'replacedValue': return <span className="flex min-w-0 flex-col"><ResourceName resource={value.resource} />
+      <span className="text-sm text-muted-foreground">{t('reviewReplacedValue')}</span></span>;
     case 'unknown': return <span>{t('reviewUnknownItem')} <code className="text-xs text-muted-foreground">{value.id}</code></span>;
     case 'key': return <span className="flex min-w-0 flex-col">
       <span>{value.algorithm}{value.comment && <span className="text-muted-foreground"> · {value.comment}</span>}</span>

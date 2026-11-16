@@ -2399,6 +2399,35 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
 
+    def test_実行のリクエストで結果の保存先を名前で示し今ある変数は値を置き換えることを示す(self):
+        sender, _ = self.passkey_account("Run requester")
+        receiver, principal = self.passkey_account("Run approver", mobile=True)
+        kept = self.variable(receiver, principal, name="Release token", value="current-release-token").rsplit("/", 1)[1]
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
+            "message": "リリース用のトークンを発行してください。", "operations": [{"name": "run.execute", "input": {
+                "ownerId": "$approver", "operation": {"kind": "http", "request": {"method": "POST", "url": "https://service.example/tokens"}},
+                "save": {"/body/token": kept}, "names": {"/body/next": "Next release token"}}}]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        receiver.goto(response.json()["url"])
+        expect(receiver.get_by_role("heading", name="HTTPリクエスト", exact=True)).to_be_visible()
+        main = receiver.locator("main")
+        row = lambda label: main.locator("dl", has=receiver.get_by_text(label, exact=True)).last.locator("dd")
+        expect(main.get_by_text("結果の保存先", exact=True)).to_be_visible()
+        expect(row("/body/token")).to_have_text("Release token今の値を置き換えます")
+        expect(row("/body/token").get_by_role("link", name="Release token", exact=True)).to_be_visible()
+        expect(row("/body/next")).to_have_text("Next release token新しい変数として保存します")
+        for internal in ["$approver", kept]:
+            self.assertNotIn(internal, main.inner_text())
+        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
+        print("Rendered run request: " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "run-request-destinations-mobile-ja.png"), full_page=True)
+        self.select(receiver, "言語", "English")
+        expect(main.get_by_text("Result destinations", exact=True)).to_be_visible()
+        expect(row("/body/token")).to_have_text("Release tokenReplaces its current value")
+        expect(row("/body/next")).to_have_text("Next release tokenKept in a new variable")
+        print("Rendered run request (English): " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "run-request-destinations-mobile-en.png"), full_page=True)
+
     def test_リクエスト内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
         receiver, principal = self.passkey_account("Approver")

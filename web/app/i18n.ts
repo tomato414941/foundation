@@ -694,6 +694,8 @@ const words: Record<string, [string, string]> = {
   reviewIdOf: ['{{name}}のID', 'ID of {{name}}'],
   reviewYouNamed: ['あなた（{{name}}）', 'You ({{name}})'],
   reviewUnknownItem: ['表示できない項目', 'An item you cannot view'],
+  reviewNewVariable: ['新しい変数として保存します', 'Kept in a new variable'],
+  reviewReplacedValue: ['今の値を置き換えます', 'Replaces its current value'],
   reviewNothingToShow: ['指定する内容はありません。', 'Nothing else is specified.'],
   'reviewField.id': ['対象', 'Item'],
   'reviewField.ownerId': ['所有者', 'Owner'],
