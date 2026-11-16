@@ -2,6 +2,7 @@ import { Form, Link, redirect, useActionData, useLoaderData } from 'react-router
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/connection-flow';
 import { Resource } from '../../../shared/contracts';
+import { Execution } from '../../../shared/executions';
 import { api, actionResult, formText, signedIn } from '../api';
 import { connectionClient } from '../custody';
 import { requireKeys } from '../keys';
@@ -14,7 +15,9 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   return actionResult(async () => {
     const progress = await (await connectionClient()).progress(params.id);
     if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
-    return progress;
+    const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
+    const name = execution.operations[progress.flow.execution.index]?.input.name;
+    return { ...progress, name: typeof name === 'string' ? name : null };
   });
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
@@ -31,7 +34,7 @@ export default function ConnectionFlow() {
   const { t } = useTranslation(), data = useLoaderData<typeof clientLoader>(), result = useActionData<typeof clientAction>();
   const progress = 'kind' in data ? data : null;
   usePolling(progress?.kind === 'pending' || progress?.kind === 'authorize');
-  return <Page title={progress?.flow.name ?? t('connect')} narrow>
+  return <Page title={progress?.name ?? t('connect')} narrow>
     <ErrorNotice error={'error' in data && typeof data.error === 'string' ? data.error : result && 'error' in result ? result.error : null} />
     {!progress && <Notice tone="info">{t('connectionFlowHelp')}</Notice>}
     {progress && <Form method="post"><ConnectionProgress progress={progress} /></Form>}

@@ -13,7 +13,7 @@ export function runOperation(client: KeyholderClient): KeyholderOperation {
     if (!('programId' in run.operation)) {
       const operation = RuntimeOperation.parse(run.operation);
       const programId = crypto.randomUUID();
-      await client.records.put(programId, { operation, save: run.save });
+      await client.records.put(programId, { operation });
       invocation = { ...invocation, input: { ...run,
         operation: { kind: run.operation.kind, programId,
         programDigest: await hash(reviewedProgram(operation)) } } };

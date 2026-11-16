@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { decode, encode } from '../shared/encryption.js';
 import { FunctionDefinition, Resource } from '../shared/contracts.js';
@@ -10,6 +11,9 @@ import { newSSHKey } from '../cli/src/ssh-access.js';
 import { canonical, hash } from '../shared/authority.js';
 import { ContentTypes, protect } from '../shared/custody.js';
 import { Task, signEnvironment } from '../shared/runtime-protocol.js';
+import { ExecutionClient } from '../shared/execution-client.js';
+import { ConnectionClient } from '../shared/connection-client.js';
+import { RemoteFlowStore } from '../shared/operation-continuations.js';
 
 type Flow = Awaited<ReturnType<typeof flowFixture>>;
 
@@ -193,5 +197,28 @@ test('保存先の変数は、名前を変えて別の変数がその名前に�
     await f.executor.tick();
     assert.equal(decode(await f.client.reveal(target)), 'the kept value');
     assert.equal(decode(await f.client.reveal(other)), 'before');
+  } finally { await f.close(); }
+});
+
+// Why: the user decided that a seal holds only what it cannot do without. A connection being made once had its progress
+// sealed with the connection's name and with the method it was made through, that method's name and description
+// included, though Foundation keeps them as labels.
+// Intent: start connecting through a method under a name and a description given here, open the progress sealed for the
+// device that started it, and look for them in it.
+test('つなぎかけの接続の進み具合は、接続とつなぎ方の名前や説明を入れずに封をする', async () => {
+  const f = await flowFixture();
+  try {
+    const name = 'ベータ, the second name', description = 'A description given here.';
+    const definition = await f.method('openrouter:oauth');
+    if (definition.kind !== 'oauth') throw new Error('Expected an OAuth method.');
+    const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
+      body: { kind: 'method', name, definition: { ...definition, config: { ...definition.config, hint: description } } } }, Resource);
+    const store = new RemoteFlowStore(f.client);
+    const operations = new ExecutionClient(f.client, new ConnectionClient(f.client, store, f.transport, 'cli'));
+    const progress = await operations.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+      methodId: method.id, name } });
+    if (!('flow' in progress)) throw new Error('Expected a connection being made.');
+    const sealed = JSON.stringify(await store.records.get(progress.flow.id, z.unknown()));
+    assert.equal(sealed.includes(name) || sealed.includes(description), false);
   } finally { await f.close(); }
 });

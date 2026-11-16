@@ -4,10 +4,10 @@ import { RuntimeOperation } from './runtime-protocol.js';
 import type { ExecutionOperation } from './runtime-protocol.js';
 import { RevokeConnection, RunOperation } from './executions.js';
 import type { DefinitionCall } from './executions.js';
-import { Name } from './contracts.js';
 import { z } from 'zod';
 
-export const PrivateProgram = z.object({ operation: RuntimeOperation, save: z.record(z.string(), Name) }).strict();
+// A run's program kept sealed for its keyholder until the run is carried out; where it keeps values stays with the run.
+export const PrivateProgram = z.object({ operation: RuntimeOperation }).strict();
 export function reviewedProgram(operation: ExecutionOperation) {
   if (operation.kind === 'http') return { kind: operation.kind, request: operation.request };
   return operation;

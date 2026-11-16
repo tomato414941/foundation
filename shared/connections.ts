@@ -118,20 +118,23 @@ export function connectionSettings(method: MethodDescription, fields: Record<str
     value: field.choices?.find(choice => choice.value === fields[field.name])?.label ?? fields[field.name]! }));
 }
 
-// What is sealed of a connection: everything but its method.
-export function sealedConnection(state: ConnectionState) {
-  const { methodId: _methodId, method: _method, ...sealed } = state;
-  return encode(canonical(sealed));
+// What is kept of a connection: everything but its method, which is read from where it is kept.
+export function keptConnection(state: ConnectionState) {
+  const { methodId: _methodId, method: _method, ...kept } = state;
+  return JsonObject.parse(kept);
 }
-// A connection opened with the method its signed metadata names. Whoever uses it first checks the method's rules against
-// the digest there; whoever changes it signs the method it then names.
-export function openConnection(bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) {
-  const sealed: unknown = JSON.parse(decode(bytes));
-  const state = sealed && typeof sealed === 'object' && !('methodId' in sealed) && !('method' in sealed)
-    ? ConnectionMaterial.safeParse({ ...sealed, methodId: metadata.methodId, method }) : null;
+export const sealedConnection = (state: ConnectionState) => encode(canonical(keptConnection(state)));
+// A connection kept without its method, with the method it is used with.
+export function withMethod(kept: unknown, methodId: unknown, method: MethodDescription) {
+  const state = kept && typeof kept === 'object' && !('methodId' in kept) && !('method' in kept)
+    ? ConnectionMaterial.safeParse({ ...kept, methodId, method }) : null;
   if (!state?.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
   return state.data;
 }
+// A connection opened with the method its signed metadata names. Whoever uses it first checks the method's rules against
+// the digest there; whoever changes it signs the method it then names.
+export const openConnection = (bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) =>
+  withMethod(JSON.parse(decode(bytes)), metadata.methodId, method);
 
 export const ConnectionAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('refresh'), id: Id }).strict(),
