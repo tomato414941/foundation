@@ -623,7 +623,10 @@ const words: Record<string, [string, string]> = {
   bindings: ['値の割り当て（JSON）', 'Value bindings (JSON)'],
   description: ['説明', 'Description'],
   parameters: ['パラメーター（JSON）', 'Parameters (JSON)'],
-  saveOutputs: ['結果の保存先（JSON）', 'Save outputs (JSON)'],
+  saveOutputs: ['結果を保存する変数（JSON）', 'Variables for outputs (JSON)'],
+  saveOutputsHelp: ['結果の値の JSON ポインタから、保存する変数の ID へ。', 'From the JSON pointer of a value in the result to the ID of the variable that keeps it.'],
+  saveOutputNames: ['結果を保存する新しい変数（JSON）', 'New variables for outputs (JSON)'],
+  saveOutputNamesHelp: ['結果の値の JSON ポインタから、新しく作る変数の名前へ。', 'From the JSON pointer of a value in the result to the name of a new variable that keeps it.'],
   arguments: ['引数', 'Arguments'],
   relation: ['関係', 'Relationship'],
   delegate: ['委任先', 'Delegate'],
@@ -1292,6 +1295,10 @@ errors.push([
   ['connection_uncertain'],
   'この接続はトークンの更新結果を確認できていません。サービスに再接続してください。',
   'The result of this connection\'s token update is unknown. Reconnect the service.',
+], [
+  ['output_name_required', 'output_exists', 'invalid_output'],
+  '結果を保存する変数は、今ある変数ならIDで指定し、新しく作る変数には名前を付けてください。',
+  'Choose an existing variable for an output by its ID, or give a new variable a name.',
 ]);
 for (const [codes, ja, en] of errors) for (const code of codes) words['errors.' + code] = [ja, en];
 const resources = Object.fromEntries(

@@ -193,7 +193,7 @@ try {
   const returned = JSON.parse(result.text)[0];
   assert.equal(result.state, 'succeeded'); assert.deepEqual(returned.arguments, arguments_); assert.equal(returned.configured, true);
   assert.ok(!JSON.stringify(result).includes(secret));
-  const capture = await caller.functions.invoke(fn.id, arguments_, { save: { '/output': 'Release output' } });
+  const capture = await caller.functions.invoke(fn.id, arguments_, { names: { '/output': 'Release output' } });
   const captured = await wait(() => caller.functions.result(capture.id), value => !['waiting', 'running'].includes(value.state));
   assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.results[0]), ['saved']);
   const output = captured.results[0].saved['/output']; resources.push(output);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { encode } from '../shared/encryption.js';
+import { decode, encode } from '../shared/encryption.js';
 import { FunctionDefinition, Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
@@ -63,7 +63,7 @@ const ways = {
   result: { kind: 'result', deposit: async (f: Flow, name: string) => {
     const started = await f.operations.execute({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
       environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://service.example/value',
-        method: 'GET' } }, save: { '/value': name } } });
+        method: 'GET' } }, names: { '/value': name } } });
     if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected a run.');
     await f.executor.tick();
     const task = await f.client.api.json('/api/runtime/runs/' + started.task.id, {}, Task);
@@ -168,5 +168,30 @@ test('関数の説明と引数の見出しを変えても、出した許可の�
     const invoked = await f.functions.invoke(fn.id, { message: 'Still approved' });
     await f.functionExecutor.tick();
     assert.deepEqual((await f.functions.result(invoked.id)).results[0], { message: 'Still approved', read: true });
+  } finally { await f.close(); }
+});
+
+// Why: the user decided that what is signed names things by what identifies them. A reviewed run once named the
+// variables it keeps values in by their names, so a value went to whichever variable had that name when the run went
+// ahead: a variable renamed in between was passed over, and another that had taken its name was written over.
+// Intent: ask for a run that keeps a value in a variable, rename it and give its name to another before the run goes
+// ahead, and read both.
+test('保存先の変数は、名前を変えて別の変数がその名前になっても、指した変数に保存される', async () => {
+  const f = await flowFixture(() => jsonResponse({ value: 'the kept value' }));
+  try {
+    const variable = async () => saved(await f.operations.execute(
+      { name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Token' } }, { value: encode('before') }));
+    const target = await variable();
+    const started = await f.operations.start({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
+      environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://service.example/value',
+        method: 'GET' } }, save: { '/value': target } } });
+    const current = await f.client.api.json('/api/resources/' + target, {}, Resource);
+    await f.client.api.json('/api/resources/' + target, { method: 'PATCH',
+      body: { version: current.version, name: 'Renamed token' } }, Resource);
+    const other = await variable();
+    await f.operations.continue(started.id);
+    await f.executor.tick();
+    assert.equal(decode(await f.client.reveal(target)), 'the kept value');
+    assert.equal(decode(await f.client.reveal(other)), 'before');
   } finally { await f.close(); }
 });

@@ -16,6 +16,11 @@ export function defineRuns(definitions: DefinitionRegistry, services: Pick<Opera
     body: z.object({}).strict(), response: { 200: P.Task } }, input: params => params });
   definitions.define('run.execute', RunOperation, ['実行する', 'Run an operation'], keyholder,
     { execution: 'keyholder', continuation: 'run', delegatedOperation: input => Operations[input.operation.kind], configure: ['environmentId'], environmentReason: ['HTTPリクエストやコマンドを実行環境で処理します。', 'Send the HTTP request or run the command in an execution environment.'], secret: () => false,
+      // A value kept in a new variable goes to an id drawn for it here, unless its requester drew one.
+      review: async (_who, input) => {
+        const names = RunOperation.shape.names.parse(input.names), save = RunOperation.shape.save.parse(input.save);
+        return { ...input, save: { ...Object.fromEntries(Object.keys(names).map(pointer => [pointer, crypto.randomUUID()])), ...save } };
+      },
       complete: async (who, input, proof, execution) => {
         const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
         if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.intent.actor.principalId !== who.id ||

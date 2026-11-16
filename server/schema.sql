@@ -267,7 +267,8 @@ CREATE TABLE execution_tasks (
   lease_until timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   started_at timestamptz,
-  finished_at timestamptz
+  finished_at timestamptz,
+  output_names jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE INDEX execution_queue ON execution_tasks(environment_id,state,created_at);
 CREATE INDEX execution_owner ON execution_tasks(owner_id,created_at DESC);

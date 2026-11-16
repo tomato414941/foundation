@@ -37,6 +37,7 @@ import { OAuthRelays } from './oauth-relays.js';
 import { builtinDefinitions } from './builtin-definitions.js';
 import { Executions } from './executions.js';
 import { canonical } from '../shared/authority.js';
+import { signedInvocation } from '../shared/operation-authorization.js';
 import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
 import { ManagedProcesses } from './managed-processes.js';
@@ -116,11 +117,12 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   delegation.checkOperationContext = async (actor, intent) => {
     const context = intent.operationContext!, { plan } = await executions.input(actor, context.id);
     const continuation = definitions.get(plan.invocation.name).continuation;
-    if (context.index !== plan.index || canonical(context.invocation) !== canonical(plan.invocation) ||
+    if (context.index !== plan.index || canonical(context.invocation) !== canonical(signedInvocation(plan.invocation)) ||
       canonical(intent.approval ?? null) !== canonical(plan.approval ?? null) ||
       !continuation || plan.continuation?.kind !== continuation ||
       plan.continuation.id !== (continuation === 'connection' ? context.continuationId : intent.id))
       fail(409, 'operation_changed', 'Use the prepared operation and its current continuation.');
+    return plan.invocation;
   };
   delegation.completed = async task => {
     const execution = task.intent.operationContext;

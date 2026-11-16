@@ -16,8 +16,8 @@ import { sshAccess } from './ssh-access.js';
 import packageInfo from '../package.json' with { type: 'json' };
 
 const Operation = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('http'), request: HttpRequest,
-    save: z.record(z.string().max(500), Name).default({}) }).strict(),
+  z.object({ kind: z.literal('http'), request: HttpRequest, save: z.record(z.string().max(500), Id).default({}),
+    names: z.record(z.string().max(500), Name).default({}) }).strict(),
   Command.extend({ kind: z.literal('command') }).strict(),
 ]);
 export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
@@ -66,7 +66,7 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     { environmentId: input.environmentId, inputAccess: input.inputAccess }), input.response_format));
   server.registerTool('foundation_run', {
     title: 'Run on an explicitly trusted executor',
-    description: 'Sign and encrypt one HTTP request or command for an explicitly selected, trusted executor. Requires environment permission and caller-program input grants. Use foundation_invoke_function for saved functions. Use save to map HTTP result JSON pointers to encrypted variable names. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
+    description: 'Sign and encrypt one HTTP request or command for an explicitly selected, trusted executor. Requires environment permission and caller-program input grants. Use foundation_invoke_function for saved functions. Use save to keep values of the HTTP result, by JSON pointer, in encrypted variables by their IDs, and names to keep them in new encrypted variables of those names. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
     inputSchema: z.object({ ownerId: Id.optional(), environmentId: Id.optional(),
       operation: Operation, response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -77,6 +77,7 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
     const result = await executionClient(client, custody()).execute({ name: 'run.execute', input: JsonObject.parse({
       ownerId: input.ownerId ?? client.identity.principalId, environmentId, operation,
       save: input.operation.kind === 'http' ? input.operation.save : {},
+      names: input.operation.kind === 'http' ? input.operation.names : {},
     }) });
     if (!('kind' in result) || result.kind !== 'run') return result;
     const { task } = result, operationId = task.intent.operationContext!.id;

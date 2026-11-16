@@ -14,6 +14,8 @@ import {
 } from '../shared/runtime-protocol.js';
 import type { RegisteredEnvironment, SharedResultReceipt, SignedReceipt, TaskView } from '../shared/runtime-protocol.js';
 import { fail, required } from './errors.js';
+import { RunOperation } from '../shared/executions.js';
+import type { DefinitionCall } from '../shared/executions.js';
 
 interface EnvironmentRow {
   resource_id: string;
@@ -57,7 +59,8 @@ export class Delegation {
   readonly queue: TaskQueue;
   readonly queues = new Set<TaskQueue>();
   checkApproval?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
-  checkOperationContext?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
+  // Checks a run against the operation that prepared it, and returns that operation as Foundation keeps it.
+  checkOperationContext?: (actor: Actor, intent: ExecutionIntent) => Promise<DefinitionCall>;
   completed?: (task: TaskView) => Promise<void>;
   constructor(
     readonly resources: Resources, readonly bindings: Bindings,
@@ -174,9 +177,10 @@ export class Delegation {
     if (intent.origin !== this.origin || intent.actor.principalId !== actor.id)
       fail(403, 'forbidden', 'Sign execution requests with your own identity.');
     await this.bindings.requireCurrent(intent.actor);
+    let reviewed: DefinitionCall | null = null;
     if (intent.operationContext) {
       if (!this.checkOperationContext) fail(503, 'operation_unavailable', 'The prepared operation cannot be checked.');
-      await this.checkOperationContext(actor, intent);
+      reviewed = await this.checkOperationContext(actor, intent);
     }
     if (intent.approval) {
       if (!this.checkApproval) fail(503, 'approval_unavailable', 'The approval request cannot be checked.');
@@ -201,11 +205,11 @@ export class Delegation {
     }
     if (sources.reduce((bytes, content) => bytes + JSON.stringify(content).length, 0) > 16_000_000)
       fail(413, 'input_limit', 'Use at most 16 MB of encrypted inputs in one execution.');
-    return { run, sources };
+    return { run, sources, reviewed };
   }
 
   async submit(actor: Actor, request: SealedRun) {
-    const { run } = await this.validate(actor, request), { intent } = run;
+    const { run, reviewed } = await this.validate(actor, request), { intent } = run;
     if (intent.resultApproval) {
       for (const recipient of await this.custody.required(intent.ownerId))
         if (!intent.resultApproval.policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
@@ -240,10 +244,13 @@ export class Delegation {
         "SELECT count(*) FROM execution_tasks WHERE owner_id=$1 AND state IN ('queued','running')", [intent.ownerId], connection,
       );
       if (Number(active?.count) >= 20) fail(429, 'run_limit', 'Wait for an existing run to finish.');
+      const kept = reviewed?.name === 'run.execute' ? RunOperation.parse(reviewed.input) : null;
+      if (kept) await this.custody.requireDestinations(intent.ownerId, kept.save, kept.names, connection);
       const row = required(await this.resources.db.one<TaskRow>(
-        `INSERT INTO execution_tasks(id,owner_id,actor_id,environment_id,kind,state,actor,request)
-         VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING *`,
-        [intent.id, intent.ownerId, actor.id, intent.environmentId, operationName(intent.operation), JSON.stringify(runActor), JSON.stringify(run)], connection,
+        `INSERT INTO execution_tasks(id,owner_id,actor_id,environment_id,kind,state,actor,request,output_names)
+         VALUES($1,$2,$3,$4,$5,'queued',$6,$7,$8) RETURNING *`,
+        [intent.id, intent.ownerId, actor.id, intent.environmentId, operationName(intent.operation), JSON.stringify(runActor), JSON.stringify(run),
+          JSON.stringify(kept?.names ?? {})], connection,
       ));
       await this.resources.audit.record(intent.ownerId, actor.id, 'run.create', intent.id,
         { environmentId: intent.environmentId, kind: operationName(intent.operation) }, connection);

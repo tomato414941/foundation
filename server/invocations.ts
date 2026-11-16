@@ -85,6 +85,8 @@ export class Invocations {
             Date.parse(value.expiresAt) > Date.now()))
           fail(400, 'invalid_output_authorization', 'Approve each encrypted output for this invocation.');
       }
+      await this.custody.requireDestinations(ownerId, Object.fromEntries(Object.entries(input.outputs)
+        .map(([pointer, output]) => [pointer, output.policy.id])), input.names, connection);
       const definitionDigest = await hash(current.publication.definition);
       const expiresAt = new Date(Math.min(Date.now() + 3_600_000, grantExpiration(current.settings.inputAccess), ...current.sources.map(source =>
         Math.max(...source.policy.grants.filter(grant => 'function' in grant && grant.function.id === functionId &&

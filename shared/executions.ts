@@ -26,12 +26,15 @@ export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1
   methodDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   clientId: z.string().max(1000).optional(), fields: z.record(z.string(), z.string()).optional(),
   clientSecret: z.literal('').optional() }).strict();
+// A run keeps each value of its result, by its JSON pointer, in the variable save names by id: one its owner has, or a
+// new one given a name in names. That name is a label Foundation keeps, left out of the run its keyholder signs.
 export const RunOperation = z.object({ ownerId: Id, environmentId: Id.optional(),
   operation: z.union([
     z.object({ kind: z.literal('http'), request: HttpRequest }).strict(),
     Command.extend({ kind: z.literal('command') }),
     z.object({ kind: z.enum(['http', 'command']), programId: Id, programDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
-  ]), save: z.record(z.string(), Name).default({}) }).strict().superRefine((value, context) => {
+  ]), save: z.record(z.string().max(500), Id).default({}), names: z.record(z.string().max(500), Name).default({}) })
+  .strict().superRefine((value, context) => {
     if (!value.environmentId)
       context.addIssue({ code: 'custom', path: ['environmentId'], message: 'Choose an execution environment.' });
   });

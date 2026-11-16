@@ -96,17 +96,20 @@ export class FunctionClient {
     await this.remember(authorization);
     return this.settings(id);
   }
+  // Keeps each value of the result, by its JSON pointer, in the variable save names by id, or in a new variable of the
+  // name names gives it.
   async invoke(id: string, arguments_: Record<string, JsonValue> = {}, options: {
-    id?: string; ownerId?: string; save?: Record<string, string>;
+    id?: string; ownerId?: string; save?: Record<string, string>; names?: Record<string, string>;
   } = {}) {
-    const invocationId = options.id ?? crypto.randomUUID(), outputs: Record<string, unknown> = {}, names = options.save ?? {};
-    if (Object.keys(options.save ?? {}).length) {
+    const invocationId = options.id ?? crypto.randomUUID(), outputs: Record<string, unknown> = {}, names = options.names ?? {};
+    const destinations = { ...Object.fromEntries(Object.keys(names).map(pointer => [pointer, crypto.randomUUID()])), ...options.save };
+    if (Object.keys(destinations).length) {
       if (!this.custody) throw new Error('Use your keys to approve encrypted output destinations.');
       const { executor } = await this.api.json('/api/functions/' + Id.parse(id) + '/output-recipient', {}, z.object({ executor: KeyBinding }));
       await this.custody.trusted(executor);
       const environment = { manifest: { executor } };
-      for (const [pointer, name] of Object.entries(options.save!)) outputs[pointer] = await this.custody.output(
-        options.ownerId ?? this.custody.binding.principalId, name, invocationId, environment, new Date(Date.now() + 3_600_000).toISOString());
+      for (const [pointer, destination] of Object.entries(destinations)) outputs[pointer] = await this.custody.output(
+        options.ownerId ?? this.custody.binding.principalId, destination, invocationId, environment, new Date(Date.now() + 3_600_000).toISOString());
     }
     try {
       return await this.api.json('/api/functions/' + Id.parse(id) + '/executions', { method: 'POST',

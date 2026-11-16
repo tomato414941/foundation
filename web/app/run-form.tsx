@@ -44,9 +44,10 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
           }
         } else if (text || parameter.required) args[parameter.name] = text;
       }
-      const save = jsonField<Record<string, string>>(form, 'save', {});
-      if (Object.keys(save).length) await requireKeys();
-      const result = await (await functionClient(Object.keys(save).length > 0)).invoke(resource.id, args, { save });
+      const save = jsonField<Record<string, string>>(form, 'save', {}), names = jsonField<Record<string, string>>(form, 'names', {});
+      const keeps = Object.keys({ ...save, ...names }).length > 0;
+      if (keeps) await requireKeys();
+      const result = await (await functionClient(keeps)).invoke(resource.id, args, { save, names });
       return redirect('/executions/' + result.id);
     } else
       input = {
@@ -65,7 +66,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
     }
     const result = await client.execute({ name: 'run.execute', input: { ownerId,
       environmentId: formText(form, 'environmentId'),
-      operation: input, save: jsonField(form, 'save', {}) } });
+      operation: input, save: jsonField(form, 'save', {}), names: jsonField(form, 'names', {}) } });
     if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('invalid_input');
     return redirect('/executions/' + result.task.intent.operationContext!.id);
   });
@@ -97,7 +98,8 @@ export default function RunForm() {
               </Panel>
             </>
           )}
-          <JsonField name="save" label={t('saveOutputs')} value={{}} />
+          <JsonField name="save" label={t('saveOutputs')} value={{}} helperText={t('saveOutputsHelp')} />
+          <JsonField name="names" label={t('saveOutputNames')} value={{}} helperText={t('saveOutputNamesHelp')} />
           <SaveBar back={resource ? resourcePath(resource) : '..'} label="execute" />
         </div>
       </Form>

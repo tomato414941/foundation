@@ -500,16 +500,17 @@ export class CustodyClient {
     }
     return [...sources.values()];
   }
-  async output(ownerId: string, name: string, runId: string, environment: { manifest: { executor: BoundKeys } }, expiresAt: string) {
-    let existing: ResourceView | undefined, after: string | null = null;
-    do {
-      const query = new URLSearchParams({ kind: 'variable', query: name, ...(after ? { after } : {}) });
-      const page = await this.api.json('/api/principals/' + ownerId + '/resources?' + query, {}, listOf(Resource));
-      existing = page.items.find(item => item.name === name); after = page.next;
-    } while (!existing && after);
-    const latest = existing ? await this.latest(existing.id) : undefined, previous = latest?.content;
+  // The approval for an executor to keep a value in the variable of this id: one the owner has, or, with nothing sealed
+  // under the id yet, a new one.
+  async output(ownerId: string, id: string, runId: string, environment: { manifest: { executor: BoundKeys } }, expiresAt: string) {
+    const latest = await this.latest(id).catch((error: unknown) => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'custody_required') return undefined;
+      throw error;
+    }), previous = latest?.content;
+    if (previous && (previous.policy.ownerId !== ownerId || previous.policy.contentType !== ContentTypes.value))
+      throw new ClientFailure('wrong_kind', 'Keep each output in a variable of its owner.');
     const policy: CustodyPolicy = previous && !latest.replaced ? { ...previous.policy, revision: previous.policy.revision + 1, producers: [] }
-      : await this.policy(ownerId, ContentTypes.value, [], { replacing: previous?.policy });
+      : await this.policy(ownerId, ContentTypes.value, [], previous ? { replacing: previous.policy } : { id });
     policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
       materialRevision: (previous?.materialRevision ?? 0) + 1 }];
     return approvePolicy(policy, this.binding, this.keys, latest?.replaced ? undefined : previous);
@@ -528,11 +529,11 @@ export class CustodyClient {
       throw new ClientFailure('http_runtime_required', 'Update this execution environment to use HTTP connections.');
     if (operation.kind === 'http') {
       const save = options.save ?? {};
-      // A new output is named as the reviewed run names it.
+      // A new output takes the name the reviewed run gives it.
       if (Object.keys(save).length && !options.operationContext)
         throw new ClientFailure('review_required', 'Keep outputs from a reviewed run, which names them.');
-      const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, name]) =>
-        [pointer, await this.output(ownerId, name, id, environment, expiresAt)])));
+      const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, destination]) =>
+        [pointer, await this.output(ownerId, destination, id, environment, expiresAt)])));
       operation.save = outputs;
     }
     const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)

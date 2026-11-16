@@ -207,7 +207,7 @@ test('共有された関数の結果を呼び出す人の暗号化された変�
     parameters: [{ name: 'query', label: 'Query' }], result: 'json' }));
   await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'runner', objectId: fn.id });
   const { client, functions } = await caller(f);
-  const invocation = await functions.invoke(fn.id, { query: 'hello world' }, { save: { '/body/count': 'Count' } });
+  const invocation = await functions.invoke(fn.id, { query: 'hello world' }, { names: { '/body/count': 'Count' } });
   await f.functionExecutor.tick();
   const result = await functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));
@@ -285,7 +285,7 @@ test('関数の非公開の出力を元の値のまま暗号化して保存し�
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.resource.id,
     'console.log(JSON.stringify({credential:process.env.TOKEN}))'));
-  const call = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Private credential' } });
+  const call = await f.functions.invoke(fn.id, {}, { names: { '/credential': 'Private credential' } });
   await f.functionExecutor.tick();
   const result = await f.functions.result(call.id), output = result.results[0] as { saved: Record<string, string> };
   assert.equal(result.state, 'succeeded');
@@ -319,11 +319,22 @@ test('関数の入力に指定した利用期限を適用し、期限切れの�
   t.mock.restoreAll();
 });
 
+test('関数の出力をIDで指した変数に保存し、名前の無い新しい変数には保存しない', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const fn = await save(f, definition(undefined, 'console.log(JSON.stringify({credential:"replaced"}))'));
+  const kept = await f.client.save('Kept credential', encode('before'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
+  const invocation = await f.functions.invoke(fn.id, {}, { save: { '/credential': kept.id } });
+  await f.functionExecutor.tick();
+  assert.deepEqual((await f.functions.result(invocation.id)).results[0], { saved: { '/credential': kept.id } });
+  assert.equal(decode(await f.client.reveal(kept.id)), 'replaced');
+  await assert.rejects(f.functions.invoke(fn.id, {}, { save: { '/credential': crypto.randomUUID() } }), { code: 'output_name_required' });
+});
+
 test('関数で生成した秘密を暗号化して保存し、呼び出す人へ保存先のIDを返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(undefined,
     'console.log(JSON.stringify({credential:require("crypto").randomBytes(16).toString("hex")}))'));
-  const invocation = await f.functions.invoke(fn.id, {}, { save: { '/credential': 'Generated credential' } });
+  const invocation = await f.functions.invoke(fn.id, {}, { names: { '/credential': 'Generated credential' } });
   await f.functionExecutor.tick();
   const result = await f.functions.result(invocation.id);
   assert.equal(result.state, 'succeeded', JSON.stringify(result));

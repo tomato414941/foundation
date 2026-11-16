@@ -210,6 +210,7 @@ const options = {
   inputs: textOption,
   request: textOption,
   save: textOption,
+  names: textOption,
   arguments: textOption,
   environment: textOption,
   timeout: textOption,
@@ -880,10 +881,11 @@ async function main(argv: string[]) {
     if (action === 'delete') { await functions.remove(id); return 0; }
     if (action === 'cancel') { await output(await functions.cancel(id), args); return 0; }
     if (action === 'invoke' || action === 'result') {
-      const save = z.record(z.string(), Name).parse(await json(args.values.save, {}));
-      const invoker = Object.keys(save).length ? new FunctionClient(client, privateClient(client).custody) : functions;
+      const save = z.record(z.string(), Id).parse(await json(args.values.save, {}));
+      const names = z.record(z.string(), Name).parse(await json(args.values.names, {}));
+      const invoker = Object.keys({ ...save, ...names }).length ? new FunctionClient(client, privateClient(client).custody) : functions;
       let result = action === 'invoke' ? await invoker.invoke(id, JsonObject.parse(await json(args.values.arguments, {})),
-        { ownerId: owner, save, ...(args.values.id ? { id: Id.parse(args.values.id) } : {}) })
+        { ownerId: owner, save, names, ...(args.values.id ? { id: Id.parse(args.values.id) } : {}) })
         : await functions.result(id);
       if (args.values.wait) result = await waitFor(() => functions.result(result.id),
         value => value.state, seconds(args.values.timeout, 3600));
@@ -906,7 +908,8 @@ async function main(argv: string[]) {
           };
     const started = await executionClient(client).execute({ name: 'run.execute', input: { ownerId: owner, environmentId,
       operation: JsonObject.parse(input),
-      save: z.record(z.string(), Name).parse(await json(args.values.save, {})) } });
+      save: z.record(z.string(), Id).parse(await json(args.values.save, {})),
+      names: z.record(z.string(), Name).parse(await json(args.values.names, {})) } });
     if (!('kind' in started) || started.kind !== 'run') throw new Error('Continue the pending run.');
     const run = started.task;
     const result = args.values.wait

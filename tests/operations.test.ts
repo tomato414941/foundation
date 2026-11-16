@@ -17,6 +17,7 @@ import { ConnectionMaterial, connectionLabels, connectionMetadata, sealedConnect
 import { DomainError } from '../server/errors.js';
 import type { JsonApi } from '../shared/client.js';
 import { CustodyClient, SubmissionPending } from '../shared/client.js';
+import { signedInvocation } from '../shared/operation-authorization.js';
 
 test('定義した操作を通常のAPIと承認依頼から同じ利用者の権限で実行する', async t => {
   const f = await flowFixture(); t.after(f.close);
@@ -131,7 +132,7 @@ test('承認したHTTP操作と署名した実行を結び付け、実行先が�
   const plan = await operations.plan(asked.executionId);
   const prepared = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
     url: 'https://api.example.com/changed', method: 'DELETE', headers: {}, bindings: [],
-  }, save: {} }, { approval: plan.approval, operationContext: { id: asked.executionId, index: plan.index, invocation: plan.invocation } });
+  }, save: {} }, { approval: plan.approval, operationContext: { id: asked.executionId, index: plan.index, invocation: signedInvocation(plan.invocation) } });
   await f.client.api.json('/api/executions/' + asked.executionId + '/continuation', { method: 'PUT',
     body: { index: plan.index, continuation: { kind: 'run', id: prepared.intent.id } } });
   const task = await f.client.submitPrepared(prepared);
@@ -148,7 +149,7 @@ test('応答の値を、レビューした実行が付けた名前の新しい�
   const f = await flowFixture(() => jsonResponse({ value: 'kept-value' })); t.after(f.close);
   const started = await f.operations.execute({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
     environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://api.example.com/value',
-      method: 'GET' } }, save: { '/value': 'Kept value' } } });
+      method: 'GET' } }, names: { '/value': 'Kept value' } } });
   if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected a run.');
   await f.executor.tick();
   const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + started.task.id, {}, Task));
@@ -172,7 +173,7 @@ test('HTTPの秘密情報を封をしたまま再開し、同じ実行先の処�
   const plan = await operations.plan(execution.id);
   const extra = await f.client.prepare(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
     url: 'https://api.example.com/private', method: 'POST', headers: {}, bindings: [],
-  }, save: {} }, { operationContext: { id: execution.id, index: plan.index, invocation: plan.invocation } });
+  }, save: {} }, { operationContext: { id: execution.id, index: plan.index, invocation: signedInvocation(plan.invocation) } });
   await assert.rejects(f.client.submitPrepared(extra), { code: 'operation_changed' });
   const fresh = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client)));
   const resumed = await fresh.continue(execution.id);

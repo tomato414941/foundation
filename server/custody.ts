@@ -372,6 +372,22 @@ export class Custody {
     return transaction ? persist(transaction) : this.resources.db.transaction(persist);
   }
 
+  // Each value a run or an invocation keeps goes to the variable named by its id: one of its owner's, or a new one given
+  // a name.
+  async requireDestinations(ownerId: string, destinations: Record<string, string>, names: Record<string, string>,
+    connection: Queryable = this.resources.db.pool) {
+    if (Object.keys(names).some(pointer => !Object.hasOwn(destinations, pointer)))
+      fail(400, 'invalid_output', 'Keep each named output in a variable.');
+    for (const [pointer, id] of Object.entries(destinations)) {
+      const row = await this.resources.db.one<{ kind: string; owner_id: string }>(
+        'SELECT kind,owner_id FROM resources WHERE id=$1', [id], connection);
+      if (Object.hasOwn(names, pointer) ? row : !row)
+        fail(400, row ? 'output_exists' : 'output_name_required', row ? 'Keep a named output in a new variable.' : 'Name each new variable that keeps an output.');
+      if (row && (row.kind !== 'variable' || row.owner_id !== ownerId))
+        fail(400, 'wrong_kind', 'Keep each output in a variable of its owner.');
+    }
+  }
+
   async putProduced(actor: Actor, input: { content: CustodyContent; pointer: string }) {
     const content = await verifyContent(input.content), policy = content.policy;
     if (policy.contentType === ContentTypes.executionResult)
@@ -389,15 +405,18 @@ export class Custody {
     if (!producer) fail(403, 'forbidden', 'Approve this execution before saving its output.');
     const authority = policyAuthority(content);
     await this.bindings.requireCurrent(authority);
-    const task = await this.resources.db.one<{ request: SealedRun }>(
-      "SELECT request FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
+    const task = await this.resources.db.one<{ request: SealedRun; output_names: Record<string, string> }>(
+      "SELECT request,output_names FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
       [content.creationRunId],
     );
     const invocation = !task ? await this.resources.db.one<{ owner_id: string; executor: BoundKeys; output_names: Record<string, string>;
       request: { actor: BoundKeys | null; outputs: Record<string, { policy: CustodyPolicy; signature: string }> } }>(
       "SELECT owner_id,executor,output_names,request FROM function_invocations WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
       [content.creationRunId]) : null;
-    const authorized = task ? task.request.intent.ownerId === policy.ownerId &&
+    // A reviewed run keeps each value only in the variable it was reviewed to keep it in.
+    const reviewed = RunOperation.safeParse(task?.request.intent.operationContext?.invocation.input);
+    const authorized = task ? (!reviewed.success || reviewed.data.save[input.pointer] === policy.id) &&
+      task.request.intent.ownerId === policy.ownerId &&
       canonical(task.request.intent.actor) === canonical(authority) && canonical(task.request.intent.executor) === canonical(binding)
       : invocation && invocation.owner_id === policy.ownerId && canonical(invocation.request.actor) === canonical(authority) &&
         canonical(invocation.executor) === canonical(binding) && Object.hasOwn(invocation.request.outputs, input.pointer) &&
@@ -405,10 +424,9 @@ export class Custody {
         invocation.request.outputs[input.pointer]!.signature === content.authorization;
     if (!authorized)
       fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
-    // A new output takes the name the request that keeps it gave: the run as it was reviewed, or the invocation. An
-    // output that exists keeps its own.
-    const reviewed = RunOperation.safeParse(task?.request.intent.operationContext?.invocation.input);
-    const name = task ? reviewed.data?.save[input.pointer] : invocation!.output_names[input.pointer];
+    // A new output takes the name the request that keeps it gave, kept beside it: the run as it was reviewed, or the
+    // invocation. An output that exists keeps its own.
+    const name = (task ?? invocation!).output_names[input.pointer];
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
