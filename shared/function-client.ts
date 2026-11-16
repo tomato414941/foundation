@@ -8,7 +8,7 @@ import { FunctionWrite, FunctionSettingsWrite, approveFunctionSettings, publishF
 import type { CustodyClient, JsonApi } from './client.js';
 import { ProtectedRead } from './protocol.js';
 import { FunctionSave, FunctionConfigure, Execution } from './executions.js';
-import { functionSources } from './functions.js';
+import { functionRules, functionSources } from './functions.js';
 
 export class InvocationSubmissionError extends Error {
   constructor(readonly invocationId: string, cause: unknown) {
@@ -26,8 +26,8 @@ export class FunctionClient {
     if (definition.program.kind === 'http' && definition.result !== 'json')
       throw new Error('HTTP functions return a JSON response containing status, headers, and body.');
     const functionId = input.resourceId ?? crypto.randomUUID();
-    const publication = await publishFunction({ format: 2, functionId, ownerId: input.ownerId,
-      revision: input.resourceId ? (input.version ?? 0) + 1 : 1, definition, author: client.binding,
+    const publication = await publishFunction({ format: 3, functionId, ownerId: input.ownerId,
+      revision: input.resourceId ? (input.version ?? 0) + 1 : 1, definition: functionRules(definition), author: client.binding,
       createdAt: new Date().toISOString() }, client.keys);
     return FunctionWrite.parse({ functionId, publication });
   }
@@ -51,7 +51,7 @@ export class FunctionClient {
       await client.observe(item.content); sources.push(item.content);
     }
     const contents: z.infer<typeof FunctionSettingsWrite>['contents'] = {};
-    const reference = { id: functionId, digest: await hash(definition) };
+    const reference = { id: functionId, digest: await hash(functionRules(definition)) };
     for (const source of sources) {
       const previous = await client.read(source.policy.id);
       if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(client.binding)))

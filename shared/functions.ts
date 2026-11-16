@@ -1,9 +1,14 @@
 import { Template } from '@fedify/uri-template';
-import { Command, HttpRequest } from './contracts.js';
-import type { FunctionSpec, JsonValue, SourceReference } from './contracts.js';
+import { Command, FunctionRules, HttpRequest } from './contracts.js';
+import type { FunctionRuleSpec, FunctionSpec, JsonValue, SourceReference } from './contracts.js';
 import { httpSources } from './http-connections.js';
 
-export function functionArguments(spec: FunctionSpec, args: Record<string, JsonValue>) {
+export function functionRules(definition: FunctionSpec): FunctionRuleSpec {
+  const { description: _description, parameters, ...rules } = definition;
+  return FunctionRules.parse({ ...rules, parameters: parameters.map(({ label: _label, ...parameter }) => parameter) });
+}
+
+export function functionArguments(spec: FunctionRuleSpec, args: Record<string, JsonValue>) {
   const values: Record<string, JsonValue> = {};
   if (Object.keys(args).some(name => !spec.parameters.some(parameter => parameter.name === name)))
     throw new Error('Use the parameters this function declares.');
@@ -22,7 +27,7 @@ export function functionArguments(spec: FunctionSpec, args: Record<string, JsonV
   return values;
 }
 
-export function functionProgram(spec: FunctionSpec, args: Record<string, JsonValue>) {
+export function functionProgram(spec: FunctionRuleSpec, args: Record<string, JsonValue>) {
   const values = functionArguments(spec, args);
   if (spec.program.kind === 'command') {
     const { kind, ...command } = spec.program;
@@ -62,7 +67,7 @@ export function functionProgram(spec: FunctionSpec, args: Record<string, JsonVal
   return { kind: 'http' as const, request: filled, responseFormat: spec.program.responseFormat };
 }
 
-export function functionSources(spec: FunctionSpec): SourceReference[] {
+export function functionSources(spec: FunctionRuleSpec): SourceReference[] {
   return spec.program.kind === 'command' ? spec.program.inputs.map(input => input.source)
     : httpSources(spec.program.request);
 }

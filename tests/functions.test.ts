@@ -15,7 +15,7 @@ import { canonical, hash, sign } from '../shared/authority.js';
 import { ContentTypes, Operations, authorizeUse, protect, reveal } from '../shared/custody.js';
 import { DomainError } from '../server/errors.js';
 import { decode, encode } from '../shared/encryption.js';
-import { functionArguments, functionProgram } from '../shared/functions.js';
+import { functionArguments, functionProgram, functionRules } from '../shared/functions.js';
 
 const script = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,configured:!!process.env.TOKEN}));});';
 const definition = (sourceId?: string, command = script) => FunctionDefinition.parse({
@@ -297,7 +297,7 @@ test('継続許可された関数の入力を30日後も使い、所有者が撤
   const f = await flowFixture(); t.after(f.close);
   const fn = await save(f, definition(f.resource.id));
   const previous = await f.client.read(f.resource.id), content = previous.content;
-  const intent = { ...f.intent, operation: Operations.function, functionId: fn.id, functionDigest: await hash(fn.data),
+  const intent = { ...f.intent, operation: Operations.function, functionId: fn.id, functionDigest: await hash(functionRules(fn.data)),
     sources: [{ id: content.policy.id, policyDigest: await hash(content.policy), materialRevision: content.materialRevision }] };
   await authorizeUse(content, intent, { now: Date.now() + 35 * 86_400_000 });
   await f.client.save(f.resource.name, await f.client.reveal(f.resource.id), { ...content.policy,

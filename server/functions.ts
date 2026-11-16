@@ -14,7 +14,7 @@ import { canonical, hash } from '../shared/authority.js';
 import { ContentTypes, Operations, functionOperations, grantActive } from '../shared/custody.js';
 import { pointerParts, setPointer } from '../shared/values.js';
 import { fail } from './errors.js';
-import { functionProgram, functionSources } from '../shared/functions.js';
+import { functionProgram, functionRules, functionSources } from '../shared/functions.js';
 import type { z } from 'zod';
 
 interface SettingsRow { function_id: string; environment_id: string | null; version: number; approval: SettingsApproval; }
@@ -35,13 +35,13 @@ export class Functions {
     try {
       const value = await verifyFunction(row.data.publication as unknown as z.infer<typeof FunctionWrite>['publication']);
       return value.functionId === row.id && value.ownerId === row.owner_id &&
-        canonical(value.definition) === canonical(this.definition(row)) ? value : null;
+        canonical(value.definition) === canonical(functionRules(this.definition(row))) ? value : null;
     } catch { return null; }
   }
   private async approved(row: ResourceRow, settings: SettingsRow) {
     const approval = settings.approval;
     return approval.functionId === row.id && approval.ownerId === row.owner_id && approval.revision === settings.version &&
-      approval.environmentId === settings.environment_id && approval.definitionDigest === await hash(this.definition(row));
+      approval.environmentId === settings.environment_id && approval.definitionDigest === await hash(functionRules(this.definition(row)));
   }
   references(spec: FunctionSpec): string[] {
     return functionSources(spec).map(source => source.id);
@@ -136,7 +136,7 @@ export class Functions {
     await custody.bindings.requireCurrent(publication.author);
     if (publication.author.principalId !== actor.id || publication.functionId !== proof.functionId ||
       publication.ownerId !== input.ownerId || publication.revision !== (previous?.version ?? 0) + 1 ||
-      canonical(publication.definition) !== canonical(spec))
+      canonical(publication.definition) !== canonical(functionRules(spec)))
       fail(400, 'invalid_function_publication', 'Sign the current function definition.');
     const row = await this.resources.db.transaction(async connection => {
       await custody.bindings.requireCurrent(publication.author, connection);
@@ -182,7 +182,7 @@ export class Functions {
       const approval = await verifyFunctionSettings(proof.approval);
       await custody.bindings.requireCurrent(approval.author, connection);
       if (approval.author.principalId !== actor.id || approval.functionId !== row.id || approval.ownerId !== row.owner_id ||
-        approval.revision !== input.version + 1 || approval.definitionDigest !== await hash(spec) ||
+        approval.revision !== input.version + 1 || approval.definitionDigest !== await hash(functionRules(spec)) ||
         approval.environmentId !== input.environmentId || canonical(approval.inputAccess) !== canonical(input.inputAccess))
         fail(400, 'invalid_function_settings', 'Approve the current function and its execution settings.');
       if (!grantActive(approval.inputAccess)) fail(400, 'invalid_input', 'Choose a future expiration for input access.');
@@ -255,7 +255,7 @@ export class Functions {
     if (canonical(settings.executor) !== canonical(environment.registration.manifest.executor))
       fail(409, 'function_not_approved', 'The owner must approve this execution environment again.');
     await this.resources.authorization.requireResource({ id: row.owner_id }, await this.resources.get(configured.environment_id, connection), 'execute', connection);
-    const sources = await this.sources(definition, custody), reference = { id, digest: await hash(definition) };
+    const sources = await this.sources(definition, custody), reference = { id, digest: await hash(publication.definition) };
     for (const source of sources)
       if (!source.policy.grants.some(grant => 'function' in grant && canonical(grant.function) === canonical(reference) &&
         canonical(grant.executor) === canonical(settings.executor) &&

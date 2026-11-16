@@ -2,6 +2,7 @@ import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import { FunctionSave, FunctionConfigure } from '../../shared/executions.js';
 import { canonical } from '../../shared/authority.js';
+import { functionRules } from '../../shared/functions.js';
 import { FunctionWrite, FunctionSettingsWrite, Invocation as FunctionInvocation, InvocationInput } from '../../shared/function-api.js';
 import { fail } from '../errors.js';
 import { DefinitionRegistry } from '../definitions.js';
@@ -15,7 +16,7 @@ export function defineFunctions(definitions: DefinitionRegistry, services: Pick<
     { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
       const write = FunctionWrite.parse(proof);
       if (input.resourceId && input.resourceId !== write.functionId || write.publication.ownerId !== input.ownerId ||
-        canonical(write.publication.definition) !== canonical(input.definition) || write.publication.revision !== (input.resourceId ? (input.version ?? 0) + 1 : 1))
+        canonical(write.publication.definition) !== canonical(functionRules(input.definition)) || write.publication.revision !== (input.resourceId ? (input.version ?? 0) + 1 : 1))
         fail(409, 'operation_changed', 'Publish the function definition approved by this operation.');
       return functions.save(who, input, write, custody);
     } });

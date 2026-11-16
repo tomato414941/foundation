@@ -413,26 +413,30 @@ export const FunctionProgram = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
     responseFormat: z.enum(['text', 'json']).default('json') }).strict(),
 ]);
+const FunctionParameter = z.object({
+  name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/),
+  label: z.string().max(100),
+  type: z.enum(['string', 'number', 'boolean', 'json']).default('string'),
+  required: z.boolean().default(true),
+  default: Json.optional(),
+}).strict();
 export const FunctionDefinition = z
   .object({
     description: z.string().max(2000).default(''),
     program: FunctionProgram,
-    parameters: z
-      .array(
-        z.object({
-          name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/),
-          label: z.string().max(100),
-          type: z.enum(['string', 'number', 'boolean', 'json']).default('string'),
-          required: z.boolean().default(true),
-          default: Json.optional(),
-        }).strict(),
-      )
-      .max(32)
-      .default([]),
+    parameters: z.array(FunctionParameter).max(32).default([]),
     result: z.enum(['text', 'json']).default('json'),
   })
   .strict();
 export type FunctionSpec = z.infer<typeof FunctionDefinition>;
+// What a function does: its definition without its description and the labels of its parameters, which Foundation
+// keeps as labels. Its owner signs this, approvals name it by its digest, and executors run it.
+export const FunctionRules = z.object({
+  program: FunctionProgram,
+  parameters: z.array(FunctionParameter.omit({ label: true })).max(32).default([]),
+  result: FunctionDefinition.shape.result,
+}).strict();
+export type FunctionRuleSpec = z.infer<typeof FunctionRules>;
 export const FunctionInputAccess = z.object({ expiresAt: Time.nullable().default(null) }).strict();
 export const FunctionExecutionSettings = z.object({
   version: z.number().int().nonnegative(), environmentId: Id.nullable(),

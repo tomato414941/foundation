@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { encode } from '../shared/encryption.js';
-import { Resource } from '../shared/contracts.js';
+import { FunctionDefinition, Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
@@ -145,5 +145,28 @@ test('作業用の機械が登録し直しても、Foundation で付けた名前
     await f.context.delegation.register(f.executorIdentity.actor,
       await signEnvironment({ ...manifest, revision: manifest.revision + 1 }, f.executorIdentity.keys));
     assert.equal((await f.client.api.json('/api/resources/' + manifest.id, {}, Resource)).name, 'Renamed in Foundation');
+  } finally { await f.close(); }
+});
+
+// Why: the user decided that what an owner signs to allow something names it by what it does; a description or a label
+// is kept in one place, Foundation. A function's owner once signed its description and the labels of its parameters with
+// its program, so describing it again took back the approvals given to run it and to read its inputs.
+// Intent: approve a function that reads an input, describe it and its parameter again, and run it as approved.
+test('関数の説明と引数の見出しを変えても、出した許可のまま実行できる', async () => {
+  const f = await flowFixture();
+  try {
+    const definition = FunctionDefinition.parse({ description: 'Repeat a message.', program: { kind: 'command',
+      command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>' +
+        'console.log(JSON.stringify({message:JSON.parse(text).message,read:!!process.env.INPUT})));'],
+      inputs: [{ name: 'INPUT', source: { id: f.resource.id } }], timeoutSeconds: 5 },
+      parameters: [{ name: 'message', label: 'Message' }] });
+    const fn = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Repeater', definition });
+    await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
+    await f.functions.save({ ownerId: f.owner.actor.id, name: 'Repeater', resourceId: fn.id, version: fn.version,
+      definition: { ...definition, description: 'Repeat a message, described again.',
+        parameters: [{ ...definition.parameters[0]!, label: 'Words to repeat' }] } });
+    const invoked = await f.functions.invoke(fn.id, { message: 'Still approved' });
+    await f.functionExecutor.tick();
+    assert.deepEqual((await f.functions.result(invoked.id)).results[0], { message: 'Still approved', read: true });
   } finally { await f.close(); }
 });

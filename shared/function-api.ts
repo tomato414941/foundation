@@ -1,13 +1,15 @@
 import { z } from 'zod';
-import { FunctionDefinition, FunctionInputAccess, Id, Json, JsonObject, Name, Time } from './contracts.js';
+import { FunctionDefinition, FunctionInputAccess, FunctionRules, Id, Json, JsonObject, Name, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, sign, validateBinding, verify } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import { PolicyApproval, ProtectedContent } from './custody.js';
 import { TaskState } from './runtime-protocol.js';
 
+// What an owner signs of a function: what it does. Its description and the labels of its parameters are kept by
+// Foundation.
 export const FunctionPublication = z.object({
-  format: z.literal(2), functionId: Id, ownerId: Id, revision: z.number().int().positive(),
-  definition: FunctionDefinition, author: KeyBinding, createdAt: Time,
+  format: z.literal(3), functionId: Id, ownerId: Id, revision: z.number().int().positive(),
+  definition: FunctionRules, author: KeyBinding, createdAt: Time,
   signature: Signature,
 }).strict();
 export type Publication = z.infer<typeof FunctionPublication>;

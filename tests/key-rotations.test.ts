@@ -15,6 +15,7 @@ import type { PreparedRotationPayload } from '../shared/key-rotations.js';
 import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, makeReceipt, readReceipt, signEnvironment } from '../shared/runtime-protocol.js';
 import { openKeyring, signKeyring } from '../shared/keyring.js';
 import { approveFunctionSettings, publishFunction, verifyFunctionSettings } from '../shared/function-api.js';
+import { functionRules } from '../shared/functions.js';
 import { FunctionDefinition } from '../shared/contracts.js';
 import { CustodyClient } from '../shared/client.js';
 import { JournalTrust } from '../runtime/trust.js';
@@ -185,13 +186,13 @@ test('実行環境と関数設定と検証済み鍵一覧を、設定と信頼�
   const definition = FunctionDefinition.parse({ program: { kind: 'http',
     request: { url: 'https://service.example/items', method: 'GET' } } });
   const functionId = randomUUID(), publication = await publishFunction({
-    format: 2, functionId, ownerId: f.owner.actor.id, revision: 1, definition,
+    format: 3, functionId, ownerId: f.owner.actor.id, revision: 1, definition: functionRules(definition),
     author: f.owner.binding, createdAt: new Date().toISOString(),
   }, f.owner.keys);
   const fn = await f.context.functions.save(f.owner.actor, { ownerId: f.owner.actor.id, name: 'Saved HTTP request', definition },
     { functionId, publication }, f.context.custody);
   const approval = await approveFunctionSettings({ format: 1, functionId, ownerId: f.owner.actor.id,
-    definitionDigest: await hash(definition), revision: 1, environmentId: environment.manifest.id,
+    definitionDigest: await hash(functionRules(definition)), revision: 1, environmentId: environment.manifest.id,
     inputAccess: { expiresAt: null }, author: f.owner.binding, executor: f.owner.binding,
     createdAt: new Date().toISOString(),
   }, f.owner.keys);

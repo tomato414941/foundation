@@ -45,7 +45,7 @@ export class Invocations {
     await this.resources.authorization.active(row.actor);
     if (Date.parse(row.request.expiresAt) <= Date.now()) fail(409, 'invocation_expired', 'This invocation has expired.');
     const current = await this.functions.execution(row.actor, row.function_id, this.custody, this.delegation);
-    if (await hash(current.definition) !== row.request.definitionDigest ||
+    if (await hash(current.publication.definition) !== row.request.definitionDigest ||
       await hash(current.settings) !== row.request.settingsDigest ||
       canonical(current.settings.executor) !== canonical(row.executor) || current.row.owner_id !== row.function_owner_id)
       fail(409, 'function_changed', 'The function changed before this invocation started.');
@@ -85,7 +85,7 @@ export class Invocations {
             Date.parse(value.expiresAt) > Date.now()))
           fail(400, 'invalid_output_authorization', 'Approve each encrypted output for this invocation.');
       }
-      const definitionDigest = await hash(current.definition);
+      const definitionDigest = await hash(current.publication.definition);
       const expiresAt = new Date(Math.min(Date.now() + 3_600_000, grantExpiration(current.settings.inputAccess), ...current.sources.map(source =>
         Math.max(...source.policy.grants.filter(grant => 'function' in grant && grant.function.id === functionId &&
           grant.function.digest === definitionDigest && canonical(grant.executor) === canonical(current.settings.executor) &&
