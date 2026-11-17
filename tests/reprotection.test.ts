@@ -155,11 +155,13 @@ test('トークン更新中の項目があっても委任先の線を引け、�
 });
 
 // A CloudRift connection as the earliest format sealed it, with its method inside, stored as it was then.
-async function storedEarlier(f: Awaited<ReturnType<typeof flowFixture>>, name: string, method: MethodDescription, token: string) {
+async function storedEarlier(f: Awaited<ReturnType<typeof flowFixture>>, name: string, method: MethodDescription & { http?: object },
+  token: string) {
   const material = { format: 2, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(), appId: null,
     appGeneration: null, fields: { token } };
   // What the earliest format signed beside such content: everything but the digest of the method's rules.
-  const { methodDigest: _methodDigest, ...metadata } = await connectionMetadata(ConnectionMaterial.parse({ ...material, format: 3 }));
+  const { http: _http, ...rules } = method;
+  const { methodDigest: _methodDigest, ...metadata } = await connectionMetadata(ConnectionMaterial.parse({ ...material, method: rules, format: 3 }));
   // The labels stored with it then: what its method was called, and an account.
   return sealedEarlier(f, 'connection', name, encode(canonical(material)), metadata, [],
     { ...metadata, methodName: method.name, account: '' });
@@ -173,7 +175,9 @@ test('つなぎ方を中に持つ古い形の接続を、作ったときの決�
   // The same method before the pattern of its key was corrected: connections made then sealed these rules.
   const earlier = { ...current, config: { ...current.config,
     fields: current.config.fields.map(field => field.name === 'token' ? { ...field, pattern: '^.+$' } : field) } };
-  const same = await storedEarlier(f, 'Current rules', current, 'current-rules-token');
+  // The current method as connections made while methods still said how to send their values over HTTP sealed it.
+  const same = await storedEarlier(f, 'Current rules', { ...current, http: { urlField: 'url',
+    authentication: { kind: 'header', name: 'X-API-Key', value: 'CLOUDRIFT_API_KEY' } } }, 'current-rules-token');
   const changed = await storedEarlier(f, 'Earlier rules', earlier, 'earlier-rules-token');
 
   assert.deepEqual((await f.client.pendingProtection()).sort((a, b) => a.id.localeCompare(b.id)),

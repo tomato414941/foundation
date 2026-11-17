@@ -8,7 +8,13 @@ import { decode } from './encryption.js';
 // metadata the rules it was approved with, or change it before then. It lives in its own file so that it can be removed
 // once production holds none.
 const Named = z.object({ accountName: z.string().optional() }).passthrough();
-const Earlier = z.object({ format: z.literal(2), methodId: z.string().min(1), method: MethodDefinition,
+// The method it was made with, without the HTTP settings that methods no longer have.
+const EarlierMethod = z.preprocess(value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { http: _http, ...method } = value as Record<string, unknown>;
+  return method;
+}, MethodDefinition);
+const Earlier = z.object({ format: z.literal(2), methodId: z.string().min(1), method: EarlierMethod,
   oauth: Named.optional(), facts: Named.optional() }).passthrough();
 const unnamed = (value?: z.infer<typeof Named>) => {
   if (!value) return {};
