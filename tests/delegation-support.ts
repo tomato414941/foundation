@@ -30,9 +30,8 @@ export async function delegatedFixture() {
   const owner = await person('Owner'), delegate = await person('Delegate'), stranger = await person('Other');
   await f.relations.draw(owner.actor, { subjectId: delegate.actor.id, relation: 'delegate', objectId: owner.actor.id });
   const policy = AccessPolicy.parse({
-    format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, delegate.binding], readers: [owner.binding, delegate.binding],
-    grants: [],
   });
   const content = await protect(encode('confidential-value'), policy, 1, owner.binding, owner.keys);
   const resource = await custody.put(owner.actor, { name: 'Credential', content, data: { bytes: 18 } });

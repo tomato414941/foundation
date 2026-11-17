@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { ContentTypes, Operations, protect, reveal } from '../shared/custody.js';
+import { sealedEarlier, use } from './earlier-support.js';
+import { ContentTypes, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
-import { canonical } from '../shared/authority.js';
+import { canonical, hash } from '../shared/authority.js';
+import { methodDigest, methodRules } from '../shared/connection-methods.js';
 import type { MethodDescription } from '../shared/contracts.js';
-import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
+import { ConnectionMaterial, connectionMetadata, sealedConnection } from '../shared/connections.js';
 
 const minutes = (count: number) => new Date(Date.now() + count * 60_000).toISOString();
-
 test('委任先が64件の項目を開けるように暗号化し直す間の進捗を通知する', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
@@ -31,40 +32,52 @@ test('委任先が64件の項目を開けるように暗号化し直す間の進
   assert.equal(decode(await reveal(shared.content, delegate.binding, delegate.keys.encryption)), 'value 62');
 });
 
-test('期限の切れた許可が残る項目を待ち行列に示し、所有者の端末がその許可を外して封じ直す', async (t) => {
+test('前の形式で封じた項目は持ち主の端末が開くときに今の形式で封じ直し、まだ自分で使えた相手を読み手にする', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  // Items sealed before keys were opened only on the user's own machine still carry grants that expire.
-  const save = async (name: string, value: string, expiresAt: string) => f.client.save(name, encode(value), {
-    ...await f.client.policy(f.owner.actor.id, ContentTypes.value), grants: [{ actor: f.owner.binding, executor: f.delegate.binding,
-      operations: [Operations.command], functionDigests: [], origins: [], callerProgram: true, expiresAt }] });
-  const expired = await save('Expired token', 'kept after expiry', minutes(-1));
-  const current = await save('Current token', 'still granted', minutes(60));
+  const user = await f.person('Connection user'), expired = await f.person('Former user');
+  for (const person of [user, expired]) await f.client.trust.rememberBinding(person.binding);
+  const id = await sealedEarlier(f, 'variable', 'Earlier value', encode('kept value'), { bytes: 10 },
+    [use(user.binding, minutes(60)), use(expired.binding, minutes(-1))]);
+  assert.deepEqual(await f.client.pendingProtection(), [{ id, reason: 'format', remove: [] }]);
+  await assert.rejects(f.custody.read(user.actor, id), { code: 'forbidden' });
 
-  assert.deepEqual(await f.client.pendingProtection(), [{ id: expired.id, reason: 'grantExpired', remove: [] }]);
-  assert.deepEqual(await f.client.reprotectPending(), { done: [expired.id], failed: [] });
-  assert.deepEqual(await f.client.pendingProtection(), []);
-
-  const { content } = await f.client.read(expired.id);
-  assert.deepEqual(content.policy.grants, []);
+  assert.equal(decode(await f.client.reveal(id)), 'kept value');
+  const { content } = await f.client.read(id);
+  assert.equal(content.policy.format, 3);
   assert.equal(content.policy.revision, 2);
-  assert.equal(content.materialRevision, 2);
-  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid).sort(), [f.owner.binding.id, f.delegate.binding.id].sort());
-  assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'kept after expiry');
-  assert.deepEqual((await f.resources.get(expired.id)).data.executors, []);
-  assert.equal((await f.client.read(current.id)).content.policy.grants.length, 1);
+  assert.deepEqual(content.policy.readers.map(reader => reader.principalId).sort(),
+    [f.owner.actor.id, f.delegate.actor.id, user.actor.id].sort());
+  assert.deepEqual(content.policy.authorities.map(authority => authority.principalId).sort(), [f.owner.actor.id, f.delegate.actor.id].sort());
+  const opened = await f.custody.read(user.actor, id);
+  assert.equal(decode(await reveal(opened.content as typeof content, user.binding, user.keys.encryption)), 'kept value');
+  await assert.rejects(f.custody.read(expired.actor, id), { code: 'forbidden' });
+  assert.deepEqual(await f.client.pendingProtection(), []);
 });
 
-test('値を保存し直すとき、ほかの人が受けた許可のうち期限の切れたものを引き継がない', async (t) => {
+test('前の形式の接続は、送り方の設定だけが違う決まりなら今の決まりとして署名し直してそのまま使い、ほかが違えばつなぎ直しを求める', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const grant = (expiresAt: string) => ({ actor: f.stranger.binding, executor: f.delegate.binding,
-    operations: [Operations.command], functionDigests: [], origins: [], callerProgram: true, expiresAt });
-  const previous = { ...await f.client.policy(f.owner.actor.id, ContentTypes.value), grants: [grant(minutes(-1)), grant(minutes(60))] };
-
-  const next = await f.client.policy(f.owner.actor.id, ContentTypes.value, { previous });
-  assert.deepEqual(next.grants, [previous.grants[1]]);
-  assert.equal(next.revision, previous.revision + 1);
+  const method = await f.method('cloudrift:api_key');
+  // How the method once said to send the key over HTTP, which connections made then signed with its rules.
+  const http = { urlField: 'url', authentication: { kind: 'header', name: 'X-API-Key', value: 'CLOUDRIFT_API_KEY' } };
+  const connection = async (name: string, token: string, rules: object) => {
+    const state = ConnectionMaterial.parse({ format: 3, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(),
+      appId: null, appGeneration: null, fields: { token } });
+    const metadata = { ...await connectionMetadata(state), http, methodDigest: await hash(rules) };
+    return sealedEarlier(f, 'connection', name, sealedConnection(state), metadata,
+      [], { ...metadata, methodName: method.name, account: '', services: [{ id: 'cloudrift', name: 'CloudRift' }] });
+  };
+  const same = await connection('Same rules', 'same-rules-token', { ...methodRules(method), http });
+  const changed = await connection('Changed rules', 'changed-rules-token', { ...methodRules(method), http, docs: 'changed' });
+  const used = async (id: string) =>
+    (await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id, output: 'CLOUDRIFT_API_KEY' } }])).environment.CLOUDRIFT_API_KEY;
+  assert.equal(await used(same), 'same-rules-token');
+  const resealed = (await f.client.read(same)).content.metadata;
+  assert.equal(resealed.methodDigest, await methodDigest(method));
+  assert.equal('http' in resealed, false);
+  await assert.rejects(used(changed), { code: 'reconnect_required' });
+  assert.equal((await f.client.read(changed)).content.policy.format, 3);
 });
 
 test('持ち主の端末は未検証の代理を知らせ、検証済みの代理が項目を開けるように暗号化し直す', async (t) => {
@@ -128,7 +141,7 @@ test('トークン更新中の項目があっても委任先の線を引け、�
   const ai = await f.person('Agent');
   await f.client.trust.rememberBinding(ai.binding);
   const busy = await f.client.save('Busy token', encode('busy value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
-  await f.db.pool.query("INSERT INTO connection_operations(id,resource_id,executor_id,expected_revision,state) VALUES($1,$2,$3,1,'in_flight')",
+  await f.db.pool.query("INSERT INTO connection_operations(id,resource_id,renewer_id,expected_revision,state) VALUES($1,$2,$3,1,'in_flight')",
     [crypto.randomUUID(), busy.id, f.owner.actor.id]);
   await f.client.api.json('/api/relations', { method: 'POST', body: { subjectId: ai.actor.id, relation: 'delegate', objectId: f.owner.actor.id } });
 
@@ -141,19 +154,15 @@ test('トークン更新中の項目があっても委任先の線を引け、�
   assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [busy.id]);
 });
 
-// A CloudRift connection as the earlier format sealed it, with its method inside, stored as it was then.
+// A CloudRift connection as the earliest format sealed it, with its method inside, stored as it was then.
 async function storedEarlier(f: Awaited<ReturnType<typeof flowFixture>>, name: string, method: MethodDescription, token: string) {
-  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet);
   const material = { format: 2, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(), appId: null,
     appGeneration: null, fields: { token } };
-  // What the earlier format signed beside such content: everything but the digest of the method's rules.
+  // What the earliest format signed beside such content: everything but the digest of the method's rules.
   const { methodDigest: _methodDigest, ...metadata } = await connectionMetadata(ConnectionMaterial.parse({ ...material, format: 3 }));
-  const content = await protect(encode(canonical(material)), policy, 1, f.owner.binding, f.owner.keys, metadata);
   // The labels stored with it then: what its method was called, and an account.
-  await f.resources.insert(f.owner.actor.id, 'connection', name, { ...metadata, methodName: method.name, account: '' },
-    { id: policy.id });
-  await f.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [policy.id, JSON.stringify(content)]);
-  return policy.id;
+  return sealedEarlier(f, 'connection', name, encode(canonical(material)), metadata, [],
+    { ...metadata, methodName: method.name, account: '' });
 }
 
 test('つなぎ方を中に持つ古い形の接続を、作ったときの決まりのまま持ち主の端末が封じ直し、決まりが今と同じものをそのまま使う', async (t) => {

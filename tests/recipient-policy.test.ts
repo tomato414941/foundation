@@ -42,7 +42,6 @@ test('代理が変数を更新すると新しく許可された信頼済みの�
   await f.relations.draw(f.owner.actor, { subjectId: peer.actor.id, relation: 'delegate', objectId: f.owner.actor.id });
   await writer.trustIdentity(peer.actor.id, await fingerprint(peer.binding));
   const policy = await writer.refreshRecipients(previous.content.policy);
-  assert.deepEqual(policy.grants, previous.content.policy.grants);
   await writer.save('Changing peers', encode('next value'), policy, { previous });
   assert.equal(decode(await reveal((await f.custody.read(peer.actor, saved.id)).content, peer.binding, peer.keys.encryption)), 'next value');
 });

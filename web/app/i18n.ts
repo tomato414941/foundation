@@ -21,11 +21,9 @@ const words: Record<string, [string, string]> = {
   requestAuthorize: ['{{name}}での操作を完了してください。', 'Finish authorization with {{name}}.'],
   requestConnectionUsers: ['接続を使用する相手', 'Who can use this connection'],
   requestConnectionPrincipals: ['接続を使用するプリンシパル', 'Principals using this connection'],
-  requestConnectionDuration: ['30日間', '30 days'],
-  requestConnectionAccess: ['認証情報の閲覧、接続の使用・更新・解除を許可します。', 'Allow reading credentials and using, renewing, and disconnecting this connection.'],
-  requestConnectionUsersHelp: ['接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。', 'Allow use, renewal, and disconnection for 30 days. These recipients can read the credentials.'],
-  requestConnectionPermissionsHelp: ['接続の使用・更新・解除を許可します。相手は認証情報の内容を読めます。', 'Allow use, renewal, and disconnection. These recipients can read the credentials.'],
-  requestConnectionNoUsers: ['ほかの相手への実行許可を解除します。', 'Remove execution permissions granted to other recipients.'],
+  requestConnectionAccess: ['認証情報の閲覧と、接続の使用・更新を許可します。持ち主が外すまで続きます。', 'Allow reading the credentials and using and renewing this connection until the owner removes them.'],
+  requestConnectionUsersHelp: ['接続の使用と更新を許可します。相手は認証情報の内容を読めます。持ち主が外すまで続きます。', 'Allow using and renewing this connection. These recipients can read the credentials until the owner removes them.'],
+  requestConnectionNoUsers: ['ほかの相手には使用を許可しません。', 'No one else may use this connection.'],
   requestWaitingForRecipient: ['依頼を受けた方の操作を待っています。', 'Waiting for the recipient to continue.'],
   executionBlocked: ['この実行は{{name}}だけが続けられます。', 'Only {{name}} can continue this execution.'],
   executionNotRequested: [
@@ -436,7 +434,7 @@ const words: Record<string, [string, string]> = {
   resealingUnnamed: ['項目', 'Item'],
   'resealingReasons.connection_busy': ['トークンを更新中です。更新が終わってから再試行してください。', 'A token update is in progress. Retry after it finishes.'],
   'resealingReasons.recipient_excluded': ['公開鍵の検証が必要です。', 'Public key verification is required.'],
-  'resealingReasons.resealing_deferred': ['公開鍵の検証待ち、または利用中の処理の終了待ちです。未検証の公開鍵があれば検証し、利用中の処理があれば終了後に再試行してください。', 'Waiting for public key verification or an active operation to finish. Verify any unverified public keys, and retry after any active operations finish.'],
+  'resealingReasons.resealing_deferred': ['公開鍵の検証待ちです。未検証の公開鍵を検証してから再試行してください。', 'Waiting for public key verification. Verify the unverified public keys, then retry.'],
   resealingItem: ['{{name}}：{{reason}}', '{{name}}: {{reason}}'],
   resealed: ['開ける相手の変更を、{{count}}件の項目に反映しました。', 'Updated who may open {{count}} items.'],
   resealingSkipped: [
@@ -680,7 +678,7 @@ const words: Record<string, [string, string]> = {
   authorizedUsers: ['利用を許可するプリンシパル', 'Authorized principals'],
   connectionName: ['接続', 'Connection'],
   authorizeConnection: ['使用許可を変更', 'Change use permissions'],
-  connectionPermissionHelp: ['選んだプリンシパルに認証情報を共有し、30日間の使用を許可します。', 'Share credentials with the selected principals and authorize use for 30 days.'],
+  connectionPermissionHelp: ['選んだプリンシパルに認証情報を共有し、接続の使用と更新を許可します。外すまで続きます。', 'Share the credentials with the selected principals and allow them to use and renew this connection until you remove them.'],
   execution: ['実行', 'Execution'],
   executionSteps: ['処理の詳細', 'Processing details'],
   'state.pending': ['確認待ち', 'Pending'],
@@ -739,6 +737,10 @@ const words: Record<string, [string, string]> = {
   'errors.key_reset_waiting': [
     'まだ作り直せません。申請から7日たつまでお待ちください。',
     'The new keys cannot be made yet. Wait until 7 days after the request.',
+  ],
+  'errors.reseal_required': [
+    'この項目は、持ち主の端末で暗号化し直すまで使えません。持ち主がFoundationを開くと暗号化し直されます。',
+    "This item can't be used until its owner's device encrypts it again, which happens when the owner opens Foundation.",
   ],
   'errors.key_replaced': [
     '作り直す前の秘密鍵で暗号化されているため、開けません。値を入れ直すか、つなぎ直してください。',

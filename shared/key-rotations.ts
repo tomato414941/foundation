@@ -48,7 +48,7 @@ export const RotationView = z.object({
   blockers: z.array(RotationBlocker), items: z.array(RotationItem), next: z.string().nullable(),
 });
 
-// A rotation changes key bindings, never the principals, permissions, destinations or expiry dates.
+// A rotation changes key bindings, never the principals or what they may do.
 export function rotationPolicy(policy: CustodyPolicy, previous: BoundKeys, replacement: BoundKeys): CustodyPolicy {
   const replace = (binding: BoundKeys) => {
     if (binding.id !== previous.id) return binding;
@@ -58,10 +58,6 @@ export function rotationPolicy(policy: CustodyPolicy, previous: BoundKeys, repla
   return AccessPolicy.parse({
     ...policy, revision: policy.revision + 1,
     readers: policy.readers.map(replace), authorities: policy.authorities.map(replace),
-    grants: policy.grants.map(grant => 'actor' in grant
-      ? { ...grant, actor: replace(grant.actor), executor: replace(grant.executor) }
-      : { ...grant, executor: replace(grant.executor) }),
-    producers: policy.producers.map(producer => ({ ...producer, executor: replace(producer.executor) })),
   });
 }
 

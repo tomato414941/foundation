@@ -238,7 +238,7 @@ test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接�
   const material = await f.client.connection(saved.id);
   assert.equal(material.method.kind, 'ovh'); assert.equal(material.fields!.applicationSecret, 'saved-secret');
   const current = await f.client.read(saved.id);
-  assert.deepEqual(current.content.policy.grants, previous.content.policy.grants);
+  assert.deepEqual(current.content.policy.readers, previous.content.policy.readers);
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(custom.id));
 });
 

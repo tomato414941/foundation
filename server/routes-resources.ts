@@ -29,7 +29,7 @@ export async function routesResources(app: ApiApp, context: Context) {
       const row = await resources.get(request.params.id);
       await authorization.requireResource(actor(request), row, 'read');
       if (row.kind !== 'connection') fail(400, 'wrong_kind', 'Choose a connection.');
-      // Whoever may read a connection reads the method it names, as its executors do before they use it.
+      // Whoever may read a connection reads the method it names, as its readers do before they use it.
       const id = String(row.data.methodId), method = await catalog.connectionMethod(id);
       if (!method) fail(404, 'not_found', 'The connection method was not found.');
       return catalog.methodView(id, method);

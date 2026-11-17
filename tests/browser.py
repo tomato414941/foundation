@@ -867,7 +867,7 @@ class BrowserTests(unittest.TestCase):
         prompt.get_by_role("button", name="確認する", exact=True).click()
         expect(page.get_by_role("listitem").filter(has_text=address)).to_have_count(0)
 
-    def test_期限の切れた許可が残る変数を鍵を持つブラウザが開いたときに外して封じ直す(self):
+    def test_前の形式で封じた変数を鍵を持つブラウザが開いたときに今の形式で封じ直す(self):
         import re, tempfile
         page, principal = self.passkey_account("Expiring owner")
         with tempfile.TemporaryDirectory() as home:
@@ -888,22 +888,30 @@ class BrowserTests(unittest.TestCase):
             variable_id = str(uuid.uuid4())
             stored = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", f"""
                 import {{ readFile }} from 'node:fs/promises';
-                import {{ ContentTypes, Operations, protect }} from './shared/custody.ts';
+                import {{ sign }} from './shared/authority.ts';
+                import {{ ContentTypes, contentContext }} from './shared/custody.ts';
+                import {{ seal }} from './shared/encryption.ts';
                 const file = JSON.parse(await readFile('{home}/foundation/identity.json', 'utf8'));
                 const me = file.identities.find(item => item.principalId === file.current);
-                const grant = {{ actor: me.binding, executor: me.binding, operations: [Operations.command], functionDigests: [], origins: [],
-                  callerProgram: true, expiresAt: new Date(Date.now() - 60_000).toISOString() }};
+                // Sealed as the earlier policy did, with a grant that has since expired.
+                const grant = {{ actor: me.binding, executor: me.binding, operations: ['85bb00b6-ca1e-478d-94ca-a217f0c73e49'],
+                  functionDigests: [], origins: [], callerProgram: true, expiresAt: new Date(Date.now() - 60_000).toISOString() }};
                 const policy = {{ format: 2, origin: '{ORIGIN}', id: '{variable_id}', ownerId: me.principalId, contentType: ContentTypes.value,
                   revision: 1, authorities: [me.binding], readers: [me.binding], grants: [grant], producers: [] }};
-                const content = await protect(new TextEncoder().encode('saved with an expired grant'), policy, 1, me.binding, me.keys);
-                const response = await fetch('{ORIGIN}/api/resources/{variable_id}/custody', {{ method: 'PUT',
-                  headers: {{ 'content-type': 'application/json', authorization: 'Bearer ' + me.token }},
-                  body: JSON.stringify({{ name: 'Expiring token', content }}) }});
+                const bytes = new TextEncoder().encode('saved in the earlier format');
+                const value = {{ policy, authorityId: me.binding.id, authorization: await sign(policy, me.keys.signing, 'access-policy'),
+                  materialRevision: 1, updatedAt: new Date().toISOString(), creationRunId: null, metadata: {{ bytes: bytes.length }},
+                  signerId: me.binding.id, sealed: await seal(bytes, [{{ id: me.binding.id, publicKey: me.binding.encryption }}],
+                    await contentContext(policy, 1)) }};
+                const content = {{ ...value, signature: await sign(value, me.keys.signing, 'resource') }};
+                const response = await fetch('{ORIGIN}/__test/stored-item', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }},
+                  body: JSON.stringify({{ ownerId: me.principalId, kind: 'variable', name: 'Earlier token', content,
+                    data: {{ bytes: bytes.length, recipients: [me.principalId], custodyRevision: 1 }} }}) }});
                 if (!response.ok) throw new Error(await response.text());
             """], capture_output=True, text=True, env=environment)
             self.assertEqual(stored.returncode, 0, stored.stderr)
         pending = lambda: page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
-        self.assertEqual(pending(), [{"id": variable_id, "reason": "grantExpired", "remove": []}])
+        self.assertEqual(pending(), [{"id": variable_id, "reason": "format", "remove": []}])
         page.goto(f"{ORIGIN}/p/{principal['id']}/variables")
         for _ in range(50):
             if not pending():
@@ -911,10 +919,11 @@ class BrowserTests(unittest.TestCase):
             page.wait_for_timeout(200)
         self.assertEqual(pending(), [])
         policy = page.request.get(f"{ORIGIN}/api/resources/{variable_id}/custody").json()["content"]["policy"]
-        self.assertEqual(policy["grants"], [])
+        self.assertEqual(policy["format"], 3)
+        self.assertEqual([reader["principalId"] for reader in policy["readers"]], [principal["id"]])
         page.goto(f"{ORIGIN}/p/{principal['id']}/variables/{variable_id}")
         page.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved with an expired grant")
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved in the earlier format")
 
     def test_項目を渡す相手の公開鍵を検証し受け取り承認で所有者を変更する(self):
         sender, owner = self.passkey_account("Transfer sender")
@@ -1507,7 +1516,7 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
             expect(owner.get_by_text("Model assistant", exact=True).last).to_be_visible()
             expect(owner.get_by_text("接続を使用する相手", exact=True)).to_be_visible()
-            expect(owner.get_by_text("接続の使用・更新・解除を30日間許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("接続の使用と更新を許可します。相手は認証情報の内容を読めます。持ち主が外すまで続きます。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-ja.png"), full_page=True)
             print("Rendered connection permissions: " + owner.locator("main").inner_text(), flush=True)
             owner.get_by_role("button", name="承認", exact=True).click()
@@ -1521,27 +1530,25 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, env=environment)
             self.assertEqual(used.returncode, 0, used.stderr)
             self.assertEqual(used.stdout, "Configured\n")
-            expires_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 3600))
             response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-                "message": "この接続を1時間使用します。", "operations": [{"name": "connection.authorize", "input": {
+                "message": "この接続を使い続けます。", "operations": [{"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id, "version": connection["version"],
-                    "users": [agent["id"]], "expiresAt": expires_at
+                    "users": [agent["id"]]
                 }}]}, headers={"origin": ORIGIN})
             self.assertTrue(response.ok, response.text())
-            limited_request = response.json()
-            owner.goto(limited_request["url"])
+            repeated_request = response.json()
+            owner.goto(repeated_request["url"])
             expect(owner.get_by_role("heading", name="接続の使用を許可する", exact=True)).to_be_visible()
-            expect(owner.get_by_text("接続の使用・更新・解除を許可します。相手は認証情報の内容を読めます。", exact=True)).to_be_visible()
-            expect(owner.get_by_text("有効期限", exact=True)).to_be_visible()
+            expect(owner.get_by_text("接続の使用と更新を許可します。相手は認証情報の内容を読めます。持ち主が外すまで続きます。", exact=True)).to_be_visible()
             owner.set_viewport_size({"width": 390, "height": 844})
             self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-ja.png"), full_page=True)
             self.select(owner, "言語", "English")
-            expect(owner.get_by_text("Allow use, renewal, and disconnection. These recipients can read the credentials.", exact=True)).to_be_visible()
+            expect(owner.get_by_text("Allow using and renewing this connection. These recipients can read the credentials until the owner removes them.", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-en.png"), full_page=True)
             owner.get_by_role("button", name="Cancel", exact=True).click()
             expect(owner.get_by_role("status")).to_have_text("The request was cancelled")
-            self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + limited_request["id"]).json()["state"], "declined")
+            self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + repeated_request["id"]).json()["state"], "declined")
             self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()["version"], connection["version"])
             self.select(owner, "Language", "日本語")
             owner.set_viewport_size({"width": 1440, "height": 1050})
@@ -2095,8 +2102,7 @@ class BrowserTests(unittest.TestCase):
         owner.goto(access_request["url"])
         expect(owner.get_by_text("Permissions assistant", exact=True)).to_be_visible()
         expect(owner.get_by_text("接続を使用するプリンシパル", exact=True)).to_be_visible()
-        expect(owner.get_by_text("30日間", exact=True)).to_be_visible()
-        expect(owner.get_by_text("認証情報の閲覧、接続の使用・更新・解除を許可します。", exact=True)).to_be_visible()
+        expect(owner.get_by_text("認証情報の閲覧と、接続の使用・更新を許可します。持ち主が外すまで続きます。", exact=True)).to_be_visible()
         expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-access-ja.png"), full_page=True)
         owner.get_by_role("button", name="キャンセル", exact=True).click()

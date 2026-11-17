@@ -88,7 +88,6 @@ test('変数と接続とアプリを一回の操作で暗号化し直し受け�
     assert.equal((await f.resources.get(resource.id)).owner_id, f.stranger.actor.id);
     assert.deepEqual(await reveal(transferred.content, f.stranger.binding, f.stranger.keys.encryption), bytes);
     assert.deepEqual(transferred.content.metadata, previous.content.metadata);
-    assert.deepEqual(transferred.content.policy.grants, []);
     assert.deepEqual(transferred.content.policy.authorities.map(binding => binding.principalId).sort(),
       [f.stranger.actor.id, f.delegate.actor.id].sort());
     await assert.rejects(f.custody.read(f.owner.actor, resource.id), { code: 'forbidden' });
@@ -192,7 +191,7 @@ test('内容を保存すると現在の所有者を保ち値を更新する', as
   const previous = await f.client.read(f.resource.id);
   const content = await protect(encode('confidential-value'), { ...previous.content.policy,
     ownerId: f.stranger.actor.id, revision: previous.content.policy.revision + 1,
-    authorities: [f.stranger.binding], readers: [f.stranger.binding], grants: [] },
+    authorities: [f.stranger.binding], readers: [f.stranger.binding] },
     previous.content.materialRevision + 1, f.owner.binding, f.owner.keys, previous.content.metadata, previous.content);
   for (const path of ['/api/resources/' + f.resource.id + '/custody', '/api/custody/' + f.resource.id])
     await assert.rejects(f.api(f.owner.token).json(path, { method: 'PUT', body: {

@@ -57,7 +57,6 @@ test('OpenAIの保存済みキーを組込み方式に移し、同じ接続と�
     name: original.name, fields: { token: '', projectId: 'proj_saved', organizationId: '' } });
   assert.equal(migrated.id, original.id);
   const current = await f.client.read(migrated.id);
-  assert.deepEqual(current.content.policy.grants, previous.content.policy.grants);
   assert.deepEqual(current.content.policy.readers, previous.content.policy.readers);
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(service.id));
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(custom.id));

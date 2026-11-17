@@ -81,9 +81,9 @@ test('鍵で守られた項目の役割は署名した方針から書かれ、�
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), editor = await f.person('Editor'), viewer = await f.person('Viewer');
-  const policy = AccessPolicy.parse({ format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+  const policy = AccessPolicy.parse({ format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, editor.binding],
-    readers: [owner.binding, editor.binding], grants: [], observers: [viewer.actor.id] });
+    readers: [owner.binding, editor.binding], observers: [viewer.actor.id] });
   const row = await f.custody.put(owner.actor, { name: 'Token', content: await protect(encode('value'), policy, 1, owner.binding, owner.keys) });
   assert.equal(await f.authorization.holds(editor.actor.id, row, 'reveal'), true);
   assert.equal(await f.authorization.holds(editor.actor.id, row, 'update'), true);
@@ -99,8 +99,8 @@ test('委任先の線は封じ直しを待たずに引けて外せ、外した�
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
   const id = crypto.randomUUID();
   const sealed = (readers: typeof owner.binding[], revision = 1, previous?: Awaited<ReturnType<typeof f.custody.read>>) => protect(
-    encode('owner value'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
-      contentType: ContentTypes.value, revision, authorities: readers, readers, grants: [] }),
+    encode('owner value'), AccessPolicy.parse({ format: 3, id, origin: f.config.origin, ownerId: owner.actor.id,
+      contentType: ContentTypes.value, revision, authorities: readers, readers }),
     (previous?.content.materialRevision ?? 0) + 1, owner.binding, owner.keys, undefined, previous?.content);
   await f.custody.put(owner.actor, { name: 'Token', content: await sealed([owner.binding]) });
   const line = { subjectId: ai.actor.id, relation: 'delegate', objectId: owner.actor.id };
@@ -131,9 +131,9 @@ test('持ち主の項目は持ち主向けに必ず暗号化し、委任先向�
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
   await f.relations.draw(owner.actor, { subjectId: ai.actor.id, relation: 'delegate', objectId: owner.actor.id });
-  const sealed = (readers: typeof owner.binding[], signer: typeof owner) => protect(encode('value'), AccessPolicy.parse({ format: 2,
+  const sealed = (readers: typeof owner.binding[], signer: typeof owner) => protect(encode('value'), AccessPolicy.parse({ format: 3,
     id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id, contentType: ContentTypes.value, revision: 1,
-    authorities: readers, readers, grants: [] }), 1, signer.binding, signer.keys);
+    authorities: readers, readers }), 1, signer.binding, signer.keys);
   const created = await f.custody.put(ai.actor, { name: 'Agent value', content: await sealed([owner.binding, ai.binding], ai) });
   assert.equal(created.owner_id, owner.actor.id);
   await assert.rejects(f.custody.put(ai.actor, { name: 'Shared value', content: await sealed([owner.binding, ai.binding, friend.binding], ai) }),
@@ -388,8 +388,8 @@ test('鍵で守られた項目は、新しい持ち主向けに封をした内�
   const f = await fixture(), { app, call } = await served(f);
   t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('Owner'), other = await f.person('Other');
-  const policy = AccessPolicy.parse({ format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding] });
   const first = await protect(encode('kept value'), policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Token', content: first });
   const passed = await protect(encode('kept value'), { ...policy, ownerId: other.actor.id, revision: 2,

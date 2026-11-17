@@ -356,7 +356,7 @@ const resourceBase = {
   permissions: z.array(Action),
 };
 const custodyMetadata = {
-  recipients: z.array(Id).default([]), executors: z.array(Id).default([]),
+  recipients: z.array(Id).default([]),
   custodyRevision: z.number().int().positive().nullable().default(null),
 };
 export const VariableResource = z.object({

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Id, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, SignedBinding } from './authority.js';
 import { AccessPolicy, ProtectedContent } from './custody.js';
+import { EarlierContent } from './custody-legacy.js';
 import { ConnectionLabels } from './connections.js';
 
 export const BoundRecipient = SignedBinding.extend({ name: Name });
@@ -12,14 +13,16 @@ export const ResourceTransfer = z.object({ to: Id, version: z.number().int().pos
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),
   version: z.number().int().positive().optional() }).strict();
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
+// An item as stored: one still sealed under the earlier policy is read only to be sealed again.
+export const StoredRead = z.object({ content: z.union([ProtectedContent, EarlierContent]), version: z.number().int().positive() }).strict();
 // An item to seal again, why, and the principals no longer to seal it for.
-export const Reprotection = z.object({ id: Id, reason: z.enum(['grantExpired', 'recipients', 'format']),
+export const Reprotection = z.object({ id: Id, reason: z.enum(['recipients', 'format']),
   remove: z.array(Id).max(1000).default([]) }).strict();
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();
 export const RenewalOperation = z.object({
-  id: Id, resource_id: Id, executor_id: Id, expected_revision: z.number().int().positive(),
+  id: Id, resource_id: Id, renewer_id: Id, expected_revision: z.number().int().positive(),
   state: z.enum(['prepared', 'in_flight', 'committed', 'uncertain', 'aborted']),
   fence: z.string().regex(/^\d+$/), result: ProtectedContent.nullable(),
 });

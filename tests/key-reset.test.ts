@@ -103,8 +103,8 @@ test('作り直しの申請を取り消すと、登録しておいた新しい�
 test('作り直す前の秘密鍵で暗号化した変数に、新しい公開鍵で値を入れ直す', async t => {
   const f = await fixture(); t.after(f.close);
   const person = await signedIn(f), other = await f.person('Other'), id = randomUUID();
-  const before = AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: person.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [person.binding], readers: [person.binding], grants: [] });
+  const before = AccessPolicy.parse({ format: 3, id, origin: f.config.origin, ownerId: person.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [person.binding], readers: [person.binding] });
   const row = await f.custody.put(person.actor, { name: 'Token', content: await protect(encode('lost value'), before, 1, person.binding, person.keys) });
   await f.keyResets.request(person.actor, person.actor.id);
   await wait(f, person.actor.id);
@@ -125,8 +125,8 @@ test('共有した相手が公開鍵を作り直すと、所有者が暗号化�
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Owner'), friend = await signedIn(f, 'Friend'), id = randomUUID();
   await f.custody.put(owner.actor, { name: 'Shared', content: await protect(encode('shared value'), AccessPolicy.parse({
-    format: 2, id, origin: f.config.origin, ownerId: owner.actor.id, contentType: ContentTypes.value, revision: 1,
-    authorities: [owner.binding], readers: [owner.binding, friend.binding], grants: [] }), 1, owner.binding, owner.keys) });
+    format: 3, id, origin: f.config.origin, ownerId: owner.actor.id, contentType: ContentTypes.value, revision: 1,
+    authorities: [owner.binding], readers: [owner.binding, friend.binding] }), 1, owner.binding, owner.keys) });
   assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), []);
   await f.keyResets.request(friend.actor, friend.actor.id);
   await wait(f, friend.actor.id);

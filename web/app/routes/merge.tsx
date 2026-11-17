@@ -42,9 +42,7 @@ export async function clientAction({ params }: Route.ClientActionArgs) {
       const policy = { ...item.content.policy, ownerId: client.binding.principalId, revision: item.content.policy.revision + 1,
         readers: unique([...item.content.policy.readers.filter(keep), ...recipients]),
         authorities: unique([...item.content.policy.authorities.filter(keep), ...recipients]),
-        grants: item.content.policy.grants.filter(grant => keep(grant.executor)).map(grant => 'actor' in grant ? ({
-          ...grant, actor: keep(grant.actor) ? grant.actor : client.binding }) : grant),
-        observers: (item.content.policy.observers ?? []).filter(id => id !== plan.from.id), producers: [],
+        observers: (item.content.policy.observers ?? []).filter(id => id !== plan.from.id),
       };
       contents[item.id] = { version: item.version, content: await protect(
         await reveal(item.content, previous.binding, previous.keys.encryption), policy, item.content.materialRevision + 1,

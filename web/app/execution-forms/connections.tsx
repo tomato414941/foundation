@@ -70,7 +70,7 @@ export const connectionForm = defineForm({ load,
         : <OwnerFields data={data} name={name !== 'connection.authorize'} defaultName={data.method?.defaultName} />}
       {name === 'connection.authorize' ? <>
         <Detail label={t('connectionName')}>{data.connection?.name}</Detail>
-        {requestPrincipalId ? <ConnectionUsers users={data.users} expiresAt={typeof input.expiresAt === 'string' ? input.expiresAt : undefined} />
+        {requestPrincipalId ? <ConnectionUsers users={data.users} />
           : <Detail label={t('authorizedUsers')}>{data.users.map(user => user.name).join(', ') || '—'}</Detail>}
       </> : <>
         {!compact && data.method && <Detail label={t('method')}>{connectionMethodName(data.method.name, t)}</Detail>}

@@ -13,8 +13,8 @@ test('メンバー追加と所有者変更で配下の変数を再暗号化し�
   const project = await f.principals.create('Project', null, owner.actor.id);
   const child = await f.principals.create('Nested project', null, project.id);
   const bytes = encode('shared project value'), id = randomUUID();
-  const initial = await protect(bytes, AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
-    ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }),
+  const initial = await protect(bytes, AccessPolicy.parse({ format: 3, id, origin: f.config.origin,
+    ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding] }),
     1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Project variable', content: initial });
   const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
@@ -52,8 +52,8 @@ test('メンバー追加と所有者変更で配下の変数を再暗号化し�
 test('変数は新しい所有者が受け取りに同意したときに移り、宛先の鍵と編集権限を引き継ぐ', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Before'), next = await f.person('After'), id = randomUUID();
-  const policy = AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 3, id, origin: f.config.origin, ownerId: owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding] });
   const initial = await protect(encode('transfer-value'), policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Transferred variable', content: initial });
   const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
@@ -88,8 +88,8 @@ test('メンバーを外すとまだ封じてある変数も渡さなくなり�
   const membership = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
   await f.relations.draw(await f.confirmed(owner, { action: 'relation.draw', principalId: project.id, subjectId: member.actor.id,
     relation: 'member' }), membership);
-  const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin,
-    ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 3, id: randomUUID(), origin: f.config.origin,
+    ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding] });
   const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Credential', content });
   await f.relations.erase(owner.actor, membership);

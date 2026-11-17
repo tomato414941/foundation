@@ -4,10 +4,10 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', '002-ssh-environments', '003-files', '004-storage', '005-ownership', '006-delegates', '007-principal-history', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names', '012-remove-environments', '013-remove-http-settings'];
+const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', '002-ssh-environments', '003-files', '004-storage', '005-ownership', '006-delegates', '007-principal-history', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names', '012-remove-environments', '013-remove-http-settings', '014-seal-format'];
 // The migrations written in SQL alone, applied in order.
 const SqlMigrations = ['002-ssh-environments', '005-ownership', '007-principal-history', '008-key-rotations', '009-ssh-access',
-  '010-output-names', '011-run-output-names', '013-remove-http-settings'];
+  '010-output-names', '011-run-output-names', '013-remove-http-settings', '014-seal-format'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {

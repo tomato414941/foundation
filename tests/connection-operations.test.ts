@@ -2,16 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { delegatedFixture } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
-import { ContentTypes, Operations, matchesPin, protect, renewContent, reveal } from '../shared/custody.js';
+import { ContentTypes, protect, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyPolicy } from '../shared/custody.js';
 import { hash } from '../shared/authority.js';
 import { decode, encode } from '../shared/encryption.js';
 
 async function setup() {
   const f = await delegatedFixture();
-  const policy: CustodyPolicy = { ...f.policy, id: crypto.randomUUID(), contentType: ContentTypes.tokenSet,
-    grants: [{ actor: f.owner.binding, executor: f.delegate.binding, operations: [Operations.http, Operations.refresh],
-      functionDigests: [], origins: [], callerProgram: true, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }] };
+  const policy: CustodyPolicy = { ...f.policy, id: crypto.randomUUID(), contentType: ContentTypes.tokenSet };
   const metadata = { state: 'ready', authorizationDigest: await hash({ account: 'account-1', scopes: ['read'] }),
     methodId: 'provider:oauth', methodDigest: await hash({ method: 'provider:oauth' }), methodKind: 'oauth', generation: crypto.randomUUID(),
     appId: null, accountId: 'account-1', accountVerified: true,
@@ -21,7 +19,7 @@ async function setup() {
   return { ...f, connection: { policy, content, resource }, operations: new ConnectionOperations(f.custody) };
 }
 
-test('接続更新を一つの実行先が取得し、更新した暗号文を一度だけ確定する', async () => {
+test('接続の更新を一つの読み手が取得し、更新した暗号文を一度だけ確定する', async () => {
   const f = await setup();
   try {
     const id = crypto.randomUUID(), source = f.connection.content;
@@ -38,8 +36,6 @@ test('接続更新を一つの実行先が取得し、更新した暗号文を�
     const current = await f.custody.read(f.owner.actor, source.policy.id);
     assert.equal(current.content.materialRevision, 2);
     assert.equal(decode(await reveal(current.content, f.owner.binding, f.owner.keys.encryption)), 'rotated-refresh-token');
-    assert.equal(await matchesPin(content, { id: source.policy.id, policyDigest: await hash(source.policy),
-      materialRevision: 1, authorizationDigest: String(source.metadata.authorizationDigest) }), true);
   } finally { await f.close(); }
 });
 
@@ -64,7 +60,7 @@ test('接続更新中は宛先の変更を待ち、承認した接続先と権�
   try {
     const source = f.connection.content;
     const operation = await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), source.policy.id, 1);
-    const changed = await protect(encode('replacement'), { ...source.policy, revision: 2, grants: [] }, 2,
+    const changed = await protect(encode('replacement'), { ...source.policy, revision: 2, observers: [f.stranger.actor.id] }, 2,
       f.owner.binding, f.owner.keys, source.metadata);
     await assert.rejects(f.custody.put(f.owner.actor, { name: 'Connection', content: changed,
       version: f.connection.resource.version }), { code: 'connection_busy' });

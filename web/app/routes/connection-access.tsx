@@ -12,15 +12,17 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
   if (resource.kind !== 'connection' || resource.ownerId !== params.owner || !resource.permissions.includes('update'))
     throw new Response('Not found', { status: 404 });
-  const [principals, protectedItem, owner] = await Promise.all([api('/principals?limit=200', {}, listOf(Principal)),
-    (await custodyClient()).read(resource.id), api('/principals/' + resource.ownerId, {}, Principal)]);
-  const users = protectedItem.content.policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor.principalId] : []);
+  const client = await custodyClient();
+  const [principals, protectedItem, owner, owners] = await Promise.all([api('/principals?limit=200', {}, listOf(Principal)),
+    client.read(resource.id), api('/principals/' + resource.ownerId, {}, Principal), client.ownerSide(resource.ownerId)]);
+  // Those who use what the owner holds open the connection anyway; its users are the other principals it is sealed for.
+  const users = protectedItem.content.policy.readers.map(reader => reader.principalId).filter(id => !owners.has(id));
   const missing = users.filter(id => !principals.items.some(principal => principal.id === id));
   const recipients = await Promise.all(missing.map(async id => {
     try { return await api('/principals/' + id, {}, Principal); }
     catch { return { id, name: id }; }
   }));
-  return { resource, principals: [...principals.items, ...recipients], users, owner };
+  return { resource, principals: [...principals.items, ...recipients].filter(principal => !owners.has(principal.id)), users, owner };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {

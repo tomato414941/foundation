@@ -6,8 +6,10 @@ import type { Resources, ResourceRow } from './resources.js';
 import type { Bindings } from './bindings.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
-import { ContentTypes, grantActive, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
-import type { CustodyContent, CustodyPolicy } from '../shared/custody.js';
+import { ContentTypes, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
+import type { CustodyContent, PolicyParties } from '../shared/custody.js';
+import { EarlierContent, isEarlier } from '../shared/custody-legacy.js';
+import type { EarlierSealed } from '../shared/custody-legacy.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
@@ -24,20 +26,18 @@ export interface ProtectedWrite {
   data?: Record<string, JsonValue>;
   version?: number;
 }
-// Whom an item is shared with besides its signer: who opens it, signs for it, sees it, or has it used for them.
-// Signing an item is not sharing it, so one who may change it may still not change these. Expired grants give nothing.
-function sharedWith(policy: CustodyPolicy, signer: BoundKeys, now = Date.now()) {
+// Whom an item is shared with besides its signer: who opens it, signs for it, or sees it. Signing an item is not sharing
+// it, so one who may change it may still not change these.
+function sharedWith(policy: PolicyParties, signer: BoundKeys) {
   const others = (values: BoundKeys[]) => [...new Set(values.map(value => value.principalId))].filter(id => id !== signer.principalId).sort();
   return {
     readers: others(policy.readers), authorities: others(policy.authorities),
     observers: [...new Set(policy.observers ?? [])].filter(id => id !== signer.principalId).sort(),
-    grants: policy.grants.filter(grant => grantActive(grant, now) && !('actor' in grant && grant.actor.principalId === signer.principalId))
-      .map(grant => canonical(grant)).sort(),
   };
 }
 // Whether the signer continues an item it signed for with keys it has since replaced. Those keys can no longer hand it
 // over, so the signer seals a new value with its current keys, and what they sealed cannot be opened again.
-export const succeeds = (policy: CustodyPolicy, signer: BoundKeys) =>
+export const succeeds = (policy: Pick<PolicyParties, 'authorities'>, signer: BoundKeys) =>
   !policy.authorities.some(authority => canonical(authority) === canonical(signer)) &&
   policy.authorities.some(authority => authority.principalId === signer.principalId);
 // Labels stay with the item until a writer gives new ones.
@@ -55,8 +55,7 @@ export class Custody {
   metadata(content: CustodyContent) {
     const schema = content.policy.contentType === ContentTypes.tokenSet ? ConnectionMetadata
       : content.policy.contentType === ContentTypes.clientCredential
-        ? AppMetadata : z.object({ bytes: z.number().int().min(0)
-          .max(contentLimit(content.policy.contentType)) }).strict();
+        ? AppMetadata : z.object({ bytes: z.number().int().min(0).max(contentLimit) }).strict();
     if (!schema.safeParse(content.metadata).success)
       fail(400, 'invalid_metadata', 'Provide only the public metadata for this protected item.');
     return content.metadata;
@@ -73,7 +72,7 @@ export class Custody {
     }
     await this.resources.references(content.policy.id, values.map(value => value.id), connection);
   }
-  private async replacePending(previous: CustodyContent, next: CustodyContent, connection: Queryable) {
+  private async replacePending(previous: CustodyContent | EarlierSealed, next: CustodyContent, connection: Queryable) {
     const pending = await this.resources.db.one<{ id: string; state: string }>(
       "SELECT id,state FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
       [previous.policy.id], connection);
@@ -86,66 +85,59 @@ export class Custody {
     await connection.query("UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1", [pending.id]);
   }
 
-  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
-    const row = await this.resources.db.one<{ content: CustodyContent }>(
+  // The item as stored: until one of its authorities seals it again, it may still be sealed under the earlier policy.
+  async stored(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent | EarlierSealed> {
+    const row = await this.resources.db.one<{ content: unknown }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
     if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers.');
-    return ProtectedContent.parse(row.content);
+    return z.union([ProtectedContent, EarlierContent]).parse(row.content);
+  }
+  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
+    const content = await this.stored(id, connection);
+    if (isEarlier(content)) fail(409, 'reseal_required', 'One of its authorities must seal this item again before it can be used.');
+    return content;
   }
 
-  // Items this identity can seal again without anyone deciding anything: those still encrypted for executors whose
-  // grants have expired and, where it uses what the owner holds, those whose readers no longer match who may open them: not
-  // yet sealed for everyone who uses what the owner holds, as for a new delegate, still sealed for one that may no
-  // longer open them, as for a delegate whose line was erased, or sealed for keys that someone has since replaced; and
-  // connections still sealed in the earlier format. The server cannot do it, because only the item's readers can open it.
-  // The list only says where to look, and each item is sealed again on its own.
+  // Items this identity can seal again without anyone deciding anything: those still sealed under the earlier policy and,
+  // where it uses what the owner holds, those whose readers no longer match who may open them: not yet sealed for
+  // everyone who uses what the owner holds, as for a new delegate, still sealed for one that may no longer open them, as
+  // for a delegate whose line was erased, or sealed for keys that someone has since replaced. The server cannot do it,
+  // because only the item's readers can open it. The list only says where to look, and each item is sealed again on its own.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
-    type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[]; authorities: BoundKeys[];
-      grants: Array<{ executor: BoundKeys; actor?: BoundKeys; expiresAt: string | null }>; current: boolean };
+    type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[]; authorities: BoundKeys[]; current: boolean };
     const rows = await this.resources.db.all<Row>(
       `SELECT c.resource_id AS id, r.kind, r.owner_id, c.content->'policy'->'readers' AS readers,
-         c.content->'policy'->'authorities' AS authorities, c.content->'policy'->'grants' AS grants,
-         r.kind<>'connection' OR c.content->'metadata' ? 'methodDigest' AS current
+         c.content->'policy'->'authorities' AS authorities, c.content->'policy'->>'format'='3' AS current
        FROM resource_custody c JOIN resources r ON r.id=c.resource_id
        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
        ORDER BY 1`, [binding.id]);
-    const named = (row: Row) => [...row.readers, ...row.authorities,
-      ...(row.grants ?? []).flatMap(grant => grant.actor ? [grant.actor, grant.executor] : [grant.executor])];
+    const named = (row: Row) => [...row.readers, ...row.authorities];
     const current = new Map((await this.resources.db.all<{ principal_id: string; id: string }>(
       "SELECT principal_id,binding->>'id' AS id FROM principal_key_bindings WHERE retired_at IS NULL AND principal_id=ANY($1::uuid[])",
       [[...new Set(rows.flatMap(row => named(row).map(value => value.principalId)))]])).map(row => [row.principal_id, row.id]));
     const replaced = (row: Row) => named(row).some(value => current.has(value.principalId) && current.get(value.principalId) !== value.id);
     const owners = new Set(await this.resources.authorization.find(principalId, 'principal', 'use'));
     const recipients = new Map<string, string[]>();
-    // A reader may open an item it may reveal, and a result of a principal it may read; one who runs with an item
-    // may use it. Each is looked up once for each principal it is sealed for.
+    // Whether a reader may still open an item, looked up once for each principal it is sealed for.
     const found = new Map<string, Set<string>>();
-    const may = async (principal: string, row: Row, permission: 'open' | 'use') => {
-      const [type, name] = row.kind === 'result' ? ['principal', 'read'] : [row.kind, permission === 'open' ? 'reveal' : 'use'];
-      const key = [principal, type, name].join(':');
-      if (!found.has(key)) found.set(key, new Set(await this.resources.authorization.find(principal, type, name)));
-      return found.get(key)!.has(row.kind === 'result' ? row.owner_id : row.id);
+    const opens = async (principal: string, row: Row) => {
+      const key = principal + ':' + row.kind;
+      if (!found.has(key)) found.set(key, new Set(await this.resources.authorization.find(principal, row.kind, 'reveal')));
+      return found.get(key)!.has(row.id);
     };
-    const items: Array<{ id: string; reason: 'grantExpired' | 'recipients' | 'format'; remove: string[] }> = [];
+    const items: Array<{ id: string; reason: 'recipients' | 'format'; remove: string[] }> = [];
     for (const row of rows) {
-      // A connection still sealed in the earlier format, with its method inside, is sealed again without it first.
       if (!row.current) { items.push({ id: row.id, reason: 'format', remove: [] }); continue; }
-      const grants = row.grants ?? [], expired = grants.some(grant => !grantActive(grant));
-      if (!owners.has(row.owner_id)) {
-        if (expired) items.push({ id: row.id, reason: 'grantExpired', remove: [] });
-        continue;
-      }
+      if (!owners.has(row.owner_id)) continue;
       if (!recipients.has(row.owner_id))
         recipients.set(row.owner_id, (await this.recipients(row.owner_id)).map(recipient => recipient.binding.id));
       const remove = new Set<string>();
-      for (const reader of row.readers) if (!(await may(reader.principalId, row, 'open'))) remove.add(reader.principalId);
-      for (const grant of grants) if (grant.actor && !(await may(grant.actor.principalId, row, 'use'))) remove.add(grant.actor.principalId);
+      for (const reader of row.readers) if (!(await opens(reader.principalId, row))) remove.add(reader.principalId);
       if (remove.size || recipients.get(row.owner_id)!.some(id => !row.readers.some(reader => reader.id === id)) || replaced(row))
         items.push({ id: row.id, reason: 'recipients', remove: [...remove] });
-      else if (expired) items.push({ id: row.id, reason: 'grantExpired', remove: [] });
     }
     return items;
   }
@@ -169,21 +161,16 @@ export class Custody {
 
   async read(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
-    const content = await this.get(id);
+    const content = await this.stored(id);
     const { binding } = await this.bindings.current(actor.id);
-    const granted = content.policy.grants.filter(grant => grantActive(grant));
     // Sealed for keys the reader has since replaced, the item still goes to it, to seal its next value with the
     // current keys; nothing opens what is sealed there.
-    const sealed = content.policy.readers.some(reader => reader.principalId === binding.principalId);
-    const executes = granted.some(grant => canonical(grant.executor) === canonical(binding));
-    const requests = granted.some(grant => 'actor' in grant && canonical(grant.actor) === canonical(binding));
-    if (!sealed && !executes && !requests) fail(403, 'forbidden', 'This identity is not a recipient of this item.');
-    const row = await this.resources.get(id), { authorization } = this.resources;
-    // Being sealed for is not enough: the item goes to a reader that may still reveal it, to one that runs with it that
-    // may still use it, and to an executor that may read it. An erased line thus takes effect before the owner's
-    // devices seal the item again without that reader.
-    if (!(sealed && await authorization.can(actor, row, 'reveal')) && !(requests && await authorization.can(actor, row, 'use')) &&
-      !(executes && await authorization.can(actor, row, 'read')))
+    if (!content.policy.readers.some(reader => reader.principalId === binding.principalId))
+      fail(403, 'forbidden', 'This identity is not a reader of this item.');
+    const row = await this.resources.get(id);
+    // Being sealed for is not enough: the item goes to a reader that may still reveal it. An erased line thus takes
+    // effect before the owner's devices seal the item again without that reader.
+    if (!await this.resources.authorization.can(actor, row, 'reveal'))
       fail(403, 'forbidden', 'This identity may no longer open this item.');
     return { content, version: row.version };
   }
@@ -205,8 +192,7 @@ export class Custody {
     if (input.data && canonical(input.data) !== canonical(content.metadata))
       fail(400, 'invalid_metadata', 'Sign the public metadata together with its encrypted content.');
     if (policy.origin !== this.origin) fail(400, 'wrong_origin', 'This content belongs to another Foundation server.');
-    const allBindings = [...policy.readers, ...policy.authorities,
-      ...policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor])];
+    const allBindings = [...policy.readers, ...policy.authorities];
     const persist = async (connection: Queryable) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       const { binding } = await this.bindings.current(actor.id, connection);
@@ -227,9 +213,8 @@ export class Custody {
           fail(409, 'transfer_required', 'Use POST /api/resources/' + current.id + '/transfer to change the owner.');
         if (transfer) await this.resources.principals.get(transfer.to, connection);
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
-        const previous = await this.resources.db.one<{ content: CustodyContent }>(
-          'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection,
-        );
+        const previous = await this.resources.db.one('SELECT 1 FROM resource_custody WHERE resource_id=$1', [policy.id], connection)
+          ? { content: await this.stored(policy.id, connection) } : undefined;
         if (previous && !succeeds(previous.content.policy, binding)) {
           if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
             fail(403, 'forbidden', 'The existing policy must authorize its editor.');
@@ -273,18 +258,16 @@ export class Custody {
       // may share what the owner holds.
       if (!sealed) {
         const recipients = (await this.recipients(policy.ownerId, connection)).map(item => item.binding);
-        const expected = sharedWith({ ...policy, readers: recipients, authorities: recipients, observers: [], grants: [] }, binding).readers;
+        const expected = sharedWith({ ...policy, readers: recipients, authorities: recipients, observers: [] }, binding).readers;
         const given = sharedWith(policy, binding);
-        if ([...given.readers, ...given.authorities].some(id => !expected.includes(id)) || given.observers.length || given.grants.length)
+        if ([...given.readers, ...given.authorities].some(id => !expected.includes(id)) || given.observers.length)
           await this.resources.authorization.requirePrincipal(actor, policy.ownerId, 'share', connection);
       }
       if (transfer && current)
         await this.relations.agree(actor, { kind: 'transfer', itemId: transfer.id, to: transfer.to },
           this.relations.handing(current, transfer.to), connection);
       const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
-        recipients: policy.readers.map(reader => reader.principalId),
-        executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))],
-        custodyRevision: policy.revision };
+        recipients: policy.readers.map(reader => reader.principalId), custodyRevision: policy.revision };
       let row: ResourceRow;
       if (current) {
         row = await this.resources.update(current, { name: input.name, data }, connection);
@@ -292,7 +275,7 @@ export class Custody {
         row = { ...row, owner_id: policy.ownerId, private_data: null, sealed: null };
       } else row = await this.resources.insert(policy.ownerId, kindOf(policy.contentType), input.name,
         data, { id: policy.id }, connection);
-      await this.projectGrants(content, connection);
+      await this.projectRoles(content, connection);
       await connection.query(
         'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',
         [policy.id, JSON.stringify(content)],
@@ -313,17 +296,16 @@ export class Custody {
   }
 
   // Who holds which role on the item, as its signed policy says: a reader opens it, an observer only sees it is there,
-  // an authority changes it and its policy, and a grant lets an actor use it on an executor. Whoever uses what the owner
-  // holds has these roles through its line to the owner, and an erased line takes them away at once, so the item records
-  // them only for others. One the item is still sealed for after its line was erased gains nothing here from that, until
-  // the owner's devices seal the item again without it. This runs before the new content replaces the previous one.
-  private async projectGrants(content: CustodyContent, connection: Queryable) {
+  // and an authority changes it and its policy. Whoever uses what the owner holds has these roles through its line to the
+  // owner, and an erased line takes them away at once, so the item records them only for others. One the item is still
+  // sealed for after its line was erased gains nothing here from that, until the owner's devices seal the item again
+  // without it. This runs before the new content replaces the previous one.
+  private async projectRoles(content: CustodyContent, connection: Queryable) {
     const { policy } = content, holders = new Set(await this.resources.authorization.holders(principal(policy.ownerId), 'use', connection));
-    const previous = await this.resources.db.one<{ content: CustodyContent }>(
-      'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection);
-    const named = new Set(previous ? [...previous.content.policy.readers, ...previous.content.policy.authorities,
-      ...previous.content.policy.grants.flatMap(grant => 'actor' in grant ? [grant.actor, grant.executor] : [grant.executor])]
-      .map(binding => binding.principalId).concat(previous.content.policy.observers ?? []) : []);
+    const previous = await this.resources.db.one('SELECT 1 FROM resource_custody WHERE resource_id=$1', [policy.id], connection)
+      ? (await this.stored(policy.id, connection)).policy : undefined;
+    const named = new Set(previous ? [...previous.readers, ...previous.authorities]
+      .map(binding => binding.principalId).concat(previous.observers ?? []) : []);
     const recorded = new Set((await this.resources.db.all<{ subject_id: string }>(
       'SELECT DISTINCT subject_id FROM relations WHERE resource_id=$1', [policy.id], connection)).map(row => row.subject_id));
     const lines = new Map<string, { subjectId: string; relation: string }>();
@@ -331,14 +313,10 @@ export class Custody {
       if (holders.has(subjectId) || (named.has(subjectId) && !recorded.has(subjectId))) return;
       for (const relation of relations) lines.set(subjectId + '#' + relation, { subjectId, relation });
     };
-    for (const reader of content.policy.readers) add(reader.principalId, ['reader', 'revealer']);
-    for (const observer of content.policy.observers ?? []) add(observer, ['reader']);
-    for (const authority of content.policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'user']);
-    for (const grant of content.policy.grants) {
-      if ('actor' in grant) add(grant.actor.principalId, ['reader', 'user']);
-      add(grant.executor.principalId, ['reader', 'user']);
-    }
-    await project(connection, content.policy.id, [...lines.values()]);
+    for (const reader of policy.readers) add(reader.principalId, ['reader', 'revealer']);
+    for (const observer of policy.observers ?? []) add(observer, ['reader']);
+    for (const authority of policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'user']);
+    await project(connection, policy.id, [...lines.values()]);
   }
 
 }

@@ -210,7 +210,7 @@ CREATE TABLE resource_custody (
 CREATE TABLE connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  executor_id uuid NOT NULL,
+  renewer_id uuid NOT NULL,
   expected_revision integer NOT NULL,
   state text NOT NULL CHECK(state IN ('prepared','in_flight','committed','uncertain','aborted')),
   fence bigint GENERATED ALWAYS AS IDENTITY,

@@ -55,18 +55,18 @@ export async function routesCustody(app: ApiApp, context: Context) {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.Reprotection) } },
   }, async request => ({ items: await custody.pending(actor(request), request.params.id), next: null }));
   app.get('/api/resources/:id/custody', {
-    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
+    schema: { params: C.IdParams, response: { 200: P.StoredRead } },
   }, request => custody.read(actor(request), request.params.id));
   app.get('/api/custody/:id', {
-    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
+    schema: { params: C.IdParams, response: { 200: P.StoredRead } },
   }, request => custody.read(actor(request), request.params.id));
   app.put('/api/custody/:id', {
     schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: P.ProtectedRead } },
   }, async request => {
     if (request.body.content.policy.id !== request.params.id)
       fail(400, 'wrong_content', 'Update the selected protected content.');
-    await custody.put(actor(request), request.body);
-    return custody.read(actor(request), request.params.id);
+    const row = await custody.put(actor(request), request.body);
+    return { content: request.body.content, version: row.version };
   });
   app.post('/api/connection-operations', {
     schema: { body: P.PrepareRenewal, response: { 201: P.RenewalOperation } },

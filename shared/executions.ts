@@ -11,7 +11,7 @@ export const ValueSave = destination.extend({ value: z.literal('').optional() })
 export const AppSave = destination.extend({ methodId: z.string().min(1).max(200), clientId: z.string().max(1000),
   fields: z.record(z.string(), z.string()).optional(), clientSecret: z.literal('').optional() });
 export const AuthorizeConnection = z.object({ ownerId: Id, connectionId: Id, version: z.number().int().positive(),
-  users: z.array(Id).max(32), expiresAt: z.iso.datetime().optional() }).strict();
+  users: z.array(Id).max(32) }).strict();
 export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1).max(200),
   connectionId: Id.optional(), name: Name.optional(), appId: Id.optional(),
   redirectUri: z.url().optional(),

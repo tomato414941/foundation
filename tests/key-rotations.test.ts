@@ -321,9 +321,9 @@ test('途中で止まった鍵交換は、旧鍵を持つ端末が同じ新し�
 });
 
 async function readOnlyItem(f: Awaited<ReturnType<typeof apiFixture>>) {
-  const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
+  const policy = AccessPolicy.parse({ format: 3, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [f.owner.binding],
-    readers: [f.owner.binding, f.delegate.binding], grants: [] });
+    readers: [f.owner.binding, f.delegate.binding] });
   const content = await protect(encode('owner-signed-value'), policy, 1, f.owner.binding, f.owner.keys);
   return f.custody.put(f.owner.actor, { name: 'Owner signed', content, data: { bytes: 18 } });
 }

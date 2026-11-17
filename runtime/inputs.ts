@@ -1,9 +1,7 @@
-import { hash } from '../shared/authority.js';
 import type { CustodyClient } from '../shared/client.js';
 import type { InjectionInput, SourceReference } from '../shared/contracts.js';
 import { validInputName } from '../shared/contracts.js';
-import { ContentTypes, Operations, useContent } from '../shared/custody.js';
-import type { ExecutionIntent } from '../shared/custody.js';
+import { ContentTypes, reveal } from '../shared/custody.js';
 import { atPointer, textValue } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
 import type { Connections } from './connections.js';
@@ -40,23 +38,13 @@ export async function processInputs(
 
 // Opens each input on this machine with the user's own keys; a connection renews its tokens here when they expire.
 export async function openInputs(custody: CustodyClient, connections: Connections, inputs: InjectionInput[]) {
-  const { binding, keys } = connections;
   const sources = await custody.sourceContents(inputs.map(input => input.source.id));
-  const intent: ExecutionIntent = {
-    format: 2, id: crypto.randomUUID(), origin: custody.origin, ownerId: binding.principalId,
-    actor: binding, executor: binding, environmentId: binding.id, environmentDigest: await hash(binding),
-    operation: Operations.command, functionDigest: null, operationDigest: await hash(inputs),
-    sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
-      policyDigest: await hash(content.policy), materialRevision: content.materialRevision,
-      ...(content.policy.contentType === ContentTypes.tokenSet ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
-    }))), resultRecipients: [binding], createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-  };
   const outputs = new Map<string, Promise<ConnectionOutputs>>();
   return processInputs(inputs, async source => {
     const content = sources.find(content => content.policy.id === source.id)!;
-    if (content.policy.contentType === ContentTypes.value) return { value: await useContent(content, intent, keys) };
-    if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(content, intent, sources, new AbortController().signal));
+    if (content.policy.contentType === ContentTypes.value)
+      return { value: await reveal(content, connections.binding, connections.keys.encryption) };
+    if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(content, sources, new AbortController().signal));
     const { values, files } = await outputs.get(source.id)!;
     if (!source.output || !Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
     return { value: encode(values[source.output]!), file: files.includes(source.output) };

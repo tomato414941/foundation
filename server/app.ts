@@ -18,7 +18,7 @@ import { verifiedRelease } from './release.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
-import { AccessPolicy, PolicyApproval, ProtectedContent } from '../shared/custody.js';
+import { AccessPolicy, ProtectedContent } from '../shared/custody.js';
 import { SignedBinding } from '../shared/authority.js';
 import { routesResources } from './routes-resources.js';
 import { routesCustody } from './routes-custody.js';
@@ -34,7 +34,7 @@ import { routesMcp } from './mcp.js';
 import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
 
-for (const [id, schema] of Object.entries({ AccessPolicy, PolicyApproval, ProtectedContent })) z.globalRegistry.add(schema, { id });
+for (const [id, schema] of Object.entries({ AccessPolicy, ProtectedContent })) z.globalRegistry.add(schema, { id });
 
 declare module 'fastify' {
   interface FastifyRequest {

@@ -1,14 +1,13 @@
-import { z } from 'zod';
 import { AppSave, AuthorizeConnection, ConnectService, Execution } from '../executions.js';
 import { CatalogMethod, Id, Resource, listOf } from '../contracts.js';
 import type { JsonValue } from '../contracts.js';
 import { canonical } from '../authority.js';
-import { AccessPolicy, ContentTypes, permittedOperations } from '../custody.js';
+import { ContentTypes } from '../custody.js';
 import { AppMaterial, connectionLabels, connectionMetadata, requiresApp, sealedConnection } from '../connections.js';
 import { suppliedConnectionFields, visibleConnectionFields } from '../connection-fields.js';
 import { decode, encode } from '../encryption.js';
 import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from '../connection-methods.js';
-import { connectionPolicy } from '../connection-policy.js';
+import { connectionPolicy, withUsers } from '../connection-policy.js';
 import { registrationMaterial, registrationApplication } from '../connection-registration.js';
 import type { ExecutionResultView, PrivateOperationInput } from '../execution-client.js';
 import type { KeyholderClient, KeyholderOperation, KeyholderPlan } from './types.js';
@@ -21,17 +20,6 @@ class ConnectionOperations {
     if (!selected) throw new Error('Choose an available connection method.');
     this.connectionNames.set(id, selected.defaultName);
     return catalogDefinition(selected);
-  }
-  private async userPolicy(policy: z.infer<typeof AccessPolicy>, users: string[], expiresAt?: string, advance = true) {
-    const expiry = expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
-    const bindings = await Promise.all([...new Set(users)].map(async id => {
-      const { binding } = await this.client.custody.inspectIdentity(id);
-      await this.client.custody.trusted(binding);
-      return binding;
-    }));
-    return AccessPolicy.parse({ ...policy, revision: policy.revision + (advance ? 1 : 0),
-      grants: [...policy.grants.filter(grant => !('actor' in grant)), ...bindings.map(binding => ({ actor: binding, executor: binding,
-        operations: [...permittedOperations(policy.contentType)], origins: [], functionDigests: [], callerProgram: true, expiresAt: expiry }))] });
   }
   private async prepareFields(plan: KeyholderPlan, material: PrivateOperationInput): Promise<ExecutionResultView | null> {
     const id = plan.id, { name, input } = plan.invocation;
@@ -55,7 +43,8 @@ class ConnectionOperations {
     const permission = AuthorizeConnection.parse(input), previous = await this.client.custody.read(permission.connectionId);
     if (previous.version !== permission.version || previous.content.policy.ownerId !== permission.ownerId ||
       previous.content.policy.contentType !== ContentTypes.tokenSet) throw new Error('Review the current connection before changing its permissions.');
-    const policy = await this.userPolicy(previous.content.policy, permission.users, permission.expiresAt);
+    const policy = await withUsers(this.client.custody, { ...previous.content.policy, revision: previous.content.policy.revision + 1 },
+      permission.users);
     const current = await this.client.custody.api.json('/api/resources/' + permission.connectionId, {}, Resource);
     const resource = await this.client.custody.save(current.name, await this.client.custody.reveal(permission.connectionId), policy,
       { previous, metadata: previous.content.metadata,

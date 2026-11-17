@@ -8,7 +8,7 @@ import { buildApp } from '../server/app.js';
 import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
 import { delegatedFixture } from './delegation-support.js';
 import { confirmedCall } from './confirmation-support.js';
-import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 test('OAuthの認可応答を開始したプリンシパルへ暗号化して中継し、同じ応答を受け付ける', async t => {
@@ -46,8 +46,8 @@ test('HTTP APIで登録し、変数を保存して同じ権限で一覧を取得
   const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
     headers, payload: await signBinding(binding, keys) });
   assert.equal(bound.statusCode, 200, bound.body);
-  const content = await protect(encode('api-value'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
-    ownerId: identity.principal.id, contentType: ContentTypes.value, revision: 1, authorities: [binding], readers: [binding], grants: [] }),
+  const content = await protect(encode('api-value'), AccessPolicy.parse({ format: 3, id, origin: f.config.origin,
+    ownerId: identity.principal.id, contentType: ContentTypes.value, revision: 1, authorities: [binding], readers: [binding] }),
     1, binding, keys);
   const created = await app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
     headers, payload: { name: 'API variable', content } });

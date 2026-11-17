@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { canonical, hash, thumbprint, verify, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { continuesPolicy, lineageLimit, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
+import { isEarlier } from '../shared/custody-legacy.js';
 import { openKeyring, keyringClaim } from '../shared/keyring.js';
 import { handoffContext, rotationPolicy, rotationPreparationProof, RotationPayload } from '../shared/key-rotations.js';
 import type {
@@ -127,6 +128,10 @@ export class KeyRotations {
   private async blockers(row: RotationRow, items: Item[], connection: Queryable = this.db.pool) {
     // Replacing an authority's keys changes the item's authorities, which adds a handoff to its signed history; an item
     // whose history is full keeps the previous keys, so the rotation cannot finish while such an item names them.
+    // An item still sealed under the earlier policy is sealed again by its owner's devices before its keys are replaced.
+    const earlier = items.filter(item => item.kind === 'content' && isEarlier(item.source.content as { policy: { format: number } }))
+      .map(item => ({ kind: item.kind, id: item.id, reason: 'reseal_required' }));
+    if (earlier.length) return earlier;
     const full = items.flatMap(item => {
       if (item.kind !== 'content') return [];
       const content = ProtectedContent.parse(item.source.content);
@@ -138,7 +143,7 @@ export class KeyRotations {
   private async signedBlockers(row: RotationRow, items: Item[], connection: Queryable) {
     return this.db.all<{ kind: string; id: string; reason: string }>(
       "SELECT 'connectionOperation' AS kind,id,'connection_busy' AS reason FROM connection_operations " +
-      "WHERE state IN ('prepared','in_flight','uncertain') AND (executor_id=$1 OR resource_id=ANY($2::uuid[])) " +
+      "WHERE state IN ('prepared','in_flight','uncertain') AND (renewer_id=$1 OR resource_id=ANY($2::uuid[])) " +
       "UNION ALL SELECT 'oauthRelay',id,'authorization_active' FROM oauth_relays WHERE binding_id=$3::uuid AND expires_at>now() " +
       "UNION ALL SELECT 'principal',id,'key_binding_changed' FROM principals WHERE id=$1 AND NOT EXISTS " +
       "(SELECT 1 FROM principal_key_bindings WHERE principal_id=$1 AND id=$3::uuid AND retired_at IS NULL) " +
@@ -290,7 +295,7 @@ export class KeyRotations {
         this.custody.metadata(content);
         if (canonical(content.policy) !== canonical(rotationPolicy(previous.policy, before, after)) ||
           canonical(content.metadata) !== canonical(previous.metadata) ||
-          content.materialRevision !== previous.materialRevision + 1 || content.creationRunId !== null ||
+          content.materialRevision !== previous.materialRevision + 1 ||
           !continuesPolicy(previous.policy, content))
           fail(400, 'invalid_rotation_content', 'Preserve the content metadata and permissions while replacing its keys.');
         const authority = policyAuthority(content);

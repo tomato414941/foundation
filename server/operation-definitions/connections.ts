@@ -5,8 +5,8 @@ import { AppSave, AuthorizeConnection, ConnectService, Execution, ValueSave } fr
 import { canonical } from '../../shared/authority.js';
 import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
-import { ContentTypes, permittedOperations } from '../../shared/custody.js';
-import type { CustodyPolicy } from '../../shared/custody.js';
+import { ContentTypes } from '../../shared/custody.js';
+import type { PolicyParties } from '../../shared/custody.js';
 import type { Catalog } from '../catalog.js';
 import type { Custody } from '../custody.js';
 import { succeeds } from '../custody.js';
@@ -58,13 +58,6 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       (input.resourceId && policy.id !== input.resourceId) || write.version !== input.version ||
       (!input.resourceId && await resources.db.one('SELECT 1 FROM resources WHERE id=$1', [policy.id])))
       fail(409, 'operation_changed', 'Save the item prepared by this operation.');
-    const binding = await custody.bindings.current(who.id);
-    const previous = input.resourceId ? await custody.get(input.resourceId) : null;
-    const executors = previous
-      ? previous.policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id) : [];
-    const grants = policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id);
-    if (canonical([...new Set(executors)].sort()) !== canonical([...new Set(grants)].sort()))
-      fail(409, 'operation_changed', 'Keep the permissions this item has.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
     if ('methodId' in input) await requireFields(who, input, write.content.metadata);
@@ -78,19 +71,17 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       review: reviewFields, resolve: reviewFields,
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
-  const approvedUsers = async (policy: CustodyPolicy, users: string[], expiresAt?: string) => {
-    const expected = [...new Set(users)].sort();
-    const grants = policy.grants.filter(grant => 'actor' in grant);
-    if (canonical(grants.map(grant => 'actor' in grant ? grant.actor.principalId : '').sort()) !== canonical(expected))
+  // A connection's users are its readers beyond those who use what its owner holds: the readers among those stay as
+  // they are, and the users are the principals approved for it.
+  const parties = async (policy: PolicyParties) => {
+    const owners = new Set((await custody.recipients(policy.ownerId)).map(recipient => recipient.binding.principalId));
+    return { owners, own: policy.readers.filter(reader => owners.has(reader.principalId)),
+      users: [...new Set(policy.readers.map(reader => reader.principalId).filter(id => !owners.has(id)))].sort() };
+  };
+  const approvedUsers = async (policy: PolicyParties, users: string[]) => {
+    const { owners, users: given } = await parties(policy);
+    if (canonical(given) !== canonical([...new Set(users)].filter(id => !owners.has(id)).sort()))
       fail(409, 'operation_changed', 'Use the principals approved for this connection.');
-    for (const grant of grants) {
-      if (!('actor' in grant) || canonical(grant.actor) !== canonical(grant.executor) ||
-        canonical([...grant.operations].sort()) !== canonical([...permittedOperations(ContentTypes.tokenSet)].sort()) ||
-        grant.origins.length || grant.functionDigests.length || !grant.callerProgram ||
-        Date.parse(grant.expiresAt) <= Date.now() || Date.parse(grant.expiresAt) > Date.now() + 30 * 86_400_000 + 60_000 ||
-        expiresAt && grant.expiresAt !== expiresAt)
-        fail(409, 'operation_changed', 'Use the connection permissions approved by this execution.');
-    }
   };
   definitions.define('connection.authorize', AuthorizeConnection, ['接続の使用を許可する', 'Authorize connection use'], keyholder,
     { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
@@ -99,10 +90,10 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       if (row.version !== input.version || write.version !== input.version || write.name !== row.name ||
         policy.id !== input.connectionId || policy.ownerId !== input.ownerId || previous.policy.ownerId !== input.ownerId ||
         policy.contentType !== ContentTypes.tokenSet || canonical(write.content.metadata) !== canonical(previous.metadata) ||
-        canonical(policy.readers) !== canonical(previous.policy.readers) || canonical(policy.authorities) !== canonical(previous.policy.authorities) ||
-        canonical(policy.grants.filter(grant => !('actor' in grant))) !== canonical(previous.policy.grants.filter(grant => !('actor' in grant))))
+        canonical(policy.authorities) !== canonical(previous.policy.authorities) ||
+        canonical((await parties(policy)).own) !== canonical((await parties(previous.policy)).own))
         fail(409, 'operation_changed', 'Change permissions for the current connection.');
-      await approvedUsers(policy, input.users, input.expiresAt);
+      await approvedUsers(policy, input.users);
       return resources.view(who, await custody.put(who, write));
     } });
   definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
@@ -143,11 +134,12 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
         if (input.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
           canonical([...selectScopes(method.config.scopes, input.scopes)].sort()) !== canonical([...z.array(z.string()).parse(write.content.metadata.scopes)].sort()))
           fail(409, 'operation_changed', 'Save the service permissions approved by this execution.');
-        // A connection sealed only for keys its signer has since replaced is connected anew, without its permissions.
+        // A connection sealed only for keys its signer has since replaced is connected anew, without its users.
         const binding = (await custody.bindings.current(who.id)).binding;
         if (input.users) await approvedUsers(policy, input.users);
-        else if (canonical(policy.grants) !== canonical(previous && !succeeds(previous.policy, binding) ? previous.policy.grants : []))
-          fail(409, 'operation_changed', 'Keep the approved connection permissions.');
+        else if (canonical((await parties(policy)).users) !==
+          canonical(previous && !succeeds(previous.policy, binding) ? (await parties(previous.policy)).users : []))
+          fail(409, 'operation_changed', 'Keep the approved users of this connection.');
         const row = await custody.put(who, write);
         return { kind: 'connected', id: row.id, metadata: write.content.metadata };
       } });

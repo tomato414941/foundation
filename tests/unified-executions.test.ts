@@ -85,7 +85,7 @@ test('接続の所有者がAIに使用を許可し、AIが自分の鍵で開い�
   assert.equal('kind' in permission && permission.kind, 'saved');
   const visible = await agent.read(saved.resource.id);
   assert.equal(visible.content.policy.ownerId, f.stranger.actor.id);
-  assert.ok(visible.content.policy.grants.some(grant => 'actor' in grant && grant.actor.principalId === f.delegate.actor.id));
+  assert.ok(visible.content.policy.readers.some(reader => reader.principalId === f.delegate.actor.id));
   const own = new Connections(f.delegate.binding, f.delegate.keys, new HttpBroker(f.api(f.delegate.token)).connections(),
     new MemoryJournal(), f.transport);
   const used = await openInputs(agent, own, [{ name: 'HF_TOKEN', source: { id: saved.resource.id, output: 'HF_TOKEN' } }]);

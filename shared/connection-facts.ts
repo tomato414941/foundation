@@ -10,7 +10,7 @@ const commonFacts = new Set(['format', 'generation', 'methodId', 'method', 'appI
 const extensions = JsonObject.refine(value => Object.keys(value).every(key => !commonFacts.has(key)),
   'Keep method-specific facts separate from common facts.');
 
-// Providers expose observations, not credentials. Readers use the same projection as executors.
+// Providers expose observations, not credentials.
 export const ConnectionFacts = z.object({
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),

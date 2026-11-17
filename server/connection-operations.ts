@@ -2,14 +2,14 @@ import type { Actor } from './authorization.js';
 import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, Operations, grantActive, verifyContent } from '../shared/custody.js';
+import { ContentTypes, verifyContent } from '../shared/custody.js';
 import type { CustodyContent } from '../shared/custody.js';
 import { fail, required } from './errors.js';
 
 export interface ConnectionOperation {
   id: string;
   resource_id: string;
-  executor_id: string;
+  renewer_id: string;
   expected_revision: number;
   state: 'prepared' | 'in_flight' | 'committed' | 'uncertain' | 'aborted';
   fence: string;
@@ -20,15 +20,15 @@ export class ConnectionOperations {
   constructor(readonly custody: Custody) {}
   get db() { return this.custody.resources.db; }
 
-  private async allowed(actor: Actor, resourceId: string, connection: Queryable = this.db.pool, refresh = true) {
+  // A connection is renewed by its readers, each on its own device, while they may still open it.
+  private async allowed(actor: Actor, resourceId: string, connection: Queryable = this.db.pool) {
     await this.custody.resources.authorization.active(actor, connection);
     const content = await this.custody.get(resourceId, connection);
     const { binding } = await this.custody.bindings.current(actor.id, connection);
-    if (content.policy.contentType !== ContentTypes.tokenSet || !(content.policy.authorities.some(authority =>
-      canonical(authority) === canonical(binding)) || content.policy.grants.some(grant =>
-      canonical(grant.executor) === canonical(binding) && (!refresh || grant.operations.includes(Operations.refresh)) &&
-      grantActive(grant))))
-      fail(403, 'forbidden', 'This executor cannot renew the connection.');
+    if (content.policy.contentType !== ContentTypes.tokenSet ||
+      !content.policy.readers.some(reader => canonical(reader) === canonical(binding)) ||
+      !await this.custody.resources.authorization.can(actor, await this.custody.resources.get(resourceId, connection), 'reveal', connection))
+      fail(403, 'forbidden', 'Only a reader of this connection can renew it.');
     return content;
   }
 
@@ -38,7 +38,7 @@ export class ConnectionOperations {
       const content = await this.allowed(actor, resourceId, connection);
       const existing = await this.db.one<ConnectionOperation>('SELECT * FROM connection_operations WHERE id=$1', [id], connection);
       if (existing) {
-        if (existing.resource_id !== resourceId || existing.executor_id !== actor.id || existing.expected_revision !== expectedRevision)
+        if (existing.resource_id !== resourceId || existing.renewer_id !== actor.id || existing.expected_revision !== expectedRevision)
           fail(409, 'operation_conflict', 'Use a new operation ID for another token update.');
         return existing;
       }
@@ -48,9 +48,9 @@ export class ConnectionOperations {
         "SELECT * FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')", [resourceId], connection,
       );
       if (active) fail(409, active.state === 'uncertain' ? 'connection_uncertain' : 'connection_busy',
-        active.state === 'uncertain' ? 'Resolve the previous token update or reconnect this service.' : 'Another executor is updating this connection.');
+        active.state === 'uncertain' ? 'Resolve the previous token update or reconnect this service.' : 'Another device is updating this connection.');
       return required(await this.db.one<ConnectionOperation>(
-        "INSERT INTO connection_operations(id,resource_id,executor_id,expected_revision,state) VALUES($1,$2,$3,$4,'prepared') RETURNING *",
+        "INSERT INTO connection_operations(id,resource_id,renewer_id,expected_revision,state) VALUES($1,$2,$3,$4,'prepared') RETURNING *",
         [id, resourceId, actor.id, expectedRevision], connection,
       ));
     });
@@ -61,7 +61,7 @@ export class ConnectionOperations {
     const operation = required(await this.db.one<ConnectionOperation>(
       'SELECT * FROM connection_operations WHERE id=$1 AND fence=$2::bigint', [id, fence], connection,
     ));
-    if (operation.executor_id !== actor.id) fail(403, 'forbidden', 'Use the executor that started this update.');
+    if (operation.renewer_id !== actor.id) fail(403, 'forbidden', 'Use the identity that started this update.');
     return operation;
   }
 
@@ -139,7 +139,7 @@ export class ConnectionOperations {
   }
 
   async state(actor: Actor, resourceId: string) {
-    await this.allowed(actor, resourceId, this.db.pool, false);
+    await this.allowed(actor, resourceId, this.db.pool);
     return await this.db.one<ConnectionOperation>(
       "SELECT * FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')", [resourceId],
     ) ?? null;

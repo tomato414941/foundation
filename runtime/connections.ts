@@ -5,8 +5,8 @@ import { AppMaterial, connectionMetadata, openConnection, requiresApp, sealedCon
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { connectionMethod, methodDigest } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
-import { ContentTypes, Operations, authorizeUse, renewContent, useContent } from '../shared/custody.js';
-import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
+import { ContentTypes, renewContent, reveal } from '../shared/custody.js';
+import type { CustodyContent } from '../shared/custody.js';
 import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
@@ -65,28 +65,28 @@ export class Connections {
       fail(409, 'reconnect_required', 'Reconnect this service: its connection method changed.');
     return method;
   }
-  private async material(content: CustodyContent, intent: ExecutionIntent,
-    destination?: string | ((state: ConnectionState) => string)) {
-    const method = await this.method(content), open = (bytes: Uint8Array) => openConnection(bytes, content.metadata, method);
-    const target = typeof destination === 'function' ? (bytes: Uint8Array) => destination(open(bytes)) : destination;
-    const result = open(await useContent(content, intent, this.keys, { destination: target }));
+  private async material(content: CustodyContent) {
+    const method = await this.method(content);
+    const result = openConnection(await reveal(content, this.binding, this.keys.encryption), content.metadata, method);
     if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
     if (result.state === 'reconnect')
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
   }
-  private async app(id: string, methodId: string, intent: ExecutionIntent, sources: CustodyContent[]) {
+  private async app(id: string, methodId: string, sources: CustodyContent[]) {
     const content = this.source(id, ContentTypes.clientCredential, sources);
-    const value = AppMaterial.parse(JSON.parse(utf8(await useContent(content, intent, this.keys))));
+    if (!content.policy.readers.some(reader => reader.id === this.binding.id))
+      fail(403, 'refresh_required', 'Only a reader of its application can renew this connection.');
+    const value = AppMaterial.parse(JSON.parse(utf8(await reveal(content, this.binding, this.keys.encryption))));
     if (value.methodId !== methodId) fail(400, 'wrong_app', 'Choose an application for this connection method.');
     return value;
   }
-  private async connectionApp(state: ConnectionState, intent: ExecutionIntent, sources: CustodyContent[]) {
+  private async connectionApp(state: ConnectionState, sources: CustodyContent[]) {
     if (connectionMethod(state.method).application === 'none') return null;
     if (!requiresApp(state.method)) return 'implicitApp' in state && state.implicitApp ? state.implicitApp : AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
-    const app = await this.app(state.appId!, state.methodId, { ...intent, operation: Operations.refresh }, sources);
+    const app = await this.app(state.appId!, state.methodId, sources);
     if (app.generation !== state.appGeneration)
       fail(409, 'app_changed', 'Reconnect this service with the current application.');
     if (connectionMethod(state.method).requiresApp && state.method.kind !== 'aws' &&
@@ -94,13 +94,12 @@ export class Connections {
       fail(409, 'app_changed', 'Reconnect this service with the current application settings.');
     return app;
   }
-  async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
-    destination?: string): Promise<ConnectionOutputs> {
-    let state = await this.material(content, intent, destination);
+  async outputs(content: CustodyContent, sources: CustodyContent[], signal: AbortSignal): Promise<ConnectionOutputs> {
+    let state = await this.material(content);
     if (this.provider(state.method).renew && await this.broker.state(content.policy.id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
-    state = await this.refresh(content, state, intent, sources, signal, destination);
-    const values = await this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
+    state = await this.refresh(content, state, sources, signal);
+    const values = await this.provider(state.method).outputs(state, await this.connectionApp(state, sources), signal);
     return { values, files: state.method.kind === 'token' ? state.method.config.files ?? [] : [] };
   }
 
@@ -117,14 +116,11 @@ export class Connections {
     await this.journal.write('refresh_' + record.operation.id, record);
     return material;
   }
-  private async refresh(content: CustodyContent, material: ConnectionState, intent: ExecutionIntent,
-    sources: CustodyContent[], signal: AbortSignal, destination?: string) {
+  private async refresh(content: CustodyContent, material: ConnectionState, sources: CustodyContent[], signal: AbortSignal) {
     const provider = this.provider(material.method);
     if (!provider.needsRenewal(material)) return material;
     if (!provider.renew) fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-    try { await authorizeUse(content, { ...intent, operation: Operations.refresh }, { destination }); }
-    catch { fail(403, 'refresh_required', 'This identity cannot renew the connection.'); }
-    const app = await this.connectionApp(material, intent, sources), id = randomUUID();
+    const app = await this.connectionApp(material, sources), id = randomUUID();
     const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);
     const record: Renewal = { operation, previous: content, material, app, phase: 'prepared', delivered: false };
     await this.journal.write('refresh_' + id, record);

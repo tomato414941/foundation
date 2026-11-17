@@ -13,7 +13,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, Operations, protect, reveal } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { CustodyClient } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
@@ -91,30 +91,6 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}, bun
   }
   return { f, context, app, origin, directory, run, start, close, person };
 }
-
-test('変数を使用権限でローカルコマンドへ渡し、内容の読み出しを制限する', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Variable executor', '--origin', c.origin]);
-  assert.equal(initialized.code, 0, initialized.stderr);
-  const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
-  const owner = await c.person('Variable owner'), id = crypto.randomUUID();
-  const policy = AccessPolicy.parse({ format: 2, id, origin: c.origin, ownerId: owner.actor.id, contentType: ContentTypes.value,
-    revision: 1, readers: [owner.binding], authorities: [owner.binding], producers: [],
-    grants: [{ actor: identity.binding, executor: identity.binding, operations: [Operations.command], callerProgram: true,
-      expiresAt: new Date(Date.now() + 7_200_000).toISOString() }] });
-  await c.context.custody.put(owner.actor, { name: 'Command variable',
-    content: await protect(encode('command-variable-value'), policy, 1, owner.binding, owner.keys) });
-  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await fingerprint(owner.binding)]);
-  assert.equal(trusted.code, 0, trusted.stderr);
-  const executed = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'VARIABLE_VALUE', source: { id } },
-  ]), '--', process.execPath, '-e', 'if(process.env.VARIABLE_VALUE!=="command-variable-value")process.exit(2);console.log("Variable used");']);
-  assert.equal(executed.code, 0, executed.stderr);
-  assert.match(executed.stdout, /Variable used/);
-  const read = await c.run(['read', id]);
-  assert.equal(read.code, 1);
-  assert.match(read.stderr, /cannot reveal/);
-});
 
 test('CLIで登録して変数を保存し、コマンドへ渡して出力を伏せる', async (t) => {
   const c = await cliFixture();
@@ -332,8 +308,8 @@ test('発行されたキーでログインした CLI は本人として入り、
   assert.equal(JSON.parse(initialized.stdout).principal.id, person.actor.id);
   const id = randomUUID(),
     content = encode('sealed elsewhere');
-  const policy = AccessPolicy.parse({ format: 2, id, origin: c.origin, ownerId: person.actor.id, contentType: ContentTypes.value,
-    revision: 1, authorities: [person.binding], readers: [person.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 3, id, origin: c.origin, ownerId: person.actor.id, contentType: ContentTypes.value,
+    revision: 1, authorities: [person.binding], readers: [person.binding] });
   await c.context.custody.put(person.actor, {
     name: 'Browser variable',
     content: await protect(content, policy, 1, person.binding, person.keys),
