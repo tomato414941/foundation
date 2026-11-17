@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { Id, Json, JsonObject } from '../shared/contracts.js';
+import { Id, Json } from '../shared/contracts.js';
 
 export const ResponseFormat = z.enum(['json', 'markdown']).default('json');
 export function mcpReply(value: unknown, format: 'json' | 'markdown' = 'json'): CallToolResult {
@@ -21,7 +21,6 @@ export async function mcpCall(work: () => Promise<unknown>, format: 'json' | 'ma
 export function registerMetadataTools(server: McpServer, gateway: {
   schema(): Promise<unknown>;
   request(method: string, path: string, body?: unknown, confirmation?: string): Promise<unknown>;
-  executionResult?(id: string): Promise<unknown>;
 }) {
   server.registerTool('foundation_schema', {
     title: 'Inspect the Foundation API',
@@ -73,40 +72,4 @@ export function registerMetadataTools(server: McpServer, gateway: {
       throw new Error('Choose a Foundation resource API path.');
     return gateway.request(input.method, url.pathname + url.search, input.body, input.confirmation);
   }, input.response_format));
-  server.registerTool('foundation_functions', {
-    title: 'Find callable functions', description: 'List saved functions this principal may run, with their declared inputs.',
-    inputSchema: z.object({ query: z.string().max(200).optional(), limit: z.number().int().min(1).max(100).default(20),
-      after: Id.optional(), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, input => mcpCall(() => {
-    const query = new URLSearchParams({ limit: String(input.limit), ...(input.query ? { query: input.query } : {}),
-      ...(input.after ? { after: input.after } : {}) });
-    return gateway.request('GET', '/api/functions?' + query);
-  }, input.response_format));
-  server.registerTool('foundation_invoke_function', {
-    title: 'Invoke a saved function', description: 'Run a saved function by its ID with its declared arguments. Returns an execution ID; read the result with foundation_execution_result.',
-    inputSchema: z.object({ functionId: Id, arguments: JsonObject.default({}), id: Id.optional(), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, input => mcpCall(async () => {
-    const id = input.id ?? crypto.randomUUID();
-    try { return await gateway.request('POST', '/api/functions/' + input.functionId + '/executions', { id, arguments: input.arguments }); }
-    catch (error) { throw new Error((error instanceof Error ? error.message : 'The invocation request failed.') +
-      ' Check execution ' + id + ' or retry with the same id and arguments.'); }
-  }, input.response_format));
-  server.registerTool('foundation_execution_result', {
-    title: 'Read an execution', description: 'Read the state, error, and result of an execution. Large results are returned in parts with a next offset.',
-    inputSchema: z.object({ id: Id, offset: z.number().int().min(0).default(0),
-      limit: z.number().int().min(1).max(20000).default(20000), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, input => mcpCall(async () => {
-    const execution = gateway.executionResult ? await gateway.executionResult(input.id)
-      : (await gateway.request('GET', '/api/executions/' + input.id) as { body: unknown }).body;
-    const { results, ...metadata } = execution as Record<string, unknown>, serialized = JSON.stringify(results), text = serialized.slice(input.offset, input.offset + input.limit);
-    return { ...metadata, offset: input.offset, text, next: input.offset + text.length < serialized.length ? input.offset + text.length : null };
-  }, input.response_format));
-  server.registerTool('foundation_cancel_execution', {
-    title: 'Cancel a function invocation', description: 'Ask Foundation to stop an execution. Effects that already happened are not undone.',
-    inputSchema: z.object({ id: Id, response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, input => mcpCall(() => gateway.request('POST', '/api/executions/' + input.id + '/cancel', {}), input.response_format));
 }

@@ -9,10 +9,7 @@ import type { ActionName } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText } from './api';
 import { custodyClient } from './custody';
 import { requireKeys } from './keys';
-import { hash } from '../../shared/authority';
-import { Operations, permittedOperations } from '../../shared/custody';
 import { isProtected } from '../../shared/protected';
-import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ErrorNotice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
 // The actions a role gives, read back from its name: a reader may read, a user may use.
@@ -39,8 +36,7 @@ export async function shareLoader({ params, request }: LoaderFunctionArgs) {
     given(id, request.signal),
   ]);
   const protectedItem = 'kind' in target && isProtected(target.kind);
-  return { target, grants, protectedItem,
-    environments: protectedItem ? await availableEnvironments(target.ownerId) : [] };
+  return { target, grants, protectedItem };
 }
 export async function shareAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
@@ -64,21 +60,9 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
           if (actions.includes('read')) policy.observers.push(id);
           if (actions.some(action => ['reveal', 'update', 'use'].includes(action))) {
             const { binding } = await client.inspectIdentity(id); await client.trusted(binding);
-            if (actions.includes('reveal') || actions.includes('update')) policy.readers.push(binding);
+            // Using what a key protects means opening it on the user's own machine, so a user reads it as well.
+            policy.readers.push(binding);
             if (actions.includes('update')) policy.authorities.push(binding);
-            if (actions.includes('use')) {
-              const environments = await Promise.all(form.getAll('environments').map(id => client.environment(String(id))));
-              if (!environments.length) throw new ApiFailure('environment_required');
-              const functionId = formText(form, 'functionId'), callerProgram = form.has('callerProgram');
-              const fn = functionId ? await api('/resources/' + functionId, {}, Resource) : null;
-              if (resource.kind !== 'app' && !callerProgram && (!fn || fn.kind !== 'function')) throw new ApiFailure('function_required');
-              for (const environment of environments) {
-                policy.grants.push({ actor: binding, executor: environment.manifest.executor,
-                  operations: callerProgram || resource.kind === 'app' ? [...permittedOperations(policy.contentType)] : [Operations.function],
-                  callerProgram, origins: [], functionDigests: fn?.kind === 'function' ? [await hash(fn.data)] : [],
-                  expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
-              }
-            }
           }
         }
         await client.save(resource.name, await client.reveal(resource.id), policy, { previous, metadata: previous.content.metadata });
@@ -173,11 +157,6 @@ export default function Sharing() {
             </div>
           </Panel>
           {data.protectedItem && actions.includes('update') && <p className="text-sm leading-relaxed text-muted-foreground">{t('editorDisclosure')}</p>}
-          {data.protectedItem && actions.includes('use') && <>
-            <EnvironmentChoice items={data.environments} multiple />
-            <InputField name="functionId" label={t('approvedFunction')} />
-            <CheckboxField name="callerProgram" label={t('callerProgram')} hint={t('callerProgramHelp')} />
-          </>}
           <SaveBar back={back} label="grant" />
         </div>
       </Form>

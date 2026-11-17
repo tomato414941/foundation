@@ -14,7 +14,9 @@ export interface Journal {
   pending(prefix: string): Promise<string[]>;
 }
 
-const JournalId = z.string().regex(/^(run|process|invocation|function|connect|refresh|checkpoint|identity|environment|flow)_[A-Za-z0-9_-]{1,100}$/);
+const JournalId = z.string().regex(/^(refresh|checkpoint|identity)_[A-Za-z0-9_-]{1,100}$/);
+// Records of kinds this machine no longer keeps are left out, and go with their directory when it is moved.
+const kept = (name: string) => JournalId.safeParse(name).success;
 export class FileJournal implements Journal {
   private indexing?: Promise<void>;
   constructor(readonly directory: string, readonly origin: string,
@@ -58,7 +60,7 @@ export class FileJournal implements Journal {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await secureWrite(join(this.directory, id + '.json'), canonical(envelope), true);
   }
-  private delivery(id: string) { return /^(run|process|invocation|refresh)_/.test(id); }
+  private delivery(id: string) { return id.startsWith('refresh_'); }
   private delivered(value: unknown) {
     return !!value && typeof value === 'object' && 'delivered' in value && value.delivered === true;
   }
@@ -94,7 +96,7 @@ export class FileJournal implements Journal {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
       throw error;
     }
-    return entries.filter(entry => entry.isFile() && entry.name.startsWith(prefix)).map(entry => JournalId.parse(entry.name));
+    return entries.filter(entry => entry.isFile() && entry.name.startsWith(prefix) && kept(entry.name)).map(entry => entry.name);
   }
   async keys(prefix: string) {
     let files;
@@ -103,7 +105,7 @@ export class FileJournal implements Journal {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
       throw error;
     }
-    return files.filter(file => file.isFile() && file.name.startsWith(prefix) && file.name.endsWith('.json'))
-      .map(file => JournalId.parse(file.name.slice(0, -5)));
+    return files.filter(file => file.isFile() && file.name.startsWith(prefix) && file.name.endsWith('.json') && kept(file.name.slice(0, -5)))
+      .map(file => file.name.slice(0, -5));
   }
 }

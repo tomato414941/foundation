@@ -16,7 +16,6 @@ const NamedPrincipal = Principal.pick({ id: true, name: true });
 type NamedPrincipal = z.infer<typeof NamedPrincipal>;
 export type ReviewValue =
   | { kind: 'text'; text: string }
-  | { kind: 'command'; parts: string[] }
   | { kind: 'empty' }
   | { kind: 'boolean'; value: boolean }
   | { kind: 'time'; value: string }
@@ -34,7 +33,7 @@ export type ReviewValue =
 export interface ReviewRow { field: string; value: ReviewValue; literal?: boolean }
 
 // Fields that only keep concurrent changes apart, never what the operation does.
-const hidden = new Set(['version', 'revision', 'functionVersion', 'methodDigest', 'programDigest']);
+const hidden = new Set(['version', 'revision', 'methodDigest']);
 const times = new Set(['expiresAt']);
 const keys = new Set(['hostKeys', 'publicKey', 'authorizedKeys']);
 // Fields naming an item or principal by its ID, and fields holding what the requester passes on as it is.
@@ -96,8 +95,6 @@ export function reviewer({ approver, requester, principals, inspect, signal }: R
     if (input === null || input === '') return { kind: 'empty' };
     if (typeof input === 'boolean') return { kind: 'boolean', value: input };
     if (typeof input === 'number') return { kind: 'text', text: String(input) };
-    if (field === 'command' && Array.isArray(input) && input.every(part => typeof part === 'string'))
-      return { kind: 'command', parts: input as string[] };
     if (Array.isArray(input)) return input.length ? { kind: 'list', items: await Promise.all(input.map(child => value(field, child))) } : { kind: 'empty' };
     if (typeof input === 'object') return { kind: 'group', rows: await rows(input) };
     if (input === '$approver') return approver ? principal(approver) : { kind: 'approver' };
@@ -120,15 +117,6 @@ export function loadOperationReviews(operations: ExecutionView['operations'], co
   return Promise.all(operations.map(operation => operation.execution === 'keyholder' ? null : rows(operation.input)));
 }
 
-// A program and its arguments as they are passed, one by one, without a shell to expand or split them.
-export function CommandArguments({ parts }: { parts: string[] }) {
-  return <ol className="flex min-w-0 flex-wrap gap-1.5">
-    {parts.map((part, index) => <li key={index} className="min-w-0">
-      <code className="block rounded border bg-background/60 px-1.5 py-0.5 text-sm whitespace-pre-wrap wrap-anywhere">{part}</code>
-    </li>)}
-  </ol>;
-}
-
 // An item by its name, with what tells it apart from others of the same name where its name alone would not.
 function ResourceName({ resource }: { resource: ResourceView }) {
   const name = hasSection(resource.kind)
@@ -142,7 +130,6 @@ function Value({ field, value }: { field: string; value: ReviewValue }) {
   const { t } = useTranslation();
   switch (value.kind) {
     case 'text': return <span className="whitespace-pre-wrap">{value.text}</span>;
-    case 'command': return <CommandArguments parts={value.parts} />;
     case 'empty': return <span className="text-muted-foreground">{t(times.has(field) ? 'reviewNoExpiry' : 'reviewNone')}</span>;
     case 'boolean': return <>{t(value.value ? 'reviewYes' : 'reviewNo')}</>;
     case 'time': return <DateText value={value.value} />;

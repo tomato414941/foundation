@@ -146,7 +146,6 @@ export class Authentication {
     principalId: string,
     name: string,
     expiresAt: string | null = null,
-    environmentId: string | null = null,
     connection: Queryable = this.db.pool,
     encryptionKey?: PublicEncryptionKey,
   ) {
@@ -160,15 +159,14 @@ export class Authentication {
     if (Number(count?.count) >= 100)
       fail(409, 'credential_limit', 'Remove an unused credential before adding another.');
     const result = await this.db.one<CredentialRow>(
-      `INSERT INTO credentials(id,principal_id,kind,name,identifier,expires_at,environment_id,data)
-      VALUES($1,$2,'key',$3,$4,$5,$6,$7) RETURNING *`,
+      `INSERT INTO credentials(id,principal_id,kind,name,identifier,expires_at,data)
+      VALUES($1,$2,'key',$3,$4,$5,$6) RETURNING *`,
       [
         id,
         principalId,
         name,
         digest(raw),
         expiresAt,
-        environmentId,
         JSON.stringify(encryptionKey ? { publicKey: PublicKey.parse(encryptionKey) } : {}),
       ],
       connection,
@@ -181,7 +179,7 @@ export class Authentication {
     return this.db.transaction(async (connection) => {
       const principal = await this.principals.create(name, binding.encryption, undefined, connection, binding.principalId);
       await bindFirst(connection, this.db, this.audit, principal.id, input);
-      const result = await this.issueKey(principal.id, name, null, null, connection);
+      const result = await this.issueKey(principal.id, name, null, connection);
       await this.audit.record(principal.id, principal.id, 'principal.enroll', principal.id, {}, connection);
       return { principal: { id: principal.id, name: principal.name }, ...result };
     });
@@ -221,7 +219,7 @@ export class Authentication {
         expiresAt: input.expiresAt, ...(input.wrap ? { wrap: input.wrap } : {}) });
       if (input.wrap && !samePublicKey((await this.principals.get(principalId, connection)).public_key, input.wrap.publicKey))
         fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
-      const issued = await this.issueKey(principalId, input.name, input.expiresAt, null, connection);
+      const issued = await this.issueKey(principalId, input.name, input.expiresAt, connection);
       if (input.wrap)
         await connection.query('UPDATE credentials SET private_wrap=$2 WHERE id=$1',
           [issued.credential.id, WrappedKey.parse(input.wrap.wrappedKey)]);
@@ -244,8 +242,8 @@ export class Authentication {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials', connection);
       const target = required(
-        await this.db.one<{ kind: string; environment_id: string | null; expires_at: Date | null }>(
-          'SELECT kind,environment_id,expires_at FROM credentials WHERE id=$1 AND principal_id=$2',
+        await this.db.one<{ kind: string; expires_at: Date | null }>(
+          'SELECT kind,expires_at FROM credentials WHERE id=$1 AND principal_id=$2',
           [id, principalId],
           connection,
         ),
@@ -255,13 +253,12 @@ export class Authentication {
       if (target.kind !== 'key' || id !== actor.credentialId)
         await this.confirmations.consume(connection, actor, { action: 'credential.remove', principalId, credentialId: id });
       const count = await this.db.one<{ count: string }>(
-        'SELECT count(*) FROM credentials WHERE principal_id=$1 AND environment_id IS NULL AND (expires_at IS NULL OR expires_at>now())',
+        'SELECT count(*) FROM credentials WHERE principal_id=$1 AND (expires_at IS NULL OR expires_at>now())',
         [principalId],
         connection,
       );
       if (
         Number(count?.count) <= 1 &&
-        !target.environment_id &&
         (!target.expires_at || target.expires_at.getTime() > Date.now())
       )
         fail(409, 'last_credential', 'Add another sign-in method before removing the last one.');

@@ -18,13 +18,10 @@ import { verifiedRelease } from './release.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
-import { AccessPolicy, PolicyApproval, ProtectedContent, RunIntent } from '../shared/custody.js';
+import { AccessPolicy, PolicyApproval, ProtectedContent } from '../shared/custody.js';
 import { SignedBinding } from '../shared/authority.js';
-import { ExecutionReceipt, LegacyReceipt, SharedReceipt, Task } from '../shared/runtime-protocol.js';
 import { routesResources } from './routes-resources.js';
-import { routesRuntime } from './routes-runtime.js';
-import { routesProcesses } from './routes-processes.js';
-import { routesFunctions } from './routes-functions.js';
+import { routesCustody } from './routes-custody.js';
 import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
 import { routesExecutions } from './routes-executions.js';
@@ -37,8 +34,7 @@ import { routesMcp } from './mcp.js';
 import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
 
-for (const [id, schema] of Object.entries({ AccessPolicy, PolicyApproval, ProtectedContent, RunIntent,
-  ExecutionReceipt, LegacyReceipt, SharedReceipt, Task })) z.globalRegistry.add(schema, { id });
+for (const [id, schema] of Object.entries({ AccessPolicy, PolicyApproval, ProtectedContent })) z.globalRegistry.add(schema, { id });
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -203,8 +199,6 @@ export async function buildApp(context: Context) {
     server: { name: 'Foundation' },
     features: {
       email: context.mailer.enabled,
-      environments: context.environments.runner.enabled,
-      ssh: context.environments.sshEnabled,
       storage: context.objects.store.enabled,
       payments: context.billing.provider.enabled,
     },
@@ -509,9 +503,7 @@ export async function buildApp(context: Context) {
   );
   await routesExecutions(app, context);
   await routesResources(app, context);
-  await routesRuntime(app, context);
-  await routesProcesses(app, context);
-  await routesFunctions(app, context);
+  await routesCustody(app, context);
   await routesSSH(app, context);
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);

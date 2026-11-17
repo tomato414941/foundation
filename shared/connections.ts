@@ -134,5 +134,3 @@ export function withMethod(kept: unknown, methodId: unknown, method: MethodDescr
 export const openConnection = (bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) =>
   withMethod(JSON.parse(decode(bytes)), metadata.methodId, method);
 
-export const ConnectionAction = z.object({ action: z.literal('refresh'), id: Id }).strict();
-export type ConnectionCommand = z.infer<typeof ConnectionAction>;

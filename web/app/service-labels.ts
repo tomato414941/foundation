@@ -51,7 +51,7 @@ export const serviceLabels: Record<string, string> = {
   "vultr.token.userId.label": "ユーザーID",
   "vultr.token.issuerId.label": "OIDC発行者ID",
   "vultr.token.credential.label": "OIDCトークン",
-  "vultr.token.credential.note": "OIDCトークンを入力してください。空欄の場合は、実行環境のVULTR_OIDC_TOKEN_FILEまたはVULTR_OIDC_TOKENから取得します。",
+  "vultr.token.credential.note": "OIDCトークンを入力してください。空欄の場合は、接続を使う端末のVULTR_OIDC_TOKEN_FILEまたはVULTR_OIDC_TOKENから取得します。",
   "vultr.token.sessionName.label": "セッション名",
   "vultr.token.duration.label": "セッションの有効期間（秒）",
   "vultr.token.duration.note": "Vultrで設定したロールの有効期間の範囲内で指定してください。",

@@ -36,9 +36,8 @@ def check_package(directory, manifest):
         if not set(archive.getnames()).issubset(allowed) or "package/LICENSE" not in archive.getnames():
             raise RuntimeError("The package includes files outside the CLI distribution or is missing its license.")
         code = archive.extractfile("package/dist/cli.mjs").read()
-        agent = archive.extractfile("package/dist/agent.mjs").read()
         if pkg["name"] != "@tomato414941/foundation" or pkg["version"] != manifest["cliVersion"] or \
-            hashlib.sha256(code).hexdigest() != manifest["cliSha256"] or hashlib.sha256(agent).hexdigest() != manifest["agentSha256"]:
+            hashlib.sha256(code).hexdigest() != manifest["cliSha256"]:
             raise RuntimeError("The CLI package does not match this release.")
     prefix = directory / "installed"
     subprocess.run(["npm", "install", "--global", "--offline", "--ignore-scripts", "--no-audit", "--no-fund",
@@ -67,24 +66,13 @@ def main():
         return
     if args.existing_only:
         raise RuntimeError("This commit has no prepared release. Rerun the original release workflow.")
-    process = subprocess.Popen(["node", "--import", "tsx", "deploy/environment/prepare.ts"], stdout=subprocess.PIPE, text=True)
-    environment = {}
-    for line in process.stdout:
-        line = line.rstrip()
-        print(line, flush=True)
-        if line.startswith("EC2_ENVIRONMENT_"):
-            name, value = line.split("=", 1)
-            environment[name] = value
-    if process.wait():
-        raise RuntimeError("The execution environment infrastructure could not be prepared.")
     pkg = json.loads(Path("cli/package.json").read_text())
     subprocess.run(["npm", "pack", "--ignore-scripts", "--pack-destination", str(directory.resolve()), "./cli"], check=True, stdout=subprocess.DEVNULL)
     packed = directory / (pkg["name"].replace("@", "").replace("/", "-") + "-" + pkg["version"] + ".tgz")
     packed.rename(directory / "cli.tgz")
     manifest = {
         "commit": commit, "cliVersion": pkg["version"], "cliSha256": digest("cli/dist/cli.mjs"),
-        "agentSha256": digest("cli/dist/agent.mjs"),
-        "schemaSha256": digest("server/schema.sql"), "environment": environment,
+        "schemaSha256": digest("server/schema.sql"),
     }
     check_package(directory, manifest)
     write_json(directory / "build.json", manifest)

@@ -63,12 +63,12 @@ test('受け取り先が鍵を作り直したら検証へ案内し新しい鍵�
 test('変数と接続とアプリを一回の操作で暗号化し直し受け取り側の承認後に所有者と利用権限を移す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const unknown = await f.person('Unverified delegate'), notices: RecipientAccess[] = [];
-  await f.relations.draw(f.stranger.actor, { subjectId: f.executorIdentity.actor.id, relation: 'delegate', objectId: f.stranger.actor.id });
+  await f.relations.draw(f.stranger.actor, { subjectId: f.delegate.actor.id, relation: 'delegate', objectId: f.stranger.actor.id });
   await f.relations.draw(f.stranger.actor, { subjectId: unknown.actor.id, relation: 'delegate', objectId: f.stranger.actor.id });
   const client = new CustodyClient(f.api(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys,
     new JournalTrust(new MemoryJournal()), notice => notices.push(notice));
   await client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
-  await client.trustIdentity(f.executorIdentity.actor.id, await fingerprint(f.executorIdentity.binding));
+  await client.trustIdentity(f.delegate.actor.id, await fingerprint(f.delegate.binding));
   const connection = await f.saveConnection({ methodId: 'tailscale:api-access-token', name: 'Network connection',
     fields: { token: 'tskey-api-transfer-test' } });
   const app = await f.saveApp('github:oauth');
@@ -90,16 +90,16 @@ test('変数と接続とアプリを一回の操作で暗号化し直し受け�
     assert.deepEqual(transferred.content.metadata, previous.content.metadata);
     assert.deepEqual(transferred.content.policy.grants, []);
     assert.deepEqual(transferred.content.policy.authorities.map(binding => binding.principalId).sort(),
-      [f.stranger.actor.id, f.executorIdentity.actor.id].sort());
+      [f.stranger.actor.id, f.delegate.actor.id].sort());
     await assert.rejects(f.custody.read(f.owner.actor, resource.id), { code: 'forbidden' });
-    assert.deepEqual(await reveal((await f.custody.read(f.executorIdentity.actor, resource.id)).content,
-      f.executorIdentity.binding, f.executorIdentity.keys.encryption), bytes);
+    assert.deepEqual(await reveal((await f.custody.read(f.delegate.actor, resource.id)).content,
+      f.delegate.binding, f.delegate.keys.encryption), bytes);
     await assert.rejects(f.custody.read(unknown.actor, resource.id), { code: 'forbidden' });
   }
   const receiver = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys,
     new JournalTrust(new MemoryJournal()));
   await receiver.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
-  await receiver.trustIdentity(f.executorIdentity.actor.id, await fingerprint(f.executorIdentity.binding));
+  await receiver.trustIdentity(f.delegate.actor.id, await fingerprint(f.delegate.binding));
   await receiver.trustIdentity(unknown.actor.id, await fingerprint(unknown.binding));
   const updated = await receiver.reprotectPending();
   assert.deepEqual(updated.failed, []);

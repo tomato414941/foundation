@@ -3,16 +3,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { setTimeout as delay } from 'node:timers/promises';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { configuration } from '../../dist/server/config.js';
 import { createContext } from '../../dist/server/context.js';
 import { Client } from '../../dist/cli/src/client.js';
 import { saveIdentity } from '../../dist/cli/src/config.js';
-import { newIdentityKeys, bindKeys, signBinding, canonical } from '../../dist/shared/authority.js';
+import { newIdentityKeys, bindKeys, signBinding } from '../../dist/shared/authority.js';
 import { CustodyClient } from '../../dist/shared/client.js';
-import { FunctionClient } from '../../dist/shared/function-client.js';
 import { FileJournal } from '../../dist/runtime/journal.js';
 import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
@@ -20,23 +18,17 @@ import { encode, decode } from '../../dist/shared/encryption.js';
 import { followKeys, rotateKeys } from '../../dist/shared/key-rotations.js';
 import { confirmationHeader, signConfirmation } from '../../dist/shared/confirmations.js';
 import { cleanupIdentities } from './cleanup.mjs';
-import { OpenSSH } from '../../dist/server/ssh-client.js';
 
 // Only disposable identities and test material are used, including against production.
 const config = await configuration();
 const context = await createContext(config);
 const directory = await mkdtemp(join(tmpdir(), 'foundation-release-smoke-'));
 const identities = [], resources = [];
-let environment, vm, agent, mcp, finished = false, storageVerified = false;
+let mcp, finished = false, storageVerified = false;
 const check = async path => {
   const response = await fetch(config.origin + path, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
   assert.equal(response.status, 200, 'Public request failed: ' + path);
   return response;
-};
-const wait = async (read, ready, seconds = 240) => {
-  const deadline = Date.now() + seconds * 1000;
-  while (Date.now() < deadline) { const value = await read(); if (ready(value)) return value; await delay(1500); }
-  throw new Error('Release verification timed out.');
 };
 try {
   assert.equal((await (await check('/health')).json()).ok, true);
@@ -52,8 +44,7 @@ try {
     const client = new Client({ origin: config.origin, principalId: enrollment.principal.id, token: enrollment.token, keys, binding });
     const trust = new JournalTrust(new FileJournal(join(directory, String(index)), config.origin, binding, keys));
     const custody = new CustodyClient(client, config.origin, binding, keys, trust);
-    const functions = new FunctionClient(client, custody);
-    identities[index] = { id: binding.principalId, client, custody, functions, binding, trust };
+    identities[index] = { id: binding.principalId, client, custody, binding, trust };
   }
   const [owner, caller] = identities;
   {
@@ -100,61 +91,22 @@ try {
     const reused = await issue(view.id);
     assert.equal(reused.status, 403); assert.equal((await reused.json()).error.code, 'confirmation_invalid');
   }
-  if (process.env.RELEASE_SMOKE_MODE !== 'attached') {
-    const ssh = new OpenSSH(), direct = await ssh.keys();
-    const created = await owner.client.json('/api/principals/' + owner.id + '/resources', { method: 'POST', body: {
-      kind: 'environment', name: 'Release VM verification', options: {
-        lifetime: { idleSeconds: 300, maxSeconds: 600 }, ssh: { authorizedKeys: [direct.publicKey] },
-      },
-    } });
-    vm = created.id;
-    await wait(() => owner.client.json('/api/resources/' + vm), value => value.data.state === 'running');
-    const started = await owner.client.json('/api/environments/' + vm + '/processes', { method: 'POST', body: {
-      command: ['sh', '-c', 'printf release-shared > release-check.txt; printf ready'],
-    } });
-    const completed = await wait(() => owner.client.json('/api/processes/' + started.id), value => Boolean(value.finishedAt));
-    assert.equal(completed.state, 'succeeded'); assert.equal(completed.result.stdout, 'ready');
-    const connection = await owner.client.json('/api/environments/' + vm + '/ssh');
-    const read = await ssh.run({ id: vm, host: connection.host, port: connection.port, username: connection.username,
-      privateKey: direct.privateKey, hostKey: connection.hostKey }, 'cat release-check.txt');
-    assert.equal(read.stdout, 'release-shared');
-    await owner.client.json('/api/relations', { method: 'POST', body: { subjectId: caller.id, relation: 'runner', objectId: vm } });
-  }
-  const home = join(directory, 'agent');
-  process.env.XDG_CONFIG_HOME = home;
-  await saveIdentity(owner.client.identity);
-  environment = crypto.randomUUID();
-  agent = spawn(process.execPath, ['/app/release/cli.mjs', 'agent', 'start', '--id', environment, '--isolation', 'process'],
-    { env: { ...process.env, XDG_CONFIG_HOME: home }, stdio: 'ignore' });
-  const registration = await wait(async () => {
-    try { return await owner.client.json('/api/environments/' + environment + '/registration'); }
-    catch (error) { if (error.status === 404 || error.status === 409) return { registration: null }; throw error; }
-  }, value => Boolean(value.registration));
-  const executor = registration.registration.manifest.executor;
-  if (!identities.some(value => value.id === executor.principalId)) identities.push(executor.principalId);
-  // Trust only the disposable executor enrolled for this verification environment.
-  const physical = await context.bindings.current(executor.principalId);
-  assert.equal(canonical(physical.binding), canonical(executor));
-  await owner.trust.rememberBinding(executor); await caller.trust.rememberBinding(executor);
-  await caller.trust.rememberBinding(owner.binding);
+  // The CLI of this release opens a value on this machine and hands it to a local command, which sees it masked
+  // nowhere but in its own environment.
   const secret = 'release-input-' + crypto.randomUUID();
   const input = await owner.custody.save('Release input', encode(secret), await owner.custody.policy(owner.id, ContentTypes.value));
   resources.push(input.id);
-  const definition = {
-    description: '', program: { kind: 'command', command: ['node', '-e',
-      'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>console.log(JSON.stringify({arguments:JSON.parse(s),configured:!!process.env.TOKEN,output:require("crypto").randomBytes(24).toString("hex")})));'],
-      inputs: [{ name: 'TOKEN', source: { id: input.id } }], timeoutSeconds: 90 },
-    parameters: [{ name: 'count', label: 'Count', type: 'number', required: true }, { name: 'enabled', label: 'Enabled', type: 'boolean', required: true }], result: 'json',
-  };
-  const fn = await owner.functions.save({ ownerId: owner.id, name: 'Release function', definition });
-  resources.push(fn.id);
-  await owner.functions.configure(fn.id, { environmentId: environment });
-  await owner.client.json('/api/relations', { method: 'POST', body: { subjectId: caller.id, relation: 'runner', objectId: fn.id } });
+  const home = join(directory, 'cli');
+  process.env.XDG_CONFIG_HOME = home;
+  await saveIdentity(owner.client.identity);
+  const command = spawn(process.execPath, ['/app/release/cli.mjs', 'exec', '--inputs', JSON.stringify([{ name: 'TOKEN', source: { id: input.id } }]),
+    '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN === process.argv[1] ? "opened" : "unopened")', secret],
+    { env: { ...process.env, XDG_CONFIG_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let printed = '';
+  command.stdout.on('data', chunk => { printed += chunk; });
+  assert.equal(await new Promise(resolve => command.once('close', resolve)), 0);
+  assert.equal(printed, 'opened');
   await assert.rejects(caller.custody.read(input.id));
-  const arguments_ = { count: 0, enabled: false };
-  const publicFunctions = new FunctionClient(caller.client);
-  const interface_ = await publicFunctions.get(fn.id);
-  assert.deepEqual(Object.keys(interface_.data).sort(), ['description', 'parameters', 'result']);
   mcp = new McpClient({ name: 'Foundation release verification', version: '1.0.0' });
   await mcp.connect(new StreamableHTTPClientTransport(new URL('/api/mcp', config.origin), {
     requestInit: { headers: { authorization: 'Bearer ' + caller.client.identity.token } },
@@ -178,35 +130,12 @@ try {
     assert.equal(downloaded.status, 200); assert.equal(await downloaded.text(), content);
     storageVerified = true;
   }
-  if (vm) {
-    const started = await call('foundation_api', { method: 'POST', path: '/api/environments/' + vm + '/processes',
-      body: { command: ['cat', 'release-check.txt'] } });
-    assert.equal(started.status, 202);
-    const completed = await wait(() => caller.client.json('/api/processes/' + started.body.id), value => Boolean(value.finishedAt));
-    assert.equal(completed.state, 'succeeded'); assert.equal(completed.result.stdout, 'release-shared');
-  }
-  const available = await call('foundation_functions', { query: 'Release function' });
-  assert.ok(available.body.items.some(item => item.id === fn.id));
-  const started = (await call('foundation_invoke_function', { functionId: fn.id, arguments: arguments_ })).body;
-  const result = await wait(() => call('foundation_execution_result', { id: started.id }),
-    value => !['waiting', 'running'].includes(value.state));
-  const returned = JSON.parse(result.text)[0];
-  assert.equal(result.state, 'succeeded'); assert.deepEqual(returned.arguments, arguments_); assert.equal(returned.configured, true);
-  assert.ok(!JSON.stringify(result).includes(secret));
-  const capture = await caller.functions.invoke(fn.id, arguments_, { names: { '/output': 'Release output' } });
-  const captured = await wait(() => caller.functions.result(capture.id), value => !['waiting', 'running'].includes(value.state));
-  assert.equal(captured.state, 'succeeded'); assert.deepEqual(Object.keys(captured.results[0]), ['saved']);
-  const output = captured.results[0].saved['/output']; resources.push(output);
-  assert.match(decode(await caller.custody.reveal(output)), /^[a-f0-9]{48}$/);
-  assert.equal((await caller.client.json('/api/resources/' + output)).name, 'Release output');
+  const read = await call('foundation_read', { path: '/api/principals/' + caller.id + '/resources' });
+  assert.equal(read.status, 200);
   finished = true;
 } finally {
   const failures = [];
   if (mcp) await mcp.close();
-  if (agent) {
-    agent.kill('SIGTERM');
-    await new Promise(resolve => { if (agent.exitCode !== null) resolve(); else agent.once('exit', resolve); });
-  }
   for (const id of resources.reverse()) {
     try {
       const row = await context.resources.get(id), actor = { id: row.owner_id };
@@ -214,20 +143,6 @@ try {
       else await context.resources.delete(actor, row);
     }
     catch (error) { failures.push(error); }
-  }
-  for (const id of [environment, vm].filter(Boolean)) {
-    try {
-      const row = await context.resources.get(id);
-      if (row.data.driver === 'attached') await context.resources.delete({ id: row.owner_id }, row);
-      else {
-        await context.environments.remove({ id: row.owner_id }, row);
-        await wait(async () => {
-        await context.db.pool.query('UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1', [id]);
-        await context.environments.tick();
-        return context.environments.deletion({ id: row.owner_id }, id);
-        }, value => value.state === 'complete', 360);
-      }
-    } catch (error) { failures.push(error); }
   }
   if (!failures.length) {
     const ids = identities.map(value => typeof value === 'string' ? value : value.id);
@@ -237,4 +152,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, function: true, mcp: true, vm: Boolean(vm), encryptedInputs: true, encryptedOutput: true, keyRotation: true, confirmation: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, mcp: true, exec: true, keyRotation: true, confirmation: true, cleanup: true }));

@@ -4,14 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { flowFixture } from './flow-support.js';
 import { migrateExecutions } from '../server/migrations/migrate-executions.js';
 import { migrateRequests } from '../server/migrations/migrate-requests.js';
-import { migrateHistory } from '../server/migrations/migrate-history.js';
+import { removeEnvironments } from '../server/migrations/remove-environments.js';
 import { ApprovalRequest } from '../shared/contracts.js';
 import { Execution } from '../shared/executions.js';
 import { decode } from '../shared/encryption.js';
 
 test('保存済みの入力待ちを移行し、同じ実行IDと暗号化済みの項目を使って続行する', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const id = randomUUID(), interruptedId = randomUUID(), publicInput = { ownerId: f.owner.actor.id, name: 'Migrated value', value: '', environmentIds: [] };
+  const id = randomUUID(), interruptedId = randomUUID(), publicInput = { ownerId: f.owner.actor.id, name: 'Migrated value', value: '' };
   const requested = [{ name: 'variable.save', input: publicInput, inputs: [{ pointer: '/value', label: 'Token', secret: true, multiline: false }] }];
   const snapshot = { actor: { id: f.owner.actor.id, approvalId: id }, operations: [{ name: 'variable.save', input: publicInput }],
     index: 0, results: [{ pending: true }], proofs: [null], inFlight: null, continuation: null };
@@ -56,11 +56,49 @@ test('保存済みの入力待ちを移行し、同じ実行IDと暗号化済み
   assert.equal(completed.state, 'succeeded'); assert.equal((completed.results[0] as { id: string }).id, saved.resource.id);
 });
 
+test('実行環境をなくす移行で、実行環境で動かす操作の記録を消し、値の保存を待つ操作は実行環境の指定を外して続けられる', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
+    operations: [{ name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Value without environments' } }] } }, ApprovalRequest);
+  const run = await f.context.executions.start(f.owner.actor, [{ name: 'principal.create',
+    input: { ownerId: f.owner.actor.id, name: 'Recorded run' } }]);
+  // What a database held before the migration: the tables, columns and kinds of execution environments, and records
+  // of operations that named them.
+  const rewrite = async (id: string, operations: (saved: Array<{ name: string; input: Record<string, unknown> }>) => void) => {
+    const row = (await f.context.db.one<{ snapshot: string }>('SELECT snapshot FROM executions WHERE id=$1', [id]))!;
+    const snapshot = await f.context.vault.decrypt<{ operations: Array<{ name: string; input: Record<string, unknown> }> }>(
+      row.snapshot, 'operation-execution:' + id);
+    operations(snapshot.operations);
+    await f.context.db.pool.query('UPDATE executions SET snapshot=$2 WHERE id=$1',
+      [id, await f.context.vault.encrypt(snapshot, 'operation-execution:' + id)]);
+  };
+  await rewrite(asked.executionId, operations => { operations[0]!.input.environmentIds = [randomUUID()]; });
+  await rewrite(run.id, operations => { operations[0] = { name: 'run.execute', input: { ownerId: f.owner.actor.id, environmentId: randomUUID() } }; });
+  for (const table of ['function_invocations', 'function_settings', 'environment_processes', 'execution_tasks',
+    'executor_environments', 'environment_deletions', 'environment_jobs']) await f.context.db.pool.query(`CREATE TABLE ${table}(id uuid)`);
+  await f.context.db.pool.query("ALTER TABLE billing_events ADD COLUMN meter text NOT NULL DEFAULT 'storage'");
+  await f.context.db.pool.query('ALTER TABLE usage_limits ADD COLUMN compute_seconds bigint');
+  await f.context.db.pool.query('ALTER TABLE credentials ADD COLUMN environment_id uuid');
+  await f.context.db.pool.query("DELETE FROM schema_migrations WHERE name='012-remove-environments'");
+
+  await removeEnvironments(f.context.db, f.context.vault);
+  await removeEnvironments(f.context.db, f.context.vault);
+  assert.equal(await f.context.db.one('SELECT 1 FROM executions WHERE id=$1', [run.id]), undefined);
+  const migrated = await f.client.api.json('/api/executions/' + asked.executionId, {}, Execution);
+  assert.deepEqual(migrated.operations[0]?.input, { ownerId: f.owner.actor.id, name: 'Value without environments' });
+  await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
+  const saved = await f.operations.continue(asked.executionId, { value: 'kept-secret' });
+  if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected the saved value.');
+  assert.equal(decode(await f.client.reveal(saved.resource.id)), 'kept-secret');
+});
+
 test('実行の保存形式を更新しても依頼のURLと入力待ちの実行を保持し、承諾後に保存を完了する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Retained input' } }] } }, ApprovalRequest);
+  // A database from before the schema was recorded named the table of executions differently and kept usage by meter.
   await f.db.pool.query('ALTER TABLE executions RENAME TO operation_executions');
+  await f.db.pool.query("ALTER TABLE billing_events ADD COLUMN meter text NOT NULL DEFAULT 'storage'");
   await f.db.pool.query("DELETE FROM schema_migrations WHERE name='001-foundation-schema'");
   await f.db.migrate();
   const retained = await f.client.api.json('/api/requests/' + asked.id, {}, ApprovalRequest);
@@ -72,16 +110,3 @@ test('実行の保存形式を更新しても依頼のURLと入力待ちの実�
   assert.equal(decode(await f.client.reveal(saved.resource.id)), 'retained-value');
 });
 
-test('既存の実行先の処理を一件の実行として引き継ぎ、再開時に外部操作を一度だけ行う', async t => {
-  const f = await flowFixture(); t.after(f.close);
-  const task = await f.delegation.submit(f.owner.actor, f.request);
-  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='unified-execution-history'");
-  await migrateHistory(f.context);
-  const execution = await f.client.api.json('/api/executions/' + task.id, {}, Execution);
-  assert.equal(execution.state, 'running');
-  await f.executor.tick();
-  const completed = await f.client.api.json('/api/executions/' + task.id, {}, Execution);
-  assert.equal(completed.state, 'succeeded');
-  assert.equal((await f.client.api.json('/api/executions/' + task.id, {}, Execution)).state, 'succeeded');
-  assert.equal(f.requests.length, 1);
-});

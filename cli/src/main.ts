@@ -14,7 +14,6 @@ import {
   ApprovalRequest,
   Credential,
   Id,
-  JsonObject,
   Input,
   Name,
   RequestInput,
@@ -26,21 +25,16 @@ import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, signBinding, SignedBinding } from '../../shared/authority.js';
-import { Task } from '../../shared/runtime-protocol.js';
-import type { TaskView } from '../../shared/runtime-protocol.js';
 import { Client, ApiError } from './client.js';
 import { currentIdentity, rotateIdentity } from './keys.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { IdentityVerificationRequired, transferResource } from '../../shared/client.js';
-import { launchAgent } from './agent-launcher.js';
 import { executionClient } from './executions.js';
 import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
 import { OperationMaterial } from '../../shared/execution-client.js';
 import { startMcp } from './mcp.js';
-import { FunctionClient } from '../../shared/function-client.js';
-import { FunctionDefinition } from '../../shared/contracts.js';
 import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOutput, connectionOwner, existingConnection, flowOutput,
   requestConnection, saveApp, startConnection } from './connections.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
@@ -66,36 +60,20 @@ Usage: foundation <command> [options]
   execution cancel ID                  Cancel a prepared operation
   execution run NAME --body JSON       Execute an operation (private material via --fields)
   execution continue ID [--fields JSON] Resume an operation awaiting private input
-  execution share-result ID            Share a legacy result using its existing permissions
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   keys rotate                          Replace this identity's keys, keeping its items and sign-ins
-  agent start [--id ID]                Register this machine as an execution environment
-  app NAME --method ID --client-id ID  Encrypt an application (--for ENV to allow use)
+  app NAME --method ID --client-id ID  Encrypt an application
   connect SERVICE [--needs NAME] [--why TEXT] Ask the owner to connect a service in a browser,
                                        or return their ready connection that gives NAME
   connect --method ID --fields JSON    Encrypt and save a connection on this device
   connect wait ID                      Continue after service authorization
   connect wait-request ID              Wait for the owner to finish a requested connection
-  keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
+  keep NAME (--file FILE | --stdin)    Encrypt and save a variable
   transfer ID --to ID                  Transfer an item after the recipient accepts it
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
-  run --environment ID --request JSON  Run an HTTP request on the selected executor
-  function list                       List accessible functions and their inputs
-  function show ID                    Read a function's interface or permitted definition
-  function create --body JSON         Approve and save a function definition
-  function update ID --body JSON      Approve and replace a function definition
-  function settings ID                Read function execution settings
-  function configure ID --environment ID Approve the execution environment and input access
-  function unconfigure ID             Clear execution settings and revoke input access
-  function invoke ID [--arguments JSON] Invoke a function (--id ID for retries, --wait for result)
-  function result ID                  Read an execution (--wait to wait for completion)
-  function cancel ID                  Cancel a function execution
-  function delete ID                  Delete a function
-  run --environment ID -- COMMAND ...  Run a command in an environment
-  wait ID [--timeout SECONDS]           Wait for a run to finish
   retry ID                             Continue an execution using its saved consent
   request --body JSON                  Create an approval request
   request wait ID [--timeout SECONDS]  Wait for an approval request
@@ -112,7 +90,7 @@ Usage: foundation <command> [options]
   ssh-access check ID [--account NAME] Read a host's authorized keys over SSH and report them
 
 Options:
-  --owner ID             Choose the principal that owns a new item or run (for connect without
+  --owner ID             Choose the principal that owns a new item (for connect without
                          --fields: the principal asked, by default the one delegating to this machine)
   --needs NAME           Output a requested connection must give, such as RUNPOD_API_KEY (repeatable)
   --why TEXT             Why a connection is requested, shown to its owner
@@ -122,16 +100,13 @@ Options:
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
   --name NAME            How this machine appears when it signs in (default: host name)
   --origin URL           Choose a server when signing in or registering
-  --for ID               Allow this executor to use the content (repeatable)
   --app ID               Application to use for a connection
   --fields JSON          Connection or application fields (@FILE or @- accepted)
   --aws JSON             AWS authentication, region, and optional role (@FILE or @- recommended)
   --client-secret VALUE  Application secret (@FILE or @- recommended)
-  --isolation MODE       process for trusted local code, or container
-  --image IMAGE          Command container image pinned with @sha256:DIGEST
-  --inputs JSON         Inputs for exec or a remote command (default: [])
-  --wait                 Wait after starting a run or requesting approval
-  --timeout SECONDS      Maximum waiting or command time (default: 60 for commands)
+  --inputs JSON          Inputs for exec (default: [])
+  --wait                 Wait after requesting approval
+  --timeout SECONDS      Maximum waiting time
   --output FILE          Write the result to a private file
   --force                Replace an existing output file
   --upload FILE          Send a binary body with the api command
@@ -160,12 +135,10 @@ JSON and the key may be supplied as @FILE, or @- to read standard input.
 Signing in makes this machine act as you, with your encryption key. Registering
 with --name creates a separate principal instead.
 The unlock portion of a sign-in key stays on this machine. Verify fingerprints
-with each identity holder before trusting their keys. --for permits that executor
-to read the content and use it in commands or HTTP requests you supply.
-Without --for, content is readable only by its approved readers. Updates preserve
-existing permissions unless --for is supplied. Local exec decrypts on this machine.
-exec masks input values in stdout and stderr. read deliberately reveals content.
-Ctrl+C while waiting stops the wait; use the API to cancel the remote operation.
+with each identity holder before trusting their keys. Content is readable only by
+its approved readers, and updates preserve its permissions. exec decrypts on this
+machine and masks input values in stdout and stderr. read deliberately reveals
+content. Ctrl+C while waiting stops the wait; use the API to cancel the request.
 
 Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
 It can hold several identities. A command acts as --principal, then
@@ -188,12 +161,8 @@ const options = {
   confirmation: textOption,
   file: textOption,
   stdin: booleanOption,
-  for: { type: 'string' as const, multiple: true as const },
   fingerprint: textOption,
   id: textOption,
-  isolation: textOption,
-  image: textOption,
-  once: booleanOption,
   method: textOption,
   needs: { type: 'string' as const, multiple: true as const },
   why: textOption,
@@ -208,11 +177,6 @@ const options = {
   parameters: textOption,
   'redirect-uri': textOption,
   inputs: textOption,
-  request: textOption,
-  save: textOption,
-  names: textOption,
-  arguments: textOption,
-  environment: textOption,
   timeout: textOption,
   wait: booleanOption,
   output: textOption,
@@ -470,8 +434,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
   } while (after && !existing);
   const operations = executionClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
   const completed = await operations.execute({ name: 'variable.save', input: { ownerId: owner, name,
-    ...(existing ? { resourceId: existing.id, version: previous!.version } : {}),
-    ...(args.values.for ? { environmentIds: args.values.for.map(id => Id.parse(id)) } : {}) } }, { value: content });
+    ...(existing ? { resourceId: existing.id, version: previous!.version } : {}) } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
   const result = completed.resource;
   await output(result, args);
@@ -577,12 +540,6 @@ async function sshAccessCommand(client: Client, args: Arguments) {
     ...(args.values['ssh-key'] ? { keyId: Id.parse(args.values['ssh-key']) } : {}) });
 }
 
-async function taskOutput(client: Client, task: TaskView, args: Arguments) {
-  const result = await privateClient(client).custody.result(task);
-  const execution = await client.json('/api/executions/' + (task.intent.operationContext?.id ?? task.id), {}, Execution);
-  if (result?.ok) execution.results[task.intent.operationContext?.index ?? 0] = result.result;
-  await output(execution, args);
-}
 async function main(argv: string[]) {
   const boundary = argv.indexOf('--'),
     commandArguments = boundary < 0 ? [] : argv.slice(boundary + 1),
@@ -645,19 +602,12 @@ async function main(argv: string[]) {
     }
     return 0;
   }
-  if (command === 'agent') {
-    if (args.positionals[0] !== 'start') throw new Error('Use foundation agent start.');
-    return launchAgent('start', { origin: client.identity.origin, id: args.values.id ? Id.parse(args.values.id) : undefined,
-      ownerId: owner, name: Name.parse(args.values.name ?? hostname()),
-      isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
-      image: args.values.image, once: args.values.once });
-  }
   if (command === 'app') {
     const resource = await saveApp(client, { ownerId: owner,
       name: requireArgument(args.positionals[0], 'Supply an application name.'), id: args.values.id,
       methodId: requireArgument(args.values.method, 'Choose --method ID.'), clientId: args.values['client-id'] ?? '',
       clientSecret: args.values['client-secret'] === undefined ? undefined : await text(args.values['client-secret']),
-      fields: await json(args.values.fields, {}), environments: args.values.for });
+      fields: await json(args.values.fields, {}) });
     await output(resource, args); return 0;
   }
   if (command === 'definition') {
@@ -672,20 +622,6 @@ async function main(argv: string[]) {
     else if (action === 'start') await output(await client.json('/api/executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, Execution), args);
     else if (action === 'respond') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, Execution), args);
     else if (action === 'cancel') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, Execution), args);
-    else if (action === 'share-result') {
-      const execution = await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, Execution);
-      const custody = privateClient(client).custody;
-      const shared = [];
-      for (const step of execution.steps) {
-        const reference = step.runs.at(-1);
-        if (reference?.kind !== 'run') continue;
-        const task = await client.json('/api/runtime/runs/' + reference.id, {}, Task);
-        const result = await custody.shareLegacyResult(task);
-        shared.push({ id: task.id, readers: result.receipt && 'content' in result.receipt
-          ? result.receipt.content.policy.readers.map(reader => reader.principalId) : [] });
-      }
-      await output({ id: execution.id, results: shared }, args);
-    }
     else if (action === 'run' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
       const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
@@ -702,11 +638,10 @@ async function main(argv: string[]) {
       const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
         : await operations.execute(invocation!, material);
       await output('flow' in result ? flowOutput(result) : result, args);
-    } else throw new Error('Choose execution list, start, respond, run, get, continue, share-result, or cancel.');
+    } else throw new Error('Choose execution list, start, respond, run, get, continue, or cancel.');
     return 0;
   }
   if (command === 'connect') {
-    if (args.values.environment || args.values.for) throw new Error('Register on this device. Select an execution environment when running a program.');
     const flowClient = connectionClient(client), actions = ['start', 'status', 'wait', 'complete', 'cancel', 'wait-request'];
     const service = args.positionals[0] && !actions.includes(args.positionals[0]) ? args.positionals[0] : undefined;
     const action = service ? 'start' : args.positionals[0] ?? 'start';
@@ -780,9 +715,7 @@ async function main(argv: string[]) {
     const execution = await client.json('/api/executions/' + id, {}, Execution);
     if (execution.state === 'failed')
       await client.json('/api/executions/' + id + '/resume', { method: 'POST', body: {} }, Execution);
-    const result = await executionClient(client).continue(id);
-    if ('kind' in result && result.kind === 'run') await taskOutput(client, result.task, args);
-    else await output(result, args);
+    await output(await executionClient(client).continue(id), args);
     return 0;
   }
   if (command === 'api' || command === 'schema') {
@@ -856,87 +789,6 @@ async function main(argv: string[]) {
       .max(32)
       .parse(await json(args.values.inputs, []));
     return execute(await localInputs(client, inputs), commandArguments);
-  }
-  if (command === 'function') {
-    const action = requireArgument(args.positionals[0], 'Choose list, show, create, update, settings, configure, unconfigure, invoke, result, cancel, or delete.');
-    const functions = new FunctionClient(client);
-    if (action === 'list') { await output(await client.json('/api/functions?limit=100'), args); return 0; }
-    if (action === 'create' || action === 'update') {
-      const body = z.object({ name: Name, definition: FunctionDefinition, version: z.number().int().positive().optional() }).strict().parse(await json(args.values.body));
-      const id = action === 'update' ? Id.parse(requireArgument(args.positionals[1], 'Supply a function ID.')) : undefined;
-      const previous = id ? await functions.get(id) : null;
-      await output(await new FunctionClient(client, privateClient(client).custody).save({ ownerId: previous?.ownerId ?? owner,
-        name: body.name, definition: body.definition, ...(id ? { resourceId: id, version: body.version ?? previous!.version } : {}) }), args);
-      return 0;
-    }
-    const id = Id.parse(requireArgument(args.positionals[1], 'Supply a function or execution ID.'));
-    if (action === 'show') { await output(await functions.get(id), args); return 0; }
-    if (action === 'settings') { await output(await functions.settings(id), args); return 0; }
-    if (action === 'configure' || action === 'unconfigure') {
-      const environmentId = action === 'configure' ? Id.parse(requireArgument(args.values.environment, 'Choose an execution environment with --environment ID.')) : null;
-      const inputAccess = z.object({ expiresAt: z.iso.datetime().nullable().default(null) }).strict().parse(await json(args.values.body, {}));
-      await output(await new FunctionClient(client, privateClient(client).custody).configure(id, { environmentId, inputAccess }), args);
-      return 0;
-    }
-    if (action === 'delete') { await functions.remove(id); return 0; }
-    if (action === 'cancel') { await output(await functions.cancel(id), args); return 0; }
-    if (action === 'invoke' || action === 'result') {
-      const save = z.record(z.string(), Id).parse(await json(args.values.save, {}));
-      const names = z.record(z.string(), Name).parse(await json(args.values.names, {}));
-      const invoker = Object.keys({ ...save, ...names }).length ? new FunctionClient(client, privateClient(client).custody) : functions;
-      let result = action === 'invoke' ? await invoker.invoke(id, JsonObject.parse(await json(args.values.arguments, {})),
-        { ownerId: owner, save, names, ...(args.values.id ? { id: Id.parse(args.values.id) } : {}) })
-        : await functions.result(id);
-      if (args.values.wait) result = await waitFor(() => functions.result(result.id),
-        value => value.state, seconds(args.values.timeout, 3600));
-      await output(result, args);
-      return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
-    }
-    throw new Error('Choose list, show, create, update, settings, configure, unconfigure, invoke, result, cancel, or delete.');
-  }
-  if (command === 'run') {
-    const modes = [args.values.request, commandArguments.length ? true : false].filter(Boolean);
-    if (modes.length !== 1) throw new Error('Choose --request or a command after --.');
-    const environmentId = Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
-    const input = args.values.request
-      ? { kind: 'http', request: await json(args.values.request) }
-      : {
-            kind: 'command',
-            command: commandArguments,
-            timeoutSeconds: seconds(args.values.timeout, 60, 3600),
-            inputs: await json(args.values.inputs, []),
-          };
-    const started = await executionClient(client).execute({ name: 'run.execute', input: { ownerId: owner, environmentId,
-      operation: JsonObject.parse(input),
-      save: z.record(z.string(), Id).parse(await json(args.values.save, {})),
-      names: z.record(z.string(), Name).parse(await json(args.values.names, {})) } });
-    if (!('kind' in started) || started.kind !== 'run') throw new Error('Continue the pending run.');
-    const run = started.task;
-    const result = args.values.wait
-      ? await waitFor(
-          () => client.json('/api/runtime/runs/' + run.id, {}, Task),
-          (value) => value.state,
-          seconds(args.values.timeout, 3600),
-        )
-      : run;
-    await taskOutput(client, result, args);
-    return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
-  }
-  if (command === 'wait') {
-    const id = Id.parse(requireArgument(args.positionals[0], 'Supply a run ID.'));
-    const result = await waitFor(
-      () => client.json('/api/executions/' + id, {}, Execution),
-      (value) => value.state,
-      seconds(args.values.timeout, 3600),
-    );
-    for (const step of result.steps) {
-      const run = step.runs.filter(run => run.kind === 'run').at(-1);
-      if (!run) continue;
-      const task = await client.json('/api/runtime/runs/' + run.id, {}, Task);
-      if (task.receipt) result.results[step.index] = (await privateClient(client).custody.result(task))?.result ?? null;
-    }
-    await output(result, args);
-    return result.state === 'succeeded' ? 0 : 1;
   }
   if (command === 'request-access' || command === 'request') {
     if (command === 'request' && args.positionals[0] === 'wait') {

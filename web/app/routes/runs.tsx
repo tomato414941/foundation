@@ -1,4 +1,3 @@
-import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/runs';
@@ -16,14 +15,7 @@ export default function Runs() {
   const [search] = useSearchParams();
   usePolling(data.items.some(item => ['waiting', 'running'].includes(item.state)));
   return (
-    <Page
-      title={t('runs')}
-      actions={
-        <Button variant="default" asChild>
-          <Link to="new">{t('http')}</Link>
-        </Button>
-      }
-    >
+    <Page title={t('runs')}>
       {data.items.length ? (
         <div className="overflow-hidden rounded-xl border bg-card">
           <ul className="divide-y divide-border">

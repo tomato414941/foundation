@@ -1,41 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Command, FunctionInputAccess, HttpRequest, Id, JsonObject, Name } from '../../shared/contracts.js';
-import { FunctionSave, Execution } from '../../shared/executions.js';
-import { Task } from '../../shared/runtime-protocol.js';
-import type { CustodyClient } from '../../shared/client.js';
+import { Id } from '../../shared/contracts.js';
 import { mcpCall, registerMetadataTools, ResponseFormat } from '../../runtime/mcp-metadata.js';
 import { ApiError } from './client.js';
 import type { Client } from './client.js';
-import { privateClient } from './custody.js';
-import { executionClient } from './executions.js';
-import { FunctionClient } from '../../shared/function-client.js';
 import { SSHAccount } from '../../shared/ssh.js';
 import { sshAccess } from './ssh-access.js';
 import packageInfo from '../package.json' with { type: 'json' };
 
-const Operation = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('http'), request: HttpRequest, save: z.record(z.string().max(500), Id).default({}),
-    names: z.record(z.string().max(500), Name).default({}) }).strict(),
-  Command.extend({ kind: z.literal('command') }).strict(),
-]);
-export function createLocalMcp(client: Client, custody: () => CustodyClient = () => privateClient(client).custody) {
+export function createLocalMcp(client: Client) {
   const server = new McpServer({ name: 'foundation-mcp-server', version: packageInfo.version }, {
-    instructions: 'Foundation holds what this principal owns and may use. To act on a request, search for the matching API with foundation_schema, read with foundation_read, and make changes with foundation_api. Run saved functions with foundation_invoke_function after finding them with foundation_functions. When Foundation returns a URL for consent or secret input, give it to the user. Never put secret values in requests. This local server can also save and configure functions with this machine\'s keys.',
+    instructions: 'Foundation holds what this principal owns and may use. To act on a request, search for the matching API with foundation_schema, read with foundation_read, and make changes with foundation_api. When Foundation returns a URL for consent or secret input, give it to the user. Never put secret values in requests. This local server can also apply SSH access from this machine.',
   });
   registerMetadataTools(server, {
     schema: () => client.json('/api/openapi.json'),
-    async executionResult(id) {
-      const execution = await client.json('/api/executions/' + id, {}, Execution);
-      for (const step of execution.steps) {
-        const run = step.runs.filter(run => run.kind === 'run').at(-1);
-        if (!run) continue;
-        const task = await client.json('/api/runtime/runs/' + run.id, {}, Task);
-        if (task.receipt) execution.results[step.index] = (await custody().result(task))?.result ?? null;
-      }
-      return execution;
-    },
     async request(method, path, body, confirmation) {
       // A change waiting for confirmation names what to confirm and how, so that it can be proved and sent again.
       const response = await client.response(path, { method, body, ...(confirmation ? { confirmation } : {}) }).catch((error: unknown) => {
@@ -46,54 +25,6 @@ export function createLocalMcp(client: Client, custody: () => CustodyClient = ()
       return { status: response.status, body: response.status === 204 ? null : await response.json() };
     },
   });
-  server.registerTool('foundation_save_function', {
-    title: 'Save a reusable function',
-    description: 'Save a reusable program, its arguments and result format independently of an execution environment. Command programs read arguments as JSON from stdin and write their result to stdout in temporary working storage. Configure its execution environment separately with foundation_configure_function before invoking it. Reference variable or connection IDs; never supply their plaintext.',
-    inputSchema: FunctionSave.extend({ response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, input => mcpCall(async () => {
-    const { response_format: _format, ...destination } = input;
-    const result = await new FunctionClient(client, custody()).save(destination);
-    return { id: result.id, name: result.name, version: result.version };
-  }, input.response_format));
-  server.registerTool('foundation_configure_function', {
-    title: 'Configure function execution',
-    description: 'Select the execution environment and approve access to the exact function inputs using local encryption keys. Requires permission to update the function and use the selected environment. Set environmentId to null to clear the settings and revoke input access. Changing execution settings preserves the function definition and its version.',
-    inputSchema: z.object({ functionId: Id, environmentId: Id.nullable(),
-      inputAccess: FunctionInputAccess.default({ expiresAt: null }), response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-  }, input => mcpCall(() => new FunctionClient(client, custody()).configure(input.functionId,
-    { environmentId: input.environmentId, inputAccess: input.inputAccess }), input.response_format));
-  server.registerTool('foundation_run', {
-    title: 'Run on an explicitly trusted executor',
-    description: 'Sign and encrypt one HTTP request or command for an explicitly selected, trusted executor. Requires environment permission and caller-program input grants. Use foundation_invoke_function for saved functions. Use save to keep values of the HTTP result, by JSON pointer, in encrypted variables by their IDs, and names to keep them in new encrypted variables of those names. Returns the execution ID and state. Retry transport failures with foundation_resume_execution and the returned ID.',
-    inputSchema: z.object({ ownerId: Id.optional(), environmentId: Id.optional(),
-      operation: Operation, response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, input => mcpCall(async () => {
-    const environmentId = input.environmentId;
-    if (!environmentId) throw new Error('Choose an execution environment.');
-    const operation = input.operation.kind === 'http' ? { kind: 'http', request: input.operation.request } : input.operation;
-    const result = await executionClient(client, custody()).execute({ name: 'run.execute', input: JsonObject.parse({
-      ownerId: input.ownerId ?? client.identity.principalId, environmentId, operation,
-      save: input.operation.kind === 'http' ? input.operation.save : {},
-      names: input.operation.kind === 'http' ? input.operation.names : {},
-    }) });
-    if (!('kind' in result) || result.kind !== 'run') return result;
-    const { task } = result, operationId = task.intent.operationContext!.id;
-    return { id: operationId, state: task.state === 'queued' ? 'running' : task.state, environmentId: task.environmentId,
-      url: client.identity.origin + '/executions/' + operationId };
-  }, input.response_format));
-  server.registerTool('foundation_resume_execution', {
-    title: 'Resubmit the same signed execution',
-    description: 'Resubmit the exact locally saved request after a submission transport failure. Uses the same ID and encrypted request, so it cannot dispatch an already dispatched operation again.',
-    inputSchema: z.object({ id: Id, response_format: ResponseFormat }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  }, input => mcpCall(async () => {
-    const result = await executionClient(client, custody()).continue(input.id);
-    return 'kind' in result && result.kind === 'run'
-      ? client.json('/api/executions/' + result.task.intent.operationContext!.id, {}, Execution) : result;
-  }, input.response_format));
   server.registerTool('foundation_ssh_access', {
     title: 'Apply or check SSH access on a host',
     description: 'Sign in to an SSH host over SSH from this machine, verifying the host keys registered in Foundation, and apply the authorized keys Foundation decided for each account between the lines it manages, leaving other lines as they are; or with check, only read them. Reports what each account shows afterwards. Signs in with a private key file on this machine, an SSH key whose private key is kept in Foundation, or otherwise the agent and keys OpenSSH finds for this user. Decide which keys are let in with foundation_api first.',

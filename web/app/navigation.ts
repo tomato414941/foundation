@@ -3,8 +3,6 @@ export const sections = {
   services: 'connection',
   variables: 'variable',
   storage: 'object',
-  environments: 'environment',
-  functions: 'function',
   definitions: 'service',
   methods: 'method',
   apps: 'app',

@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { chmod } from 'node:fs/promises';
 
 await build({
-  entryPoints: { cli: 'cli/src/main.ts', agent: 'cli/src/executor-main.ts' },
+  entryPoints: { cli: 'cli/src/main.ts' },
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -14,4 +14,3 @@ await build({
   legalComments: 'eof',
 });
 await chmod('cli/dist/cli.mjs', 0o755);
-await chmod('cli/dist/agent.mjs', 0o755);

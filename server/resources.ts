@@ -6,7 +6,7 @@ import type { Authorization, Actor, ResourceIdentity } from './authorization.js'
 import { principal } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
-import { EnvironmentResource, Resource, Name, ResourceKind } from '../shared/contracts.js';
+import { Resource, Name, ResourceKind } from '../shared/contracts.js';
 import type {
   ResourceKindName,
   ResourceView,
@@ -18,9 +18,7 @@ import type {
 } from '../shared/contracts.js';
 import { connectionSettings } from '../shared/connections.js';
 import { fail, required } from './errors.js';
-import { environmentConnected } from './environment-status.js';
 import { stillLetIn } from './ssh-access.js';
-import type { EnvironmentHeartbeat } from './environment-status.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -134,17 +132,7 @@ export class Resources {
                 return { ...row.data, methodName: method?.name ?? '', settings: method ? connectionSettings(method, fields) : [],
                   services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [] };
               })()
-            : row.kind === 'function'
-              ? { description: row.data.description, parameters: row.data.parameters, result: row.data.result,
-                ...(permissions.includes('read') ? { program: row.data.program } : {}) }
-              : row.kind === 'environment'
-                ? EnvironmentResource.shape.data.strip().parse({ ...row.data,
-                    connected: row.data.state === 'running' && environmentConnected(await this.db.one<EnvironmentHeartbeat>(
-                      row.data.driver === 'managed'
-                        ? 'SELECT ssh_checked_at AS heartbeat_at,NULL::timestamptz AS stopped_at FROM environment_jobs WHERE resource_id=$1'
-                        : 'SELECT heartbeat_at,stopped_at FROM executor_environments WHERE resource_id=$1', [row.id])),
-                  })
-                : row.data;
+            : row.data;
     return Resource.parse({
       id: row.id,
       ownerId: row.owner_id,
@@ -177,8 +165,7 @@ export class Resources {
     );
     const selected = rows.slice(0, limit),
       permissions = await this.authorization.permissions(actor, selected);
-    const readable = selected.filter((row) => permissions.get(row.id)?.includes('read') ||
-      (row.kind === 'function' && permissions.get(row.id)?.includes('execute')));
+    const readable = selected.filter((row) => permissions.get(row.id)?.includes('read'));
     return {
       items: await Promise.all(readable.map((row) => this.view(actor, row, permissions.get(row.id) as ActionName[]))),
       next: rows.length > limit ? selected.at(-1)!.id : null,
@@ -187,8 +174,7 @@ export class Resources {
   // What others hold that the actor was let read: not what belongs to a principal it acts as or for.
   async shared(actor: Actor) {
     const readable = (
-      await Promise.all([...ResourceKind.options.map((kind) => this.authorization.find(actor.id, kind, 'read')),
-        this.authorization.find(actor.id, 'function', 'execute')])
+      await Promise.all(ResourceKind.options.map((kind) => this.authorization.find(actor.id, kind, 'read')))
     ).flat();
     const rows = await this.db.all<ResourceRow>(
       'SELECT * FROM resources WHERE id=ANY($1::uuid[]) AND NOT owner_id=ANY($2::uuid[]) ORDER BY name,id',

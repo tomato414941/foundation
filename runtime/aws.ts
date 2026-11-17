@@ -86,7 +86,7 @@ export class AwsConnections implements AwsConnectionProvider {
       if (error instanceof Error && ['ExpiredToken', 'ExpiredTokenException', 'TokenRefreshRequired'].includes(error.name))
         fail(409, 'reconnect_required', 'Reconnect with current AWS credentials.');
       if (assuming) fail(502, 'role_denied', 'Check the IAM role and its trust policy for this authentication source.');
-      fail(502, 'aws_authentication_failed', 'Check the AWS credentials available to the selected environment.');
+      fail(502, 'aws_authentication_failed', 'Check the AWS credentials available on this machine.');
     } finally { target?.destroy(); client.destroy(); }
   }
 }

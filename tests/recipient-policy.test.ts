@@ -15,7 +15,7 @@ test('代理は未検証の相手を知らせて保存し、自分で鍵を検�
   await f.relations.draw(f.owner.actor, { subjectId: peer.actor.id, relation: 'delegate', objectId: f.owner.actor.id });
   await f.client.trustIdentity(peer.actor.id, await fingerprint(peer.binding));
   const notices: RecipientAccess[] = [];
-  const writer = new CustodyClient(f.api(f.executorIdentity.token), f.config.origin, f.executor.binding, f.executor.keys,
+  const writer = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys,
     new JournalTrust(new MemoryJournal()), notice => notices.push(notice));
   await writer.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
   const saved = await writer.save('Verified peers', encode('shared value'), await writer.policy(f.owner.actor.id, ContentTypes.value));
@@ -34,7 +34,7 @@ test('代理は未検証の相手を知らせて保存し、自分で鍵を検�
 test('代理が変数を更新すると新しく許可された信頼済みの代理にも暗号化し、既存の利用許可を保つ', async t => {
   const f = await flowFixture(); t.after(f.close);
   const peer = await f.person('Later delegate');
-  const writer = new CustodyClient(f.api(f.executorIdentity.token), f.config.origin, f.executor.binding, f.executor.keys,
+  const writer = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys,
     new JournalTrust(new MemoryJournal()));
   await writer.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
   const saved = await writer.save('Changing peers', encode('first value'), await writer.policy(f.owner.actor.id, ContentTypes.value));
@@ -54,7 +54,7 @@ test('更新する代理が未検証の鍵は以前の暗号化先からも外�
   await f.client.trustIdentity(peer.actor.id, await fingerprint(peer.binding));
   const saved = await f.client.save('Existing peers', encode('before update'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
   const notices: RecipientAccess[] = [];
-  const writer = new CustodyClient(f.api(f.executorIdentity.token), f.config.origin, f.executor.binding, f.executor.keys,
+  const writer = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys,
     new JournalTrust(new MemoryJournal()), notice => notices.push(notice));
   await writer.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
   const previous = await writer.read(saved.id);
@@ -69,7 +69,7 @@ test('更新する代理が未検証の鍵は以前の暗号化先からも外�
 
 test('代理が自分で信頼した相手でも持ち主の代理ではなければ共有の許可を求める', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const writer = new CustodyClient(f.api(f.executorIdentity.token), f.config.origin, f.executor.binding, f.executor.keys,
+  const writer = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys,
     new JournalTrust(new MemoryJournal()));
   await writer.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
   await writer.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
@@ -90,7 +90,7 @@ test('代理が暗号化先を選び直すときも持ち主と明示的な共�
   const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value);
   const saved = await f.client.save('Explicit readers', encode('shared explicitly'), {
     ...policy, readers: [...policy.readers, f.stranger.binding] });
-  const writer = new CustodyClient(f.api(f.executorIdentity.token), f.config.origin, f.executor.binding, f.executor.keys,
+  const writer = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys,
     new JournalTrust(new MemoryJournal()));
   await writer.trustIdentity(f.owner.actor.id, await fingerprint(f.owner.binding));
   const previous = await writer.read(saved.id);

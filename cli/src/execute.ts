@@ -3,7 +3,6 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { childEnvironment } from '../../runtime/command.js';
 
 export function secretVariants(values: string[]) {
   return [
@@ -55,6 +54,12 @@ export class Redactor {
     this.pending = this.pending.slice(position);
     if (result) this.output(result);
   }
+}
+// The command sees the inputs and the few settings it needs from this shell, and nothing else of it.
+function childEnvironment(input: Record<string, string>) {
+  const inherited = Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'TZ', 'TERM', 'HOME', 'TMPDIR',
+    'SYSTEMROOT', 'COMSPEC', 'PATHEXT'].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : []));
+  return { ...inherited, ...input };
 }
 export async function execute(payload: { environment: Record<string, string>; files: Record<string, string>; sensitive: string[] }, command: string[]) {
   if (!command.length) throw new Error('Put the command after --.');

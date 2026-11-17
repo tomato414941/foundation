@@ -1,0 +1,20 @@
+DROP TABLE function_invocations;
+DROP TABLE function_settings;
+DROP TABLE environment_processes;
+DROP TABLE execution_tasks;
+DROP TABLE executor_environments;
+DROP TABLE environment_deletions;
+DROP TABLE environment_jobs;
+DELETE FROM relations WHERE relation='runner';
+DELETE FROM resources WHERE kind IN ('environment','function');
+ALTER TABLE resources DROP CONSTRAINT resources_kind_check;
+ALTER TABLE resources ADD CONSTRAINT resources_kind_check
+  CHECK (kind IN ('variable','connection','service','method','app','object','keyring','ssh_key','ssh_host'));
+DELETE FROM billing_events WHERE meter<>'storage';
+DROP INDEX billing_events_usage;
+ALTER TABLE billing_events DROP COLUMN meter;
+CREATE INDEX billing_events_usage ON billing_events(created_at,principal_id);
+ALTER TABLE usage_limits DROP COLUMN compute_seconds;
+DELETE FROM credentials WHERE environment_id IS NOT NULL;
+ALTER TABLE credentials DROP COLUMN environment_id;
+DELETE FROM key_rotation_items WHERE kind NOT IN ('content','keyring');

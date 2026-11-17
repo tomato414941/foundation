@@ -1,15 +1,12 @@
 import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
-import { CatalogMethod, Id } from '../shared/contracts.js';
+import { CatalogMethod } from '../shared/contracts.js';
 import { catalogDefinition } from '../shared/connection-methods.js';
-import type { CustodyContent } from '../shared/custody.js';
-import type { SignedReceipt } from '../shared/runtime-protocol.js';
-import { ClaimedExecution, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
-import type { ExecutionBroker } from './executor.js';
+import { ProtectedContent, RenewalOperation } from '../shared/protocol.js';
 import type { ConnectionBroker } from './connections.js';
 import { DomainError } from '../server/errors.js';
 
-export class HttpBroker implements ExecutionBroker {
+export class HttpBroker {
   readonly api: JsonApi;
   constructor(api: JsonApi) {
     this.api = { async json<T>(path: string, options = {}, schema?: z.ZodType<T>): Promise<T> {
@@ -21,19 +18,6 @@ export class HttpBroker implements ExecutionBroker {
         throw error;
       }
     } };
-  }
-  claim(id: string, executor: string) {
-    return this.api.json('/api/environments/' + id + '/claim', { method: 'POST', body: { executor } }, ClaimedExecution);
-  }
-  renew(id: string, lease: string) {
-    return this.api.json('/api/runtime/runs/' + id + '/renew', { method: 'POST', body: { lease } }, z.object({ active: z.boolean() }));
-  }
-  dispatch(id: string, lease: string) { return this.api.json('/api/runtime/runs/' + id + '/dispatch', { method: 'POST', body: { lease } }); }
-  finish(lease: string, receipt: SignedReceipt) {
-    return this.api.json('/api/runtime/runs/' + receipt.id + '/finish', { method: 'POST', body: { lease, receipt } }, Task);
-  }
-  capture(content: CustodyContent, pointer: string) {
-    return this.api.json('/api/executor/outputs', { method: 'POST', body: { content, pointer } }, z.object({ id: Id }));
   }
   connections(): ConnectionBroker {
     const api = this.api;

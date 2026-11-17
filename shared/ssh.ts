@@ -34,23 +34,6 @@ export function sshKeyBytes(value: string): Uint8Array | null {
 
 export const SSHPublicKey = z.string().trim().max(8192).refine(value => sshKeyBytes(value) !== null,
   'Use an OpenSSH public key from a .pub file.');
-export const SSHSettings = z.object({ authorizedKeys: z.array(SSHPublicKey).max(32) }).strict();
-export const SSHUpdate = SSHSettings.extend({ revision: z.number().int().positive().optional() });
-export const SSHConnection = SSHSettings.extend({
-  host: z.string().min(1).max(253).nullable(), port: z.number().int().min(1).max(65535),
-  username: z.string().regex(/^[a-z_][a-z0-9_-]*$/), workingDirectory: z.string().startsWith('/').max(4096),
-  hostKey: SSHPublicKey.nullable(), fingerprint: z.string().nullable(),
-  revision: z.number().int().positive(), appliedRevision: z.number().int().nonnegative(),
-  activeSessions: z.number().int().min(0).max(1024),
-}).strict();
-export const SSHView = SSHConnection.extend({ state: z.enum(['starting', 'configuring', 'ready', 'disabled', 'stopped']) });
-export type SSHConnectionInfo = z.infer<typeof SSHView>;
-
-export function sshCommand(value: Pick<SSHConnectionInfo, 'host' | 'port' | 'username'>) {
-  if (!value.host) throw new Error('Wait for the SSH address.');
-  return 'ssh -p ' + value.port + ' ' + value.username + '@' + value.host;
-}
-
 // The algorithm and key of an OpenSSH public key, without its comment.
 export function sshKeyText(value: string) {
   if (!sshKeyBytes(value)) throw new Error('Use an OpenSSH public key from a .pub file.');

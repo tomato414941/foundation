@@ -237,8 +237,6 @@ export class Relations {
           recipients: { method: 'GET', path: '/api/resources/' + id + '/transfer-recipients?to=' + to },
           submit: { method: 'POST', path: '/api/resources/' + id + '/transfer', fields: ['to', 'version', 'content'] },
         });
-      if (row.kind === 'environment')
-        fail(400, 'not_transferable', 'An environment stays with the principal that created it.');
       await this.agree(actor, { kind: 'transfer', itemId: id, to }, this.handing(row, to), connection);
       const changed = await this.resources.changeOwner(row, to, connection);
       await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);

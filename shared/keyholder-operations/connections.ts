@@ -68,13 +68,11 @@ class ConnectionOperations {
     const destination = AppSave.parse(input);
     const previous = destination.resourceId ? await this.client.custody.latest(destination.resourceId) : undefined;
     if (previous && previous.version !== destination.version) throw new Error('This item changed. Reload it before saving.');
-    const environments = await Promise.all((destination.environmentIds ?? []).map(id => this.client.custody.environment(id)));
     const type = ContentTypes.clientCredential;
     if (previous && (previous.content.policy.contentType !== type || previous.content.policy.ownerId !== destination.ownerId))
       throw new Error('Choose the item prepared by this operation.');
-    const policy = previous && !previous.replaced && destination.environmentIds === undefined ? await this.client.custody.refreshRecipients(previous.content.policy)
-      : await this.client.custody.policy(destination.ownerId, type, environments,
-        previous?.replaced ? { replacing: previous.content.policy } : { previous: previous?.content.policy });
+    const policy = previous && !previous.replaced ? await this.client.custody.refreshRecipients(previous.content.policy)
+      : await this.client.custody.policy(destination.ownerId, type, previous ? { replacing: previous.content.policy } : {});
     let bytes: Uint8Array, metadata: Record<string, JsonValue> | undefined;
     const application = AppSave.parse(input);
     const old = previous && !previous.replaced
@@ -113,7 +111,7 @@ class ConnectionOperations {
       const app = AppMaterial.parse({ format: 1, methodId: connection.methodId, clientId: connection.clientId,
         generation: crypto.randomUUID(), fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
         ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}) });
-      const policy = await this.client.custody.policy(connection.ownerId, ContentTypes.clientCredential, []);
+      const policy = await this.client.custody.policy(connection.ownerId, ContentTypes.clientCredential);
       const saved = await this.client.custody.save((connection.name ?? method.name).slice(0, 185) + ' application', encode(canonical(app)), policy,
         { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
             fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, app.fields) },

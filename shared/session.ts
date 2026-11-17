@@ -6,8 +6,6 @@ import { SignedBinding } from './authority.js';
 export const KeyReset = z.object({ requestedAt: Time, readyAt: Time }).strict();
 export const Features = z.object({
   email: z.boolean(),
-  environments: z.boolean(),
-  ssh: z.boolean(),
   storage: z.boolean(),
   payments: z.boolean(),
 });

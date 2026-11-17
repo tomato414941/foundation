@@ -13,7 +13,6 @@ import { MemoryJournal } from './delegation-support.js';
 import { decode, encode } from '../shared/encryption.js';
 import { Execution } from '../shared/executions.js';
 import { canonical } from '../shared/authority.js';
-import { Operations } from '../shared/custody.js';
 import { DomainError } from '../server/errors.js';
 
 function browser(f: Awaited<ReturnType<typeof flowFixture>>, custody = f.client) {
@@ -145,7 +144,7 @@ test('代理のCLIでGitHubの認可応答を受け取り、指定した所有�
     return jsonResponse({ access_token: 'delegate-token', token_type: 'bearer', scope: 'repo' });
   }); t.after(f.close);
   const app = await f.saveApp('github:oauth');
-  const identity = f.executorIdentity, trust = new JournalTrust(new MemoryJournal());
+  const identity = f.delegate, trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(f.owner.binding);
   const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
   const cli = new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'cli'));
@@ -219,22 +218,6 @@ test('間違ったアプリ認証は利用時に失敗し、修正して保存�
     { previous, metadata: previous.content.metadata });
   await f.saveConnection({ methodId: 'ovh:client_credentials', appId: app.id, connectionId: saved.id });
   assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', 'https://ca.api.ovh.com/1.0/vps'))?.ok, true);
-});
-
-test('選んだ実行環境で繰り返し使っても、期限切れの許可を除き、同じ使い方の許可を1つにまとめて実行する', async t => {
-  const f = await flowFixture(() => jsonResponse({ login: 'octocat' })); t.after(f.close);
-  const saved = await f.saveConnection({ methodId: 'github:token', fields: { token: 'private-token' } });
-  const previous = await f.client.read(saved.id);
-  const expired = Array.from({ length: 100 }, (_, index) => ({ actor: f.client.binding, executor: f.environment.manifest.executor,
-    operations: [Operations.http, Operations.refresh], origins: ['https://api' + index + '.example.com'], functionDigests: [],
-    callerProgram: true, expiresAt: new Date(Date.now() - 60_000).toISOString() }));
-  await f.client.save(saved.name, await f.client.reveal(saved.id), { ...previous.content.policy,
-    revision: previous.content.policy.revision + 1, grants: expired }, { previous, metadata: previous.content.metadata });
-  for (let index = 0; index < 3; index++)
-    assert.equal((await f.http(saved.id, 'GITHUB_TOKEN', 'https://api.github.com/user'))?.ok, true);
-  const grants = (await f.client.read(saved.id)).content.policy.grants;
-  assert.equal(grants.length, 1);
-  assert.ok(Date.parse(grants[0]!.expiresAt) > Date.now());
 });
 
 test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接続と共有先を維持する', async t => {

@@ -40,7 +40,6 @@ class BrowserTests(unittest.TestCase):
         self.contexts = []
         self.errors = []
         self.authenticators = {}
-        self.environments = []
 
     def tearDown(self):
         result = self._outcome.result
@@ -50,8 +49,6 @@ class BrowserTests(unittest.TestCase):
                     if not page.is_closed():
                         page.screenshot(path=str(ARTIFACTS / (self._testMethodName + str(index) + '.png')), full_page=True)
                         print(page.url + '\n' + page.locator('body').inner_text()[:10000], flush=True)
-        for page, environment_id in self.environments:
-            page.request.post(ORIGIN + '/api/resources/' + environment_id + '/stop', data={}, headers={'origin': ORIGIN})
         for context in self.contexts:
             context.close()
         self.assertEqual(self.errors, [], "Browser scripts complete successfully")
@@ -163,22 +160,6 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("option", name=option, exact=True).click()
         expect(page.get_by_role("listbox")).to_be_hidden()
 
-    def configure_function(self, page, expires_at=None, english=False):
-        environment_label = "environment" if english else "実行環境"
-        summary_label = "Configure environment and input access" if english else "実行先と利用許可を設定"
-        details = page.locator("details").filter(has=page.get_by_text(summary_label, exact=True))
-        expect(details).to_be_visible()
-        if details.get_attribute("open") is None:
-            details.locator("summary").click()
-        self.select(page, environment_label, "Browser executor")
-        self.select(page, "Input access" if english else "入力の利用許可",
-                    ("Set an expiration" if english else "期限を指定") if expires_at else
-                    ("Allow until revoked" if english else "継続して許可"))
-        if expires_at:
-            page.get_by_label("Input access expires" if english else "入力利用の有効期限", exact=True).fill(expires_at)
-        page.get_by_role("button", name="Approve and save execution settings" if english else "実行設定を承認して保存", exact=True).click()
-        expect(page.locator("main")).to_contain_text("Execution settings approved" if english else "実行設定を承認済みです", timeout=15000)
-
     def application(self, page, principal, method_id, client_id, client_secret, fields=(), name="Connection application"):
         page.goto(f"{ORIGIN}/p/{principal['id']}/apps/new?method={method_id}")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
@@ -213,27 +194,6 @@ class BrowserTests(unittest.TestCase):
         other.goto(previous)
         self.trust_fingerprint(page, principal["id"], fingerprint)
 
-    def executor(self, page, principal, name="Browser executor"):
-        response = page.request.post(ORIGIN + "/__test/executor", data={"ownerId": principal["id"], "name": name})
-        self.assertTrue(response.ok, response.text())
-        environment = response.json()
-        path = f"{ORIGIN}/p/{principal['id']}/environments/{environment['id']}"
-        page.goto(path)
-        self.environments.append((page, environment["id"]))
-        self.trust_fingerprint(page, environment["principalId"], environment["fingerprint"])
-        return path
-
-    def managed_environment(self, page, principal, name):
-        response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(response.ok, response.text())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill(name)
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        self.environments.append((page, page.url.rsplit('/', 1)[1]))
-        return page.url
-
     def saved_connection(self, page, name):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
@@ -261,10 +221,6 @@ class BrowserTests(unittest.TestCase):
         state = parse_qs(urlparse(link.get_attribute("href")).query)["state"][0]
         page.goto(ORIGIN + "/oauth/callback?" + urlencode({"state": state, "code": "initial-google-code"}))
         return self.saved_connection(page, "Mail account"), exchanges
-
-    def allow_environment(self, page, name="Browser executor"):
-        page.get_by_text("実行環境での利用を許可する（任意）", exact=True).click()
-        page.get_by_role("checkbox", name=name, exact=True).check()
 
     def test_AIが出した指紋付きのリンクで承認するとAIの公開鍵を検証して委任先にし持ち主の変数を開かせる(self):
         owner, principal = self.passkey_account("Linked owner")
@@ -561,380 +517,6 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("status").filter(has_text="この実行はdev-ovh-sgだけが続けられます。")).to_be_visible()
         expect(owner.get_by_text("承認の依頼はまだ届いていません。あなたが入力や承認をするには、dev-ovh-sgに承認の依頼を送ってもらってください（CLI では foundation request）。")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "execution-blocked-ja.png"), full_page=True)
-
-    def test_所有するAIの実行結果を本人の鍵で表示しログイン後にも読み出す(self):
-        owner, principal = self.passkey_account("Chancellor Rigel")
-        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
-        response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "dev-us の AI"}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        agent = response.json()
-        environment_id = self.executor(owner, agent, "dev-us").rsplit("/", 1)[1]
-        owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
-        owner.get_by_role("textbox", name="名前", exact=True).fill("Execution agent")
-        owner.get_by_role("button", name="追加", exact=True).click()
-        token = owner.get_by_role("textbox", name="APIキー", exact=True).input_value()
-        with tempfile.TemporaryDirectory() as directory:
-            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
-            environment["XDG_CONFIG_HOME"] = directory
-            login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
-                capture_output=True, text=True, input=token, env=environment, timeout=30)
-            self.assertEqual(login.returncode, 0, login.stderr)
-            fingerprint = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", """
-                import { readFile } from 'node:fs/promises';
-                import { join } from 'node:path';
-                import { fingerprint } from './shared/authority.ts';
-                const data = JSON.parse(await readFile(join(process.env.XDG_CONFIG_HOME, 'foundation/identity.json'), 'utf8'));
-                console.log(await fingerprint(data.identities.find(item => item.principalId === data.current).binding));
-            """], capture_output=True, text=True, env=environment, timeout=30)
-            self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
-            self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
-            owner.goto(ORIGIN + "/account/trust")
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
-            executor = owner.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
-            for identity_id, value in [(principal["id"], owner_fingerprint), (executor["id"], executor["fingerprint"])]:
-                trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", identity_id, "--fingerprint", value],
-                    capture_output=True, text=True, env=environment, timeout=30)
-                self.assertEqual(trusted.returncode, 0, trusted.stderr)
-            executed = subprocess.run(["node", "cli/dist/cli.mjs", "run", "--environment", environment_id, "--wait", "--timeout", "20", "--",
-                "node", "-e", 'console.log("本人の鍵で読める実行結果です。");'],
-                capture_output=True, text=True, env=environment, timeout=30)
-            self.assertEqual(executed.returncode, 0, executed.stderr)
-            execution_id = json.loads(executed.stdout)["id"]
-        owner.evaluate("""async id => {
-            const db = await new Promise((resolve, reject) => {
-                const request = indexedDB.open('foundation-keys', 2);
-                request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
-            });
-            await new Promise((resolve, reject) => {
-                const transaction = db.transaction('keys', 'readwrite');
-                transaction.objectStore('keys').delete('v2:' + id);
-                transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
-            });
-            db.close();
-        }""", agent["id"])
-        path = ORIGIN + "/executions/" + execution_id
-        owner.goto(path)
-        expect(owner.get_by_role("heading", name="実行の詳細", exact=True)).to_be_visible()
-        expect(owner.locator("main pre")).to_have_text("本人の鍵で読める実行結果です。\n")
-        owner.screenshot(path=str(ARTIFACTS / "execution-owner-output-ja.png"), full_page=True)
-        print("Rendered execution for its owner: " + owner.locator("main").inner_text(), flush=True)
-        signed_out = owner.request.post(ORIGIN + "/api/auth/signout", data={}, headers={"origin": ORIGIN})
-        self.assertTrue(signed_out.ok, signed_out.text())
-        owner.evaluate("""async () => {
-            const db = await new Promise(resolve => {
-                const request = indexedDB.open('foundation-keys', 2); request.onsuccess = () => resolve(request.result);
-            });
-            await new Promise(resolve => {
-                const transaction = db.transaction('keys', 'readwrite');
-                transaction.objectStore('keys').clear(); transaction.oncomplete = resolve;
-            });
-            db.close();
-        }""")
-        owner.goto(path)
-        owner.wait_for_url("**/signin?returnTo=**")
-        owner.get_by_role("button", name="パスキーでサインイン", exact=True).click()
-        owner.wait_for_url(path)
-        expect(owner.locator("main pre")).to_have_text("本人の鍵で読める実行結果です。\n")
-        owner.set_viewport_size({"width": 390, "height": 844})
-        owner.screenshot(path=str(ARTIFACTS / "execution-owner-output-after-signin-mobile-ja.png"), full_page=True)
-
-    def test_完了した実行の処理と時刻を表示し鍵に応じて出力を案内する(self):
-        page, principal = self.passkey_account("Execution initiator")
-        environment_id = self.executor(page, principal, "dev-us").rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials/new?kind=key")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Execution test key")
-        page.get_by_role("button", name="追加", exact=True).click()
-        token = page.get_by_role("textbox", name="APIキー", exact=True).input_value()
-        with tempfile.TemporaryDirectory() as config_directory:
-            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
-            environment["XDG_CONFIG_HOME"] = config_directory
-            login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
-                capture_output=True, text=True, input=token, env=environment, timeout=30)
-            self.assertEqual(login.returncode, 0, login.stderr)
-            fingerprint = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
-            trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", fingerprint["id"], "--fingerprint", fingerprint["fingerprint"]],
-                capture_output=True, text=True, env=environment, timeout=30)
-            self.assertEqual(trusted.returncode, 0, trusted.stderr)
-            executed = subprocess.run(["node", "cli/dist/cli.mjs", "run", "--environment", environment_id, "--wait", "--timeout", "20", "--",
-                "node", "-e", 'console.log("画面確認用の実行です。");console.error("補足の出力です。");'],
-                capture_output=True, text=True, env=environment, timeout=30)
-            self.assertEqual(executed.returncode, 0, executed.stderr)
-            execution_id = json.loads(executed.stdout)["id"]
-        path = ORIGIN + "/executions/" + execution_id
-        page.goto(path)
-        expect(page.get_by_role("heading", name="実行の詳細", exact=True)).to_be_visible()
-        expect(page.get_by_text("完了", exact=True)).to_be_visible()
-        expect(page.get_by_text("コマンドの実行", exact=True)).to_be_visible()
-        expect(page.locator("main").get_by_role("link", name="dev-us", exact=True)).to_be_visible()
-        for label in ["開始日時", "終了日時", "所要時間"]:
-            expect(page.locator("dt").filter(has_text=re.compile("^" + label + "$"))).to_be_visible()
-        expect(page.locator("main pre").filter(has_text="画面確認用の実行です。")).to_have_text("画面確認用の実行です。\n")
-        expect(page.locator("main pre").filter(has_text="補足の出力です。")).to_have_text("補足の出力です。\n")
-        expect(page.locator("main dl").filter(has=page.locator("dt", has_text="終了コード")).locator("dd")).to_have_text("0")
-        page.screenshot(path=str(ARTIFACTS / "execution-completed-output-ja.png"), full_page=True)
-        print("Rendered completed execution: " + page.locator("main").inner_text(), flush=True)
-        def change_receipt(route):
-            response = route.fetch()
-            task = response.json()
-            sealed = task["receipt"]["content"]["sealed"] if "content" in task["receipt"] else task["receipt"]["sealed"]
-            ciphertext = sealed["ciphertext"]
-            sealed["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
-            route.fulfill(response=response, json=task)
-        page.route("**/api/runtime/runs/*", change_receipt)
-        page.reload()
-        expect(page.get_by_text("完了", exact=True)).to_be_visible()
-        expect(page.get_by_role("alert")).to_have_text("出力を読み取れませんでした。ページを再読み込みしてください。")
-        page.unroute("**/api/runtime/runs/*", change_receipt)
-        reader, recipient = self.passkey_account("Execution viewer")
-        for object_id in [principal["id"], environment_id]:
-            granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "reader", "objectId": object_id}, headers={"origin": ORIGIN})
-            self.assertTrue(granted.ok, granted.text())
-        reader.goto(path)
-        expect(reader.get_by_text("完了", exact=True)).to_be_visible()
-        expect(reader.locator("main").get_by_role("link", name="dev-us", exact=True)).to_be_visible()
-        notice = reader.get_by_role("alert")
-        expect(notice).to_have_count(1)
-        expect(notice).to_have_text("出力はこのアカウントに共有されていません。")
-        reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-ja.png"), full_page=True)
-        print("Rendered completed execution for viewer: " + reader.locator("main").inner_text(), flush=True)
-        reader.reload()
-        expect(reader.get_by_text("完了", exact=True)).to_be_visible()
-        expect(notice).to_contain_text("出力はこのアカウントに共有されていません。")
-        self.select(reader, "言語", "English")
-        reader.set_viewport_size({"width": 390, "height": 844})
-        expect(reader.get_by_role("heading", name="Execution details", exact=True)).to_be_visible()
-        expect(reader.get_by_text("Completed", exact=True)).to_be_visible()
-        expect(notice).to_have_text("The output has not been shared with this account.")
-        reader.screenshot(path=str(ARTIFACTS / "execution-completed-locked-mobile-en.png"), full_page=True)
-        print("Rendered execution detail (English): " + reader.locator("main").inner_text(), flush=True)
-
-    def test_実行環境がなくても関数を作り環境削除後も同じ関数を別環境で実行する(self):
-        page, principal = self.passkey_account("Independent function owner")
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/functions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Independent function")
-        page.screenshot(path=str(ARTIFACTS / "function-without-environment-ja.png"), full_page=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Independent function", exact=True)).to_be_visible(timeout=15000)
-        expect(page.locator("main")).to_contain_text("実行先が未設定です")
-        function_path = page.url
-        before = page.request.get(ORIGIN + "/api/functions/" + function_path.rsplit("/", 1)[1]).json()
-        environment_path = self.executor(page, principal)
-        page.goto(function_path)
-        self.configure_function(page)
-        page.goto(environment_path)
-        page.get_by_role("button", name="削除", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
-        page.wait_for_url("**/environments?deleted=1", timeout=20000)
-        page.goto(function_path)
-        expect(page.get_by_role("heading", name="Independent function", exact=True)).to_be_visible()
-        expect(page.locator("main")).to_contain_text("実行先が未設定です")
-        after = page.request.get(ORIGIN + "/api/functions/" + before["id"]).json()
-        self.assertEqual(after, before)
-        self.executor(page, principal)
-        page.goto(function_path)
-        self.configure_function(page)
-        page.goto(function_path + "/run")
-        page.get_by_role("button", name="実行", exact=True).click()
-        page.wait_for_url("**/executions/*")
-        expect(page.get_by_text("完了", exact=True)).to_be_visible(timeout=15000)
-        expect(page.locator("main")).to_contain_text("{}")
-
-    def test_関数を譲渡した後に画面で保存し直し新しい所有者の実行設定を案内する(self):
-        page, principal = self.passkey_account("Function transfer owner")
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/functions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Received function")
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Received function", exact=True)).to_be_visible()
-        function_id = page.url.rsplit("/", 1)[1]
-        created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Function recipient"}, headers={"origin": ORIGIN})
-        self.assertTrue(created.ok, created.text())
-        recipient = created.json()
-        version = page.request.get(ORIGIN + "/api/resources/" + function_id).json()["version"]
-        passed = page.request.post(ORIGIN + "/api/resources/" + function_id + "/transfer", data={"to": recipient["id"], "version": version}, headers={"origin": ORIGIN})
-        self.assertTrue(passed.ok, passed.text())
-        page.goto(f"{ORIGIN}/p/{recipient['id']}/functions/{function_id}")
-        expect(page.locator("main")).to_contain_text("この所有者で関数を保存し直してください")
-        page.screenshot(path=str(ARTIFACTS / "function-transfer-approval-ja.png"), full_page=True)
-        page.get_by_role("link", name="編集", exact=True).last.click()
-        page.get_by_role("button", name="保存", exact=True).click()
-        expect(page.get_by_role("heading", name="Received function", exact=True)).to_be_visible()
-        expect(page.locator("main")).to_contain_text("実行先が未設定です")
-
-    def test_固定した関数を共有して秘密を使う処理の結果を受け取る(self):
-        page, principal = self.passkey_account("Function owner")
-        environment = self.executor(page, principal).rsplit("/", 1)[1]
-        source = self.variable(page, principal, name="Function token", value="private-function-token").rsplit("/", 1)[1]
-        page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Reusable function")
-        code = 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{const args=JSON.parse(text);console.log(JSON.stringify({message:args.message,amount:args.amount,enabled:args.enabled,payload:args.payload,configured:!!process.env.TOKEN}));});'
-        page.get_by_role("textbox", name="プログラムと引数（JSON配列）", exact=True).fill(json.dumps(["node", "-e", code]))
-        page.get_by_role("textbox", name="接続・変数の入力（JSON）", exact=True).fill(json.dumps([{"name": "TOKEN", "source": {"id": source}}]))
-        page.get_by_role("textbox", name="パラメーター（JSON）", exact=True).fill(json.dumps([
-            {"name": "message", "label": "Message"},
-            {"name": "amount", "label": "Amount", "type": "number", "default": 0},
-            {"name": "enabled", "label": "Enabled", "type": "boolean", "default": True},
-            {"name": "payload", "label": "Payload", "type": "json", "default": {}},
-        ]))
-        page.screenshot(path=str(ARTIFACTS / "function-editor-desktop-ja.png"), full_page=True)
-        print("Rendered function editor: " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
-        function_path = page.url
-        function_id = function_path.rsplit("/", 1)[1]
-        self.configure_function(page, expires_at="2099-01-02T03:04")
-        page.screenshot(path=str(ARTIFACTS / "function-settings-desktop-ja.png"), full_page=True)
-        print("Rendered execution settings: " + page.locator("main").inner_text(), flush=True)
-        expect(page.locator("main")).to_contain_text("2099")
-        reader, recipient = self.passkey_account("Function caller")
-        granted = page.request.post(ORIGIN + "/api/relations", data={"subjectId": recipient["id"], "relation": "runner", "objectId": function_id}, headers={"origin": ORIGIN})
-        self.assertTrue(granted.ok, granted.text())
-        reader.goto(function_path + "/run")
-        reader.get_by_role("textbox", name="Message", exact=True).fill("Shared invocation")
-        expect(reader.get_by_role("spinbutton", name="Amount", exact=True)).to_have_value("0")
-        reader.get_by_role("spinbutton", name="Amount", exact=True).fill("12.5")
-        expect(reader.get_by_role("checkbox", name="Enabled", exact=True)).to_be_checked()
-        reader.get_by_role("checkbox", name="Enabled", exact=True).uncheck()
-        reader.get_by_role("textbox", name="Payload", exact=True).fill(json.dumps({"items": [1, False, None]}))
-        reader.screenshot(path=str(ARTIFACTS / "function-run-desktop-ja.png"), full_page=True)
-        reader.get_by_role("button", name="実行", exact=True).click()
-        reader.wait_for_url("**/executions/*")
-        expect(reader.locator("main")).to_contain_text("Shared invocation", timeout=15000)
-        expect(reader.locator("main")).to_contain_text('"configured": true')
-        expect(reader.locator("main")).to_contain_text('"amount": 12.5')
-        expect(reader.locator("main")).to_contain_text('"enabled": false')
-        expect(reader.locator("main")).to_contain_text('"items": [')
-        reader.screenshot(path=str(ARTIFACTS / "function-result-desktop-ja.png"), full_page=True)
-        print("Rendered function result: " + reader.locator("main").inner_text(), flush=True)
-        self.assertEqual(reader.request.get(ORIGIN + "/api/resources/" + source + "/custody").status, 403)
-        self.assertEqual(reader.request.get(ORIGIN + "/api/environments/" + environment + "/registration").status, 403)
-        page.goto(function_path + "/edit")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_role("textbox", name="Program and arguments (JSON array)", exact=True)).to_have_value(json.dumps(["node", "-e", code], ensure_ascii=False, indent=2))
-        page.screenshot(path=str(ARTIFACTS / "function-editor-mobile-en.png"), full_page=True)
-        print("Rendered function editor (English): " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("textbox", name="Description", exact=True).fill("Reusable processing with a private token")
-        page.get_by_role("button", name="Save", exact=True).click()
-        expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
-        expect(page.locator("main")).to_contain_text("Reusable processing with a private token")
-        expect(page.locator("main")).to_contain_text("Execution settings approved")
-        expect(page.locator("main")).to_contain_text("2099")
-        page.goto(function_path + "/edit")
-        page.get_by_role("textbox", name="Program and arguments (JSON array)", exact=True).fill(json.dumps(["node", "-e", code.replace("payload:args.payload,", "")]))
-        page.get_by_role("button", name="Save", exact=True).click()
-        expect(page.get_by_role("heading", name="Reusable function", exact=True)).to_be_visible(timeout=15000)
-        expect(page.locator("main")).to_contain_text("Approve execution settings for the current function")
-        self.configure_function(page, english=True)
-        page.screenshot(path=str(ARTIFACTS / "function-settings-mobile-en.png"), full_page=True)
-        print("Rendered execution settings (English): " + page.locator("main").inner_text(), flush=True)
-        expect(page.locator("main")).to_contain_text("Allow until revoked")
-        page.get_by_role("button", name="Delete", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/functions")
-        expect(page.get_by_role("heading", name="Functions", exact=True)).to_be_visible()
-        reader.reload()
-        expect(reader.locator("main")).to_contain_text("Shared invocation")
-
-    def test_HTTP関数の本文形式を保存してステータスと本文を確認する(self):
-        page, principal = self.passkey_account("HTTP function owner")
-        self.executor(page, principal)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/functions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("HTTP function")
-        self.select(page, "処理", "HTTPリクエスト")
-        page.get_by_label("URL", exact=True).fill("https://service.example/submit")
-        self.select(page, "メソッド", "POST")
-        self.select(page, "応答本文の形式", "テキスト")
-        expect(page.locator("main")).to_contain_text("受付の応答は、その後の処理の完了を意味しません。")
-        page.screenshot(path=str(ARTIFACTS / "function-http-editor-desktop-ja.png"), full_page=True)
-        print("Rendered HTTP function editor: " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
-        function_path = page.url
-        self.configure_function(page)
-        page.goto(function_path + "/run")
-        page.get_by_role("button", name="実行", exact=True).click()
-        page.wait_for_url("**/executions/*")
-        expect(page.locator("main")).to_contain_text('"status": 200', timeout=15000)
-        expect(page.locator("main")).to_contain_text('"headers": {}')
-        expect(page.locator("main")).to_contain_text('"body": "{}"')
-        page.screenshot(path=str(ARTIFACTS / "function-http-result-desktop-ja.png"), full_page=True)
-        page.goto(function_path + "/edit")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_role("combobox", name="Response body format", exact=True)).to_contain_text("Text")
-        page.screenshot(path=str(ARTIFACTS / "function-http-editor-mobile-en.png"), full_page=True)
-        print("Rendered HTTP function editor (English): " + page.locator("main").inner_text(), flush=True)
-        self.select(page, "Response body format", "JSON")
-        page.get_by_role("button", name="Save", exact=True).click()
-        expect(page.get_by_role("heading", name="HTTP function", exact=True)).to_be_visible(timeout=15000)
-        self.configure_function(page, english=True)
-        page.goto(function_path + "/run")
-        page.get_by_role("button", name="Run", exact=True).click()
-        page.wait_for_url("**/executions/*")
-        expect(page.locator("main")).to_contain_text('"body": {}', timeout=15000)
-
-    def test_サービスなしのHTTP接続を保存し関数と直接実行で使う(self):
-        page, principal = self.passkey_account("HTTP connection owner")
-        self.executor(page, principal)
-        root = f"{ORIGIN}/p/{principal['id']}"
-        page.goto(root + "/services/new")
-        expect(page.get_by_role("combobox", name="サービス", exact=True)).to_contain_text("サービスを指定しない")
-        expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_contain_text("Bearerトークン")
-        page.get_by_role("textbox", name="名前", exact=True).fill("My webhook")
-        page.get_by_label("送信先URL", exact=True).fill("https://receiver.example/private-webhook")
-        page.get_by_label("Bearerトークン", exact=True).fill("browser-private-bearer")
-        page.screenshot(path=str(ARTIFACTS / "http-connection-desktop-ja.png"), full_page=True)
-        print("Rendered HTTP connection: " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="接続する", exact=True).click()
-        connection = self.saved_connection(page, "My webhook")
-        self.assertEqual(connection["data"]["services"], [])
-        self.assertEqual(connection["data"]["http"]["authentication"]["kind"], "bearer")
-        page.goto(root + "/functions/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Webhook function")
-        self.select(page, "処理", "HTTPリクエスト")
-        self.select(page, "接続", "My webhook")
-        self.select(page, "メソッド", "POST")
-        expect(page.get_by_label("URL", exact=True)).to_have_value("")
-        expect(page.get_by_label("URL", exact=True)).to_have_attribute("placeholder", "接続に保存したURLを使用")
-        self.select(page, "リクエスト本文の形式", "JSON")
-        page.get_by_role("textbox", name="本文", exact=True).fill('{"message":"Hello"}')
-        page.screenshot(path=str(ARTIFACTS / "http-connection-function-desktop-ja.png"), full_page=True)
-        print("Rendered connected HTTP function: " + page.locator("main").inner_text(), flush=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("heading", name="Webhook function", exact=True)).to_be_visible(timeout=15000)
-        function_path = page.url
-        definition = page.request.get(ORIGIN + "/api/functions/" + function_path.rsplit("/", 1)[1]).json()
-        self.assertEqual(definition["data"]["program"]["request"]["connectionId"], connection["id"])
-        self.assertEqual(definition["data"]["program"]["request"]["json"], {"message": "Hello"})
-        page.goto(function_path + "/edit")
-        expect(page.get_by_role("combobox", name="接続", exact=True)).to_contain_text("My webhook")
-        expect(page.get_by_role("combobox", name="リクエスト本文の形式", exact=True)).to_contain_text("JSON")
-        self.assertEqual(json.loads(page.get_by_role("textbox", name="本文", exact=True).input_value()), {"message": "Hello"})
-        page.get_by_role("button", name="保存", exact=True).click()
-        expect(page.get_by_role("heading", name="Webhook function", exact=True)).to_be_visible(timeout=15000)
-        self.configure_function(page)
-        page.goto(function_path + "/run")
-        page.get_by_role("button", name="実行", exact=True).click()
-        page.wait_for_url("**/executions/*")
-        expect(page.locator("main")).to_contain_text('"status": 200', timeout=15000)
-        page.goto(root + "/runs/new")
-        self.select(page, "実行環境", "Browser executor")
-        self.select(page, "接続", "My webhook")
-        self.select(page, "言語", "English")
-        page.set_viewport_size({"width": 390, "height": 844})
-        expect(page.get_by_role("combobox", name="Connection", exact=True)).to_contain_text("My webhook")
-        expect(page.get_by_label("URL", exact=True)).to_have_value("")
-        page.screenshot(path=str(ARTIFACTS / "http-connection-run-mobile-en.png"), full_page=True)
-        print("Rendered connected HTTP request (English): " + page.locator("main").inner_text(), flush=True)
-        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-        page.get_by_role("button", name="Run", exact=True).click()
-        page.wait_for_url("**/executions/*")
-        expect(page.locator("main")).to_contain_text('HTTP status', timeout=15000)
-        expect(page.locator("main")).to_contain_text('200')
-        expect(page.get_by_role("link", name="My webhook", exact=True)).to_be_visible()
 
     def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
@@ -1983,7 +1565,6 @@ class BrowserTests(unittest.TestCase):
         }, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         child = created.json()
-        self.executor(page, child, "Owned AI executor")
         page.goto(f"{ORIGIN}/p/{child['id']}/services/new?method=github:token")
         page.get_by_role("textbox", name="名前", exact=True).fill("AI GitHub connection")
         page.get_by_label("Personal access token").fill("test-provider-token")
@@ -2011,7 +1592,6 @@ class BrowserTests(unittest.TestCase):
 
     def test_独立した接続方法を登録しOAuthアプリを対応する方法に結び付ける(self):
         page, principal = self.passkey_account("Method owner")
-        self.executor(page, principal)
         root = f"{ORIGIN}/p/{principal['id']}"
         page.goto(root + "/methods/new")
         page.get_by_role("textbox", name="名前", exact=True).fill("Workspace sign-in")
@@ -2049,340 +1629,13 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_label("クライアントシークレット", exact=True)).to_be_visible()
         expect(page.get_by_label("コールバックURL", exact=True)).to_have_value(ORIGIN + "/oauth/callback")
 
-    def test_スマホで時間制限なしの実行環境を作成し停止後に同じ環境を起動する(self):
-        owner, principal = self.passkey_account("Mobile environment owner")
-        response = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(response.ok, response.text())
-        page = self.page(webkit=True, mobile=True)
-        page.context.add_cookies(owner.context.cookies())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        self.receive_keys(owner, page)
-        expect(page.locator("summary").filter(has_text="自動停止")).to_contain_text("なし")
-        expect(page.get_by_text("今月の残り 60分", exact=True)).to_be_visible()
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-        start = page.get_by_role("button", name="作成", exact=True)
-        for scroll in [0, 10000, 0]:
-            page.evaluate("value => window.scrollTo(0, value)", scroll)
-            box = start.bounding_box()
-            self.assertIsNotNone(box)
-            self.assertGreaterEqual(box["y"], 0)
-            self.assertLessEqual(box["y"] + box["height"], page.evaluate("window.innerHeight"))
-        start.click()
-        page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
-        environment_id = page.url.rsplit("/", 1)[1]
-        self.environments.append((page, environment_id))
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
-        self.assertTrue(response.ok, response.text())
-        environment = response.json()
-        self.assertTrue(environment["name"])
-        self.assertEqual(environment["data"]["size"], "small")
-        self.assertEqual(environment["data"]["lifetime"], {"idleSeconds": None, "maxSeconds": None})
-        page.get_by_role("button", name="停止", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
-        expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
-        page.get_by_role("button", name="起動", exact=True).click()
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        self.assertEqual(page.url.rsplit("/", 1)[1], environment_id)
-        restarted = page.request.get(ORIGIN + "/api/resources/" + environment_id).json()
-        self.assertEqual(restarted["ownerId"], environment["ownerId"])
-        self.assertEqual(restarted["data"]["ssh"]["fingerprint"], environment["data"]["ssh"]["fingerprint"])
-
-    def test_数日後の自動停止を設定して作成し利用枠を使い切ると次の起動を止める(self):
-        page, principal = self.passkey_account("Quota environment owner")
-        paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_role("heading", name="実行環境を作成", exact=True)).to_be_visible()
-        expect(page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-unlimited-desktop-ja.png"), full_page=True)
-        page.get_by_role("textbox", name="名前", exact=True).fill("Medium environment")
-        page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True).check()
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-        page.get_by_text("自動停止", exact=True).click()
-        page.get_by_role("checkbox", name="稼働時間で停止", exact=True).check()
-        page.get_by_role("spinbutton", name="最長稼働時間（分）", exact=True).fill("4320")
-        page.get_by_role("checkbox", name="未使用時に停止", exact=True).check()
-        page.get_by_role("spinbutton", name="操作がないときの停止時間（分）", exact=True).fill("15")
-        expect(page.locator("summary").filter(has_text="自動停止")).to_contain_text("最長 4320分 / 未使用 15分")
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-lifetime-desktop-ja.png"), full_page=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
-        environment_id = page.url.rsplit("/", 1)[1]
-        self.environments.append((page, environment_id))
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
-        self.assertTrue(response.ok, response.text())
-        environment = response.json()
-        self.assertEqual(environment["data"]["size"], "medium")
-        self.assertEqual(environment["data"]["lifetime"], {"idleSeconds": 900, "maxSeconds": 259200})
-        limit = page.request.put(ORIGIN + "/api/principals/" + principal["id"] + "/limits",
-                                 data={"storageBytes": 1073741824, "computeSeconds": 1}, headers={"origin": ORIGIN})
-        self.assertTrue(limit.ok, limit.text())
-        expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=20000)
-        expect(page.get_by_text("今月の利用枠に達したため停止しました。", exact=True)).to_be_visible()
-        page.set_viewport_size({"width": 390, "height": 844})
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_text("今月の残り 0分", exact=True)).to_be_visible()
-        expect(page.get_by_role("alert").filter(has_text="今月の利用枠を使い切っています")).to_be_visible()
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_disabled()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-quota-mobile-ja.png"), full_page=True)
-        self.select(page, "言語", "English")
-        expect(page.get_by_text("Remaining this month: 0 minutes", exact=True)).to_be_visible()
-        expect(page.get_by_role("button", name="Create", exact=True)).to_be_disabled()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-quota-mobile-en.png"), full_page=True)
-
-    def test_スマホでSSH公開鍵を指定して接続情報を確認し公開鍵を変更する(self):
-        import tempfile
-        owner, principal = self.passkey_account("SSH environment owner")
-        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
-        page = self.page(webkit=True, mobile=True)
-        page.context.add_cookies(owner.context.cookies())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        self.receive_keys(owner, page)
-        page.get_by_text("SSH接続", exact=True).click()
-        page.get_by_role("button", name="公開鍵を追加", exact=True).click()
-        keys = page.get_by_role("textbox", name="公開鍵 1", exact=True)
-        expect(keys).to_be_visible()
-        keys.fill("invalid key")
-        page.get_by_role("button", name="作成", exact=True).click()
-        expect(page.get_by_role("alert").filter(has_text="SSH公開鍵を確認してください")).to_be_visible()
-        with tempfile.TemporaryDirectory() as directory:
-            public_keys = []
-            for name in ["first", "second"]:
-                path = Path(directory) / name
-                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
-                public_keys.append(path.with_suffix(".pub").read_text().strip())
-            keys.fill(public_keys[0])
-            page.get_by_role("button", name="作成", exact=True).click()
-            page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
-            environment_id = page.url.rsplit("/", 1)[1]
-            self.environments.append((page, environment_id))
-            expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-            expect(page.locator("code").filter(has_text=".ssh.foundation.test")).to_be_visible()
-            expect(page.get_by_text("SSHホスト鍵のフィンガープリント", exact=True)).to_be_visible(timeout=20000)
-            editor = page.get_by_role("textbox", name="SSH公開鍵", exact=True)
-            expect(editor).to_have_value(public_keys[0])
-            editor.fill(public_keys[1])
-            editor.locator("xpath=ancestor::form").get_by_role("button", name="保存", exact=True).click()
-            expect(page.get_by_text("SSH公開鍵を保存しました。", exact=True)).to_be_visible()
-            response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
-            self.assertTrue(response.ok, response.text())
-            self.assertEqual(response.json()["authorizedKeys"], [public_keys[1]])
-            self.assertEqual(response.json()["workingDirectory"], "/home/ubuntu")
-            page.reload()
-            expect(editor).to_have_value(public_keys[1])
-            self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
-            print("Rendered SSH: " + editor.locator("xpath=ancestor::*[@data-slot='card']").inner_text(), flush=True)
-            self.select(page, "言語", "English")
-            expect(page.get_by_text("SSH host key fingerprint", exact=True)).to_be_visible()
-
-    def test_PCで公開鍵ファイルと入力から追加した鍵を確認して実行環境を作成する(self):
-        page, principal = self.passkey_account("SSH key account")
-        paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-desktop-ja.png"), full_page=True)
-        page.get_by_text("SSH接続", exact=True).click()
-        with tempfile.TemporaryDirectory() as directory:
-            paths, public_keys = [], []
-            for name in ["first", "second"]:
-                path = Path(directory) / name
-                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-C", name, "-N", "", "-f", str(path)], check=True)
-                paths.append(path.with_suffix(".pub"))
-                public_keys.append(paths[-1].read_text().strip())
-            with page.expect_file_chooser() as chooser:
-                page.get_by_role("button", name="ファイルから追加", exact=True).click()
-            chooser.value.set_files([str(path) for path in paths])
-            expect(page.get_by_role("textbox", name="公開鍵 1", exact=True)).to_have_value(public_keys[0])
-            expect(page.get_by_role("textbox", name="公開鍵 2", exact=True)).to_have_value(public_keys[1])
-            page.get_by_role("button", name="公開鍵 1を削除", exact=True).click()
-            expect(page.get_by_role("textbox", name="公開鍵 1", exact=True)).to_have_value(public_keys[1])
-            page.get_by_role("button", name="公開鍵を追加", exact=True).click()
-            page.get_by_role("textbox", name="公開鍵 2", exact=True).fill(public_keys[0])
-            expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-            page.screenshot(path=str(ARTIFACTS / "environment-create-keys-desktop-ja.png"), full_page=True)
-            self.select(page, "言語", "English")
-            expect(page.get_by_role("textbox", name="Public key 1", exact=True)).to_have_value(public_keys[1])
-            expect(page.get_by_role("button", name="Remove public key 2", exact=True)).to_be_visible()
-            page.screenshot(path=str(ARTIFACTS / "environment-create-keys-desktop-en.png"), full_page=True)
-            page.get_by_role("button", name="Create", exact=True).click()
-            page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
-            environment_id = page.url.rsplit("/", 1)[1]
-            self.environments.append((page, environment_id))
-            expect(page.get_by_text("Connected", exact=True)).to_be_visible(timeout=15000)
-            response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
-            self.assertTrue(response.ok, response.text())
-            self.assertEqual(response.json()["authorizedKeys"], [public_keys[1], public_keys[0]])
-
-    def test_ストレージにオブジェクトを保存して実行環境を起動して停止する(self):
-        page, principal = self.passkey_account()
-        response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(response.ok, response.text())
-        page.goto(f"{ORIGIN}/p/{principal['id']}/storage/new")
-        page.locator('input[name="file"]').set_input_files({"name": "report.txt", "mimeType": "text/plain", "buffer": b"browser file"})
-        page.get_by_role("button", name="アップロード", exact=True).click()
-        expect(page.get_by_role("heading", name="report.txt", exact=True)).to_be_visible()
-        breadcrumb = page.get_by_role("navigation", name="現在の位置", exact=True)
-        expect(breadcrumb.get_by_text("report.txt", exact=True)).to_be_visible()
-        breadcrumb.get_by_role("link", name="ストレージ", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/storage")
-        page.get_by_role("link", name="report.txt", exact=True).click()
-        with page.expect_download() as download:
-            page.get_by_role("link", name="ダウンロード", exact=True).click()
-        self.assertEqual(Path(download.value.path()).read_text(), "browser file")
-        self.managed_environment(page, principal, "Worker")
-        page.get_by_role("button", name="停止", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
-        expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
-
-    def test_実行環境の通信断と再接続と停止を一覧と詳細へ自動反映する(self):
-        page, principal = self.passkey_account("Environment connection owner")
-        path = self.executor(page, principal, "Connection monitor")
-        environment_id = path.rsplit("/", 1)[1]
-
-        def connected(value):
-            response = page.request.post(ORIGIN + "/__test/executor/" + environment_id + "/connectivity",
-                                         data={"connected": value})
-            self.assertTrue(response.ok, response.text())
-
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments")
-        row = page.locator("tbody tr").filter(has=page.get_by_role("link", name="Connection monitor", exact=True))
-        badge = row.locator('[data-slot="badge"]:visible')
-        expect(badge).to_have_text("接続中")
-        connected(False)
-        expect(badge).to_have_text("応答なし", timeout=20000)
-        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-list-ja.png"), full_page=True)
-        connected(True)
-        expect(badge).to_have_text("接続中", timeout=20000)
-
-        page.set_viewport_size({"width": 390, "height": 844})
-        page.goto(path)
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "environment-connected-detail-ja.png"), full_page=True)
-        connected(False)
-        expect(page.get_by_text("応答なし", exact=True)).to_be_visible(timeout=20000)
-        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-detail-ja.png"), full_page=True)
-        self.select(page, "言語", "English")
-        expect(page.get_by_text("Not responding", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "environment-unresponsive-detail-en.png"), full_page=True)
-        connected(True)
-        expect(page.get_by_text("Connected", exact=True)).to_be_visible(timeout=20000)
-        page.get_by_role("button", name="Stop", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="Stop", exact=True).click()
-        expect(page.get_by_text("Stopped", exact=True)).to_be_visible(timeout=15000)
-        resource = page.request.get(ORIGIN + "/api/resources/" + environment_id).json()
-        self.assertFalse(resource["data"]["connected"])
-        self.assertEqual(resource["data"]["state"], "stopped")
-
-    def test_スマホで一覧と詳細を行き来し削除中の表示を再読込後も確認して削除を完了する(self):
-        owner, principal = self.passkey_account("Mobile deletion owner")
-        path = self.managed_environment(owner, principal, "Mobile deletion environment")
-        environment_id = path.rsplit("/", 1)[1]
-        page = self.page(webkit=True, mobile=True)
-        page.context.add_cookies(owner.context.cookies())
-        page.goto(path)
-        self.receive_keys(owner, page)
-        page.get_by_role("link", name="実行環境の一覧へ戻る", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/environments")
-        page.get_by_role("link", name="Mobile deletion environment", exact=True).click()
-        breadcrumb = page.get_by_role("navigation", name="現在の位置", exact=True)
-        expect(breadcrumb.get_by_text("Mobile deletion environment", exact=True)).to_be_visible()
-        breadcrumb.get_by_role("link", name="実行環境", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/environments")
-        page.get_by_role("link", name="Mobile deletion environment", exact=True).click()
-        page.request.post(ORIGIN + "/__test/deletion/" + environment_id, data={"phase": "stop", "mode": "hold"})
-        delete_requests = []
-        page.on("request", lambda request: delete_requests.append(request) if request.method == "DELETE" and request.url.endswith(environment_id) else None)
-        try:
-            page.get_by_role("button", name="削除", exact=True).click()
-            dialog = page.get_by_role("dialog")
-            dialog.get_by_role("button", name="削除", exact=True).click()
-            expect(dialog.get_by_role("button", name="削除中…", exact=True)).to_be_disabled()
-            expect(dialog.get_by_role("status")).to_contain_text("画面を閉じても処理は続きます")
-            # Let the accepted delete and route revalidation finish before replacing the document.
-            page.wait_for_load_state("networkidle")
-            page.reload()
-            expect(page.get_by_role("button", name="削除中…", exact=True)).to_be_disabled()
-            expect(page.get_by_role("status")).to_contain_text("画面を閉じても処理は続きます")
-            page.get_by_role("link", name="実行環境の一覧へ戻る", exact=True).click()
-            expect(page.get_by_text("削除中", exact=True)).to_be_visible()
-            page.get_by_role("link", name="Mobile deletion environment", exact=True).click()
-            expect(page.get_by_role("button", name="削除中…", exact=True)).to_be_disabled()
-            self.assertEqual(len(delete_requests), 1)
-        finally:
-            page.request.post(ORIGIN + "/__test/deletion/" + environment_id, data={"phase": "stop", "mode": "release"})
-        page.wait_for_url(f"**/p/{principal['id']}/environments?deleted=1", timeout=15000)
-        expect(page.get_by_role("alert")).to_contain_text("実行環境を削除しました")
-        response = page.request.get(ORIGIN + "/api/resources/" + environment_id + "/deletion")
-        self.assertEqual(response.json()["state"], "complete")
-
-    def test_削除の失敗理由を確認画面に表示し再試行して一覧へ戻る(self):
-        page, principal = self.passkey_account("Deletion retry owner")
-        path = self.managed_environment(page, principal, "Retry deletion environment")
-        page.set_viewport_size({"width": 390, "height": 844})
-        environment_id = path.rsplit("/", 1)[1]
-        page.request.post(ORIGIN + "/__test/deletion/" + environment_id, data={"phase": "volume", "mode": "fail"})
-        page.get_by_role("button", name="削除", exact=True).click()
-        dialog = page.get_by_role("dialog")
-        dialog.get_by_role("button", name="削除", exact=True).click()
-        expect(dialog.get_by_role("button", name="削除を再試行", exact=True)).to_be_enabled(timeout=15000)
-        expect(dialog.get_by_role("alert")).to_contain_text("ディスクの削除を完了できませんでした")
-        page.screenshot(path=str(ARTIFACTS / "environment-delete-error-ja.png"), full_page=True)
-        page.reload()
-        expect(page.get_by_role("alert")).to_contain_text("ディスクの削除を完了できませんでした")
-        page.get_by_role("button", name="削除を再試行", exact=True).click()
-        expect(dialog.get_by_role("button", name="削除を再試行", exact=True)).to_be_enabled()
-        dialog.get_by_role("button", name="削除を再試行", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/environments?deleted=1", timeout=15000)
-        expect(page.get_by_role("alert")).to_contain_text("実行環境を削除しました")
-
-    def test_実行環境を作成してプリンシパルへ共有し権限を解除する(self):
-        page, principal = self.passkey_account("Environment owner")
-        recipient, other = self.passkey_account("Shared principal")
-        page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        page.set_viewport_size({"width": 390, "height": 844})
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        expect(page.get_by_role("button", name="作成", exact=True)).to_be_enabled()
-        page.screenshot(path=str(ARTIFACTS / "environment-create-ja.png"), full_page=True)
-        page.get_by_role("button", name="作成", exact=True).click()
-        page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
-        path = page.url
-        environment_id = path.rsplit("/", 1)[1]
-        self.environments.append((page, environment_id))
-        expect(page.get_by_role("heading", name=re.compile(r"^実行環境 [a-f0-9]{8}$"))).to_be_visible()
-        expect(page.get_by_text("接続中", exact=True)).to_be_visible(timeout=15000)
-        name = page.get_by_role("heading", level=1).inner_text()
-        page.get_by_role("link", name="共有", exact=True).click()
-        page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(other["id"])
-        page.get_by_role("checkbox", name="実行する", exact=True).check()
-        page.get_by_role("button", name="権限を保存", exact=True).click()
-        expect(page.get_by_text("Shared principal", exact=True)).to_be_visible()
-        expect(page.get_by_role("heading", name="権限を付与したプリンシパル", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "environment-sharing-ja.png"), full_page=True)
-        recipient.goto(path)
-        expect(recipient.get_by_role("heading", name=name, exact=True)).to_be_visible()
-        shared = recipient.request.get(ORIGIN + "/api/resources/" + environment_id)
-        self.assertTrue(shared.ok, shared.text())
-        self.assertIn("execute", shared.json()["permissions"])
-        page.get_by_role("button", name="権限を解除", exact=True).click()
-        expect(page.get_by_text("項目がありません。", exact=True)).to_be_visible()
-        self.assertEqual(recipient.request.get(ORIGIN + "/api/resources/" + environment_id).status, 403)
-        page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name=name, exact=True).click()
-        page.wait_for_url(path)
-        page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name="実行環境", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/environments")
-
     def test_リクエスト画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver", mobile=True)
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
             "message": "作業で使用する値を保存してください。", "operations": [{
             "name": "variable.save", "input": {
-                "ownerId": "$approver", "name": "Requested variable", "value": "", "environmentIds": []
+                "ownerId": "$approver", "name": "Requested variable", "value": ""
             }, "inputs": [{"pointer": "/value", "label": "Private value", "secret": True}]
         }]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
@@ -2406,35 +1659,6 @@ class BrowserTests(unittest.TestCase):
         receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
-
-    def test_実行のリクエストで結果の保存先を名前で示し今ある変数は値を置き換えることを示す(self):
-        sender, _ = self.passkey_account("Run requester")
-        receiver, principal = self.passkey_account("Run approver", mobile=True)
-        kept = self.variable(receiver, principal, name="Release token", value="current-release-token").rsplit("/", 1)[1]
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "リリース用のトークンを発行してください。", "operations": [{"name": "run.execute", "input": {
-                "ownerId": "$approver", "operation": {"kind": "http", "request": {"method": "POST", "url": "https://service.example/tokens"}},
-                "save": {"/body/token": kept}, "names": {"/body/next": "Next release token"}}}]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        receiver.goto(response.json()["url"])
-        expect(receiver.get_by_role("heading", name="HTTPリクエスト", exact=True)).to_be_visible()
-        main = receiver.locator("main")
-        row = lambda label: main.locator("dl", has=receiver.get_by_text(label, exact=True)).last.locator("dd")
-        expect(main.get_by_text("結果の保存先", exact=True)).to_be_visible()
-        expect(row("/body/token")).to_have_text("Release token今の値を置き換えます")
-        expect(row("/body/token").get_by_role("link", name="Release token", exact=True)).to_be_visible()
-        expect(row("/body/next")).to_have_text("Next release token新しい変数として保存します")
-        for internal in ["$approver", kept]:
-            self.assertNotIn(internal, main.inner_text())
-        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
-        print("Rendered run request: " + main.inner_text(), flush=True)
-        receiver.screenshot(path=str(ARTIFACTS / "run-request-destinations-mobile-ja.png"), full_page=True)
-        self.select(receiver, "言語", "English")
-        expect(main.get_by_text("Result destinations", exact=True)).to_be_visible()
-        expect(row("/body/token")).to_have_text("Release tokenReplaces its current value")
-        expect(row("/body/next")).to_have_text("Next release tokenKept in a new variable")
-        print("Rendered run request (English): " + main.inner_text(), flush=True)
-        receiver.screenshot(path=str(ARTIFACTS / "run-request-destinations-mobile-en.png"), full_page=True)
 
     def test_リクエスト内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
@@ -2622,14 +1846,13 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "言語", "English")
         page.get_by_role("button", name="Open navigation", exact=True).click()
         expect(page.get_by_role("dialog")).to_be_visible()
-        page.get_by_role("link", name="Environments", exact=True).click()
+        page.get_by_role("link", name="Variables", exact=True).click()
         page.get_by_role("link", name="Create", exact=True).click()
-        expect(page.get_by_role("heading", name="Create environment", exact=True)).to_be_visible()
-        page.get_by_role("textbox", name="Name", exact=True).fill("Mobile worker")
-        page.get_by_role("radio", name="Medium — 2 CPU / 2 GB", exact=True).check()
+        expect(page.get_by_role("heading", name="Create variable", exact=True)).to_be_visible()
+        page.get_by_role("textbox", name="Name", exact=True).fill("Mobile value")
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
         page.get_by_role("link", name="Cancel", exact=True).click()
-        expect(page.get_by_role("heading", name="Environments", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Variables", exact=True)).to_be_visible()
         page.reload()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
 

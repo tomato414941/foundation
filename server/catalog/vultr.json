@@ -197,7 +197,7 @@
                 "oidc"
               ]
             },
-            "note": "Leave blank to read a current OIDC token from VULTR_OIDC_TOKEN_FILE or VULTR_OIDC_TOKEN on the executor."
+            "note": "Leave blank to read a current OIDC token from VULTR_OIDC_TOKEN_FILE or VULTR_OIDC_TOKEN on the machine that uses the connection."
           },
           {
             "name": "sessionName",

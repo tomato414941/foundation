@@ -23,9 +23,9 @@ const authorization = { device_code: 'private-cli-device-code', user_code: 'WXYZ
 const token = { access_token: 'private-device-access-token', token_type: 'bearer', scope: 'repo,gist' };
 
 async function cli(f: Fixture, delegate = false) {
-  const identity = delegate ? f.executorIdentity : f.owner, trust = new JournalTrust(new MemoryJournal());
+  const identity = delegate ? f.delegate : f.owner, trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(f.owner.binding);
-  await trust.rememberBinding(f.executorIdentity.binding);
+  await trust.rememberBinding(f.delegate.binding);
   const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
   const store = new RemoteFlowStore(custody), connections = new ConnectionClient(custody, store, f.transport, 'cli');
   return { custody, store, connections, operations: new ExecutionClient(custody, connections) };

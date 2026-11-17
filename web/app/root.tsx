@@ -4,8 +4,8 @@ import { setNonce } from 'get-nonce';
 import { cn } from 'cn';
 import {
   BookOpen,
-  Code2,
   Folder,
+  History,
   House,
   Inbox,
   Variable,
@@ -13,7 +13,6 @@ import {
   LogOut,
   Menu,
   Settings,
-  Terminal,
   Users,
   CircleUserRound,
   X,
@@ -120,10 +119,8 @@ export default function App() {
       ['services', prefix + '/services', Link2],
       ['variables', prefix + '/variables', Variable],
       ['storage', prefix + '/storage', Folder],
-      ['environments', prefix + '/environments', Terminal],
-      ['functions', prefix + '/functions', Code2],
       ['principals', prefix + '/principals', Users],
-      ['runs', prefix + '/runs', Terminal],
+      ['runs', prefix + '/runs', History],
     ],
     [
       ['requests', '/requests', Inbox],

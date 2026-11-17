@@ -57,7 +57,7 @@ def verify_container(image, name):
         else:
             subprocess.run(["docker", "logs", name + "-app"], check=True)
             raise RuntimeError("The packaged server did not become healthy.")
-        subprocess.run(["docker", "exec", "-e", "RELEASE_SMOKE_MODE=attached", name + "-app", "node", "/app/deploy/release/smoke.mjs"], check=True)
+        subprocess.run(["docker", "exec", name + "-app", "node", "/app/deploy/release/smoke.mjs"], check=True)
     finally:
         for container in reversed(containers):
             subprocess.run(["docker", "rm", "-f", "-v", container], check=True, stdout=subprocess.DEVNULL)

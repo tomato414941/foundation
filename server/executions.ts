@@ -6,7 +6,7 @@ import { principal } from './authorization.js';
 import type { Principals } from './principals.js';
 import { digest } from './vault.js';
 import { atPointer, setPointer } from '../shared/values.js';
-import { Id, Json, Operation } from '../shared/contracts.js';
+import { Id, Operation } from '../shared/contracts.js';
 import type { RequestedOperation } from '../shared/contracts.js';
 import type { Proposed } from './relations.js';
 import type { z } from 'zod';
@@ -23,8 +23,6 @@ import { Execution } from '../shared/executions.js';
 import type { DefinitionCall, ExecutionView, OperationWaiting } from '../shared/executions.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { deliverExecution } from './request-delivery.js';
-import type { TaskView } from '../shared/runtime-protocol.js';
-import type { InvocationView } from '../shared/function-api.js';
 
 interface Snapshot {
   actor: Actor;
@@ -39,7 +37,6 @@ interface Snapshot {
   inFlight: number | null;
   continuation: OperationWaiting['continuation'];
   preparations?: Array<{ index: number; digest: string }>;
-  runtime?: { kind: 'run' | 'function'; id: string };
   archive?: { format: string; record: JsonValue };
 }
 interface ExecutionRow {
@@ -54,14 +51,9 @@ interface ViewMetadata {
   canRespond: boolean;
   proposal: NonNullable<ExecutionView['approval']>['proposal'];
   deliveries: Array<{ id: string }>;
-  runtime: Array<{ id: string; index: number }>;
 }
 // One persisted execution mechanism serves direct calls and calls awaiting a person's response.
 export class Executions {
-  runtime!: {
-    get(actor: Actor, reference: NonNullable<Snapshot['runtime']>): Promise<TaskView | InvocationView>;
-    cancel(actor: Actor, reference: NonNullable<Snapshot['runtime']>): Promise<TaskView | InvocationView>;
-  };
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
     readonly definitions: DefinitionRegistry, readonly audit: Audit, readonly principals: Principals, readonly origin: string,
     readonly confirmations: Confirmations) {}
@@ -112,28 +104,21 @@ export class Executions {
       : { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
   }
   private async view(row: ExecutionRow, snapshot: Snapshot, actor: Actor | null = { id: snapshot.actor.id }, metadata?: ViewMetadata): Promise<ExecutionView> {
-    const { creator, canRespond, proposal, deliveries, runtime } = metadata ?? await this.metadata(row, actor);
+    const { creator, canRespond, proposal, deliveries } = metadata ?? await this.metadata(row, actor);
     const currentResult = snapshot.results[snapshot.index];
     const fault = currentResult && typeof currentResult === 'object' && !Array.isArray(currentResult) && 'error' in currentResult ? currentResult.error : null;
     const error = fault && typeof fault === 'object' && !Array.isArray(fault) ? fault : null;
     return Execution.parse({ id: row.id, actorId: row.actor_id, ownerId: row.owner_id ?? row.creator_id,
       requests: deliveries.map(item => item.id), creator: { id: creator.id, name: creator.name },
-      steps: snapshot.operations.map((operation, index) => {
-        const result = snapshot.results[index];
-        const runs: ExecutionView['steps'][number]['runs'] = runtime.filter(run => run.index === index).map(run => ({ kind: 'run' as const, id: run.id }));
-        if (snapshot.runtime && index === 0) runs.push(snapshot.runtime);
-        const reference = !snapshot.runtime && result != null ? this.definitions.get(operation.name).runtimeReference?.(result) : null;
-        if (reference) runs.push(reference);
-        return { index, name: operation.name, state: index < snapshot.index ? 'succeeded' : index === snapshot.index ? row.state : 'waiting', runs };
-      }),
+      steps: snapshot.operations.map((operation, index) => ({ index, name: operation.name,
+        state: index < snapshot.index ? 'succeeded' : index === snapshot.index ? row.state : 'waiting' })),
       approval: row.wait === 'approval' ? { requestId: deliveries.at(-1)?.id ?? null, proposal } : null,
       canContinue: !snapshot.archive && canRespond && ['waiting', 'running', 'failed'].includes(row.state),
       error,
       canCancel: !snapshot.archive && !!actor && !actor.requestId && !['succeeded', 'cancelled'].includes(row.state) && [row.creator_id, row.actor_id].includes(actor.id),
       url: this.origin + '/executions/' + row.id,
       operations: snapshot.operations.map(operation => ({ ...operation, title: this.definitions.describe(operation),
-        execution: this.definitions.get(operation.name).execution, configure: [...this.definitions.get(operation.name).configure],
-        environment: this.definitions.get(operation.name).environment })),
+        execution: this.definitions.get(operation.name).execution, configure: [...this.definitions.get(operation.name).configure] })),
       index: snapshot.index, state: row.state, wait: row.wait,
       waiting: (row.wait === 'input' || row.wait === 'execution' && !!snapshot.continuation) && canRespond && (actor?.id === row.actor_id || actor?.requestId)
         ? { index: snapshot.index, invocation: { name: snapshot.operations[snapshot.index]!.name, input: snapshot.operations[snapshot.index]!.input },
@@ -145,18 +130,16 @@ export class Executions {
       createdAt: iso(row.created_at), expiresAt: iso(row.expires_at) });
   }
   private async metadata(row: ExecutionRow, actor: Actor | null): Promise<ViewMetadata> {
-    const [creator, canRespond, proposal, deliveries, runtime] = await Promise.all([
+    const [creator, canRespond, proposal, deliveries] = await Promise.all([
       this.principals.named(row.creator_id), this.canRespond(actor, row), this.proposal(row.proposal),
       this.db.all<{ id: string }>('SELECT id FROM requests WHERE execution_id=$1 ORDER BY created_at', [row.id]),
-      this.db.all<{ id: string; index: number }>(`SELECT id,(request->'intent'->'operationContext'->>'index')::integer AS index
-        FROM execution_tasks WHERE request->'intent'->'operationContext'->>'id'=$1 ORDER BY created_at`, [row.id]),
     ]);
-    return { creator, canRespond, proposal, deliveries, runtime };
+    return { creator, canRespond, proposal, deliveries };
   }
   private async expire(row: ExecutionRow) {
     if (row.expires_at.getTime() > Date.now() || !['waiting', 'running', 'failed'].includes(row.state)) return row;
     const snapshot = await this.read(row);
-    if (snapshot.archive || row.state === 'failed' && snapshot.runtime) return row;
+    if (snapshot.archive) return row;
     await this.db.transaction(async connection => {
       await this.revoke(row.id, connection);
       await connection.query("UPDATE executions SET response='expired' WHERE id=$1", [row.id]);
@@ -212,11 +195,8 @@ export class Executions {
     }))), ids = selected.map(item => item.row.id);
     const proposalIds = [...new Set(selected.flatMap(({ row }) => row.proposal
       ? row.proposal.kind === 'line' ? [row.proposal.subjectId, row.proposal.objectId] : [row.proposal.itemId, row.proposal.to] : []))];
-    const [deliveries, runtime, names] = await Promise.all([
+    const [deliveries, names] = await Promise.all([
       this.db.all<{ id: string; execution_id: string }>('SELECT id,execution_id FROM requests WHERE execution_id=ANY($1::uuid[]) ORDER BY created_at', [ids]),
-      this.db.all<{ id: string; execution_id: string; index: number }>(`SELECT id,request->'intent'->'operationContext'->>'id' AS execution_id,
-        (request->'intent'->'operationContext'->>'index')::integer AS index FROM execution_tasks
-        WHERE request->'intent'->'operationContext'->>'id'=ANY($1::text[]) ORDER BY created_at`, [ids]),
       this.db.all<{ id: string; name: string }>('SELECT id,name FROM principals WHERE id=ANY($1::uuid[]) UNION ALL SELECT id,name FROM resources WHERE id=ANY($1::uuid[])', [proposalIds]),
     ]);
     const named = (id: string) => ({ id, name: names.find(item => item.id === id)?.name ?? id });
@@ -227,36 +207,9 @@ export class Executions {
       const canRespond = row.response === 'accepted' && actor.id === row.actor_id || (row.responder_id
         ? represented.includes(row.responder_id) : row.code_hash ? actor.id !== row.creator_id : actor.id === row.actor_id);
       return this.view(row, await this.read(row), actor, { creator, canRespond, proposal,
-        deliveries: deliveries.filter(item => item.execution_id === row.id), runtime: runtime.filter(item => item.execution_id === row.id) });
+        deliveries: deliveries.filter(item => item.execution_id === row.id) });
     }));
     return { items, next: rows.length > limit ? rows[limit - 1]!.id : null };
-  }
-  async recordRuntime(kind: 'run' | 'function', job: TaskView | InvocationView) {
-    if ('intent' in job && job.intent.operationContext) {
-      const context = job.intent.operationContext;
-      try {
-        await this.locked(context.id, async () => {
-          const row = await this.row(context.id), snapshot = await this.read(row);
-          if (row.state === 'waiting' && row.wait === 'input' && snapshot.index === context.index && snapshot.continuation)
-            await this.save(row, snapshot, 'running', 'execution');
-        });
-      } catch (error) {
-        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'execution_busy') throw error;
-      }
-      return;
-    }
-    if (await this.db.one('SELECT 1 FROM executions WHERE id=$1', [job.id])) return;
-    const call = 'functionId' in job ? { name: 'function.invoke', input: { functionId: job.functionId, ownerId: job.ownerId } }
-      : { name: 'run.execute', input: { ownerId: job.ownerId, environmentId: job.environmentId, operation: { kind: job.kind } } };
-    const actor = { id: job.actorId }, state = job.state === 'queued' ? 'running' : job.state;
-    const snapshot: Snapshot = { actor, creatorActor: actor, agreementIndex: null, responders: [], submissionDigest: null,
-      operations: [Operation.parse(call)], index: state === 'succeeded' ? 1 : 0,
-      results: [Json.parse('intent' in job ? { kind: 'run', id: job.id } : job)], proofs: [null], inFlight: null, continuation: null,
-      runtime: { kind, id: job.id } };
-    await this.db.pool.query(`INSERT INTO executions(id,actor_id,creator_id,owner_id,state,wait,snapshot,expires_at,created_at)
-      VALUES($1,$2,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING`, [job.id, job.actorId, job.ownerId, state,
-      state === 'running' ? 'execution' : null, await this.vault.encrypt(snapshot, 'operation-execution:' + job.id),
-      'intent' in job ? job.intent.expiresAt : new Date(Date.now() + 86_400_000), job.createdAt]);
   }
   async plan(id: string, actor: Actor, operations: DefinitionCall[], expiresAt: Date, results?: Array<JsonValue | null>,
     response?: { responderId?: string; message: string; code?: string; pending?: boolean; deliver?: boolean }, submissionDigest: string | null = null) {
@@ -420,27 +373,11 @@ export class Executions {
   }
   async revoke(id: string, connection: Queryable) {
     const row = await this.db.one<ExecutionRow>('SELECT * FROM executions WHERE id=$1 FOR UPDATE', [id], connection);
-    await connection.query(
-      `UPDATE execution_tasks SET cancel_requested=true,
-       state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-       error=CASE WHEN phase='dispatched' THEN 'approval_cancelled' ELSE NULL END,
-       finished_at=now(),lease_until=NULL
-       WHERE (request->'intent'->'approval'->>'id'=$1 OR request->'intent'->'operationContext'->>'id'=$1) AND state IN ('queued','running')`, [id]);
     if (!row || ['succeeded', 'cancelled'].includes(row.state)) return;
     const snapshot = await this.read(row);
-    if (snapshot.runtime) {
-      const job = await this.runtime.cancel(snapshot.actor, snapshot.runtime);
-      await connection.query('UPDATE executions SET state=$2,wait=NULL,revision=revision+1 WHERE id=$1',
-        [id, job.state === 'succeeded' ? 'succeeded' : job.state === 'running' ? 'running' : job.state === 'uncertain' ? 'uncertain' : 'cancelled']);
-      return;
-    }
-    const current = snapshot.operations[snapshot.index], result = snapshot.results[snapshot.index];
-    const cancelled = current && result && row.wait === 'execution'
-      ? await this.definitions.get(current.name).cancel?.({ id: snapshot.actor.id }, result) : null;
-    const unknown = cancelled && typeof cancelled === 'object' && 'state' in cancelled && cancelled.state === 'uncertain' ||
-      row.state === 'uncertain' || snapshot.inFlight !== null || await this.db.one(
-      "SELECT 1 FROM execution_tasks WHERE (request->'intent'->'approval'->>'id'=$1 OR request->'intent'->'operationContext'->>'id'=$1) AND state='uncertain' LIMIT 1", [id], connection);
-    if (current) snapshot.results[snapshot.index] = cancelled ? Json.parse(cancelled) : { state: unknown ? 'uncertain' : 'cancelled' };
+    const current = snapshot.operations[snapshot.index];
+    const unknown = row.state === 'uncertain' || snapshot.inFlight !== null;
+    if (current) snapshot.results[snapshot.index] = { state: unknown ? 'uncertain' : 'cancelled' };
     await connection.query('UPDATE executions SET state=$2,wait=NULL,snapshot=$3,revision=revision+1 WHERE id=$1',
       [id, unknown ? 'uncertain' : 'cancelled', await this.vault.encrypt(snapshot, 'operation-execution:' + id)]);
   }
@@ -475,28 +412,11 @@ export class Executions {
     }
   }
   private async recover(row: ExecutionRow) {
-    if (!['running', 'uncertain'].includes(row.state) || (row.lease_until && row.lease_until.getTime() > Date.now())) return row;
-    const initial = await this.read(row);
-    if (row.state === 'uncertain' && !initial.runtime && !this.definitions.get(initial.operations[initial.index]!.name).observe) return row;
+    if (row.state !== 'running' || (row.lease_until && row.lease_until.getTime() > Date.now())) return row;
     try {
       return await this.locked(row.id, async () => {
         const current = await this.row(row.id), saved = await this.read(current);
-        if (saved.runtime) {
-          const job = await this.runtime.get(saved.actor, saved.runtime);
-          saved.results[0] = Json.parse('intent' in job ? { kind: 'run', id: job.id } : job);
-          saved.index = job.state === 'succeeded' ? 1 : 0;
-          await this.save(current, saved, job.state === 'queued' ? 'running' : job.state,
-            ['queued', 'running'].includes(job.state) ? 'execution' : null);
-        } else if (current.state === 'uncertain') {
-          const definition = this.definitions.get(saved.operations[saved.index]!.name);
-          const observed = await definition.observe!({ id: saved.actor.id }, required(saved.results[saved.index]));
-          saved.results[saved.index] = observed.result;
-          if (observed.state !== 'pending') {
-            if (observed.state === 'succeeded') saved.index++;
-            await this.save(current, saved, observed.state === 'succeeded' && saved.index < saved.operations.length ? 'running' : observed.state);
-            if (observed.state === 'succeeded' && saved.index < saved.operations.length) await this.resume(current, saved);
-          }
-        } else if (current.state === 'running' && saved.inFlight !== null) {
+        if (current.state === 'running' && saved.inFlight !== null) {
           saved.results[saved.inFlight] = { error: { code: 'execution_uncertain', message: 'Check the result before starting this operation again.' } };
           await this.save(current, saved, 'uncertain');
         } else if (current.state === 'running') await this.resume(current, saved);
@@ -533,7 +453,6 @@ export class Executions {
       options.message ? { message: options.message, pending: false } : undefined, options.submissionDigest);
     return this.locked(id, async () => {
       const row = await this.row(id), previous = await this.read(row);
-      if (previous.runtime) fail(409, 'execution_changed', 'Follow the recorded execution to its result.');
       if (row.state === 'succeeded') return this.view(row, previous);
       if (row.state === 'cancelled') fail(409, 'cancelled', 'This operation was cancelled.');
       if (previous.inFlight !== null && row.state !== 'uncertain') await this.save(row, previous, 'uncertain');
@@ -575,38 +494,9 @@ export class Executions {
       }
       const operation = snapshot.operations[snapshot.index]!, definition = this.definitions.get(operation.name);
       if (definition.execution === 'keyholder') {
-        if (snapshot.continuation) {
-          const task = await this.db.one<{ id: string; state: string; resource_id: string | null }>(`SELECT t.id,t.state,c.resource_id
-            FROM execution_tasks t LEFT JOIN resource_custody c ON c.content->>'creationRunId'=t.id::text
-            WHERE t.request->'intent'->'operationContext'->>'id'=$1 AND t.request->'intent'->'operationContext'->>'index'=$2
-            ORDER BY t.created_at DESC LIMIT 1`, [row.id, String(snapshot.index)]);
-          if (task && ['queued', 'running'].includes(task.state)) {
-            await this.save(row, snapshot, 'running', 'execution');
-            return this.view(row, snapshot);
-          }
-          if (task && (snapshot.continuation.kind === 'run' || task.resource_id)) {
-            try { return await this.finishInput(row, snapshot, task.resource_id ? { runId: task.id, resourceId: task.resource_id } : { runId: task.id }); }
-            catch (error) { if (error instanceof OperationFailed) return this.view(row, snapshot); throw error; }
-          }
-        }
         snapshot.results[snapshot.index] = { pending: true };
         await this.save(row, snapshot, 'waiting', 'input');
         return this.view(row, snapshot);
-      }
-      if (row.wait === 'execution' && definition.observe) {
-        const observed = await definition.observe(snapshot.actor, required(snapshot.results[snapshot.index]));
-        snapshot.results[snapshot.index] = observed.result;
-        if (observed.state === 'pending') {
-          await this.save(row, snapshot, 'running', 'execution');
-          return this.view(row, snapshot);
-        }
-        if (observed.state !== 'succeeded') {
-          await this.save(row, snapshot, observed.state);
-          return this.view(row, snapshot);
-        }
-        snapshot.index++;
-        await this.save(row, snapshot, snapshot.index === snapshot.operations.length ? 'succeeded' : 'running');
-        return this.resume(row, snapshot);
       }
       snapshot.inFlight = snapshot.index;
       await this.save(row, snapshot, 'running');
@@ -630,10 +520,6 @@ export class Executions {
         await this.save(row, snapshot, 'failed'); throw fault;
       }
       snapshot.inFlight = null;
-      if (definition.observe) {
-        await this.save(row, snapshot, 'running', 'execution');
-        return this.resume(row, snapshot);
-      }
       const next = { ...snapshot, index: snapshot.index + 1 };
       await this.save(row, next, next.index === snapshot.operations.length ? 'succeeded' : 'running');
     }

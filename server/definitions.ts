@@ -21,19 +21,14 @@ export interface ProcessingDefinition {
   title: Title;
   execution: 'server' | 'keyholder';
   configure: readonly string[];
-  environment: { required: boolean; reason: OperationTitle | null };
   secret(pointer: string): boolean;
   execute(actor: Actor, input: unknown): Promise<JsonValue>;
   complete?: (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) => Promise<JsonValue>;
   prepareInput?: (actor: Actor, input: unknown, proof: JsonValue, connection: Queryable) => Promise<Record<string, JsonValue>>;
   resolve?: (actor: Actor, input: unknown) => Promise<Record<string, JsonValue>>;
   review?: (actor: Actor, input: Record<string, JsonValue>) => Promise<Record<string, JsonValue>>;
-  observe?: (actor: Actor, result: JsonValue) => Promise<{ state: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'uncertain'; result: JsonValue }>;
-  cancel?: (actor: Actor, result: JsonValue) => Promise<unknown>;
-  runtimeReference?: (result: JsonValue) => { kind: 'run' | 'function' | 'process'; id: string } | null;
   resultView?: (result: JsonValue) => JsonValue;
-  continuation?: 'connection' | 'run';
-  delegatedOperation?: (input: unknown) => string;
+  continuation?: 'connection';
   // The change the actor confirms before this operation is made, when it takes a confirmation.
   confirmation?: (input: unknown) => Promise<ConfirmationOperation | null>;
 }
@@ -54,26 +49,20 @@ export class DefinitionRegistry {
   readonly endpoints: OperationEndpoint[] = [];
   define<T extends z.ZodType>(name: string, schema: T, title: Title,
     execute: (actor: Actor, input: z.output<T>) => Promise<unknown>,
-    options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; environmentReason?: readonly [string, string]; secret?: (pointer: string) => boolean;
+    options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; secret?: (pointer: string) => boolean;
       complete?: (actor: Actor, input: z.output<T>, proof: JsonValue, execution: { id: string; index: number }) => Promise<unknown>;
       prepareInput?: (actor: Actor, input: z.output<T>, proof: JsonValue, connection: Queryable) => Promise<unknown>;
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
-      observe?: ProcessingDefinition['observe']; cancel?: ProcessingDefinition['cancel']; review?: ProcessingDefinition['review'];
-      runtimeReference?: ProcessingDefinition['runtimeReference']; resultView?: ProcessingDefinition['resultView'];
-      continuation?: ProcessingDefinition['continuation']; delegatedOperation?: (input: z.output<T>) => string;
+      review?: ProcessingDefinition['review']; resultView?: ProcessingDefinition['resultView'];
+      continuation?: ProcessingDefinition['continuation'];
       confirmation?: (input: z.output<T>) => Promise<ConfirmationOperation | null> } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
       configure: options.configure ?? [], secret: options.secret ?? (() => false),
-      environment: { required: !!options.environmentReason,
-        reason: options.environmentReason ? { ja: options.environmentReason[0], en: options.environmentReason[1] } : null },
-      ...(options.observe ? { observe: options.observe } : {}), ...(options.cancel ? { cancel: options.cancel } : {}),
       ...(options.review ? { review: options.review } : {}),
-      ...(options.runtimeReference ? { runtimeReference: options.runtimeReference } : {}),
       ...(options.resultView ? { resultView: options.resultView } : {}),
       ...(options.continuation ? { continuation: options.continuation } : {}),
-      ...(options.delegatedOperation ? { delegatedOperation: (input: unknown) => options.delegatedOperation!(schema.parse(input)) } : {}),
       ...(options.confirmation ? { confirmation: (input: unknown) => options.confirmation!(schema.parse(input)) } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
       ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) =>

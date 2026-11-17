@@ -5,7 +5,6 @@ import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js
 import { ovhAccessRules } from '../shared/ovh.js';
 import { OvhApi, ovhSignature } from '../runtime/ovh.js';
 import { decode } from '../shared/encryption.js';
-import { Task } from '../shared/runtime-protocol.js';
 import type { OutboundRequest } from '../server/transport.js';
 
 const keys = { applicationKey: 'application-id', applicationSecret: 'application-secret', consumerKey: 'consumer-key' };
@@ -74,18 +73,13 @@ test('OVHのブラウザ認可で指定したAPI権限のConsumer Keyを取得�
   assert.deepEqual((await connectionMetadata(material)).scopes, selected);
 });
 
-test('保存したOVHの資格情報を許可したコマンドへ渡し、SDKで署名する', async t => {
+test('保存したOVHの資格情報を手元のコマンドへ渡し、SDKが署名に使う値をそろえる', async t => {
   const f = await flowFixture(); t.after(f.close);
   const saved = await f.saveConnection({ methodId: 'ovh:api_key', fields: { apiRegion: 'ca', ...keys } });
-  const program = "const c=require('node:crypto'); const v=[process.env.OVH_APPLICATION_SECRET,process.env.OVH_CONSUMER_KEY,'GET',process.env.OVH_API_BASE_URL+'/vps','','1369159111'].join('+'); console.log('$1$'+c.createHash('sha1').update(v).digest('hex'));";
-  const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'command', command: ['node', '-e', program],
-    timeoutSeconds: 10, inputs: ['OVH_APPLICATION_SECRET', 'OVH_CONSUMER_KEY', 'OVH_API_BASE_URL'].map(output => ({
-      name: output, source: { id: saved.id, output },
-    })) });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
-  assert.equal(result?.ok, true);
-  assert.equal((result?.result as { stdout: string }).stdout.trim(), ovhSignature(keys, { url: apiBases.ca + '/vps', method: 'GET' }, 1369159111));
+  const used = await f.inputs(['OVH_APPLICATION_KEY', 'OVH_APPLICATION_SECRET', 'OVH_CONSUMER_KEY', 'OVH_API_BASE_URL'].map(output => ({
+    name: output, source: { id: saved.id, output } })));
+  assert.deepEqual(used.environment, { OVH_APPLICATION_KEY: keys.applicationKey, OVH_APPLICATION_SECRET: keys.applicationSecret,
+    OVH_CONSUMER_KEY: keys.consumerKey, OVH_API_BASE_URL: apiBases.ca });
 });
 
 test('OVHのPATを保存し、選んだ地域のAPIを呼び出す', async t => {

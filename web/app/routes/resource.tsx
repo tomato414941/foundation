@@ -2,14 +2,14 @@ import { Button } from '../components/ui/button';
 import { InputField, TextareaField } from '../form-fields';
 import { Notice } from '../components';
 import { useState } from 'react';
-import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
+import { Link, redirect, useActionData, useLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
-import { CatalogMethod, Resource, EnvironmentDeletion, FunctionExecutionSettings } from '../../../shared/contracts';
+import { CatalogMethod, Resource } from '../../../shared/contracts';
 import { catalogDefinition } from '../../../shared/connection-methods';
 import { connectionConsole } from '../../../shared/connection-fields';
 import { decode } from '../../../shared/encryption';
-import { api, ApiFailure, actionResult, formText } from '../api';
+import { api, actionResult } from '../api';
 import { decryptVariable, requireKeys } from '../keys';
 import { RecipientAccessNotice } from '../recipient-verification';
 import {
@@ -24,63 +24,25 @@ import {
   Page,
   Panel,
   State,
-  usePolling,
   useTask,
 } from '../components';
 import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
-import { functionClient } from '../custody';
-import { FunctionSettings } from '../function-settings';
-import { inputAccessFromForm } from '../function-access';
-import { availableEnvironments, environmentState } from '../environments';
-import { EnvironmentDelete } from '../environment-delete';
-import { EnvironmentSSH } from '../environment-ssh';
-import { sshSettings } from '../ssh';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
-  const resource = await api((params.section === 'functions' ? '/functions/' : '/resources/') + params.id,
-    { signal: request.signal }, Resource).catch(async error => {
-    if (params.section === 'environments' && error instanceof ApiFailure && error.status === 404) {
-      const deletion = await api('/resources/' + params.id + '/deletion', { signal: request.signal }, EnvironmentDeletion)
-        .catch(() => null);
-      if (deletion?.state === 'complete') throw redirect(`/p/${params.owner}/environments?deleted=1`);
-    }
-    throw error;
-  });
+  const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
-  const functionSettings = resource.kind === 'function' && resource.permissions.includes('read')
-    ? await api('/functions/' + resource.id + '/execution-settings', { signal: request.signal }, FunctionExecutionSettings) : null;
   // Removing a connection leaves its credentials valid at the service, whose console is where they are disabled.
   const method = resource.kind === 'connection' && resource.permissions.includes('delete')
     ? catalogDefinition(await api('/connections/' + resource.id + '/method', { signal: request.signal }, CatalogMethod)) : null;
-  return { resource, functionSettings,
-    serviceConsole: method && resource.kind === 'connection' ? connectionConsole(method, resource.data.fields) ?? null : null,
-    environments: resource.kind === 'function' && resource.permissions.includes('update') ? await availableEnvironments(resource.ownerId) : [] };
+  return { resource,
+    serviceConsole: method && resource.kind === 'connection' ? connectionConsole(method, resource.data.fields) ?? null : null };
 }
-export async function clientAction({ params, request }: Route.ClientActionArgs) {
+export async function clientAction({ params }: Route.ClientActionArgs) {
   return actionResult(async () => {
-    const form = await request.formData();
-    if (formText(form, 'intent') === 'ssh') {
-      const settings = sshSettings(form);
-      await api(`/environments/${params.id}/ssh`, { method: 'PUT',
-        body: { ...settings, revision: Number(formText(form, 'sshRevision')) } });
-      return { sshSaved: true };
-    }
-    const intent = formText(form, 'intent');
-    if (intent === 'functionConfigure' || intent === 'functionUnconfigure') {
-      await (await functionClient(true)).configure(params.id!, {
-        environmentId: intent === 'functionConfigure' ? formText(form, 'environmentId') : null,
-        inputAccess: intent === 'functionConfigure' ? inputAccessFromForm(form) : { expiresAt: null },
-      }, { functionVersion: Number(formText(form, 'functionVersion')), version: Number(formText(form, 'settingsVersion')) });
-      return { functionConfigured: true };
-    }
-    if (intent === 'stop' || intent === 'start') {
-      await api(`/resources/${params.id}/${intent}`, { method: 'POST', body: {} });
-      return { ok: true };
-    }
-    await api(`${params.section === 'functions' ? '/functions' : '/resources'}/${params.id}`, { method: 'DELETE' });
+    await api(`/resources/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
   });
 }
@@ -93,12 +55,11 @@ function downloadBytes(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function ResourceDetail() {
-  const { resource: item, environments, functionSettings, serviceConsole } = useLoaderData<typeof clientLoader>();
+  const { resource: item, serviceConsole } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
   const { t } = useTranslation();
   const task = useTask();
-  const navigation = useNavigation();
   const [content, setContent] = useState<Uint8Array | null>(null);
   const [link, setLink] = useState<{
     url: string;
@@ -106,13 +67,7 @@ export default function ResourceDetail() {
   } | null>(null);
   const [minutes, setMinutes] = useState(15);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
-  const environment = item.kind === 'environment' ? item : null;
   const connection = item.kind === 'connection' ? item : null;
-  const status = environment ? environmentState(environment) : null;
-  usePolling(
-    item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
-    item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
-  );
   const reveal = async () => {
     await requireKeys(session.principal!.id);
     return decryptVariable(item.id, session.principal!.id);
@@ -121,22 +76,10 @@ export default function ResourceDetail() {
     <Page
       title={item.name}
       narrow={!!connection}
-      back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t(item.kind === 'environment' ? 'backToEnvironments' : 'backToList') }}
+      back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t('backToList') }}
       actions={
         <>
-          {status && <State value={status} />}
-          {environment?.data.driver === 'managed' && !environment.data.deletion &&
-            ['stopped', 'failed'].includes(environment.data.state) && can('update') && <Form method="post">
-              <Button type="submit" name="intent" value="start" loading={navigation.state !== 'idle'}>
-                {t(navigation.state !== 'idle' ? 'state.starting' : 'start')}
-              </Button>
-            </Form>}
-          {environment && !environment.data.deletion && ['starting', 'running'].includes(environment.data.state) && can('delete') && (
-            <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
-              <input type="hidden" name="intent" value="stop" />
-            </Confirm>
-          )}
-          {can('update') && !['environment', 'connection'].includes(item.kind) && (
+          {can('update') && !connection && (
             <Button variant="outline" asChild>
               <Link to="edit">{t('edit')}</Link>
             </Button>
@@ -149,7 +92,7 @@ export default function ResourceDetail() {
               <Link to="share">{t('share')}</Link>
             </Button>
           )}
-          {can('transfer') && !environment && !connection && (
+          {can('transfer') && !connection && (
             <Button variant="ghost" asChild>
               <Link to="transfer">{t('transfer')}</Link>
             </Button>
@@ -162,7 +105,7 @@ export default function ResourceDetail() {
       {connection && connection.data.state !== 'ready' && (
         <Notice tone={'warning'}>{t('state.' + connection.data.state)}</Notice>
       )}
-      {!environment && <Panel><BoxDetails item={item} /></Panel>}
+      <Panel><BoxDetails item={item} /></Panel>
       {connection && (can('update') || can('share') || can('transfer') || can('delete')) && (
         <Panel title={t('rarelyUsed')}>
           <div className="divide-y divide-border">
@@ -277,48 +220,12 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
-      {item.kind === 'environment' && (
-        <>
-          {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
-          {!item.data.deletion && item.data.stopReason && item.data.stopReason !== 'manual' &&
-            <Notice tone="info">{t('environmentStop.' + item.data.stopReason)}</Notice>}
-          {item.data.driver !== 'attached' && <Panel title={t('settings')}>
-            <Detail label={t('size')}>{t(item.data.size)}</Detail>
-            <Detail label={t('environmentLifetime')}>{[
-              item.data.lifetime.maxSeconds === null ? '' : t('environmentMaximumSummary', { minutes: item.data.lifetime.maxSeconds / 60 }),
-              item.data.lifetime.idleSeconds === null ? '' : t('environmentIdleSummary', { minutes: item.data.lifetime.idleSeconds / 60 }),
-            ].filter(Boolean).join(' / ') || t('none')}</Detail>
-          </Panel>}
-          <EnvironmentSSH item={item} canUpdate={can('update')} busy={navigation.state !== 'idle'}
-            saved={Boolean(result && 'sshSaved' in result && result.sshSaved)} />
-          <Panel>
-            <BoxDetails item={item} />
-            {item.data.executorId && <Link to={'/account/trust?principal=' + item.data.executorId}
-              className="inline-flex min-h-11 w-fit items-center text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground">
-              {t('verifyEnvironment')}
-            </Link>}
-          </Panel>
-        </>
-      )}
-      {item.kind === 'function' && (item.data.description || can('execute')) && (
-        <Panel>
-          {item.data.description && <p className="leading-relaxed">{item.data.description}</p>}
-          {can('execute') && (
-            <Button variant="default" asChild>
-              <Link to="run">{t('execute')}</Link>
-            </Button>
-          )}
-        </Panel>
-      )}
-      {item.kind === 'function' && functionSettings && <FunctionSettings settings={functionSettings}
-        environments={environments} functionVersion={item.version} canUpdate={can('update')} busy={navigation.state !== 'idle'} />}
       {item.kind === 'method' && can('use') && (
         <Button variant="ghost" asChild>
           <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
         </Button>
       )}
-      {item.kind === 'environment' && can('delete') && <EnvironmentDelete item={item} />}
-      {!environment && !connection && can('delete') && (
+      {!connection && can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t('delete')} name={item.name} />
         </div>

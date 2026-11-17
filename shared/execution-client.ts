@@ -5,7 +5,6 @@ import { Id } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import type { CustodyClient } from './client.js';
 import type { ConnectionClient, FlowProgress } from './connection-client.js';
-import type { TaskView } from './runtime-protocol.js';
 import type { AwsConnectionRequest } from './aws.js';
 import { AwsConnectionInput } from './aws.js';
 import { SealedContinuationStore } from './operation-continuations.js';
@@ -20,8 +19,7 @@ export interface PrivateOperationInput {
 }
 export const OperationMaterial = z.object({ value: z.string().optional(), clientSecret: z.string().optional(),
   fields: z.record(z.string(), z.string()).optional(), scopes: z.array(z.string()).optional(), aws: AwsConnectionInput.optional() }).strict();
-export type ExecutionResultView = ExecutionView | FlowProgress | { kind: 'saved'; resource: ResourceView; executionId: string }
-  | { kind: 'run'; task: TaskView; executionId: string };
+export type ExecutionResultView = ExecutionView | FlowProgress | { kind: 'saved'; resource: ResourceView; executionId: string };
 
 // Forms, CLI calls, and approval flows dispatch through the same operation handlers.
 export class ExecutionClient {

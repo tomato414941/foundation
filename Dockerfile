@@ -8,7 +8,7 @@ RUN npm run build
 RUN npm prune --omit=dev --offline --ignore-scripts --no-audit --no-fund
 
 FROM public.ecr.aws/docker/library/node:24.22.1-bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && sed -i -E '/^mozilla\/(Comodo_AAA_Services_root|emSign_(ECC_Root_CA|Root_TLS_CA|Root_CS_CA)_-_G3)\.crt$/s/^/!/' /etc/ca-certificates.conf \
     && update-ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG FOUNDATION_RELEASE_COMMIT=
@@ -20,7 +20,6 @@ COPY --from=build --chown=node:node /app/compose.yaml ./compose.yaml
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/cli/dist/cli.mjs ./release/cli.mjs
-COPY --from=build --chown=node:node /app/cli/dist/agent.mjs ./release/agent.mjs
 COPY --from=build --chown=node:node /app/deploy/release ./deploy/release
 RUN mkdir -p /var/lib/foundation && chown node:node /var/lib/foundation
 USER node

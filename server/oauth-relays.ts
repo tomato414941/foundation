@@ -1,5 +1,6 @@
 import type { Actor } from './authorization.js';
-import type { Delegation } from './delegation.js';
+import type { Resources } from './resources.js';
+import type { Bindings } from './bindings.js';
 import type { Executions } from './executions.js';
 import type { SealedContent } from '../shared/contracts.js';
 import { hash } from '../shared/authority.js';
@@ -13,8 +14,8 @@ interface RelayRow {
   callback_digest: string | null; sealed: SealedContent | null; expires_at: Date; received_at: Date | null;
 }
 export class OAuthRelays {
-  constructor(readonly delegation: Delegation, readonly executions: () => Executions) {}
-  get db() { return this.delegation.resources.db; }
+  constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string, readonly executions: () => Executions) {}
+  get db() { return this.resources.db; }
   private async active(actor: Actor, row: Pick<RelayRow, 'execution_id' | 'operation_index' | 'id'>) {
     const { plan } = await this.executions().input(actor, row.execution_id);
     if (plan.index !== row.operation_index || plan.invocation.name !== 'connection.connect' ||
@@ -28,7 +29,7 @@ export class OAuthRelays {
       Date.parse(input.expiresAt) <= Date.now() || Date.parse(input.expiresAt) > Date.now() + 600_000 ||
       Date.parse(input.expiresAt) > execution.expires_at.getTime())
       fail(403, 'forbidden', 'Create a callback for the connection that is awaiting authorization.');
-    const { binding } = await this.delegation.bindings.current(actor.id);
+    const { binding } = await this.bindings.current(actor.id);
     const row = await this.db.one<RelayRow>(
       `INSERT INTO oauth_relays(id,execution_id,operation_index,actor_id,binding_id,state_digest,expires_at)
        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET state_digest=$6,expires_at=$7,
@@ -41,14 +42,14 @@ export class OAuthRelays {
     return this.view(row);
   }
   private view(row: RelayRow) {
-    return { id: row.id, executionId: row.execution_id, context: relayContext(this.delegation.origin, row.id),
+    return { id: row.id, executionId: row.execution_id, context: relayContext(this.origin, row.id),
       sealed: row.sealed, expiresAt: iso(row.expires_at), receivedAt: row.received_at ? iso(row.received_at) : null };
   }
   async get(actor: Actor, id: string) {
     const row = required(await this.db.one<RelayRow>('SELECT * FROM oauth_relays WHERE id=$1 AND expires_at>now()', [id]));
     if (row.actor_id !== actor.id) fail(403, 'forbidden', 'Open a connection belonging to this identity.');
     await this.active(actor, row);
-    const { binding } = await this.delegation.bindings.current(actor.id);
+    const { binding } = await this.bindings.current(actor.id);
     if (binding.id !== row.binding_id) fail(409, 'connection_expired', 'Start the connection again.');
     return this.view(row);
   }
@@ -59,9 +60,9 @@ export class OAuthRelays {
     const row = await this.db.one<RelayRow>('SELECT * FROM oauth_relays WHERE state_digest=$1 AND expires_at>now()', [digest]);
     if (!row) fail(400, 'invalid_state', 'Start the connection again.');
     await this.active({ id: row.actor_id }, row);
-    const { binding } = await this.delegation.bindings.current(row.actor_id);
+    const { binding } = await this.bindings.current(row.actor_id);
     if (binding.id !== row.binding_id) fail(409, 'connection_expired', 'Start the connection again.');
-    const sealed = await seal(encode(callback), [{ id: binding.id, publicKey: binding.encryption }], relayContext(this.delegation.origin, row.id));
+    const sealed = await seal(encode(callback), [{ id: binding.id, publicKey: binding.encryption }], relayContext(this.origin, row.id));
     const callbackDigest = await hash(callback);
     const updated = await this.db.one<RelayRow>(
       'UPDATE oauth_relays SET sealed=$2,callback_digest=$3,received_at=now() WHERE id=$1 AND state_digest=$4 AND sealed IS NULL AND expires_at>now() RETURNING *',

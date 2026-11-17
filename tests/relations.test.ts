@@ -45,7 +45,7 @@ test('持ち主としてふるまえる者と一員だけがプリンシパル�
   assert.ok(asMember.permissions.includes('manage_billing'));
   assert.ok(!asMember.permissions.includes('transfer') && !asMember.permissions.includes('delete'));
   const asAgent = await f.principals.view(ai.actor, await f.principals.get(team.id));
-  assert.deepEqual(asAgent.permissions, ['read', 'use', 'execute']);
+  assert.deepEqual(asAgent.permissions, ['read', 'use']);
   assert.ok(['variable', 'connection', 'app'].every(kind => asAgent.createKinds.includes(kind)));
   assert.equal(await f.authorization.holds(team.id, principal(team.id), 'delete'), true);
 });

@@ -1,12 +1,11 @@
 import { CustodyClient } from '../../shared/client';
 import type { TrustStore } from '../../shared/client';
-import { canonical, hash, sign, validateBinding, verify } from '../../shared/authority';
+import { hash, sign, validateBinding, verify } from '../../shared/authority';
 import type { BoundKeys, KeyMaterial } from '../../shared/authority';
-import type { CustodyContent, CustodyPolicy, SealedRun } from '../../shared/custody';
+import type { CustodyContent, CustodyPolicy } from '../../shared/custody';
 import { ConnectionClient } from '../../shared/connection-client';
 import { RemoteFlowStore } from '../../shared/operation-continuations';
 import { ExecutionClient } from '../../shared/execution-client';
-import { FunctionClient } from '../../shared/function-client';
 import { api, ApiFailure, session } from './api';
 import { getIdentity, rememberRecipientAccess } from './keys';
 import { stored } from './storage';
@@ -45,12 +44,6 @@ class BrowserTrust implements TrustStore {
       policy: content.policy, materialRevision: content.materialRevision, digest: await hash(content),
     });
   }
-  run(id: string) { return this.get<SealedRun>('run:' + id); }
-  async rememberRun(request: SealedRun) {
-    const previous = await this.run(request.intent.id);
-    if (previous && canonical(previous) !== canonical(request)) throw new ApiFailure('execution_changed');
-    await this.put('run:' + request.intent.id, request);
-  }
 }
 export async function custodyClient(principalId?: string) {
   const id = principalId ?? (await session()).principal?.id;
@@ -68,8 +61,4 @@ export async function connectionClient() {
 export async function executionClient() {
   const connections = await connectionClient();
   return new ExecutionClient(connections.custody, connections);
-}
-export async function functionClient(withKeys = false) {
-  return new FunctionClient({ json: (path, options, schema) => api(path.slice(4), options, schema) },
-    withKeys ? await custodyClient() : undefined);
 }

@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture } from './flow-support.js';
 import { Resource, ServiceInputDefinition } from '../shared/contracts.js';
-import { Task } from '../shared/runtime-protocol.js';
 
 test('同じ所有者が同名のOpenAI接続を複数保存し、選んだキーだけを更新して使用する', async t => {
   for (const [method, field, output, path] of [
@@ -26,7 +25,7 @@ test('同じ所有者が同名のOpenAI接続を複数保存し、選んだキ�
   });
 });
 
-test('OpenAIのキーと任意のプロジェクト・組織を実行環境へ渡す', async t => {
+test('OpenAIのキーと任意のプロジェクト・組織を手元のコマンドへ渡す', async t => {
   for (const specified of [true, false]) await t.test(specified ? '接続先を指定する' : '接続先を省略する', async t => {
     const f = await flowFixture();
     t.after(f.close);
@@ -35,16 +34,8 @@ test('OpenAIのキーと任意のプロジェクト・組織を実行環境へ�
     } });
     const expected = { OPENAI_API_KEY: 'model-test-key', OPENAI_PROJECT_ID: specified ? 'proj_test' : '',
       OPENAI_ORG_ID: specified ? 'org-test' : '' };
-    const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, {
-      kind: 'command', command: [process.execPath, '-e',
-        'const assert=require("node:assert/strict");for(const [name,value] of Object.entries(' + JSON.stringify(expected) +
-        '))assert.equal(process.env[name],value);console.log("OpenAI credentials delivered");'],
-      inputs: Object.keys(expected).map(name => ({ name, source: { id: connection.id, output: name } })), timeoutSeconds: 10,
-    });
-    await f.executor.tick();
-    const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
-    assert.equal(result?.ok, true);
-    assert.match(JSON.stringify(result), /OpenAI credentials delivered/);
+    const used = await f.inputs(Object.keys(expected).map(name => ({ name, source: { id: connection.id, output: name } })));
+    assert.deepEqual(used.environment, expected);
   });
 });
 

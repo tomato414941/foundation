@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
-import type { HttpRequestInput, JsonValue, MethodDescription } from '../shared/contracts.js';
-import { AppMaterial, ConnectionAction, connectionMetadata, openConnection, requiresApp, sealedConnection } from '../shared/connections.js';
+import type { MethodDescription } from '../shared/contracts.js';
+import { AppMaterial, connectionMetadata, openConnection, requiresApp, sealedConnection } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { connectionMethod, methodDigest } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
@@ -10,14 +10,12 @@ import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
-import type { ExecutionExtension } from './executor.js';
 import type { Journal } from './journal.js';
 import { AwsConnections } from './aws.js';
 import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
 import type { ConnectionCheckpoint, ConnectionOutputs, ConnectionProvider } from './connection-provider.js';
 import { utf8 } from './inputs.js';
-import { authenticateHttp, connectionDestination } from '../shared/http-connections.js';
 
 export interface ConnectionBroker {
   method(connectionId: string): Promise<MethodDescription>;
@@ -38,8 +36,7 @@ interface Renewal {
   content?: CustodyContent;
   delivered: boolean;
 }
-export class Connections implements ExecutionExtension {
-  private active = new Set<string>();
+export class Connections {
   private readonly providers: ReturnType<typeof connectionProviders>;
   constructor(
     readonly binding: BoundKeys, readonly keys: IdentityKeys, readonly broker: ConnectionBroker,
@@ -97,23 +94,6 @@ export class Connections implements ExecutionExtension {
       fail(409, 'app_changed', 'Reconnect this service with the current application settings.');
     return app;
   }
-  async validate(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]) {
-    const action = ConnectionAction.parse(input);
-    if (intent.operation !== Operations[action.action]) fail(400, 'wrong_operation', 'Use the approved connection operation.');
-    const state = await this.material(this.source(action.id, ContentTypes.tokenSet, sources), intent);
-    await this.connectionApp(state, intent, sources);
-  }
-  async execute(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
-    const action = ConnectionAction.parse(input);
-    if (this.active.has(action.id)) fail(409, 'connection_busy', 'Another operation is updating this connection.');
-    this.active.add(action.id);
-    try {
-      signal.throwIfAborted();
-      const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
-      const refreshed = await this.refresh(content, state, intent, sources, signal);
-      return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
-    } finally { this.active.delete(action.id); }
-  }
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
     destination?: string): Promise<ConnectionOutputs> {
     let state = await this.material(content, intent, destination);
@@ -122,19 +102,6 @@ export class Connections implements ExecutionExtension {
     state = await this.refresh(content, state, intent, sources, signal, destination);
     const values = await this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
     return { values, files: state.method.kind === 'token' ? state.method.config.files ?? [] : [] };
-  }
-
-  async httpDestination(content: CustodyContent, intent: ExecutionIntent, request: HttpRequestInput) {
-    const state = await this.material(content, intent, state => connectionDestination(state, request, intent.origin));
-    return connectionDestination(state, request, intent.origin);
-  }
-
-  async http(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
-    request: HttpRequestInput) {
-    const url = await this.httpDestination(content, intent, request);
-    const state = await this.material(content, intent, url);
-    const { values } = await this.outputs(content, intent, sources, signal, url);
-    return authenticateHttp(url, request.headers, state.method.http!, values);
   }
 
   private async refreshed(record: Renewal, material: ConnectionState) {
@@ -156,7 +123,7 @@ export class Connections implements ExecutionExtension {
     if (!provider.needsRenewal(material)) return material;
     if (!provider.renew) fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
     try { await authorizeUse(content, { ...intent, operation: Operations.refresh }, { destination }); }
-    catch { fail(403, 'refresh_required', 'Authorize this requester and executor to renew the connection for this destination.'); }
+    catch { fail(403, 'refresh_required', 'This identity cannot renew the connection.'); }
     const app = await this.connectionApp(material, intent, sources), id = randomUUID();
     const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);
     const record: Renewal = { operation, previous: content, material, app, phase: 'prepared', delivered: false };

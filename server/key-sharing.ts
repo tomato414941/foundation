@@ -6,7 +6,6 @@ import type { Custody } from './custody.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { canonical } from '../shared/authority.js';
 import type { CustodyContent } from '../shared/custody.js';
-import { ContentTypes } from '../shared/custody.js';
 import { fail } from './errors.js';
 
 export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
@@ -22,9 +21,7 @@ export class KeySharing {
     // Whoever would open what the principal holds once it has its new owner: the readers its items are sealed for.
     const change: Change = { owners: { [target]: owner } };
     const rows = await resources.db.all<Pick<ResourceRow, 'id' | 'owner_id' | 'name' | 'version'>>(
-      `SELECT id,owner_id,name,version FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[])
-       UNION ALL SELECT id,owner_id,'Execution result' AS name,(receipt#>>'{content,materialRevision}')::int AS version
-       FROM execution_tasks WHERE owner_id=ANY($1::uuid[]) AND receipt ? 'content' ORDER BY id`,
+      `SELECT id,owner_id,name,version FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id`,
       [descendants], connection);
     const items = [];
     for (const row of rows) {
@@ -48,17 +45,9 @@ export class KeySharing {
         ...(content.policy.observers ? { observers: content.policy.observers.filter(id => !before.has(id) || after.has(id)) } : {}),
       };
       if (canonical({ ...policy, revision: content.policy.revision }) === canonical(content.policy)) continue;
-      if (content.policy.contentType === ContentTypes.executionResult) {
-        await resources.authorization.requirePrincipal(actor, row.owner_id, 'read', connection);
-        await resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
-        const { binding } = await bindings.current(actor.id, connection);
-        if (!content.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
-          fail(403, 'forbidden', 'An existing authority must change the result readers.');
-      } else {
-        const resource = await resources.get(row.id, connection);
-        await resources.authorization.requireResource(actor, resource, 'reveal', connection);
-        await resources.authorization.requireResource(actor, resource, 'update', connection);
-      }
+      const resource = await resources.get(row.id, connection);
+      await resources.authorization.requireResource(actor, resource, 'reveal', connection);
+      await resources.authorization.requireResource(actor, resource, 'update', connection);
       items.push({ id: row.id, name: row.name, version: row.version, content, policy });
     }
     return { items, next: null };
@@ -71,9 +60,7 @@ export class KeySharing {
       if (update.version !== item.version || canonical(update.content.policy) !== canonical(item.policy) ||
         canonical(update.content.metadata) !== canonical(item.content.metadata))
         fail(409, 'changed', 'Use the current recipient plan before changing access.');
-      if (item.content.policy.contentType === ContentTypes.executionResult)
-        await this.custody.putResult(actor, { ...update, name: item.name }, connection, item.policy.readers);
-      else await this.custody.put(actor, { ...update, name: item.name }, connection, item.policy.readers);
+      await this.custody.put(actor, { ...update, name: item.name }, connection, item.policy.readers);
     }
   }
 }

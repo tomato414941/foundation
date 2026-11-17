@@ -21,7 +21,6 @@ definition principal {
   relation creator: principal
   relation editor: principal
   relation sharer: principal
-  relation runner: principal
   relation credential_manager: principal
   relation billing_manager: principal
   relation exporter: principal
@@ -35,7 +34,6 @@ definition principal {
   permission create = stands + creator->stands
   permission update = stands + editor->stands
   permission share = stands + sharer->stands
-  permission execute = use + runner->stands
   permission manage_credentials = stands + credential_manager->stands
   permission manage_billing = stands + billing_manager->stands
   permission export = stands + exporter->stands
@@ -50,8 +48,6 @@ definition principal {
   permission create_method = create + use
   permission create_app = create + use
   permission create_object = create + use
-  permission create_environment = create + use
-  permission create_function = create + use
   permission create_ssh_key = create + use
   permission create_ssh_host = create + use
   // Only those who act as it keep the list of public keys it verified, so that a delegate cannot vouch for a key.
@@ -166,44 +162,6 @@ definition object {
   permission share = owner->stands + sharer->stands
   permission transfer = owner->stands + transferrer->stands
   permission use = owner->use + user->stands
-  permission rename = update
-}
-
-// Somewhere to run things. It stays with the principal it was made for, so it is not passed on.
-definition environment {
-  relation owner: principal
-  relation reader: principal
-  relation editor: principal
-  relation deleter: principal
-  relation sharer: principal
-  relation user: principal
-  relation runner: principal
-
-  permission read = owner->use + reader->stands
-  permission update = owner->use + editor->stands
-  permission delete = owner->use + deleter->stands
-  permission share = owner->stands + sharer->stands
-  permission use = owner->use + user->stands
-  permission execute = owner->use + runner->stands
-  permission rename = update
-}
-
-// An operation the owner decided, run with what it uses.
-definition function {
-  relation owner: principal
-  relation reader: principal
-  relation editor: principal
-  relation deleter: principal
-  relation sharer: principal
-  relation transferrer: principal
-  relation runner: principal
-
-  permission read = owner->use + reader->stands
-  permission update = owner->use + editor->stands
-  permission delete = owner->use + deleter->stands
-  permission share = owner->stands + sharer->stands
-  permission transfer = owner->stands + transferrer->stands
-  permission execute = owner->use + runner->stands
   permission rename = update
 }
 

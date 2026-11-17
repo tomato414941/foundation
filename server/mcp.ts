@@ -31,7 +31,7 @@ export async function routesMcp(app: ApiApp, origin: string) {
     const server = new McpServer(
       { name: 'Foundation', version: '1.0.0' },
       {
-        instructions: 'Foundation holds what this principal owns and may use. To act on a request, search for the matching API with foundation_schema, read with foundation_read, and make changes with foundation_api. Run saved functions with foundation_invoke_function after finding them with foundation_functions. When Foundation returns a URL for consent or secret input, give it to the user. Never put secret values in requests.',
+        instructions: 'Foundation holds what this principal owns and may use. To act on a request, search for the matching API with foundation_schema, read with foundation_read, and make changes with foundation_api. When Foundation returns a URL for consent or secret input, give it to the user. Never put secret values in requests.',
       },
     );
     registerMetadataTools(server, {

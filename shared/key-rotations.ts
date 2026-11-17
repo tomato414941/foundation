@@ -9,23 +9,18 @@ import { bindKeys, newIdentityKeys } from './authority.js';
 import { decode, encode, open, seal } from './encryption.js';
 import { AccessPolicy, ProtectedContent, protect, reveal, verifyContent } from './custody.js';
 import type { CustodyContent, CustodyPolicy } from './custody.js';
-import { SignedEnvironment, signEnvironment } from './runtime-protocol.js';
-import { FunctionSettingsApproval, approveFunctionSettings } from './function-api.js';
 import { openKeyring, signKeyring } from './keyring.js';
 import type { JsonApi } from './client.js';
 import type { JWK } from 'jose';
 
-export const RotationKind = z.enum(['content', 'result', 'environment', 'keyring', 'functionSettings']);
+export const RotationKind = z.enum(['content', 'keyring']);
 export const RotationStart = z.object({
   id: Id, replacement: SignedBinding, previousSignature: Signature, handoff: Sealed,
 }).strict();
 export const RotationHandoff = z.object({ replacement: KeyReplacement, handoff: Sealed }).strict();
 export const RotationPayload = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('content'), content: ProtectedContent }).strict(),
-  z.object({ kind: z.literal('result'), content: ProtectedContent }).strict(),
-  z.object({ kind: z.literal('environment'), registration: SignedEnvironment }).strict(),
   z.object({ kind: z.literal('keyring'), signature: Signature }).strict(),
-  z.object({ kind: z.literal('functionSettings'), approval: FunctionSettingsApproval }).strict(),
 ]);
 export type PreparedRotationPayload = z.infer<typeof RotationPayload>;
 export const RotationPreparation = z.object({
@@ -153,7 +148,7 @@ export async function followKeys(api: JsonApi, held: { binding: BoundKeys; keys:
 }
 export class KeysReplaced extends Error {
   readonly code = 'keys_replaced';
-  constructor(message: string, readonly environmentId?: string) { super(message); }
+  constructor(message: string) { super(message); }
 }
 
 type Item = z.infer<typeof RotationItem>;
@@ -222,24 +217,13 @@ async function rotationPayload(item: Item, previous: BoundKeys, next: { binding:
   if (!source) throw new Error('This identity cannot read an item it must prepare.');
   switch (item.kind) {
     case 'content':
-    case 'result':
-      return { kind: item.kind, content: await prepareRotatedContent(ProtectedContent.parse(
-        item.kind === 'content' ? source.content : source.receipt.content), previous, next.binding, previous, keys, next.keys) };
-    case 'environment': {
-      const { manifest } = SignedEnvironment.parse(source.registration);
-      return { kind: 'environment', registration: await signEnvironment({ ...manifest, executor: next.binding,
-        revision: manifest.revision + 1 }, next.keys) };
-    }
+      return { kind: item.kind, content: await prepareRotatedContent(ProtectedContent.parse(source.content),
+        previous, next.binding, previous, keys, next.keys) };
     case 'keyring': {
       const keyring = await openKeyring(String(source.signature), previous);
       return { kind: 'keyring', signature: await signKeyring({ ...keyring, signerId: next.binding.id,
         revision: keyring.revision + 1, keys: keyring.keys.map(entry => entry.binding.id === previous.id
           ? { ...entry, binding: next.binding } : entry) }, next.keys.signing) };
-    }
-    case 'functionSettings': {
-      const { signature: _signature, ...approval } = FunctionSettingsApproval.parse(source.approval);
-      return { kind: 'functionSettings', approval: await approveFunctionSettings({ ...approval, revision: approval.revision + 1,
-        executor: next.binding, author: next.binding }, next.keys) };
     }
   }
 }
@@ -252,15 +236,8 @@ export async function endorsementPayload(request: z.infer<typeof RotationRequest
   const source = request.source as Record<string, any>;
   switch (request.kind) {
     case 'content':
-    case 'result':
-      return { kind: request.kind, content: await prepareRotatedContent(ProtectedContent.parse(
-        request.kind === 'content' ? source.content : source.receipt.content), previous, next, signer, keys) };
-    case 'functionSettings': {
-      const { signature: _signature, ...approval } = FunctionSettingsApproval.parse(source.approval);
-      if (canonical(approval.author) !== canonical(signer)) throw new Error('Another identity approved these settings.');
-      return { kind: 'functionSettings', approval: await approveFunctionSettings({ ...approval,
-        revision: approval.revision + 1, executor: next }, keys) };
-    }
+      return { kind: request.kind, content: await prepareRotatedContent(ProtectedContent.parse(source.content),
+        previous, next, signer, keys) };
     default: throw new Error('Only the rotating identity prepares this item.');
   }
 }

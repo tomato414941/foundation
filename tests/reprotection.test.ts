@@ -4,10 +4,8 @@ import { flowFixture, jsonResponse } from './flow-support.js';
 import { ContentTypes, Operations, protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 import { canonical } from '../shared/authority.js';
-import { HttpRequest } from '../shared/contracts.js';
 import type { MethodDescription } from '../shared/contracts.js';
 import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
-import { Task } from '../shared/runtime-protocol.js';
 
 const minutes = (count: number) => new Date(Date.now() + count * 60_000).toISOString();
 
@@ -36,8 +34,10 @@ test('委任先が64件の項目を開けるように暗号化し直す間の進
 test('期限の切れた許可が残る項目を待ち行列に示し、所有者の端末がその許可を外して封じ直す', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const save = async (name: string, value: string, expiresAt: string) => f.client.save(name, encode(value),
-    await f.client.policy(f.owner.actor.id, ContentTypes.value, [f.environment], { expiresAt }));
+  // Items sealed before keys were opened only on the user's own machine still carry grants that expire.
+  const save = async (name: string, value: string, expiresAt: string) => f.client.save(name, encode(value), {
+    ...await f.client.policy(f.owner.actor.id, ContentTypes.value), grants: [{ actor: f.owner.binding, executor: f.delegate.binding,
+      operations: [Operations.command], functionDigests: [], origins: [], callerProgram: true, expiresAt }] });
   const expired = await save('Expired token', 'kept after expiry', minutes(-1));
   const current = await save('Current token', 'still granted', minutes(60));
 
@@ -49,32 +49,20 @@ test('期限の切れた許可が残る項目を待ち行列に示し、所有�
   assert.deepEqual(content.policy.grants, []);
   assert.equal(content.policy.revision, 2);
   assert.equal(content.materialRevision, 2);
-  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid).sort(), [f.owner.binding.id, f.executor.binding.id].sort());
+  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid).sort(), [f.owner.binding.id, f.delegate.binding.id].sort());
   assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'kept after expiry');
   assert.deepEqual((await f.resources.get(expired.id)).data.executors, []);
   assert.equal((await f.client.read(current.id)).content.policy.grants.length, 1);
 });
 
-test('実行結果の書き込みを待つ項目は、その書き込みの期限まで封じ直さない', async (t) => {
-  const f = await flowFixture();
-  t.after(f.close);
-  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value, [f.environment], { expiresAt: minutes(-1) });
-  policy.producers = [{ executor: f.environment.manifest.executor, runId: crypto.randomUUID(), expiresAt: minutes(60), materialRevision: 2 }];
-  const saved = await f.client.save('Run output', encode('before the run'), policy);
-
-  assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: [] });
-  assert.deepEqual(await f.client.pendingProtection(), [{ id: saved.id, reason: 'grantExpired', remove: [] }]);
-  assert.equal((await f.client.read(saved.id)).content.policy.revision, 1);
-});
-
 test('値を保存し直すとき、ほかの人が受けた許可のうち期限の切れたものを引き継がない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const grant = (expiresAt: string) => ({ actor: f.stranger.binding, executor: f.environment.manifest.executor,
+  const grant = (expiresAt: string) => ({ actor: f.stranger.binding, executor: f.delegate.binding,
     operations: [Operations.command], functionDigests: [], origins: [], callerProgram: true, expiresAt });
   const previous = { ...await f.client.policy(f.owner.actor.id, ContentTypes.value), grants: [grant(minutes(-1)), grant(minutes(60))] };
 
-  const next = await f.client.policy(f.owner.actor.id, ContentTypes.value, [], { previous });
+  const next = await f.client.policy(f.owner.actor.id, ContentTypes.value, { previous });
   assert.deepEqual(next.grants, [previous.grants[1]]);
   assert.equal(next.revision, previous.revision + 1);
 });
@@ -109,7 +97,7 @@ test('持ち主の端末は未検証の代理を知らせ、検証済みの代�
   assert.equal(decode(await reveal((await f.custody.read(other.actor, saved.id)).content, other.binding, other.keys.encryption)), 'owner value');
   const later = await f.client.save('Later', encode('later value'), await f.client.policy(f.owner.actor.id, ContentTypes.value));
   assert.deepEqual((await f.custody.get(later.id)).policy.readers.map(reader => reader.principalId).sort(),
-    [f.owner.actor.id, f.executor.binding.principalId, ai.actor.id, other.actor.id].sort());
+    [f.owner.actor.id, f.delegate.binding.principalId, ai.actor.id, other.actor.id].sort());
 });
 
 test('委任先の線を外すと、まだ封じてある項目も委任先に渡さなくなり、持ち主の端末が委任先抜きで封じ直す', async (t) => {
@@ -155,7 +143,7 @@ test('トークン更新中の項目があっても委任先の線を引け、�
 
 // A CloudRift connection as the earlier format sealed it, with its method inside, stored as it was then.
 async function storedEarlier(f: Awaited<ReturnType<typeof flowFixture>>, name: string, method: MethodDescription, token: string) {
-  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet, [f.environment]);
+  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet);
   const material = { format: 2, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(), appId: null,
     appGeneration: null, fields: { token } };
   // What the earlier format signed beside such content: everything but the digest of the method's rules.
@@ -183,18 +171,10 @@ test('つなぎ方を中に持つ古い形の接続を、作ったときの決�
   assert.deepEqual(await f.client.pendingProtection(), []);
   assert.equal((await f.client.connection(same)).fields!.token, 'current-rules-token');
 
-  const run = async (connectionId: string) => {
-    const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'http',
-      request: HttpRequest.parse({ connectionId, url: 'https://api.cloudrift.ai/api/v1/account/info', method: 'POST' }), save: {} });
-    await f.executor.tick();
-    return f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
-  };
-  assert.equal((await run(same))?.ok, true);
-  assert.equal(f.requests.at(-1)?.headers['X-API-Key'], 'current-rules-token');
-  const refused = await run(changed);
-  assert.equal(refused?.ok, false);
-  assert.deepEqual(refused?.error && typeof refused.error === 'object' && 'code' in refused.error ? refused.error.code : null,
-    'reconnect_required');
+  const used = async (id: string) =>
+    (await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id, output: 'CLOUDRIFT_API_KEY' } }])).environment.CLOUDRIFT_API_KEY;
+  assert.equal(await used(same), 'current-rules-token');
+  await assert.rejects(used(changed), { code: 'reconnect_required' });
 });
 
 test('封じ直す前の古い形の接続も、持ち主はキーを入れ直さずにつなぎ直せる', async (t) => {

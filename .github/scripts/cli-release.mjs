@@ -170,7 +170,7 @@ async function main() {
       if (process.env.RELEASE_TAG && process.env.RELEASE_TAG !== 'cli-v' + pkg.version)
         throw new Error('The release tag must match the CLI package version.');
       const registry = await readRegistry();
-      await checkPublishedContent(pkg, registry, { 'dist/cli.mjs': readFileSync('cli/dist/cli.mjs'), 'dist/agent.mjs': readFileSync('cli/dist/agent.mjs') });
+      await checkPublishedContent(pkg, registry, { 'dist/cli.mjs': readFileSync('cli/dist/cli.mjs') });
       const plan = planRelease(pkg, registry);
       appendFileSync(process.env.GITHUB_OUTPUT, 'publish=' + plan.publish + '\ntag=' + plan.tag + '\n');
       console.log(plan.reason);

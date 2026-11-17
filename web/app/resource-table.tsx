@@ -1,12 +1,11 @@
 import { Link } from 'react-router';
-import { Code2, File, KeyRound, Link2, Plug, Terminal } from 'lucide-react';
+import { File, KeyRound, Link2, Plug } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ResourceView } from '../../shared/contracts';
-import { Bytes, DateText, Empty, State, usePolling } from './components';
+import { Bytes, DateText, Empty, State } from './components';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { hasSection, resourcePath, sectionFor } from './navigation';
 import { connectionMethodName } from './connection-method-labels';
-import { environmentState } from './environments';
 
 export function ResourceTable({
   items: listed,
@@ -23,10 +22,6 @@ export function ResourceTable({
 }) {
   const { t } = useTranslation();
   const items = listed.filter(item => hasSection(item.kind));
-  const changing = items.some(item => item.kind === 'environment' && (item.data.deletion
-    ? item.data.deletion.state === 'pending' : ['starting', 'stopping'].includes(item.data.state)));
-  usePolling(changing || items.some(item => item.kind === 'environment' && !item.data.deletion && item.data.state === 'running'),
-    changing ? 2500 : 15000);
   if (!items.length) return <Empty search={search} />;
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
@@ -44,9 +39,7 @@ export function ResourceTable({
         </TableHeader>
         <TableBody>
           {items.map((item) => {
-            const state = item.kind === 'environment'
-              ? environmentState(item)
-              : 'state' in item.data ? item.data.state : null;
+            const state = 'state' in item.data ? item.data.state : null;
             const stateBadge = state && <State value={state} />;
             const Icon =
               item.kind === 'connection'
@@ -55,11 +48,7 @@ export function ResourceTable({
                   ? KeyRound
                   : item.kind === 'object'
                     ? File
-                    : item.kind === 'environment'
-                      ? Terminal
-                      : item.kind === 'function'
-                        ? Code2
-                        : Plug;
+                    : Plug;
             return (
               <TableRow key={item.id}>
                 <TableCell className="px-5 py-4">

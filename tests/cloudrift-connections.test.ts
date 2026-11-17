@@ -1,57 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { flowFixture, jsonResponse } from './flow-support.js';
-import { HttpRequest } from '../shared/contracts.js';
-import { Task } from '../shared/runtime-protocol.js';
+import { flowFixture } from './flow-support.js';
 
-type Fixture = Awaited<ReturnType<typeof flowFixture>>;
-async function inspect(f: Fixture, connectionId: string, url = 'https://api.cloudrift.ai/api/v1/account/info') {
-  const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, {
-    kind: 'http', request: HttpRequest.parse({ connectionId, url, method: 'POST',
-      json: { version: '2025-02-10', data: {} } }), save: {},
-  });
-  await f.executor.tick();
-  const completed = await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task);
-  return { task: completed, result: await f.client.result(completed) };
-}
-
-test('CloudRiftのAPIキーを暗号化して保存し、同じ接続を更新して管理APIを使用する', async t => {
-  const f = await flowFixture(request => {
-    assert.equal(request.url, 'https://api.cloudrift.ai/api/v1/account/info');
-    assert.equal(request.method, 'POST');
-    assert.deepEqual(JSON.parse(Buffer.from(request.body!).toString()), { version: '2025-02-10', data: {} });
-    return jsonResponse({ user: { id: 'test-user' } });
-  }); t.after(f.close);
+test('CloudRiftのAPIキーを暗号化して保存し、同じ接続を更新して手元のコマンドへ渡す', async t => {
+  const f = await flowFixture(); t.after(f.close);
   const key = 'cloudrift_initial_test_key';
+  const used = async (id: string) =>
+    (await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id, output: 'CLOUDRIFT_API_KEY' } }])).environment.CLOUDRIFT_API_KEY;
   const original = await f.saveConnection({ methodId: 'cloudrift:api_key', name: 'CloudRift compute', fields: { token: key } });
   if (original.kind !== 'connection') throw new Error('Expected a saved connection.');
   assert.deepEqual(original.data.services, [{ id: 'cloudrift', name: 'CloudRift' }]);
   const encrypted = await f.client.read(original.id);
   assert.equal(JSON.stringify({ original, content: encrypted.content }).includes(key), false);
-  const used = await inspect(f, original.id);
-  assert.equal(used.task.state, 'succeeded', JSON.stringify(used.result));
+  assert.equal(await used(original.id), key);
   const updated = await f.saveConnection({ methodId: 'cloudrift:api_key', connectionId: original.id,
     name: original.name, fields: { token: 'cloudrift_updated_test_key' } });
   assert.equal(updated.id, original.id);
   assert.equal(updated.name, original.name);
-  const reused = await inspect(f, updated.id);
-  assert.equal(reused.task.state, 'succeeded', JSON.stringify(reused.result));
+  assert.equal(await used(updated.id), 'cloudrift_updated_test_key');
   const reconnected = await f.saveConnection({ methodId: 'cloudrift:api_key', connectionId: updated.id,
     name: updated.name, fields: {} });
   assert.equal(reconnected.id, original.id);
-  const retained = await inspect(f, reconnected.id);
-  assert.equal(retained.task.state, 'succeeded', JSON.stringify(retained.result));
-  assert.deepEqual(f.requests.map(request => request.headers?.['X-API-Key']),
-    ['cloudrift_initial_test_key', 'cloudrift_updated_test_key', 'cloudrift_updated_test_key']);
-});
-
-test('CloudRiftのHTTP接続でAPIキーの送信先を管理APIのホストに限定する', async t => {
-  const f = await flowFixture(); t.after(f.close);
-  const connection = await f.saveConnection({ methodId: 'cloudrift:api_key', fields: { token: 'cloudrift_private_test_key' } });
-  for (const url of ['https://other.example/api/v1/account/info', 'https://api.cloudrift.ai.other.example/api/v1/account/info']) {
-    const { task, result } = await inspect(f, connection.id, url);
-    assert.equal(task.state, 'failed');
-    assert.equal(result?.error?.code, 'invalid_destination');
-  }
-  assert.equal(f.requests.length, 0);
+  assert.equal(await used(reconnected.id), 'cloudrift_updated_test_key');
 });

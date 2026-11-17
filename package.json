@@ -19,13 +19,9 @@
     "test": "npm run build:cli && node scripts/test-database.mjs node --import tsx --test --test-timeout=60000 tests/*.test.ts",
     "test:ui": "node scripts/test-database.mjs node scripts/browser-tests.mjs",
     "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts",
-    "prepare:environment": "tsx deploy/environment/prepare.ts",
-    "test:ec2": "tsx tests/ec2-live.ts",
     "migrate": "node --env-file-if-exists=.env dist/server/migrate.js"
   },
   "dependencies": {
-    "@aws-sdk/client-ec2": "3.1146.0",
-    "@aws-sdk/client-iam": "3.1146.0",
     "@aws-sdk/client-kms": "3.1146.0",
     "@aws-sdk/client-s3": "3.1146.0",
     "@aws-sdk/client-sts": "3.1146.0",

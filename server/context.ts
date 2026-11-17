@@ -13,15 +13,11 @@ import { Resources } from './resources.js';
 import { Catalog } from './catalog.js';
 import { PublicTransport } from './transport.js';
 import type { Transport } from './transport.js';
-import { Functions } from './functions.js';
 import { KeySharing } from './key-sharing.js';
 import { Billing, StripePayments } from './billing.js';
 import type { PaymentProvider } from './billing.js';
 import { Objects, S3Objects } from './objects.js';
 import type { ObjectStore } from './objects.js';
-import { EC2Runner } from './ec2-runner.js';
-import type { Runner } from './runner.js';
-import { Environments } from './environments.js';
 import { SSHAccess } from './ssh-access.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
@@ -31,19 +27,10 @@ import { KeyResets } from './key-resets.js';
 import { KeyRotations } from './key-rotations.js';
 import { Keyrings } from './keyrings.js';
 import { Custody } from './custody.js';
-import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { builtinDefinitions } from './builtin-definitions.js';
 import { Executions } from './executions.js';
-import { canonical } from '../shared/authority.js';
-import { signedInvocation } from '../shared/operation-authorization.js';
-import { fail, DomainError } from './errors.js';
-import { Processes } from './processes.js';
-import { ManagedProcesses } from './managed-processes.js';
-import { OpenSSH } from './ssh-client.js';
-import type { SSHClient } from './ssh-client.js';
-import { Invocations } from './invocations.js';
 
 export interface Dependencies {
   db?: Database;
@@ -51,21 +38,9 @@ export interface Dependencies {
   transport?: Transport;
   payments?: PaymentProvider;
   storage?: ObjectStore;
-  runner?: Runner;
-  ssh?: SSHClient;
 }
 export async function createContext(config: Configuration, deps: Dependencies = {}, options: { migrate?: boolean } = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
-  if (!deps.runner) {
-    const tables = await db.one<{ jobs: string | null; resources: string | null }>(
-      "SELECT to_regclass('environment_jobs') AS jobs,to_regclass('resources') AS resources");
-    if (tables?.jobs && tables.resources && await db.one(
-      "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND to_jsonb(j)->>'provider' IS DISTINCT FROM 'ec2' LIMIT 1"))
-      throw new Error('Migrate existing managed environment disks and provider records before starting the EC2 deployment.');
-    if (tables?.jobs && tables.resources && await db.one(
-      "SELECT 1 FROM environment_jobs j JOIN resources r ON r.id=j.resource_id WHERE r.data->>'driver'='managed' AND (r.data ? 'image' OR r.data->>'isolation'='container') LIMIT 1"))
-      throw new Error('Upgrade existing managed environments to VM command execution before starting this deployment.');
-  }
   if (options.migrate) await db.migrate();
   else await db.assertReady();
   const vault = await Vault.initialize(db, config),
@@ -80,72 +55,22 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const authentication = new Authentication(db, principals, authorization, audit, mailer, config, confirmations),
     keyResets = new KeyResets(db, authorization, audit, config);
   const catalog = await Catalog.load(resources, config),
-    transport = deps.transport ?? new PublicTransport(config.origin),
-    functions = new Functions(resources, config.origin);
+    transport = deps.transport ?? new PublicTransport(config.origin);
   const bindings = new Bindings(db, authorization, audit, confirmations),
     keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
     custody = new Custody(resources, bindings, relations, config.origin),
-    delegation = new Delegation(resources, bindings, custody, config.origin),
     connectionOperations = new ConnectionOperations(custody),
-    oauthRelays = new OAuthRelays(delegation, () => executions);
-  const processes = new Processes(resources, delegation);
+    oauthRelays = new OAuthRelays(resources, bindings, config.origin, () => executions);
   const keyRotations = new KeyRotations(custody);
-  const invocations = new Invocations(functions, custody, delegation);
   principals.keySharing = new KeySharing(custody);
-  const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
-    environments = new Environments(
-      resources,
-      billing,
-      deps.runner ?? new EC2Runner(config),
-      vault,
-      config,
-      delegation,
-      deps.ssh ?? new OpenSSH(),
-    );
-  const managedProcesses = new ManagedProcesses(processes, environments);
+  const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config));
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
   const sshAccess = new SSHAccess(db, resources, audit, confirmations);
-  const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog, environments,
-    objects, billing, processes, integrations, custody, delegation, functions, invocations, sshAccess });
+  const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
+    objects, billing, integrations, custody, sshAccess });
   const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin, confirmations);
-  executions.runtime = {
-    get: (actor, reference) => reference.kind === 'run' ? delegation.get(actor, reference.id) : invocations.get(actor, reference.id),
-    cancel: (actor, reference) => reference.kind === 'run' ? delegation.cancel(actor, reference.id) : invocations.cancel(actor, reference.id),
-  };
   const requests = new Requests(db, authorization, authentication, config.origin, executions);
-  delegation.checkOperationContext = async (actor, intent) => {
-    const context = intent.operationContext!, { plan } = await executions.input(actor, context.id);
-    const continuation = definitions.get(plan.invocation.name).continuation;
-    if (context.index !== plan.index || canonical(context.invocation) !== canonical(signedInvocation(plan.invocation)) ||
-      canonical(intent.approval ?? null) !== canonical(plan.approval ?? null) ||
-      !continuation || plan.continuation?.kind !== continuation ||
-      plan.continuation.id !== (continuation === 'connection' ? context.continuationId : intent.id))
-      fail(409, 'operation_changed', 'Use the prepared operation and its current continuation.');
-    return plan.invocation;
-  };
-  delegation.completed = async task => {
-    const execution = task.intent.operationContext;
-    if (!execution) return;
-    const proof = task.kind === 'connect'
-      ? await db.one<{ id: string }>("SELECT resource_id AS id FROM resource_custody WHERE content->>'creationRunId'=$1", [task.id])
-      : null;
-    if (task.kind === 'connect' && !proof) return;
-    try {
-      await executions.complete({ id: task.actorId }, execution.id, execution.index,
-        proof ? { runId: task.id, resourceId: proof.id } : { runId: task.id });
-    } catch (error) {
-      if (!(error instanceof DomainError) || error.status >= 500) throw error;
-    }
-  };
-  delegation.checkApproval = async (actor, intent) => {
-    const { plan } = await executions.input(actor, intent.approval!.id), input = plan.invocation.input;
-    const operation = definitions.get(plan.invocation.name).delegatedOperation?.(input);
-    if (!intent.operationContext || intent.operationContext.id !== intent.approval!.id || plan.index !== intent.approval!.index ||
-      input.ownerId !== intent.ownerId || !operation || intent.operation !== operation ||
-      (input.environmentId && input.environmentId !== intent.environmentId))
-      throw new Error('Use the operation and execution environment approved by this request.');
-  };
   const context = {
     config,
     db,
@@ -163,10 +88,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     resources,
     catalog,
     transport,
-    functions,
     billing,
     objects,
-    environments,
     integrations,
     requests,
     definitions,
@@ -175,25 +98,21 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     bindings,
     keyrings,
     custody,
-    delegation,
     connectionOperations,
     oauthRelays,
-    processes,
-    managedProcesses,
-    invocations,
   };
   if (options.migrate) {
-    const [{ migrateExecutions }, { migrateRequests }, { migrateHistory }, { migrateRuns }, { migrateFiles }, { migrateStorage }, { migrateDelegates }] = await Promise.all([
-      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'), import('./migrations/migrate-history.js'), import('./migrations/migrate-runs.js'),
+    const [{ migrateExecutions }, { migrateRequests }, { migrateFiles }, { migrateStorage }, { migrateDelegates }, { removeEnvironments }] = await Promise.all([
+      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'),
       import('./migrations/migrate-files.js'), import('./migrations/migrate-storage.js'), import('./migrations/migrate-delegates.js'),
+      import('./migrations/remove-environments.js'),
     ]);
     await migrateExecutions(db, vault);
     await migrateRequests(db);
-    await migrateHistory(context);
-    await migrateRuns(db, vault);
     await migrateFiles(db, vault);
     await migrateStorage(db, vault);
     await migrateDelegates(db, vault);
+    await removeEnvironments(db, vault);
     await db.assertReady();
   }
   return context;

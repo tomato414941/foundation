@@ -7,10 +7,9 @@ import { idInput, withId, ok } from './support.js';
 export function defineBilling(definitions: DefinitionRegistry, services: Pick<OperationServices, 'billing' | 'integrations'>) {
   const { billing, integrations } = services;
   const bind = definitions.bind.bind(definitions);
-  const limits = idInput.extend({ storageBytes: z.number().int().min(1).max(1_000_000_000_000),
-    computeSeconds: z.number().int().min(1).max(10_000_000) });
+  const limits = idInput.extend({ storageBytes: z.number().int().min(1).max(1_000_000_000_000) });
   definitions.define('billing.limits', limits, ['利用上限を設定する', 'Set usage limits'], async (who, input) => {
-    await billing.limits(who, input.id, input.storageBytes, input.computeSeconds); return ok();
+    await billing.limits(who, input.id, input.storageBytes); return ok();
   });
   bind({ name: 'billing.limits', method: 'PUT', path: '/api/principals/:id/limits', schema: { params: C.IdParams,
     body: limits.omit({ id: true }), response: { 200: C.Ok } }, input: withId });

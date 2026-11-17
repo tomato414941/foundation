@@ -16,10 +16,6 @@ import { kindOf } from '../shared/protected.js';
 import { project } from './relations.js';
 import type { Relations } from './relations.js';
 import { fail } from './errors.js';
-import { SharedReceipt, verifyReceipt } from '../shared/runtime-protocol.js';
-import type { SharedResultReceipt } from '../shared/runtime-protocol.js';
-import type { SealedRun } from '../shared/custody.js';
-import { RunOperation } from '../shared/executions.js';
 
 export interface ProtectedWrite {
   name: string;
@@ -94,11 +90,8 @@ export class Custody {
     const row = await this.resources.db.one<{ content: CustodyContent }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
-    if (row) return ProtectedContent.parse(row.content);
-    const result = await this.resources.db.one<{ content: CustodyContent }>(
-      "SELECT receipt->'content' AS content FROM execution_tasks WHERE id=$1 AND receipt ? 'content'", [id], connection);
-    if (!result) fail(409, 'custody_required', 'Encrypt this item for its readers and execution environments.');
-    return ProtectedContent.parse(result.content);
+    if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers.');
+    return ProtectedContent.parse(row.content);
   }
 
   // Items this identity can seal again without anyone deciding anything: those still encrypted for executors whose
@@ -118,11 +111,6 @@ export class Custody {
          r.kind<>'connection' OR c.content->'metadata' ? 'methodDigest' AS current
        FROM resource_custody c JOIN resources r ON r.id=c.resource_id
        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
-       UNION ALL
-       SELECT t.id, 'result', t.owner_id, t.receipt->'content'->'policy'->'readers',
-         t.receipt->'content'->'policy'->'authorities', t.receipt->'content'->'policy'->'grants', true
-       FROM execution_tasks t WHERE t.receipt ? 'content'
-         AND EXISTS (SELECT 1 FROM jsonb_array_elements(t.receipt->'content'->'policy'->'authorities') a WHERE a->>'id'=$1)
        ORDER BY 1`, [binding.id]);
     const named = (row: Row) => [...row.readers, ...row.authorities,
       ...(row.grants ?? []).flatMap(grant => grant.actor ? [grant.actor, grant.executor] : [grant.executor])];
@@ -190,10 +178,6 @@ export class Custody {
     const executes = granted.some(grant => canonical(grant.executor) === canonical(binding));
     const requests = granted.some(grant => 'actor' in grant && canonical(grant.actor) === canonical(binding));
     if (!sealed && !executes && !requests) fail(403, 'forbidden', 'This identity is not a recipient of this item.');
-    if (content.policy.contentType === ContentTypes.executionResult) {
-      await this.resources.authorization.requirePrincipal(actor, content.policy.ownerId, 'read');
-      return { content, version: content.materialRevision };
-    }
     const row = await this.resources.get(id), { authorization } = this.resources;
     // Being sealed for is not enough: the item goes to a reader that may still reveal it, to one that runs with it that
     // may still use it, and to an executor that may read it. An erased line thus takes effect before the owner's
@@ -202,46 +186,6 @@ export class Custody {
       !(executes && await authorization.can(actor, row, 'read')))
       fail(403, 'forbidden', 'This identity may no longer open this item.');
     return { content, version: row.version };
-  }
-
-  async putResult(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[]) {
-    const persist = async (connection: Queryable) => {
-      await this.resources.authorization.active(actor);
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      const row = await this.resources.db.one<{ owner_id: string; request: SealedRun; receipt: SharedResultReceipt }>(
-        "SELECT owner_id,request,receipt FROM execution_tasks WHERE id=$1 AND receipt ? 'content' FOR UPDATE",
-        [input.content.policy.id], connection);
-      if (!row) fail(404, 'not_found', 'This execution has no protected result.');
-      const previous = SharedReceipt.parse(row.receipt).content;
-      const content = await verifyContent(input.content), policy = content.policy;
-      this.metadata(content);
-      const { binding } = await this.bindings.current(actor.id, connection);
-      if (policy.origin !== this.origin ||
-        content.signerId !== binding.id || canonical(policyAuthority(content)) !== canonical(binding) ||
-        !previous.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
-        fail(403, 'forbidden', 'An existing authority must sign changes to the result readers.');
-      if (policy.ownerId !== row.owner_id) {
-        await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
-        if (actor.agreedBy !== policy.ownerId && actor.id !== policy.ownerId)
-          fail(403, 'handoff_required', 'The new owner must agree to receive the protected result.');
-        await this.resources.authorization.requirePrincipal({ id: actor.agreedBy ?? actor.id }, policy.ownerId, 'create', connection);
-      } else await this.resources.authorization.requirePrincipal(actor, row.owner_id, 'update', connection);
-      if (input.version !== previous.materialRevision || content.materialRevision !== previous.materialRevision + 1 ||
-        policy.revision !== previous.policy.revision + (canonical(previous.policy) === canonical(policy) ? 0 : 1) ||
-        canonical(content.metadata) !== canonical(previous.metadata))
-        fail(409, 'changed', 'Review the current result before changing its readers.');
-      for (const reader of [...policy.readers, ...policy.authorities]) await this.bindings.requireCurrent(reader, connection);
-      for (const reader of requiredReaders ?? (await this.required(policy.ownerId, connection)).map(item => item.binding))
-        if (!policy.readers.some(next => canonical(next) === canonical(reader)))
-          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
-      const next = { ...row.receipt, content };
-      await verifyReceipt(next, row.request.intent);
-      await connection.query('UPDATE execution_tasks SET receipt=$2,owner_id=$3 WHERE id=$1', [policy.id, JSON.stringify(next), policy.ownerId]);
-      await this.resources.audit.record(policy.ownerId, actor.id, 'result.protect', policy.id,
-        { policyRevision: policy.revision, materialRevision: content.materialRevision }, connection);
-      return { content, version: content.materialRevision };
-    };
-    return transaction ? persist(transaction) : this.resources.db.transaction(persist);
   }
 
   async put(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[]) {
@@ -257,8 +201,6 @@ export class Custody {
   private async write(actor: Actor, input: ProtectedWrite, transaction?: Queryable, requiredReaders?: BoundKeys[],
     transfer?: { id: string; to: string }) {
     const content = await verifyContent(input.content), policy = content.policy;
-    if (policy.contentType === ContentTypes.executionResult)
-      fail(400, 'wrong_kind', 'Use the protected result endpoint for execution results.');
     this.metadata(content);
     if (input.data && canonical(input.data) !== canonical(content.metadata))
       fail(400, 'invalid_metadata', 'Sign the public metadata together with its encrypted content.');
@@ -272,8 +214,6 @@ export class Custody {
         fail(403, 'forbidden', 'Sign this change as an authorized editor of the item.');
       for (const keys of new Map(allBindings.map(keys => [keys.id, keys])).values())
         await this.bindings.requireCurrent(keys, connection);
-      if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
-        fail(409, 'id_in_use', 'Choose a protected content ID that is not used by an execution.');
       const current = await this.resources.db.one<ResourceRow>(
         'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection,
       );
@@ -370,104 +310,6 @@ export class Custody {
       return row;
     };
     return transaction ? persist(transaction) : this.resources.db.transaction(persist);
-  }
-
-  // Each value a run or an invocation keeps goes to the variable named by its id: one of its owner's, or a new one given
-  // a name.
-  async requireDestinations(ownerId: string, destinations: Record<string, string>, names: Record<string, string>,
-    connection: Queryable = this.resources.db.pool) {
-    if (Object.keys(names).some(pointer => !Object.hasOwn(destinations, pointer)))
-      fail(400, 'invalid_output', 'Keep each named output in a variable.');
-    for (const [pointer, id] of Object.entries(destinations)) {
-      const row = await this.resources.db.one<{ kind: string; owner_id: string }>(
-        'SELECT kind,owner_id FROM resources WHERE id=$1', [id], connection);
-      if (Object.hasOwn(names, pointer) ? row : !row)
-        fail(400, row ? 'output_exists' : 'output_name_required', row ? 'Keep a named output in a new variable.' : 'Name each new variable that keeps an output.');
-      if (row && (row.kind !== 'variable' || row.owner_id !== ownerId))
-        fail(400, 'wrong_kind', 'Keep each output in a variable of its owner.');
-    }
-  }
-
-  async putProduced(actor: Actor, input: { content: CustodyContent; pointer: string }) {
-    const content = await verifyContent(input.content), policy = content.policy;
-    if (policy.contentType === ContentTypes.executionResult)
-      fail(400, 'wrong_kind', 'Deliver protected results together with their execution receipts.');
-    this.metadata(content);
-    const { binding } = await this.bindings.current(actor.id);
-    if (policy.origin !== this.origin || content.signerId !== binding.id || !content.creationRunId)
-      fail(403, 'forbidden', 'Store output from an execution approved for this identity.');
-    const stored = await this.resources.db.one<{ content: CustodyContent }>(
-      'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id]);
-    if (stored && canonical(stored.content) === canonical(content)) return this.resources.get(policy.id);
-    const producer = policy.producers.find(producer => producer.runId === content.creationRunId &&
-      producer.materialRevision === content.materialRevision && canonical(producer.executor) === canonical(binding) &&
-      Date.parse(producer.expiresAt) > Date.now());
-    if (!producer) fail(403, 'forbidden', 'Approve this execution before saving its output.');
-    const authority = policyAuthority(content);
-    await this.bindings.requireCurrent(authority);
-    const task = await this.resources.db.one<{ request: SealedRun; output_names: Record<string, string> }>(
-      "SELECT request,output_names FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
-      [content.creationRunId],
-    );
-    const invocation = !task ? await this.resources.db.one<{ owner_id: string; executor: BoundKeys; output_names: Record<string, string>;
-      request: { actor: BoundKeys | null; outputs: Record<string, { policy: CustodyPolicy; signature: string }> } }>(
-      "SELECT owner_id,executor,output_names,request FROM function_invocations WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
-      [content.creationRunId]) : null;
-    // A reviewed run keeps each value only in the variable it was reviewed to keep it in.
-    const reviewed = RunOperation.safeParse(task?.request.intent.operationContext?.invocation.input);
-    const authorized = task ? (!reviewed.success || reviewed.data.save[input.pointer] === policy.id) &&
-      task.request.intent.ownerId === policy.ownerId &&
-      canonical(task.request.intent.actor) === canonical(authority) && canonical(task.request.intent.executor) === canonical(binding)
-      : invocation && invocation.owner_id === policy.ownerId && canonical(invocation.request.actor) === canonical(authority) &&
-        canonical(invocation.executor) === canonical(binding) && Object.hasOwn(invocation.request.outputs, input.pointer) &&
-        canonical(invocation.request.outputs[input.pointer]!.policy) === canonical(policy) &&
-        invocation.request.outputs[input.pointer]!.signature === content.authorization;
-    if (!authorized)
-      fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
-    // A new output takes the name the request that keeps it gave, kept beside it: the run as it was reviewed, or the
-    // invocation. An output that exists keeps its own.
-    const name = (task ?? invocation!).output_names[input.pointer];
-    return this.resources.db.transaction(async connection => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (await this.resources.db.one('SELECT 1 FROM execution_tasks WHERE id=$1', [policy.id], connection))
-        fail(409, 'id_in_use', 'Choose a protected content ID that is not used by an execution.');
-      const current = await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection);
-      if (current) {
-        const previous = await this.get(policy.id, connection);
-        if (canonical(previous) === canonical(content)) return current;
-        await this.resources.authorization.requireResource({ id: authority.principalId }, current, 'update', connection);
-        if (current.owner_id !== policy.ownerId || current.kind !== kindOf(policy.contentType) ||
-          !(previous.policy.authorities.some(value => canonical(value) === canonical(authority)) || succeeds(previous.policy, authority)) ||
-          content.materialRevision !== previous.materialRevision + 1 ||
-          policy.revision !== previous.policy.revision + (await hash(policy) === await hash(previous.policy) ? 0 : 1))
-          fail(409, 'changed', 'Review the current output destination before replacing it.');
-        await this.replacePending(previous, content, connection);
-      } else {
-        if (content.materialRevision !== 1 || policy.revision !== 1)
-          fail(400, 'invalid_revision', 'Start a new output at revision one.');
-        if (!(await this.resources.authorization.canCreate({ id: authority.principalId }, policy.ownerId, kindOf(policy.contentType), connection)))
-          fail(403, 'forbidden', 'The execution requester cannot create this output.');
-      }
-      for (const recipient of await this.required(policy.ownerId, connection))
-        if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
-          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
-      const data = { ...keptLabels(current?.data), ...content.metadata,
-        recipients: policy.readers.map(reader => reader.principalId),
-        executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))], custodyRevision: policy.revision };
-      if (!current && !name) fail(400, 'output_name_required', 'Name each new output in the request that keeps it.');
-      const row = current
-        ? await this.resources.update(current, { data }, connection)
-        : await this.resources.insert(policy.ownerId, kindOf(policy.contentType), name!, data, { id: policy.id }, connection);
-      await this.projectGrants(content, connection);
-      await connection.query(
-        'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',
-        [policy.id, JSON.stringify(content)],
-      );
-      await this.references({ id: authority.principalId }, content, connection);
-      await this.resources.audit.record(policy.ownerId, actor.id, 'resource.capture', policy.id,
-        { runId: content.creationRunId }, connection);
-      return row;
-    });
   }
 
   // Who holds which role on the item, as its signed policy says: a reader opens it, an observer only sees it is there,

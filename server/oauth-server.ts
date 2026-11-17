@@ -105,7 +105,7 @@ export async function routesOAuthServer(app: ApiApp, context: Context) {
           !await authorization.holds(grantor.id, { type: 'principal', id: row.principal_id }, 'manage_credentials', connection))
           return null;
         const expiresAt = new Date(Date.now() + TOKEN_DAYS * 86400_000).toISOString();
-        return authentication.issueKey(row.principal_id, code.data.name, expiresAt, null, connection);
+        return authentication.issueKey(row.principal_id, code.data.name, expiresAt, connection);
       });
       if (!issued) return reply.code(400).send(oauthError('invalid_grant', 'The authorization code is invalid or expired.'));
       return reply.header('pragma', 'no-cache').send({

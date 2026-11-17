@@ -23,13 +23,7 @@ export interface PaymentProvider {
   checkout(customerId: string, principalId: string): Promise<string>;
   portal(customerId: string): Promise<string>;
   event(body: Buffer, signature: string): Promise<PaymentEvent | null>;
-  meter(event: {
-    id: string;
-    customerId: string;
-    meter: 'compute' | 'storage';
-    amount: number;
-    createdAt: Date;
-  }): Promise<void>;
+  meter(event: { id: string; customerId: string; amount: number; createdAt: Date }): Promise<void>;
 }
 export class StripePayments implements PaymentProvider {
   readonly stripe: Stripe | null;
@@ -38,7 +32,6 @@ export class StripePayments implements PaymentProvider {
     this.enabled = Boolean(
       config.FOUNDATION_BILLING_MODE === 'required' &&
         config.STRIPE_SECRET_KEY &&
-        config.STRIPE_COMPUTE_PRICE &&
         config.STRIPE_STORAGE_PRICE &&
         config.STRIPE_WEBHOOK_SECRET,
     );
@@ -64,7 +57,7 @@ export class StripePayments implements PaymentProvider {
       mode: 'subscription',
       client_reference_id: principalId,
       subscription_data: { metadata: { foundation_principal: principalId } },
-      line_items: [{ price: this.config.STRIPE_COMPUTE_PRICE }, { price: this.config.STRIPE_STORAGE_PRICE }],
+      line_items: [{ price: this.config.STRIPE_STORAGE_PRICE }],
       success_url: this.config.origin + '/p/' + principalId + '/settings/billing?payment=complete',
       cancel_url: this.config.origin + '/p/' + principalId + '/settings/billing',
       payment_method_collection: 'always',
@@ -116,22 +109,15 @@ export class StripePayments implements PaymentProvider {
       fail(400, 'invalid_subscription', 'The subscription does not belong to this account.');
     const prices = new Set(subscription.items.data.map((item) => item.price.id));
     const status =
-      prices.has(this.config.STRIPE_COMPUTE_PRICE) && prices.has(this.config.STRIPE_STORAGE_PRICE)
+      prices.has(this.config.STRIPE_STORAGE_PRICE)
         ? subscription.status
         : 'invalid';
     return { id: event.id, customerId, subscriptionId, status };
   }
-  async meter(event: {
-    id: string;
-    customerId: string;
-    meter: 'compute' | 'storage';
-    amount: number;
-    createdAt: Date;
-  }) {
+  async meter(event: { id: string; customerId: string; amount: number; createdAt: Date }) {
     await this.client().billing.meterEvents.create(
       {
-        event_name:
-          event.meter === 'compute' ? this.config.STRIPE_COMPUTE_METER : this.config.STRIPE_STORAGE_METER,
+        event_name: this.config.STRIPE_STORAGE_METER,
         identifier: event.id,
         timestamp: Math.floor(event.createdAt.getTime() / 1000),
         payload: { stripe_customer_id: event.customerId, value: String(event.amount) },
@@ -189,7 +175,7 @@ export class Billing {
         connection,
       );
     if (!account || !['active', 'trialing'].includes(account.status))
-      fail(402, 'payment_required', 'Add a payment method to use storage and environments.');
+      fail(402, 'payment_required', 'Add a payment method to use storage.');
     return id;
   }
   // Whether a principal can take on another's costs: they reach whoever its own costs reach, who needs a payment
@@ -205,8 +191,8 @@ export class Billing {
       fail(402, 'payment_required', 'Add a payment method before paying for another principal.');
   }
   async usage(principalId: string, connection: Queryable = this.db.pool) {
-    const limits = await this.db.one<{ compute_seconds: string; storage_bytes: string }>(
-      'SELECT compute_seconds,storage_bytes FROM usage_limits WHERE principal_id=$1',
+    const limits = await this.db.one<{ storage_bytes: string }>(
+      'SELECT storage_bytes FROM usage_limits WHERE principal_id=$1',
       [principalId],
       connection,
     );
@@ -218,75 +204,22 @@ export class Billing {
     return {
       storageBytes: Number(storage?.bytes ?? 0),
       storageLimit: Number(limits?.storage_bytes ?? 1_073_741_824),
-      computeSeconds: await this.computeUsage(principalId, connection),
-      computeLimit: Number(limits?.compute_seconds ?? 3600),
       month: new Date().toISOString().slice(0, 7),
     };
   }
-  async computeUsage(principalId: string | null, connection: Queryable = this.db.pool) {
-    const usage = await this.db.one<{ seconds: string }>(
-      `WITH month AS (SELECT date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS start)
-       SELECT
-         (SELECT coalesce(sum(amount),0) FROM billing_events,month
-          WHERE meter='compute' AND ($1::uuid IS NULL OR principal_id=$1) AND created_at>=month.start)
-         + (SELECT coalesce(sum(greatest(0,floor(extract(epoch FROM
-             (date_trunc('second',now())-greatest(coalesce(j.metered_at,
-               date_trunc('second',(r.data->>'startedAt')::timestamptz)),month.start)))))
-             * CASE r.data->>'size' WHEN 'large' THEN 4 WHEN 'medium' THEN 2 ELSE 1 END),0)
-            FROM resources r JOIN environment_jobs j ON j.resource_id=r.id CROSS JOIN month
-            WHERE ($1::uuid IS NULL OR r.owner_id=$1) AND r.data->>'driver'='managed'
-              AND r.data->>'state' IN ('starting','running','stopping') AND r.data->>'startedAt' IS NOT NULL) AS seconds`,
-      [principalId], connection);
-    return Number(usage?.seconds ?? 0);
-  }
-  async lockCompute(connection: Queryable) {
-    await connection.query("SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':compute_usage'))");
-  }
-  async measureCompute(connection: Queryable = this.db.pool, environmentId?: string): Promise<void> {
-    if (connection === this.db.pool)
-      return this.db.transaction(transaction => this.measureCompute(transaction, environmentId));
-    await this.lockCompute(connection);
-    const rows = await this.db.all<{ id: string; owner_id: string; size: string; since: Date; until: Date }>(
-      `SELECT r.id,r.owner_id,r.data->>'size' AS size,
-         coalesce(j.metered_at,date_trunc('second',(r.data->>'startedAt')::timestamptz)) AS since,
-         date_trunc('second',clock_timestamp()) AS until
-       FROM resources r JOIN environment_jobs j ON j.resource_id=r.id
-       WHERE r.data->>'driver'='managed' AND r.data->>'state' IN ('starting','running','stopping')
-         AND r.data->>'startedAt' IS NOT NULL
-         AND (r.id=$1 OR coalesce(j.metered_at,(r.data->>'startedAt')::timestamptz)<=now()-interval '1 minute')
-       ORDER BY r.id FOR UPDATE OF j`, [environmentId ?? null], connection);
-    for (const row of rows) {
-      let from = row.since.getTime();
-      const until = row.until.getTime(), weight = row.size === 'large' ? 4 : row.size === 'medium' ? 2 : 1;
-      while (from < until) {
-        const date = new Date(from);
-        const to = Math.min(until, Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
-        await this.record(row.owner_id, 'compute', (to - from) / 1000 * weight,
-          `environment:${row.id}:${from}:${to}`, connection, new Date(to - 1));
-        from = to;
-      }
-      if (until > row.since.getTime()) await connection.query(
-        'UPDATE environment_jobs SET metered_at=$2 WHERE resource_id=$1', [row.id, row.until]);
-    }
-  }
-  async reserve(principalId: string, kind: 'storage' | 'compute', amount: number, connection: Queryable) {
-    if (kind === 'compute') await this.lockCompute(connection);
+  async reserve(principalId: string, amount: number, connection: Queryable) {
     if (this.config.FOUNDATION_BILLING_MODE === 'included') {
       await connection.query('SELECT pg_advisory_xact_lock(736023746)');
-      await this.reserveIncluded(kind, amount, connection);
+      await this.reserveIncluded(amount, connection);
     }
     await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
     await this.requirePayment(principalId, connection);
     const usage = await this.usage(principalId, connection);
-    if (kind === 'storage' && usage.storageBytes + amount > usage.storageLimit)
+    if (usage.storageBytes + amount > usage.storageLimit)
       fail(409, 'storage_limit', 'Increase the storage limit or remove unused objects.');
-    if (kind === 'compute') {
-      if (usage.computeSeconds + amount > usage.computeLimit)
-        fail(409, 'compute_limit', 'The monthly compute limit has been reached.');
-    }
   }
-  private async reserveIncluded(kind: 'storage' | 'compute', amount: number, connection: Queryable) {
-    if (kind === 'storage' && amount > 0) {
+  private async reserveIncluded(amount: number, connection: Queryable) {
+    if (amount > 0) {
       const total = await this.db.one<{ bytes: string }>(
         `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'variable' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources`,
         [],
@@ -295,25 +228,14 @@ export class Billing {
       if (Number(total?.bytes ?? 0) + amount > this.config.FOUNDATION_INCLUDED_STORAGE_BYTES)
         fail(409, 'storage_capacity', 'The available storage capacity has been reached.');
     }
-    if (kind === 'compute') {
-      const active = await this.db.one<{ count: string }>(
-        `SELECT count(*) count FROM resources WHERE kind='environment' AND data->>'driver'='managed' AND data->>'state' IN ('starting','running','stopping')`,
-        [],
-        connection,
-      );
-      if (Number(active?.count ?? 0) >= this.config.FOUNDATION_INCLUDED_ENVIRONMENTS)
-        fail(409, 'environment_capacity', 'All available environments are currently in use.');
-      if (await this.computeUsage(null, connection) + amount > this.config.FOUNDATION_INCLUDED_COMPUTE_SECONDS)
-        fail(409, 'compute_capacity', 'The available monthly compute capacity has been reached.');
-    }
   }
-  async limits(actor: Actor, id: string, storageBytes: number, computeSeconds: number) {
+  async limits(actor: Actor, id: string, storageBytes: number) {
     await this.authorization.requirePrincipal(actor, id, 'manage_billing');
     await this.db.pool.query(
-      'INSERT INTO usage_limits(principal_id,storage_bytes,compute_seconds) VALUES($1,$2,$3) ON CONFLICT(principal_id) DO UPDATE SET storage_bytes=$2,compute_seconds=$3',
-      [id, storageBytes, computeSeconds],
+      'INSERT INTO usage_limits(principal_id,storage_bytes) VALUES($1,$2) ON CONFLICT(principal_id) DO UPDATE SET storage_bytes=$2',
+      [id, storageBytes],
     );
-    await this.audit.record(id, actor.id, 'billing.limits', id, { storageBytes, computeSeconds });
+    await this.audit.record(id, actor.id, 'billing.limits', id, { storageBytes });
   }
   async checkout(actor: Actor, id: string) {
     id = await this.payer(id);
@@ -375,7 +297,6 @@ export class Billing {
   }
   async record(
     principalId: string,
-    meter: 'storage' | 'compute',
     amount: number,
     reference: string,
     connection: Queryable = this.db.pool,
@@ -384,8 +305,8 @@ export class Billing {
     if (!Number.isSafeInteger(amount) || amount < 0)
       throw new Error('Usage must be a nonnegative safe integer.');
     await connection.query(
-      'INSERT INTO billing_events(id,reference,payer_id,principal_id,meter,amount,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(reference) DO NOTHING',
-      [randomUUID(), reference, await this.payer(principalId, connection), principalId, meter, amount, measuredAt],
+      'INSERT INTO billing_events(id,reference,payer_id,principal_id,amount,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(reference) DO NOTHING',
+      [randomUUID(), reference, await this.payer(principalId, connection), principalId, amount, measuredAt],
     );
   }
   async report() {
@@ -395,7 +316,6 @@ export class Billing {
         const event = await this.db.one<{
           id: string;
           customer_id: string;
-          meter: 'compute' | 'storage';
           amount: string;
           created_at: Date;
         }>(
@@ -408,7 +328,6 @@ export class Billing {
           await this.provider.meter({
             id: event.id,
             customerId: event.customer_id,
-            meter: event.meter,
             amount: Number(event.amount),
             createdAt: event.created_at,
           });
@@ -434,7 +353,6 @@ export class Billing {
       for (const row of rows)
         await this.record(
           row.owner_id,
-          'storage',
           Number(row.bytes),
           'storage:' + bucket + ':' + row.owner_id,
           connection,

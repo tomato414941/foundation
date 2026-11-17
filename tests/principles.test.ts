@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { decode, encode } from '../shared/encryption.js';
-import { FunctionDefinition, Resource } from '../shared/contracts.js';
+import { encode } from '../shared/encryption.js';
+import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
 import { canonical, hash } from '../shared/authority.js';
 import { ContentTypes, protect } from '../shared/custody.js';
-import { Task, signEnvironment } from '../shared/runtime-protocol.js';
 import { ExecutionClient } from '../shared/execution-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
@@ -63,17 +62,7 @@ const ways = {
   app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
     { name: 'app.save', input: { ownerId: f.owner.actor.id, name, methodId: 'github:oauth', clientId: 'the-same-client' } },
     { clientSecret: 'the-same-secret', fields: {} }))) },
-  // What a run returns when it keeps a value of the response it got as a variable of the name given.
-  result: { kind: 'result', deposit: async (f: Flow, name: string) => {
-    const started = await f.operations.execute({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
-      environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://service.example/value',
-        method: 'GET' } }, names: { '/value': name } } });
-    if (!('kind' in started) || started.kind !== 'run') throw new Error('Expected a run.');
-    await f.executor.tick();
-    const task = await f.client.api.json('/api/runtime/runs/' + started.task.id, {}, Task);
-    return { kind: 'result', content: encode(canonical(await f.client.result(task))) };
-  } },
-} satisfies Record<string, { kind: ProtectedKindName | 'result'; deposit: (f: Flow, name: string) => Promise<Opened> }>;
+} satisfies Record<string, { kind: ProtectedKindName; deposit: (f: Flow, name: string) => Promise<Opened> }>;
 type Way = keyof typeof ways;
 type Opened = { kind: string; content: Uint8Array };
 // A way of making each kind of item that keeps sealed content: a new kind does not compile until one is given above.
@@ -91,7 +80,7 @@ async function item(f: Flow, id: string): Promise<Opened> {
 }
 // Deposits in a database of its own, with the randomness the client draws fixed, so that two deposits differ only in
 // the name. Ids drawn this way repeat between the two deposits, which is why they never share a database. Every request
-// sent out gets the same response, carrying a value a run can keep.
+// sent out gets the same response.
 async function depositAlone(deposit: (f: Flow, name: string) => Promise<Opened>, name: string) {
   const f = await flowFixture(() => jsonResponse({ value: 'the same value' }));
   const random = globalThis.crypto, counter = { value: 0 };
@@ -139,67 +128,15 @@ test('封をする種類のそれぞれを、その種類を作る預け方で�
 // each registration it signed again, as after an update, put that name back over the one given in Foundation.
 // Intent: rename an environment in Foundation, have its executor sign its registration again as it does after an
 // update, and read the name back.
-test('作業用の機械が登録し直しても、Foundation で付けた名前のまま変わらない', async () => {
-  const f = await flowFixture();
-  try {
-    const { manifest } = f.environment;
-    const current = await f.client.api.json('/api/resources/' + manifest.id, {}, Resource);
-    await f.client.api.json('/api/resources/' + manifest.id, { method: 'PATCH',
-      body: { version: current.version, name: 'Renamed in Foundation' } }, Resource);
-    await f.context.delegation.register(f.executorIdentity.actor,
-      await signEnvironment({ ...manifest, revision: manifest.revision + 1 }, f.executorIdentity.keys));
-    assert.equal((await f.client.api.json('/api/resources/' + manifest.id, {}, Resource)).name, 'Renamed in Foundation');
-  } finally { await f.close(); }
-});
-
 // Why: the user decided that what an owner signs to allow something names it by what it does; a description or a label
 // is kept in one place, Foundation. A function's owner once signed its description and the labels of its parameters with
 // its program, so describing it again took back the approvals given to run it and to read its inputs.
 // Intent: approve a function that reads an input, describe it and its parameter again, and run it as approved.
-test('関数の説明と引数の見出しを変えても、出した許可のまま実行できる', async () => {
-  const f = await flowFixture();
-  try {
-    const definition = FunctionDefinition.parse({ description: 'Repeat a message.', program: { kind: 'command',
-      command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>' +
-        'console.log(JSON.stringify({message:JSON.parse(text).message,read:!!process.env.INPUT})));'],
-      inputs: [{ name: 'INPUT', source: { id: f.resource.id } }], timeoutSeconds: 5 },
-      parameters: [{ name: 'message', label: 'Message' }] });
-    const fn = await f.functions.save({ ownerId: f.owner.actor.id, name: 'Repeater', definition });
-    await f.functions.configure(fn.id, { environmentId: f.environment.manifest.id });
-    await f.functions.save({ ownerId: f.owner.actor.id, name: 'Repeater', resourceId: fn.id, version: fn.version,
-      definition: { ...definition, description: 'Repeat a message, described again.',
-        parameters: [{ ...definition.parameters[0]!, label: 'Words to repeat' }] } });
-    const invoked = await f.functions.invoke(fn.id, { message: 'Still approved' });
-    await f.functionExecutor.tick();
-    assert.deepEqual((await f.functions.result(invoked.id)).results[0], { message: 'Still approved', read: true });
-  } finally { await f.close(); }
-});
-
 // Why: the user decided that what is signed names things by what identifies them. A reviewed run once named the
 // variables it keeps values in by their names, so a value went to whichever variable had that name when the run went
 // ahead: a variable renamed in between was passed over, and another that had taken its name was written over.
 // Intent: ask for a run that keeps a value in a variable, rename it and give its name to another before the run goes
 // ahead, and read both.
-test('保存先の変数は、名前を変えて別の変数がその名前になっても、指した変数に保存される', async () => {
-  const f = await flowFixture(() => jsonResponse({ value: 'the kept value' }));
-  try {
-    const variable = async () => saved(await f.operations.execute(
-      { name: 'variable.save', input: { ownerId: f.owner.actor.id, name: 'Token' } }, { value: encode('before') }));
-    const target = await variable();
-    const started = await f.operations.start({ name: 'run.execute', input: { ownerId: f.owner.actor.id,
-      environmentId: f.environment.manifest.id, operation: { kind: 'http', request: { url: 'https://service.example/value',
-        method: 'GET' } }, save: { '/value': target } } });
-    const current = await f.client.api.json('/api/resources/' + target, {}, Resource);
-    await f.client.api.json('/api/resources/' + target, { method: 'PATCH',
-      body: { version: current.version, name: 'Renamed token' } }, Resource);
-    const other = await variable();
-    await f.operations.continue(started.id);
-    await f.executor.tick();
-    assert.equal(decode(await f.client.reveal(target)), 'the kept value');
-    assert.equal(decode(await f.client.reveal(other)), 'before');
-  } finally { await f.close(); }
-});
-
 // Why: the user decided that a seal holds only what it cannot do without. A connection being made once had its progress
 // sealed with the connection's name and with the method it was made through, that method's name and description
 // included, though Foundation keeps them as labels.

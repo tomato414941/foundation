@@ -14,26 +14,11 @@ def validate(value):
         "image": r"ghcr\.io/tomato414941/foundation@sha256:[a-f0-9]{64}",
         "cliVersion": r"\d+\.\d+\.\d+",
         "cliSha256": r"[a-f0-9]{64}",
-        "agentSha256": r"[a-f0-9]{64}",
         "schemaSha256": r"[a-f0-9]{64}",
     }
     for name, pattern in checks.items():
         if not isinstance(value.get(name), str) or not re.fullmatch(pattern, value[name]):
             raise ValueError("Invalid release " + name)
-    settings = value.get("environment", {})
-    patterns = {
-        "EC2_ENVIRONMENT_AMI": r"ami-[a-f0-9]+",
-        "EC2_ENVIRONMENT_VPC": r"vpc-[a-f0-9]+",
-        "EC2_ENVIRONMENT_ACL": r"acl-[a-f0-9]+",
-        "EC2_ENVIRONMENT_DEFAULT_ACL": r"acl-[a-f0-9]+",
-        "EC2_ENVIRONMENT_ROUTE_TABLE": r"rtb-[a-f0-9]+",
-        "EC2_ENVIRONMENT_ZONE": r"ap-northeast-1[a-z]",
-    }
-    if set(settings) != set(patterns):
-        raise ValueError("The release must contain its complete environment configuration.")
-    for name, pattern in patterns.items():
-        if not isinstance(settings[name], str) or not re.fullmatch(pattern, settings[name]):
-            raise ValueError("Invalid environment setting " + name)
     return value
 
 

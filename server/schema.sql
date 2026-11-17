@@ -26,7 +26,6 @@ CREATE TABLE credentials (
   data jsonb NOT NULL DEFAULT '{}',
   private_wrap text,
   expires_at timestamptz,
-  environment_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   last_used_at timestamptz
 );
@@ -55,7 +54,7 @@ CREATE TABLE resources (
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   -- When it came to its owner, kept by stamp_owned_at.
   owned_at timestamptz NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function','keyring','ssh_key','ssh_host')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','keyring','ssh_key','ssh_host')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,
@@ -97,44 +96,11 @@ CREATE TABLE object_blobs (
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE environment_jobs (
-  resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-  machine_id text,
-  lease_until timestamptz,
-  lease_token uuid,
-  attempts integer NOT NULL DEFAULT 0,
-  retry_at timestamptz NOT NULL DEFAULT now(),
-  volume_id text,
-  ssh_ciphertext text,
-  ssh_checked_at timestamptz,
-  ssh_sync_at timestamptz,
-  provision_expires_at timestamptz,
-  provider text CHECK (provider='ec2'),
-  network_slot integer CHECK (network_slot BETWEEN 0 AND 4091),
-  metered_at timestamptz
-);
-CREATE UNIQUE INDEX environment_network_slot ON environment_jobs(network_slot) WHERE network_slot IS NOT NULL;
-CREATE TABLE environment_deletions (
-  resource_id uuid PRIMARY KEY,
-  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  -- Who asked for it, by id alone: the owner keeps the record after that principal is deleted.
-  actor_id uuid,
-  state text NOT NULL CHECK (state IN ('pending','failed','complete')),
-  error text,
-  requested_at timestamptz NOT NULL DEFAULT now(),
-  completed_at timestamptz
-);
 CREATE TABLE resource_references (
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   referenced_id uuid NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
   PRIMARY KEY(resource_id,referenced_id),
   CHECK (resource_id <> referenced_id)
-);
-CREATE TABLE function_settings (
-  function_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-  environment_id uuid REFERENCES resources(id) ON DELETE SET NULL,
-  version integer NOT NULL CHECK (version > 0),
-  approval jsonb NOT NULL
 );
 -- The records of what principals did name who acted by id alone: deleting a principal neither waits for them nor
 -- removes them from the history of others. What a principal owns still goes with it.
@@ -205,19 +171,17 @@ CREATE TABLE billing_events (
   payer_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   -- Who used it, by id alone: the payer keeps the usage after that principal is deleted.
   principal_id uuid NOT NULL,
-  meter text NOT NULL CHECK(meter IN ('compute','storage')),
   amount bigint NOT NULL CHECK(amount >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz
 );
-CREATE INDEX billing_events_usage ON billing_events(meter,created_at,principal_id);
+CREATE INDEX billing_events_usage ON billing_events(created_at,principal_id);
 CREATE TABLE payment_webhooks (
   id text PRIMARY KEY,
   received_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE usage_limits (
   principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
-  compute_seconds bigint NOT NULL DEFAULT 3600,
   storage_bytes bigint NOT NULL DEFAULT 1073741824
 );
 CREATE TABLE audit_log (
@@ -243,85 +207,6 @@ CREATE TABLE resource_custody (
   resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
   content jsonb NOT NULL
 );
-CREATE TABLE executor_environments (
-  resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-  executor_id uuid NOT NULL REFERENCES principals(id),
-  registration jsonb NOT NULL,
-  heartbeat_at timestamptz,
-  stopped_at timestamptz
-);
-CREATE TABLE execution_tasks (
-  id uuid PRIMARY KEY,
-  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL,
-  environment_id uuid NOT NULL,
-  kind text NOT NULL CHECK(kind IN ('http','command','function','connect','refresh','revoke')),
-  state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
-  actor jsonb NOT NULL,
-  request jsonb NOT NULL,
-  receipt jsonb,
-  error text,
-  phase text NOT NULL DEFAULT 'queued' CHECK(phase IN ('queued','claimed','dispatched','settled')),
-  cancel_requested boolean NOT NULL DEFAULT false,
-  lease_token uuid,
-  lease_until timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  started_at timestamptz,
-  finished_at timestamptz,
-  output_names jsonb NOT NULL DEFAULT '{}'::jsonb
-);
-CREATE INDEX execution_queue ON execution_tasks(environment_id,state,created_at);
-CREATE INDEX execution_owner ON execution_tasks(owner_id,created_at DESC);
-CREATE INDEX execution_operation_context ON execution_tasks((request->'intent'->'operationContext'->>'id'),created_at)
-  WHERE request->'intent'->'operationContext'->>'id' IS NOT NULL;
-CREATE TABLE environment_processes (
-  id uuid PRIMARY KEY,
-  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL,
-  executor_id uuid,
-  environment_id uuid NOT NULL,
-  state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
-  actor jsonb NOT NULL,
-  request jsonb NOT NULL,
-  result jsonb,
-  error text,
-  phase text NOT NULL DEFAULT 'queued' CHECK(phase IN ('queued','claimed','dispatched','settled')),
-  cancel_requested boolean NOT NULL DEFAULT false,
-  lease_token uuid,
-  lease_until timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  started_at timestamptz,
-  finished_at timestamptz
-);
-CREATE INDEX process_queue ON environment_processes(environment_id,state,created_at);
-CREATE TABLE function_invocations (
-  id uuid PRIMARY KEY,
-  function_id uuid NOT NULL,
-  function_owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actor_id uuid NOT NULL,
-  executor_id uuid NOT NULL,
-  environment_id uuid NOT NULL,
-  executor jsonb NOT NULL,
-  actor jsonb NOT NULL,
-  input_digest text NOT NULL,
-  request jsonb NOT NULL,
-  publication jsonb NOT NULL,
-  settings jsonb,
-  output_names jsonb NOT NULL DEFAULT '{}'::jsonb,
-  state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
-  completion jsonb,
-  error jsonb,
-  phase text NOT NULL DEFAULT 'queued' CHECK(phase IN ('queued','claimed','dispatched','settled')),
-  cancel_requested boolean NOT NULL DEFAULT false,
-  lease_token uuid,
-  lease_until timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  started_at timestamptz,
-  finished_at timestamptz
-);
-CREATE INDEX invocation_queue ON function_invocations(environment_id,state,created_at);
-CREATE INDEX invocation_owner ON function_invocations(owner_id,id);
 CREATE TABLE connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

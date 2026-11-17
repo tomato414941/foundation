@@ -3,14 +3,10 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { IdParams, Ok } from '../shared/contracts.js';
-import { SSHView } from '../shared/ssh.js';
 import { SSHPlan, SSHReport } from '../shared/ssh-access.js';
 import { SSHAccessQuery, SSHAuthorizationView, SSHHostAccountView } from './ssh-access.js';
 
-export async function routesSSH(app: ApiApp, { environments, sshAccess }: Context) {
-  app.get('/api/environments/:id/ssh', {
-    schema: { summary: 'Get SSH connection information', params: IdParams, response: { 200: SSHView.nullable() } },
-  }, request => environments.ssh(actor(request), request.params.id));
+export async function routesSSH(app: ApiApp, { sshAccess }: Context) {
   app.get('/api/ssh-access', {
     schema: { summary: 'List SSH keys let into host accounts, as decided and as the hosts last showed',
       querystring: SSHAccessQuery, response: { 200: z.object({ items: z.array(SSHAuthorizationView) }) } },

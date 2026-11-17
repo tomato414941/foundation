@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AuthorizedKeysFile, SSHAddress, SSHConnection, SSHFingerprint, SSHPublicKey, SSHSettings } from './ssh.js';
+import { AuthorizedKeysFile, SSHAddress, SSHFingerprint, SSHPublicKey } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
 import { OvhConnectionInfo } from './ovh.js';
@@ -27,7 +27,6 @@ export const Action = z.enum([
   'transfer',
   'reveal',
   'use',
-  'execute',
   'manage_credentials',
   'manage_billing',
   'export',
@@ -44,7 +43,6 @@ export const RoleOf = {
   transfer: 'transferrer',
   reveal: 'revealer',
   use: 'user',
-  execute: 'runner',
   manage_credentials: 'credential_manager',
   manage_billing: 'billing_manager',
   export: 'exporter',
@@ -56,8 +54,6 @@ export const ResourceKind = z.enum([
   'method',
   'app',
   'object',
-  'environment',
-  'function',
   'keyring',
   'ssh_key',
   'ssh_host',
@@ -366,73 +362,6 @@ export const Input = z
   })
   .strict();
 export type InjectionInput = z.infer<typeof Input>;
-export const Binding = z
-  .object({
-    pointer: z.string().max(500),
-    parts: z
-      .array(z.union([z.string().max(8192), Source]))
-      .min(1)
-      .max(32),
-  })
-  .strict();
-export const HttpRequest = z
-  .object({
-    url: z.string().min(1).max(4096).optional(),
-    connectionId: Id.optional(),
-    method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
-    headers: z.record(z.string(), z.string().max(8192)).default({}),
-    body: z.string().max(1_000_000).optional(),
-    json: Json.optional(),
-    form: z.record(z.string(), z.string()).optional(),
-    bindings: z.array(Binding).max(32).default([]),
-  })
-  .strict().refine(value => Boolean(value.url || value.connectionId), {
-    message: 'Choose a connection or enter a destination URL.',
-  });
-export type HttpRequestInput = z.infer<typeof HttpRequest>;
-export const Command = z
-  .object({
-    command: z.array(z.string().max(8192)).min(1).max(100),
-    stdin: z.string().max(1_000_000).optional(),
-    timeoutSeconds: z.number().int().min(1).max(3600).default(60),
-    inputs: z.array(Input).max(32).default([]),
-  })
-  .strict();
-export const FunctionProgram = z.discriminatedUnion('kind', [
-  Command.omit({ stdin: true }).extend({ kind: z.literal('command') }).strict(),
-  z.object({ kind: z.literal('http'), request: HttpRequest,
-    responseFormat: z.enum(['text', 'json']).default('json') }).strict(),
-]);
-const FunctionParameter = z.object({
-  name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/),
-  label: z.string().max(100),
-  type: z.enum(['string', 'number', 'boolean', 'json']).default('string'),
-  required: z.boolean().default(true),
-  default: Json.optional(),
-}).strict();
-export const FunctionDefinition = z
-  .object({
-    description: z.string().max(2000).default(''),
-    program: FunctionProgram,
-    parameters: z.array(FunctionParameter).max(32).default([]),
-    result: z.enum(['text', 'json']).default('json'),
-  })
-  .strict();
-export type FunctionSpec = z.infer<typeof FunctionDefinition>;
-// What a function does: its definition without its description and the labels of its parameters, which Foundation
-// keeps as labels. Its owner signs this, approvals name it by its digest, and executors run it.
-export const FunctionRules = z.object({
-  program: FunctionProgram,
-  parameters: z.array(FunctionParameter.omit({ label: true })).max(32).default([]),
-  result: FunctionDefinition.shape.result,
-}).strict();
-export type FunctionRuleSpec = z.infer<typeof FunctionRules>;
-export const FunctionInputAccess = z.object({ expiresAt: Time.nullable().default(null) }).strict();
-export const FunctionExecutionSettings = z.object({
-  version: z.number().int().nonnegative(), environmentId: Id.nullable(),
-  inputAccess: FunctionInputAccess,
-  state: z.enum(['publication_required', 'unconfigured', 'configured', 'approval_required', 'unavailable', 'expired']),
-}).strict();
 
 const resourceBase = {
   id: Id,
@@ -443,26 +372,6 @@ const resourceBase = {
   version: z.number().int().positive(),
   permissions: z.array(Action),
 };
-export const EnvironmentState = z.enum(['starting', 'running', 'stopping', 'stopped', 'failed']);
-export const EnvironmentStopReason = z.enum(['manual', 'idle', 'timeout', 'quota', 'capacity', 'payment']);
-export const EnvironmentDeletion = z.object({
-  state: z.enum(['pending', 'failed', 'complete']),
-  error: z.string().nullable(),
-});
-export const Lifetime = z
-  .object({
-    idleSeconds: z.number().int().min(60).max(2147483647).nullable().default(null),
-    maxSeconds: z.number().int().min(60).max(2147483647).nullable().default(null),
-  })
-  .strict();
-export const EnvironmentInput = z
-  .object({
-    size: z.enum(['small', 'medium', 'large']).default('small'),
-    lifetime: Lifetime.default({ idleSeconds: null, maxSeconds: null }),
-    ssh: SSHSettings.optional(),
-  })
-  .strict();
-export type EnvironmentOptions = z.infer<typeof EnvironmentInput>;
 const custodyMetadata = {
   recipients: z.array(Id).default([]), executors: z.array(Id).default([]),
   custodyRevision: z.number().int().positive().nullable().default(null),
@@ -519,33 +428,6 @@ export const ObjectResource = z.object({
   kind: z.literal('object'),
   data: z.object({ size: z.number().int().nonnegative(), contentType: z.string() }),
 });
-export const EnvironmentResource = z.object({
-  ...resourceBase,
-  kind: z.literal('environment'),
-  data: EnvironmentInput.extend({
-    executorId: Id.optional(), operatorId: Id.optional(), driver: z.enum(['attached', 'managed']).optional(),
-    capabilities: z.array(z.string()).optional(), isolation: z.enum(['process', 'container']).optional(),
-    manifestDigest: z.string().optional(),
-    processes: z.object({ workingDirectory: z.string() }).optional(),
-    ssh: SSHConnection.optional(),
-    awsPrincipal: z.string().optional(),
-    state: EnvironmentState,
-    connected: z.boolean(),
-    deletion: EnvironmentDeletion.optional(),
-    startedAt: Time.nullable(),
-    stoppedAt: Time.nullable(),
-    stopReason: EnvironmentStopReason.nullable().default(null),
-    lastActiveAt: Time,
-    error: z.string().nullable(),
-  }),
-});
-export const FunctionResource = z.object({
-  ...resourceBase,
-  kind: z.literal('function'),
-  data: FunctionDefinition.omit({ program: true }).extend({
-    program: FunctionProgram.optional(),
-  }),
-});
 // The public keys a principal verified, as one list it signs. Its devices read the list from the signature.
 export const KeyringResource = z.object({
   ...resourceBase,
@@ -571,8 +453,6 @@ export const Resource = z.discriminatedUnion('kind', [
   MethodResource,
   AppResource,
   ObjectResource,
-  EnvironmentResource,
-  FunctionResource,
   KeyringResource,
   SSHKeyResource,
   SSHHostResource,
@@ -580,12 +460,10 @@ export const Resource = z.discriminatedUnion('kind', [
 export type ResourceView = z.infer<typeof Resource>;
 export type VariableView = z.infer<typeof VariableResource>;
 export type ConnectionView = z.infer<typeof ConnectionResource>;
-export type EnvironmentView = z.infer<typeof EnvironmentResource>;
 export type ObjectView = z.infer<typeof ObjectResource>;
 export const NewResource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
   z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),
-  z.object({ kind: z.literal('environment'), name: Name.optional(), options: EnvironmentInput }).strict(),
 ]);
 export type NewResourceInput = z.infer<typeof NewResource>;
 export const UpdateResource = z
@@ -614,8 +492,7 @@ export type RequestedOperation = z.infer<typeof Operation>;
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
 export const DisplayedOperation = Operation.extend({ title: OperationTitle,
-  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()),
-  environment: z.object({ required: z.boolean(), reason: OperationTitle.nullable() }).strict() });
+  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()) });
 export const RequestInput = z
   .object({
     to: Id.optional(),
@@ -672,8 +549,6 @@ export const Payment = z.object({
 export const Usage = z.object({
   storageBytes: z.number().nonnegative(),
   storageLimit: z.number().positive(),
-  computeSeconds: z.number().nonnegative(),
-  computeLimit: z.number().positive(),
   month: z.string(),
 });
 export const AuditEntry = z.object({

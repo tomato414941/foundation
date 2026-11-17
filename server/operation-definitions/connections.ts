@@ -5,7 +5,7 @@ import { AppSave, AuthorizeConnection, ConnectService, Execution, ValueSave } fr
 import { canonical } from '../../shared/authority.js';
 import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
-import { ContentTypes, Operations, permittedOperations } from '../../shared/custody.js';
+import { ContentTypes, permittedOperations } from '../../shared/custody.js';
 import type { CustodyPolicy } from '../../shared/custody.js';
 import type { Catalog } from '../catalog.js';
 import type { Custody } from '../custody.js';
@@ -17,8 +17,8 @@ import { requiresApp } from '../../shared/connections.js';
 import type { OperationServices } from '../builtin-definitions.js';
 import { keyholder } from './support.js';
 
-export function defineConnections(definitions: DefinitionRegistry, services: Pick<OperationServices, 'resources' | 'custody' | 'delegation' | 'catalog'>) {
-  const { resources, custody, delegation, catalog } = services;
+export function defineConnections(definitions: DefinitionRegistry, services: Pick<OperationServices, 'resources' | 'custody' | 'catalog'>) {
+  const { resources, custody, catalog } = services;
   const bind = definitions.bind.bind(definitions);
   // Signed encrypted writes update content under its current owner.
   definitions.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
@@ -60,22 +60,21 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       fail(409, 'operation_changed', 'Save the item prepared by this operation.');
     const binding = await custody.bindings.current(who.id);
     const previous = input.resourceId ? await custody.get(input.resourceId) : null;
-    const executors = previous && input.environmentIds === undefined
-      ? previous.policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id)
-      : await Promise.all((input.environmentIds ?? []).map(async id => (await delegation.environment(id)).registration.manifest.executor.id));
+    const executors = previous
+      ? previous.policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id) : [];
     const grants = policy.grants.filter(grant => 'actor' in grant && grant.actor.id === binding.binding.id).map(grant => grant.executor.id);
     if (canonical([...new Set(executors)].sort()) !== canonical([...new Set(grants)].sort()))
-      fail(409, 'operation_changed', 'Use the execution environments approved for this item.');
+      fail(409, 'operation_changed', 'Keep the permissions this item has.');
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
     if ('methodId' in input) await requireFields(who, input, write.content.metadata);
     return resources.view(who, await custody.put(who, write, connection));
   };
   definitions.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
-    { execution: 'keyholder', configure: ['environmentIds', 'name'], secret: pointer => pointer === '/value',
+    { execution: 'keyholder', configure: ['name'], secret: pointer => pointer === '/value',
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.value) });
   definitions.define('app.save', AppSave, ['アプリを保存する', 'Save an application'], keyholder,
-    { execution: 'keyholder', configure: ['environmentIds', 'name', 'clientId', 'fields'],
+    { execution: 'keyholder', configure: ['name', 'clientId', 'fields'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       review: reviewFields, resolve: reviewFields,
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
@@ -107,7 +106,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       return resources.view(who, await custody.put(who, write));
     } });
   definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
-    { execution: 'keyholder', continuation: 'connection', delegatedOperation: () => Operations.connect, configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
+    { execution: 'keyholder', continuation: 'connection', configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       prepareInput: async (who, input, proof, connection) => {
         const method = await catalog.method(who, input.methodId);
@@ -115,7 +114,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
           fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
         const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
           name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
-          clientId: input.clientId, fields: input.fields, environmentIds: [] }), proof, ContentTypes.clientCredential, connection);
+          clientId: input.clientId, fields: input.fields }), proof, ContentTypes.clientCredential, connection);
         return { ...input, appId: app.id, fields: app.kind === 'app' ? app.data.fields : input.fields };
       },
       review: async (who, input) => {

@@ -6,20 +6,16 @@ import { connectionLabels, connectionMetadata, openConnection, sealedConnection 
 import { earlierConnection } from './connection-legacy.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { endorsementPayload, RotationRequest } from './key-rotations.js';
-import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding, verifiesReplacement } from './authority.js';
+import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, verifyBinding, verifiesReplacement } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
-  AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
-  prepareRun, protect, reveal, verifyContent, grantActive, grantExpiration,
+  AccessPolicy, ContentTypes, continuesPolicy, policyAuthority, protect, reveal, verifyContent, grantActive,
 } from './custody.js';
-import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun, UseGrant } from './custody.js';
-import { BoundRecipient, KeySharingItem, ProtectedRead, Registration, Reprotection, TransferRecipients } from './protocol.js';
+import type { ContentTypeId, CustodyContent, CustodyPolicy } from './custody.js';
+import { BoundRecipient, KeySharingItem, ProtectedRead, Reprotection, TransferRecipients } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
 import { isProtected } from './protected.js';
-import { HTTP_RUNTIME_VERSION, RuntimeOperation, Task, authorizeEnvironment, makeSharedReceipt, readReceipt, verifyEnvironment } from './runtime-protocol.js';
-import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './runtime-protocol.js';
 import { KeyringState, keyringClaim, openKeyring, signKeyring } from './keyring.js';
-import { httpSources } from './http-connections.js';
 import type { KeyringEntryValue, KeyringValue } from './keyring.js';
 
 export interface JsonApi {
@@ -37,8 +33,6 @@ export interface TrustStore {
   // new format starts fresh instead of reading records written in another one.
   checkpoint(content: CustodyContent): Promise<{ policy: CustodyPolicy; materialRevision: number; digest: string } | null>;
   rememberContent(content: CustodyContent): Promise<void>;
-  run(id: string): Promise<SealedRun | null>;
-  rememberRun(request: SealedRun): Promise<void>;
 }
 export class ClientFailure extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -106,13 +100,6 @@ export class CustodyClient {
       current = replacement.replacement.binding;
     }
     return canonical(current) === canonical(next);
-  }
-  // Old signatures attest an immutable execution request; they do not authorize a new request or new content.
-  private async historicalKeys(binding: BoundKeys) {
-    if (await this.verifies(binding)) return binding;
-    const known = binding.principalId === this.binding.principalId ? this.binding : await this.known(binding.principalId);
-    if (known && binding.generation < known.generation && await this.connectedKeys(binding, known)) return binding;
-    return this.trusted(binding);
   }
   // Whether this identity verified the keys: its own, those in its keyring, or those this device verified before
   // keyrings. A keyring's entry for a principal decides over what this device verified earlier.
@@ -214,14 +201,6 @@ export class CustodyClient {
       await this.trust.rememberBinding(identity.binding);
     }
     return identity;
-  }
-  async environment(id: string, trusted = true) {
-    const { registration, stoppedAt } = await this.api.json('/api/environments/' + Id.parse(id) + '/registration', {}, Registration);
-    await verifyEnvironment(registration);
-    if (registration.manifest.origin !== this.origin || registration.manifest.id !== id || stoppedAt)
-      throw new Error('Choose an active execution environment on this Foundation server.');
-    if (trusted) await this.trusted(registration.manifest.executor);
-    return registration;
   }
   async recipients(ownerId: string) {
     const { items } = await this.api.json('/api/principals/' + Id.parse(ownerId) + '/bound-recipients', {}, listOf(BoundRecipient));
@@ -330,20 +309,13 @@ export class CustodyClient {
   }
   // The policy for an item: carried on from its previous one, or new. One sealed only for keys this identity has since
   // replaced is sealed anew as the same item, at its next revision.
-  async policy(ownerId: string, contentType: ContentTypeId, environments: RegisteredEnvironment[] = [],
-    options: { id?: string; previous?: CustodyPolicy; replacing?: CustodyPolicy; expiresAt?: string } = {}) {
+  async policy(ownerId: string, contentType: ContentTypeId,
+    options: { id?: string; previous?: CustodyPolicy; replacing?: CustodyPolicy } = {}) {
     const { readers, authorities } = await this.ownerRecipients(ownerId, options.previous);
     if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
       throw new Error('Include your own identity as a reader before creating this item.');
-    const expiresAt = options.expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
     const grants = options.previous ? options.previous.grants.filter(grant =>
       (!('actor' in grant) || grant.actor.id !== this.binding.id) && grantActive(grant)) : [];
-    for (const environment of environments) {
-      await this.trusted(environment.manifest.executor);
-      grants.push({ actor: this.binding, executor: environment.manifest.executor,
-        operations: [...permittedOperations(contentType)],
-        origins: [], functionDigests: [], callerProgram: contentType !== ContentTypes.clientCredential, expiresAt });
-    }
     return AccessPolicy.parse({ format: 2, id: options.id ?? options.previous?.id ?? options.replacing?.id ?? crypto.randomUUID(),
       origin: this.origin, ownerId, contentType, revision: (options.previous?.revision ?? options.replacing?.revision ?? 0) + 1,
       authorities, readers, grants, producers: [] });
@@ -499,145 +471,5 @@ export class CustodyClient {
         sources.set(source.metadata.appId, (await this.read(source.metadata.appId)).content);
     }
     return [...sources.values()];
-  }
-  // The approval for an executor to keep a value in the variable of this id: one the owner has, or, with nothing sealed
-  // under the id yet, a new one.
-  async output(ownerId: string, id: string, runId: string, environment: { manifest: { executor: BoundKeys } }, expiresAt: string) {
-    const latest = await this.latest(id).catch((error: unknown) => {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'custody_required') return undefined;
-      throw error;
-    }), previous = latest?.content;
-    if (previous && (previous.policy.ownerId !== ownerId || previous.policy.contentType !== ContentTypes.value))
-      throw new ClientFailure('wrong_kind', 'Keep each output in a variable of its owner.');
-    const policy: CustodyPolicy = previous && !latest.replaced ? { ...previous.policy, revision: previous.policy.revision + 1, producers: [] }
-      : await this.policy(ownerId, ContentTypes.value, [], previous ? { replacing: previous.policy } : { id });
-    policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
-      materialRevision: (previous?.materialRevision ?? 0) + 1 }];
-    return approvePolicy(policy, this.binding, this.keys, latest?.replaced ? undefined : previous);
-  }
-  async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
-    options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;
-      approval?: ExecutionIntent['approval']; operationContext?: ExecutionIntent['operationContext'] } = {}) {
-    const operation = RuntimeOperation.parse(input);
-    const environment = await this.environment(environmentId);
-    await this.trusted(environment.manifest.executor);
-    const id = options.id ?? crypto.randomUUID();
-    let expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
-    const program = operation;
-    const request = program.kind === 'http' ? program.request : null;
-    if (request?.connectionId && environment.manifest.httpVersion !== HTTP_RUNTIME_VERSION)
-      throw new ClientFailure('http_runtime_required', 'Update this execution environment to use HTTP connections.');
-    if (operation.kind === 'http') {
-      const save = options.save ?? {};
-      // A new output takes the name the reviewed run gives it.
-      if (Object.keys(save).length && !options.operationContext)
-        throw new ClientFailure('review_required', 'Keep outputs from a reviewed run, which names them.');
-      const outputs = Object.fromEntries(await Promise.all(Object.entries(save).map(async ([pointer, destination]) =>
-        [pointer, await this.output(ownerId, destination, id, environment, expiresAt)])));
-      operation.save = outputs;
-    }
-    const ids = program.kind === 'command' ? program.inputs.map(input => input.source.id)
-      : request ? httpSources(request).map(source => source.id) : [];
-    const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
-    for (let index = 0; index < sources.length; index++) {
-      const source = sources[index]!, credential = source.policy.contentType === ContentTypes.clientCredential;
-      const use = credential ? Operations.refresh : Operations[operation.kind];
-      const destination = credential || !request?.url ? undefined : new URL(request.url).origin;
-      const permitted = source.policy.grants.some(grant => 'actor' in grant &&
-        canonical(grant.actor) === canonical(this.binding) && canonical(grant.executor) === canonical(environment.manifest.executor) &&
-        grant.operations.includes(use) && grantExpiration(grant) >= Date.parse(expiresAt) &&
-        (!destination || !grant.origins.length || grant.origins.includes(destination)) &&
-        (credential || grant.callerProgram));
-      if (permitted || !source.policy.authorities.some(authority => canonical(authority) === canonical(this.binding))) continue;
-      const previous = await this.read(source.policy.id), resource = await this.api.json('/api/resources/' + source.policy.id, {}, Resource);
-      const grant = { actor: this.binding, executor: environment.manifest.executor,
-        operations: [...new Set([use, ...(source.policy.contentType === ContentTypes.tokenSet ? [Operations.refresh] : [])])],
-        origins: destination ? [destination] : [], functionDigests: [], callerProgram: !credential, expiresAt };
-      // Expired grants allow nothing, and grants differing only in expiry allow what the latest one does.
-      // Dropping the former and merging the latter keeps one grant per scope however often it is used.
-      const scope = (value: UseGrant) => canonical({ ...value, expiresAt: null });
-      const same = previous.content.policy.grants.filter(item => scope(item) === scope(grant));
-      const policy = AccessPolicy.parse({ ...previous.content.policy, revision: previous.content.policy.revision + 1, grants: [
-        ...previous.content.policy.grants.filter(item => grantActive(item) && scope(item) !== scope(grant)),
-        { ...grant, expiresAt: new Date(Math.max(Date.parse(expiresAt), ...same.map(item => grantExpiration(item)))).toISOString() }] });
-      await this.save(resource.name, await reveal(previous.content, this.binding, this.keys.encryption), policy,
-        { previous, metadata: previous.content.metadata });
-      sources[index] = (await this.read(source.policy.id)).content;
-    }
-    const resultPolicy = await this.policy(ownerId, ContentTypes.executionResult, [], { id });
-    resultPolicy.producers = [{ executor: environment.manifest.executor, runId: id, expiresAt, materialRevision: 1 }];
-    const intent: ExecutionIntent = { format: 2, id, origin: this.origin, ownerId, actor: this.binding,
-      environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
-      operation: Operations[operation.kind], operationDigest: await hash(operation),
-      ...(options.approval ? { approval: options.approval } : {}),
-      ...(options.operationContext ? { operationContext: options.operationContext } : {}),
-      functionDigest: null,
-      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
-        materialRevision: content.materialRevision, policyDigest: await hash(content.policy),
-        ...(content.policy.contentType === ContentTypes.tokenSet && typeof content.metadata.authorizationDigest === 'string'
-          ? { authorizationDigest: content.metadata.authorizationDigest } : {}),
-      }))), resultRecipients: resultPolicy.readers,
-      ...(environment.manifest.resultVersion ? { resultApproval: await approvePolicy(resultPolicy, this.binding, this.keys) } : {}),
-      createdAt: new Date().toISOString(), expiresAt };
-    await authorizeEnvironment(environment, intent);
-    const credential = (content: CustodyContent) => content.policy.contentType === ContentTypes.clientCredential;
-    for (const source of sources) await authorizeUse(source, credential(source) &&
-      intent.operation !== Operations.connect ? { ...intent, operation: Operations.refresh } : intent,
-      credential(source) ? {} : { destination: request?.url,
-        destinationPending: Boolean(request?.connectionId && !request.url) });
-    return prepareRun(intent, operation, this.keys);
-  }
-  async submit(ownerId: string, environmentId: string, operation: ExecutionOperation,
-    options: Parameters<CustodyClient['prepare']>[3] = {}) {
-    return this.submitPrepared(await this.prepare(ownerId, environmentId, operation, options));
-  }
-  async submitPrepared(request: SealedRun) {
-    await this.trust.rememberRun(request);
-    try { return await this.api.json('/api/runtime/runs', { method: 'POST', body: request }, Task); }
-    catch (error) {
-      if (error && typeof error === 'object' && 'status' in error) throw error;
-      throw new SubmissionPending(request.intent.id);
-    }
-  }
-  async resume(id: string) {
-    const request = await this.trust.run(Id.parse(id));
-    if (!request) throw new Error('Resume this execution from the device that saved its signed request.');
-    if (canonical(request.intent.actor) !== canonical(this.binding) || request.intent.origin !== this.origin)
-      throw new Error('Use the identity that signed this execution request.');
-    try {
-      const previous = await this.api.json('/api/runtime/runs/' + id, {}, Task);
-      if (canonical(previous.intent) !== canonical(request.intent) || previous.requestSignature !== request.signature)
-        throw new Error('Use the saved request that started this execution.');
-      return previous;
-    } catch (error) {
-      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
-    }
-    return this.submitPrepared(request);
-  }
-  async result(task: TaskView) {
-    if (task.intent.origin !== this.origin || task.intent.id !== task.id)
-      throw new Error('This execution belongs to another Foundation server.');
-    await this.historicalKeys(task.intent.actor);
-    const signed = await signedValue(task.requestSignature, task.intent.actor.signing, 'run') as { intent: unknown };
-    if (canonical(signed.intent) !== canonical(task.intent)) throw new Error('The result belongs to a different signed request.');
-    await this.historicalKeys(task.intent.executor);
-    const readers = task.receipt && 'content' in task.receipt ? task.receipt.content.policy.readers : task.intent.resultRecipients;
-    if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
-      throw new ClientFailure('not_recipient', 'This identity is not a reader of the execution result.');
-    if (task.receipt && 'content' in task.receipt) await this.observe(task.receipt.content, task.id);
-    return task.receipt ? readReceipt(task.receipt, task.intent, this.binding.id, this.keys) : null;
-  }
-  async shareLegacyResult(task: TaskView) {
-    if (!task.receipt || 'content' in task.receipt) return task;
-    if (canonical(task.intent.actor) !== canonical(this.binding) || canonical(task.intent.executor) !== canonical(this.binding))
-      throw new ClientFailure('executor_required', 'The original executor and requester must attest this legacy result.');
-    const result = await this.result(task);
-    if (!result) throw new Error('Wait for this execution to finish before sharing its result.');
-    const policy = await this.policy(task.ownerId, ContentTypes.executionResult, [], { id: task.id });
-    policy.producers = [{ executor: this.binding, runId: task.id,
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString(), materialRevision: 1 }];
-    const receipt = await makeSharedReceipt(task.intent, task.receipt.state, result, this.keys,
-      await approvePolicy(policy, this.binding, this.keys), task.receipt);
-    return this.api.json('/api/runtime/runs/' + task.id + '/result', { method: 'PUT', body: { receipt } }, Task);
   }
 }

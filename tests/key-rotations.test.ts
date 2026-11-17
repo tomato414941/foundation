@@ -7,16 +7,12 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { bindKeys, hash, newIdentityKeys, sign, signBinding, verifiesReplacement } from '../shared/authority.js';
 import { decode, encode, seal, unwrap, wrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, Operations, ProtectedContent, approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, ProtectedContent, protect, reveal } from '../shared/custody.js';
 import {
   RotationHandoff, followKeys, openHandoff, prepareRotatedContent, rotateKeys, sealHandoff, signRotationPreparation,
 } from '../shared/key-rotations.js';
 import type { PreparedRotationPayload } from '../shared/key-rotations.js';
-import { FUNCTION_RUNTIME_VERSION, HTTP_RUNTIME_VERSION, makeReceipt, readReceipt, signEnvironment } from '../shared/runtime-protocol.js';
 import { openKeyring, signKeyring } from '../shared/keyring.js';
-import { approveFunctionSettings, publishFunction, verifyFunctionSettings } from '../shared/function-api.js';
-import { functionRules } from '../shared/functions.js';
-import { FunctionDefinition } from '../shared/contracts.js';
 import { CustodyClient } from '../shared/client.js';
 import { JournalTrust } from '../runtime/trust.js';
 import type { z } from 'zod';
@@ -45,25 +41,14 @@ async function apiFixture() {
     let payload: PreparedRotationPayload;
     switch (item.kind) {
       case 'content':
-      case 'result':
         payload = { kind: item.kind, content: await prepareRotatedContent(
-          ProtectedContent.parse(item.source.content ?? item.source.receipt.content),
+          ProtectedContent.parse(item.source.content),
           f.owner.binding, rotation.binding, f.owner.binding, f.owner.keys, rotation.keys) };
-        break;
-      case 'environment':
-        payload = { kind: 'environment', registration: await signEnvironment({ ...item.source.registration.manifest,
-          executor: rotation.binding, revision: item.source.registration.manifest.revision + 1 }, rotation.keys) };
         break;
       case 'keyring': {
         const previous = await openKeyring(item.source.signature, f.owner.binding);
         payload = { kind: 'keyring', signature: await signKeyring({ ...previous,
           signerId: rotation.binding.id, revision: previous.revision + 1 }, rotation.keys.signing) };
-        break;
-      }
-      case 'functionSettings': {
-        const { signature: _signature, ...previous } = item.source.approval;
-        payload = { kind: 'functionSettings', approval: await approveFunctionSettings({ ...previous,
-          revision: previous.revision + 1, executor: rotation.binding, author: rotation.binding }, rotation.keys) };
         break;
       }
       default: throw new Error('Unknown rotation item.');
@@ -101,7 +86,7 @@ test('鍵交換APIは旧鍵で利用を続けながら準備し、同じデー�
   assert.deepEqual((await f.bindings.current(f.owner.actor.id)).binding, rotation.binding);
   const current = await f.custody.read(f.owner.actor, f.resource.id);
   assert.equal(decode(await reveal(current.content, rotation.binding, rotation.keys.encryption)), 'confidential-value');
-  assert.equal(decode(await reveal(current.content, f.executor.binding, f.executor.keys.encryption)), 'confidential-value');
+  assert.equal(decode(await reveal(current.content, f.delegate.binding, f.delegate.keys.encryption)), 'confidential-value');
   assert.deepEqual(current.content.policy.readers.map(reader => reader.principalId), previous.content.policy.readers.map(reader => reader.principalId));
   assert.equal(await f.authentication.authenticate(f.owner.token).then(actor => actor?.id), f.owner.actor.id);
   await assert.rejects(reveal(current.content, f.owner.binding, f.owner.keys.encryption));
@@ -169,95 +154,6 @@ test('他人や旧鍵の署名を持たない呼出しは鍵交換を開始ま�
   assert.equal((await f.api('PUT', rotation.path + '/items/' + item.kind + '/' + item.id, forged)).statusCode, 400);
 });
 
-test('実行環境と関数設定と検証済み鍵一覧を、設定と信頼先を維持して新しい署名へ切り替える', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const environment = await signEnvironment({
-    format: 4, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
-    executor: f.owner.binding, operatorId: f.owner.actor.id,
-    driver: 'attached', capabilities: [Operations.function, Operations.http],
-    functionVersion: FUNCTION_RUNTIME_VERSION, httpVersion: HTTP_RUNTIME_VERSION, isolation: 'process', revision: 1,
-  }, f.owner.keys);
-  await f.context.delegation.register(f.owner.actor, environment, 'Local execution environment');
-  const verifiedAt = new Date().toISOString();
-  await f.context.keyrings.put(f.owner.actor, f.owner.actor.id, { version: null, signature: await signKeyring({
-    origin: f.config.origin, ownerId: f.owner.actor.id, signerId: f.owner.binding.id, revision: 1,
-    keys: [{ binding: f.executor.binding, verifiedAt }],
-  }, f.owner.keys.signing) });
-  const definition = FunctionDefinition.parse({ program: { kind: 'http',
-    request: { url: 'https://service.example/items', method: 'GET' } } });
-  const functionId = randomUUID(), publication = await publishFunction({
-    format: 3, functionId, ownerId: f.owner.actor.id, revision: 1, definition: functionRules(definition),
-    author: f.owner.binding, createdAt: new Date().toISOString(),
-  }, f.owner.keys);
-  const fn = await f.context.functions.save(f.owner.actor, { ownerId: f.owner.actor.id, name: 'Saved HTTP request', definition },
-    { functionId, publication }, f.context.custody);
-  const approval = await approveFunctionSettings({ format: 1, functionId, ownerId: f.owner.actor.id,
-    definitionDigest: await hash(functionRules(definition)), revision: 1, environmentId: environment.manifest.id,
-    inputAccess: { expiresAt: null }, author: f.owner.binding, executor: f.owner.binding,
-    createdAt: new Date().toISOString(),
-  }, f.owner.keys);
-  await f.context.functions.configure(f.owner.actor, { functionId, functionVersion: fn.version, version: 0,
-    environmentId: environment.manifest.id, inputAccess: { expiresAt: null } },
-  { approval, contents: {} }, f.context.custody, f.context.delegation);
-  const rotation = await f.start(), pending = await f.ok('GET', rotation.path);
-  assert.deepEqual(pending.items.map((item: any) => item.kind).sort(),
-    ['content', 'environment', 'functionSettings', 'keyring'].sort());
-  for (const item of pending.items) await f.prepare(rotation, item);
-  await f.ok('POST', rotation.path + '/commit');
-  const registration = await f.context.delegation.environment(environment.manifest.id);
-  assert.deepEqual(registration.registration.manifest.executor, rotation.binding);
-  assert.equal(registration.registration.manifest.revision, 2);
-  const keyring = await f.context.keyrings.get(f.owner.actor, f.owner.actor.id);
-  const verified = await openKeyring(keyring.keyring!.signature, rotation.binding);
-  assert.deepEqual(verified.keys, [{ binding: f.executor.binding, verifiedAt }]);
-  const settings = await f.db.one<{ approval: typeof approval }>('SELECT approval FROM function_settings WHERE function_id=$1', [functionId]);
-  await verifyFunctionSettings(settings!.approval, rotation.binding);
-  const executable = await f.context.functions.execution(f.owner.actor, functionId, f.context.custody, f.context.delegation);
-  assert.deepEqual(executable.definition, definition);
-});
-
-test('保存済みの実行結果を、新鍵と共有相手の鍵で元の実行証明を検証して読み取る', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const resultPolicy = AccessPolicy.parse({ format: 2, origin: f.config.origin, id: f.intent.id,
-    ownerId: f.owner.actor.id, contentType: ContentTypes.executionResult, revision: 1,
-    authorities: [f.owner.binding], readers: [f.owner.binding, f.executor.binding], grants: [],
-    producers: [{ executor: f.executor.binding, runId: f.intent.id, expiresAt: f.intent.expiresAt, materialRevision: 1 }],
-  });
-  const intent = { ...f.intent, resultApproval: await approvePolicy(resultPolicy, f.owner.binding, f.owner.keys) };
-  await f.delegation.submit(f.owner.actor, await prepareRun(intent, f.operation, f.owner.keys));
-  const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id))!;
-  await f.delegation.dispatch(f.executor.actor, intent.id, claim.lease);
-  const receipt = await makeReceipt(intent, 'succeeded', { ok: true, result: 'preserved result', error: null }, f.executor.keys);
-  await f.delegation.finish(f.executor.actor, claim.lease, receipt);
-  const rotation = await f.start(), pending = await f.ok('GET', rotation.path);
-  assert.ok(pending.items.some((item: any) => item.kind === 'result'));
-  for (const item of pending.items) await f.prepare(rotation, item);
-  await f.ok('POST', rotation.path + '/commit');
-  const task = await f.delegation.get(f.owner.actor, intent.id);
-  assert.equal((await readReceipt(task.receipt!, intent, rotation.binding.id, rotation.keys)).result, 'preserved result');
-  assert.equal((await readReceipt(task.receipt!, intent, f.executor.binding.id, f.executor.keys)).result, 'preserved result');
-  const trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.executor.binding);
-  const owner = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, rotation.binding, rotation.keys, trust);
-  assert.equal((await owner.result(task))!.result, 'preserved result');
-});
-
-test('準備後に開始した実行を待ってから鍵を交換し、失敗中も旧鍵でデータを読み取る', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const rotation = await f.start();
-  for (const item of (await f.ok('GET', rotation.path)).items) await f.prepare(rotation, item);
-  await f.delegation.submit(f.owner.actor, f.request);
-  const blocked = await f.ok('GET', rotation.path);
-  assert.equal(blocked.blockers[0].reason, 'execution_active');
-  const commit = await f.api('POST', rotation.path + '/commit');
-  assert.equal(commit.statusCode, 409);
-  assert.equal(commit.json().error.code, 'rotation_blocked');
-  const current = await f.custody.read(f.owner.actor, f.resource.id);
-  assert.equal(decode(await reveal(current.content, f.owner.binding, f.owner.keys.encryption)), 'confidential-value');
-  await f.delegation.cancel(f.owner.actor, f.intent.id);
-  await f.ok('POST', rotation.path + '/commit');
-});
-
 test('鍵交換の途中で保存に失敗すると、鍵と暗号文の更新をすべて取り消して再試行する', async t => {
   const f = await apiFixture(); t.after(f.close);
   const rotation = await f.start();
@@ -316,7 +212,7 @@ test('共有先は信頼済みの旧鍵による交換証明をたどり、複�
   const f = await apiFixture(); t.after(f.close);
   const trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(f.owner.binding);
-  const reader = new CustodyClient(f.jsonApi(f.executor.token), f.config.origin, f.executor.binding, f.executor.keys, trust);
+  const reader = new CustodyClient(f.jsonApi(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys, trust);
   assert.equal(decode(await reader.reveal(f.resource.id)), 'confidential-value');
   const old = f.owner.binding;
   for (let index = 0; index < 2; index++) {
@@ -427,7 +323,7 @@ test('途中で止まった鍵交換は、旧鍵を持つ端末が同じ新し�
 async function readOnlyItem(f: Awaited<ReturnType<typeof apiFixture>>) {
   const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin, ownerId: f.owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [f.owner.binding],
-    readers: [f.owner.binding, f.executor.binding], grants: [] });
+    readers: [f.owner.binding, f.delegate.binding], grants: [] });
   const content = await protect(encode('owner-signed-value'), policy, 1, f.owner.binding, f.owner.keys);
   return f.custody.put(f.owner.actor, { name: 'Owner signed', content, data: { bytes: 18 } });
 }
@@ -435,21 +331,21 @@ async function readOnlyItem(f: Awaited<ReturnType<typeof apiFixture>>) {
 test('読み手として含まれるだけの項目は署名者を示して待ち、署名者が自分の鍵で準備すると鍵交換を確定する', async t => {
   const f = await apiFixture(); t.after(f.close);
   const item = await readOnlyItem(f);
-  const executor = { binding: f.executor.binding, keys: f.executor.keys };
-  const waiting = await rotateKeys(f.jsonApi(f.executor.token), executor);
+  const executor = { binding: f.delegate.binding, keys: f.delegate.keys };
+  const waiting = await rotateKeys(f.jsonApi(f.delegate.token), executor);
   assert.equal(waiting.state, 'waiting');
   if (waiting.state !== 'waiting') return;
   assert.deepEqual(waiting.waiting.map(value => [value.id, value.signers]), [[item.id, [f.owner.actor.id]]]);
-  assert.equal((await f.api('POST', '/api/principals/' + f.executor.actor.id + '/key-rotations/' + waiting.rotationId + '/commit',
-    undefined, f.executor.token)).json().error.code, 'rotation_not_ready');
+  assert.equal((await f.api('POST', '/api/principals/' + f.delegate.actor.id + '/key-rotations/' + waiting.rotationId + '/commit',
+    undefined, f.delegate.token)).json().error.code, 'rotation_not_ready');
   const trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.executor.binding);
+  await trust.rememberBinding(f.delegate.binding);
   const owner = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys, trust);
   assert.deepEqual(await owner.endorseKeyRotations(), { done: [item.id], failed: [] });
-  const result = await rotateKeys(f.jsonApi(f.executor.token), executor);
+  const result = await rotateKeys(f.jsonApi(f.delegate.token), executor);
   assert.equal(result.state, 'committed');
   if (result.state !== 'committed') return;
-  const content = await f.custody.read(f.executor.actor, item.id);
+  const content = await f.custody.read(f.delegate.actor, item.id);
   assert.equal(decode(await reveal(content.content, result.binding, result.keys.encryption)), 'owner-signed-value');
   assert.equal(decode(await owner.reveal(item.id)), 'owner-signed-value');
 });
@@ -457,7 +353,7 @@ test('読み手として含まれるだけの項目は署名者を示して待�
 test('交換される鍵を確かめていない署名者や署名者でない者は、他人の鍵交換の項目を準備しない', async t => {
   const f = await apiFixture(); t.after(f.close);
   const item = await readOnlyItem(f);
-  const waiting = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
+  const waiting = await rotateKeys(f.jsonApi(f.delegate.token), { binding: f.delegate.binding, keys: f.delegate.keys });
   assert.equal(waiting.state, 'waiting');
   if (waiting.state !== 'waiting') return;
   const owner = new CustodyClient(f.jsonApi(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys,
@@ -465,11 +361,11 @@ test('交換される鍵を確かめていない署名者や署名者でない�
   assert.deepEqual(await owner.endorseKeyRotations(), { done: [], failed: [{ id: item.id, code: 'identity_untrusted' }] });
   const { items } = await f.ok('GET', '/api/key-rotations/requests');
   const payload = { sourceDigest: items[0].sourceDigest, payload: { kind: 'content', content: await prepareRotatedContent(
-    ProtectedContent.parse(items[0].source.content), f.executor.binding, items[0].rotation.replacement.binding,
+    ProtectedContent.parse(items[0].source.content), f.delegate.binding, items[0].rotation.replacement.binding,
     f.owner.binding, f.owner.keys) } };
-  const path = '/api/principals/' + f.executor.actor.id + '/key-rotations/' + waiting.rotationId + '/items/content/' + item.id + '/endorsement';
+  const path = '/api/principals/' + f.delegate.actor.id + '/key-rotations/' + waiting.rotationId + '/items/content/' + item.id + '/endorsement';
   assert.equal((await f.api('PUT', path, payload, f.stranger.token)).statusCode, 403);
-  assert.equal((await f.api('PUT', path, payload, f.executor.token)).statusCode, 403);
+  assert.equal((await f.api('PUT', path, payload, f.delegate.token)).statusCode, 403);
   assert.equal((await f.api('GET', '/api/key-rotations/requests', undefined, f.stranger.token)).json().items.length, 0);
 });
 
@@ -508,79 +404,23 @@ test('秘密鍵だけを包んだパスキーは、公開鍵から交換の受�
   await assert.rejects(followKeys(f.jsonApi(f.owner.token), { principalId: f.owner.actor.id, keys: other.keys }));
 });
 
-test('鍵の交換後は旧鍵を名乗る実行環境に依頼を渡さず、新しい鍵の実行環境に渡す', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const id = f.environment.manifest.id;
-  const result = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
-  assert.equal(result.state, 'committed');
-  if (result.state !== 'committed') return;
-  for (const path of ['/claim', '/invocations/claim', '/processes/claim']) {
-    const stale = await f.api('POST', '/api/environments/' + id + path, { executor: f.executor.binding.id }, f.executor.token);
-    assert.equal(stale.statusCode, 409, path);
-    assert.equal(stale.json().error.code, 'key_binding_changed');
-  }
-  assert.equal((await f.api('POST', '/api/environments/' + id + '/claim', { executor: result.binding.id }, f.executor.token)).statusCode, 200);
-});
-
-test('前のリリースの実行環境は登録も依頼の受け取りもできず、生存確認を更新しない', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const id = f.environment.manifest.id;
-  await f.db.pool.query("UPDATE executor_environments SET heartbeat_at=now()-interval '10 minutes' WHERE resource_id=$1", [id]);
-  for (const path of ['/claim', '/invocations/claim', '/processes/claim']) {
-    const response = await f.api('POST', '/api/environments/' + id + path, {}, f.executor.token);
-    assert.equal(response.statusCode, 426, path);
-    assert.equal(response.json().error.code, 'executor_update_required');
-  }
-  const outdated = await signEnvironment({ ...f.environment.manifest, functionVersion: FUNCTION_RUNTIME_VERSION - 1,
-    httpVersion: HTTP_RUNTIME_VERSION - 1, revision: f.environment.manifest.revision + 1 }, f.executor.keys);
-  const registered = await f.api('PUT', '/api/environments/' + id + '/registration',
-    { name: 'Outdated executor', registration: outdated }, f.executor.token);
-  assert.equal(registered.statusCode, 426);
-  const row = await f.db.one<{ stale: boolean }>(
-    "SELECT heartbeat_at<now()-interval '5 minutes' AS stale FROM executor_environments WHERE resource_id=$1", [id]);
-  assert.equal(row!.stale, true);
-});
-
-test('鍵の照合直後に交換が確定しても、旧鍵の実行環境は同じ受け取りで依頼を取得しない', async t => {
-  const f = await apiFixture(); t.after(f.close);
-  const id = f.environment.manifest.id, previous = f.executor.binding;
-  await await f.api('PUT', '/api/environments/' + id + '/processes/registration', { workingDirectory: f.config.dataDirectory }, f.executor.token);
-  const heartbeat = f.context.delegation.heartbeat.bind(f.context.delegation);
-  let rotated = false;
-  f.context.delegation.heartbeat = async (actor, environmentId, executor) => {
-    const value = await heartbeat(actor, environmentId, executor);
-    if (!rotated) {
-      rotated = true;
-      const result = await rotateKeys(f.jsonApi(f.executor.token), { binding: f.executor.binding, keys: f.executor.keys });
-      assert.equal(result.state, 'committed');
-    }
-    return value;
-  };
-  for (const claim of [() => f.context.delegation.claim(f.executor.actor, id, previous.id),
-    () => f.context.processes.claim(f.executor.actor, id, previous.id),
-    () => f.context.invocations.claim(f.executor.actor, id, previous.id)]) {
-    rotated = false;
-    await assert.rejects(claim(), { code: 'key_binding_changed' });
-  }
-});
-
 test('権限の引き継ぎ履歴が上限に達した項目は、理由を示して鍵交換を確定させない', async t => {
   const f = await apiFixture(); t.after(f.close);
-  let held = { binding: f.executor.binding, keys: f.executor.keys };
+  let held = { binding: f.delegate.binding, keys: f.delegate.keys };
   for (let index = 0; index < 16; index++) {
-    const result = await rotateKeys(f.jsonApi(f.executor.token), held);
+    const result = await rotateKeys(f.jsonApi(f.delegate.token), held);
     assert.equal(result.state, 'committed');
     if (result.state !== 'committed') return;
     held = result;
   }
   assert.equal((await f.custody.read(f.owner.actor, f.resource.id)).content.lineage?.length, 16);
-  const blocked = await rotateKeys(f.jsonApi(f.executor.token), held);
+  const blocked = await rotateKeys(f.jsonApi(f.delegate.token), held);
   assert.equal(blocked.state, 'blocked');
   if (blocked.state !== 'blocked') return;
   assert.deepEqual(blocked.blockers, [{ kind: 'content', id: f.resource.id, reason: 'authority_history_full' }]);
-  const path = '/api/principals/' + f.executor.actor.id + '/key-rotations/' + blocked.rotationId;
-  const commit = await f.api('POST', path + '/commit', undefined, f.executor.token);
+  const path = '/api/principals/' + f.delegate.actor.id + '/key-rotations/' + blocked.rotationId;
+  const commit = await f.api('POST', path + '/commit', undefined, f.delegate.token);
   assert.equal(commit.json().error.code, 'rotation_blocked');
-  assert.equal((await f.api('DELETE', path, undefined, f.executor.token)).statusCode, 200);
-  assert.deepEqual((await f.bindings.current(f.executor.actor.id)).binding, held.binding);
+  assert.equal((await f.api('DELETE', path, undefined, f.delegate.token)).statusCode, 200);
+  assert.deepEqual((await f.bindings.current(f.delegate.actor.id)).binding, held.binding);
 });

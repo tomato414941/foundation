@@ -13,11 +13,11 @@ import { visibleConnectionFields } from '../../../shared/connection-fields';
 import { custodyClient } from '../custody';
 import { connectionInitialValues } from '../connection-form';
 import { defineForm } from './types';
-import { EnvironmentFields, loadOwner, OwnerFields } from './common';
+import { loadOwner, OwnerFields } from './common';
 
 async function load(invocation: DefinitionCall) {
   const connecting = invocation.name === 'connection.connect', authorizing = invocation.name === 'connection.authorize';
-  const base = await loadOwner(invocation, undefined, Array.isArray(invocation.input.environmentIds) && invocation.input.environmentIds.length > 0);
+  const base = await loadOwner(invocation);
   const ownerId = String(invocation.input.ownerId);
   const [methods, owned, shared, connection, users] = await Promise.all([
     authorizing ? { items: [] } : api('/connection-methods', {}, listOf(CatalogMethod)),
@@ -58,7 +58,6 @@ export const connectionForm = defineForm({ load,
       return connectionSubmission(input, form, data.method);
     }
     return { input: { ...input, name: input.name ?? formText(form, 'name'),
-      environmentIds: input.environmentIds ?? form.getAll('environments').map(String),
       clientId: input.clientId || formText(form, 'clientId'),
       fields: { ...(input.fields as Record<string, string> | undefined), ...visibleConnectionFields(data.method ? connectionMethod(data.method).fields : [], connectionFields(form)) } },
       material: { clientSecret: formText(form, 'clientSecret') || undefined, fields: connectionFields(form) } };
@@ -83,7 +82,6 @@ export const connectionForm = defineForm({ load,
           preparedFields={input.fields as Record<string, string> | undefined} preparedScopes={input.scopes as string[] | undefined}
           reusableFields={data.initial?.reusableFields}
           clientId={typeof input.clientId === 'string' && input.clientId ? input.clientId : undefined} />
-        {Array.isArray(input.environmentIds) && input.environmentIds.length > 0 && <EnvironmentFields data={data} />}
         {name === 'connection.connect' && <ConnectionPreparation method={data.method} newConnection={!input.connectionId} initial={data.initial} />}
       </>}
     </>;

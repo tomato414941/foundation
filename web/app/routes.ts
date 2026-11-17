@@ -15,11 +15,8 @@ export default [
   route('oauth/authorize', 'routes/oauth-authorize.tsx'),
   route('services', 'routes/service-return.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
-  route('connections/aws/complete', 'routes/aws-role-complete.tsx'),
   route('connections/:id', 'routes/connection-flow.tsx'),
   route('shared', 'routes/shared.tsx'),
-  route('runs/:id', 'routes/run.tsx'),
-  route('invocations/:id', 'routes/invocation.tsx'),
   route('p/:owner', 'routes/workspace.tsx', [
     index('routes/home.tsx'),
     route('principals', 'routes/principals.tsx'),
@@ -28,7 +25,6 @@ export default [
     route('settings/:tab/new', 'routes/credential-new.tsx'),
     route('settings/general/share', 'routes/principal-share.tsx'),
     route('runs', 'routes/runs.tsx'),
-    route('runs/new', 'routes/run-new.tsx'),
     route(':section', 'routes/resource-list.tsx'),
     route(':section/new', 'routes/resource-form.tsx'),
     route(':section/:id', 'routes/resource.tsx'),
@@ -36,7 +32,6 @@ export default [
     route(':section/:id/share', 'routes/resource-share.tsx'),
     route('services/:id/access', 'routes/connection-access.tsx'),
     route(':section/:id/transfer', 'routes/resource-transfer.tsx'),
-    route('functions/:id/run', 'routes/resource-run.tsx'),
   ]),
   route('*', 'routes/not-found.tsx'),
 ] satisfies RouteConfig;

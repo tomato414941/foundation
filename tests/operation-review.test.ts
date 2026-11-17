@@ -41,11 +41,6 @@ test('SSH公開鍵は形式と指紋で示し、鍵として読めない文字�
   ] });
 });
 
-test('コマンドはシェルで展開せず、渡す引数を1つずつそのまま示す', async () => {
-  const command = ['printf', '%s\n', '$HOME', '`date`', 'two words'];
-  assert.deepEqual(field(await rows({ command }), 'command'), { kind: 'command', parts: command });
-});
-
 test('SSH鍵での接続許可の結果はその操作の結果として示し、同じ形の値を別の操作が返したときはそのまま扱う', () => {
   const authorization = { id: randomUUID(), hostId: randomUUID(), keyId: randomUUID(), account: 'deploy', status: 'pending',
     key: { name: 'Laptop', fingerprint: 'SHA256:abc' }, host: { name: 'Staging', address: 'staging.example.test', port: 22 } };

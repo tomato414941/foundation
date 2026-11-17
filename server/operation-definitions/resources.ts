@@ -12,25 +12,22 @@ import { idInput, withId, ok } from './support.js';
 const CREATED: Record<string, readonly [string, string]> = {
   service: ['サービス定義を作る', 'Create a service definition'],
   method: ['接続方法を作る', 'Create a connection method'],
-  environment: ['実行環境を作る', 'Create an environment'],
 };
 
-export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'environments' | 'objects' | 'relations' | 'custody' | 'sshAccess'>) {
-  const { authorization, resources, catalog, environments, objects, relations, custody, sshAccess } = services;
+export function defineResources(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'resources' | 'catalog' | 'objects' | 'relations' | 'custody' | 'sshAccess'>) {
+  const { authorization, resources, catalog, objects, relations, custody, sshAccess } = services;
   const bind = definitions.bind.bind(definitions);
   definitions.define('resource.create', z.object({ ownerId: C.Id, resource: C.NewResource }).strict(),
     input => CREATED[String((input.resource as Record<string, C.JsonValue>)?.kind)] ?? ['項目を作る', 'Create an item'],
     async (who, { ownerId: owner, resource: body }) => {
       const row = body.kind === 'service'
         ? await catalog.createService(who, owner, body.name, body.definition)
-        : body.kind === 'method'
-          ? await (async () => {
-              if (!(await authorization.canCreate(who, owner, 'method')))
-                fail(403, 'forbidden', 'You cannot create this connection method.');
-              return resources.insert(owner, 'method', body.name, C.MethodDefinition.parse({
-                ...body.definition, name: body.name }) as unknown as Record<string, C.JsonValue>);
-            })()
-          : await environments.create(who, owner, body.options, body.name);
+        : await (async () => {
+            if (!(await authorization.canCreate(who, owner, 'method')))
+              fail(403, 'forbidden', 'You cannot create this connection method.');
+            return resources.insert(owner, 'method', body.name, C.MethodDefinition.parse({
+              ...body.definition, name: body.name }) as unknown as Record<string, C.JsonValue>);
+          })();
       return resources.view(who, row);
     });
   bind({ name: 'resource.create', method: 'POST', path: '/api/principals/:id/resources', schema: { params: C.IdParams,
@@ -70,15 +67,13 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
     body: C.UpdateResource, response: { 200: C.Resource } }, input: (params, body) => ({ id: params.id, changes: body }) });
   definitions.define('resource.delete', idInput, ['項目を削除する', 'Delete an item'], async (who, input) => {
     const row = await resources.get(input.id);
-    if (row.kind === 'environment') return environments.remove(who, row);
     if (row.kind === 'object') await objects.remove(who, row);
     else if (row.kind === 'ssh_host') await sshAccess.deleteHost(who, row.id);
     else await resources.delete(who, row);
     return ok();
   }, { confirmation: input => sshAccess.deleteConfirmation(input.id) });
   bind({ name: 'resource.delete', method: 'DELETE', path: '/api/resources/:id', schema: { params: C.IdParams,
-    querystring: z.object({}).strict(), response: { 200: C.Ok, 202: C.EnvironmentDeletion } }, input: params => params,
-    status: result => result && typeof result === 'object' && 'ok' in result ? 200 : 202 });
+    querystring: z.object({}).strict(), response: { 200: C.Ok } }, input: params => params });
   const transferResource = ResourceTransfer.extend({ id: C.Id });
   definitions.define('resource.transfer', transferResource, ['項目を譲る', 'Transfer an item'], async (who, input) => {
     const row = await resources.get(input.id);

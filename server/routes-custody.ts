@@ -3,16 +3,13 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
-import { iso } from './database.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
 import { KeyReplacement, SignedBinding } from '../shared/authority.js';
 import { KeyringState, KeyringWrite } from '../shared/keyring.js';
-import { ContentTypes } from '../shared/custody.js';
-import { SharedReceipt } from '../shared/runtime-protocol.js';
 
-export async function routesRuntime(app: ApiApp, context: Context) {
-  const { bindings, keyrings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
+export async function routesCustody(app: ApiApp, context: Context) {
+  const { bindings, keyrings, custody, connectionOperations: operations, authorization } = context;
   app.post('/api/oauth/relays', {
     schema: { body: P.RegisterRelay, response: { 201: P.OAuthRelay } },
   }, async (request, reply) => reply.code(201).send(await context.oauthRelays.register(actor(request), request.body)));
@@ -68,74 +65,8 @@ export async function routesRuntime(app: ApiApp, context: Context) {
   }, async request => {
     if (request.body.content.policy.id !== request.params.id)
       fail(400, 'wrong_content', 'Update the selected protected content.');
-    if (request.body.content.policy.contentType === ContentTypes.executionResult)
-      return custody.putResult(actor(request), request.body);
     await custody.put(actor(request), request.body);
     return custody.read(actor(request), request.params.id);
-  });
-  app.post('/api/executor/outputs', {
-    schema: { body: P.ProducedOutput, response: { 201: z.object({ id: C.Id }) } },
-  }, async (request, reply) => {
-    const row = await custody.putProduced(actor(request), request.body);
-    return reply.code(201).send({ id: row.id });
-  });
-  app.put('/api/environments/:id/registration', {
-    schema: { params: C.IdParams, body: P.EnvironmentRegistration, response: { 200: z.object({ id: C.Id }) } },
-  }, async request => {
-    if (request.params.id !== request.body.registration.manifest.id)
-      fail(400, 'wrong_environment', 'Register the selected execution environment.');
-    const row = await delegation.register(actor(request), request.body.registration, request.body.name);
-    return { id: row.id };
-  });
-  app.get('/api/environments/:id/registration', {
-    schema: { params: C.IdParams, response: { 200: P.Registration } },
-  }, async request => {
-    await authorization.requireResource(actor(request), await resources.get(request.params.id), 'read');
-    const environment = await delegation.environment(request.params.id);
-    return { registration: environment.registration, stoppedAt: environment.stopped_at ? iso(environment.stopped_at) : null,
-      heartbeatAt: environment.heartbeat_at ? iso(environment.heartbeat_at) : null };
-  });
-  app.post('/api/environments/:id/heartbeat', {
-    schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: z.object({ registration: P.SignedEnvironment }) } },
-  }, request => delegation.heartbeat(actor(request), request.params.id));
-  const maintenance = z.object({ paused: z.boolean(), active: z.number().int().nonnegative(),
-    heartbeatAt: z.iso.datetime().nullable(), sshSessions: z.number().int().nonnegative() });
-  app.get('/api/environments/:id/maintenance', {
-    schema: { params: C.IdParams, response: { 200: maintenance } },
-  }, request => delegation.maintenance(actor(request), request.params.id));
-  app.post('/api/environments/:id/maintenance', {
-    schema: { params: C.IdParams, body: z.object({ paused: z.boolean() }).strict(), response: { 200: maintenance } },
-  }, request => delegation.maintenance(actor(request), request.params.id, request.body.paused));
-  app.post('/api/environments/:id/claim', {
-    schema: { params: C.IdParams, body: z.object({ executor: C.Id.optional() }).strict(), response: { 200: P.ClaimedExecution } },
-  }, request => delegation.claim(actor(request), request.params.id, request.body.executor));
-  app.post('/api/runtime/runs', {
-    schema: { body: P.DelegatedRun, response: { 202: P.Task } },
-  }, async (request, reply) => {
-    const task = await delegation.submit(actor(request), request.body);
-    await context.executions.recordRuntime('run', task);
-    return reply.code(202).send(task);
-  });
-  app.get('/api/runtime/principals/:id/runs', {
-    schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(P.Task) } },
-  }, request => delegation.list(actor(request), request.params.id, request.query.limit, request.query.after));
-  app.get('/api/runtime/runs/:id', {
-    schema: { params: C.IdParams, response: { 200: P.Task } },
-  }, request => delegation.get(actor(request), request.params.id));
-  app.put('/api/runtime/runs/:id/result', {
-    schema: { params: C.IdParams, body: z.object({ receipt: SharedReceipt }).strict(), response: { 200: P.Task } },
-  }, request => delegation.shareResult(actor(request), request.params.id, request.body.receipt));
-  app.post('/api/runtime/runs/:id/renew', {
-    schema: { params: C.IdParams, body: P.Lease, response: { 200: z.object({ active: z.boolean() }) } },
-  }, request => delegation.renew(actor(request), request.params.id, request.body.lease));
-  app.post('/api/runtime/runs/:id/dispatch', {
-    schema: { params: C.IdParams, body: P.Lease, response: { 200: C.Ok } },
-  }, request => delegation.dispatch(actor(request), request.params.id, request.body.lease));
-  app.post('/api/runtime/runs/:id/finish', {
-    schema: { params: C.IdParams, body: P.Completion, response: { 200: P.Task } },
-  }, request => {
-    if (request.params.id !== request.body.receipt.id) fail(400, 'wrong_execution', 'Complete the selected execution.');
-    return delegation.finish(actor(request), request.body.lease, request.body.receipt);
   });
   app.post('/api/connection-operations', {
     schema: { body: P.PrepareRenewal, response: { 201: P.RenewalOperation } },

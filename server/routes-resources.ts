@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
@@ -7,9 +6,8 @@ import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
 import { TransferRecipients } from '../shared/protocol.js';
 
-const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
-  const { resources, authorization, catalog, objects, environments, billing } = context;
+  const { resources, authorization, catalog, objects, billing } = context;
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,
@@ -22,11 +20,6 @@ export async function routesResources(app: ApiApp, context: Context) {
       next: null,
     }),
   );
-  // The account owner makes the role in their own console, from a template Foundation hands over as a one-hour link.
-  app.get('/api/aws/role-template', { schema: { response: { 200: z.object({ url: z.string() }) } } }, async (request) => {
-    actor(request);
-    return { url: await objects.store.publish('aws-connection.yaml', roleTemplate(), 'text/plain', 3600) };
-  });
   app.get(
     '/api/connections/:id/method',
     {
@@ -91,14 +84,10 @@ export async function routesResources(app: ApiApp, context: Context) {
     async (request) => {
       const who = actor(request),
         row = await resources.get(request.params.id);
-      if (row.kind !== 'function' || !await authorization.can(who, row, 'execute'))
-        await authorization.requireResource(who, row, 'read');
+      await authorization.requireResource(who, row, 'read');
       return resources.view(who, row);
     },
   );
-  app.get('/api/resources/:id/deletion', {
-    schema: { params: C.IdParams, response: { 200: C.EnvironmentDeletion } },
-  }, request => environments.deletion(actor(request), request.params.id));
   app.get(
     '/api/resources/:id/recipients',
     { schema: { params: C.IdParams, response: { 200: C.listOf(C.Recipient) } } },

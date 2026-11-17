@@ -6,7 +6,7 @@ import type { CustodyContent } from './custody.js';
 export async function connectionPolicy(custody: CustodyClient, ownerId: string,
   previous?: { content: CustodyContent; replaced: boolean }, users?: string[]) {
   const kept = previous && !previous.replaced ? previous.content : undefined;
-  let policy = kept ? await custody.refreshRecipients(kept.policy) : await custody.policy(ownerId, ContentTypes.tokenSet, [],
+  let policy = kept ? await custody.refreshRecipients(kept.policy) : await custody.policy(ownerId, ContentTypes.tokenSet,
     previous ? { replacing: previous.content.policy } : {});
   if (!users) return policy;
   const bindings = await Promise.all([...new Set(users)].map(async id => {

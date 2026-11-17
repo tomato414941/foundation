@@ -28,12 +28,7 @@ export default function ResourceList() {
   const { principal, session } = useWorkspace();
   const [search] = useSearchParams();
   const { section = 'services' } = useParams();
-  const available =
-    section === 'storage'
-      ? session.features.storage
-      : section === 'environments'
-        ? session.features.environments
-        : true;
+  const available = section === 'storage' ? session.features.storage : true;
   return (
     <Page
       title={t(section)}
@@ -50,7 +45,6 @@ export default function ResourceList() {
       }
     >
       <ErrorNotice error={search.get('error')} />
-      {section === 'environments' && search.get('deleted') === '1' && <Notice tone="success">{t('environmentDeleted')}</Notice>}
       {!available && <Notice>{t('featureUnavailable')}</Notice>}
       <Form method="get" className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-sm">

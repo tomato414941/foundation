@@ -29,7 +29,6 @@ export async function routesExecutions(app: ApiApp, context: Context) {
     return { items: [...definitions.definitions.values()].map(definition => {
       const [ja, en] = typeof definition.title === 'function' ? definition.title({}) : definition.title;
       return { name: definition.name, title: { ja, en }, execution: definition.execution, configure: [...definition.configure],
-        environment: definition.environment,
         input: C.JsonObject.parse(z.toJSONSchema(definition.schema)) };
     }), next: null };
   });
@@ -44,10 +43,6 @@ export async function routesExecutions(app: ApiApp, context: Context) {
     request => executions.list(actor(request), request.query.limit, request.query.after));
   app.get('/api/principals/:id/executions', { schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(Execution) } } },
     request => executions.list(actor(request), request.query.limit, request.query.after, request.params.id));
-  app.post('/api/functions/:id/executions', { schema: { params: C.IdParams,
-    body: (await import('../shared/function-api.js')).InvocationInput, response: { 201: Execution } } },
-    async (request, reply) => reply.code(201).send(await executions.create(actor(request), ExecutionInput.parse({ id: request.body.id,
-      operations: [{ name: 'function.invoke', input: { functionId: request.params.id, ...request.body } }] }))));
   app.get('/api/executions/:id', { schema: { params: C.IdParams, response: { 200: Execution } } },
     request => executions.get(request.actor, request.params.id));
   app.post('/api/executions/:id/respond', { schema: { params: C.IdParams, body: ExecutionResponse,

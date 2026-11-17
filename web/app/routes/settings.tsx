@@ -82,7 +82,6 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         method: 'PUT',
         body: {
           storageBytes: Math.round(Number(formText(form, 'storage')) * MB),
-          computeSeconds: Math.round(Number(formText(form, 'compute')) * 60),
         },
       });
     else if (intent === 'checkout' || intent === 'portal')
@@ -251,8 +250,6 @@ export default function SettingsPage() {
                 {([
                   ['storage', data.usage.storageBytes, data.usage.storageLimit,
                     <><Bytes value={data.usage.storageBytes} /> / <Bytes value={data.usage.storageLimit} /></>],
-                  ['compute', data.usage.computeSeconds, data.usage.computeLimit,
-                    <>{Math.ceil(data.usage.computeSeconds / 60)} / {Math.floor(data.usage.computeLimit / 60)} {t('minutes')}</>],
                 ] as const).map(([key, used, limit, text]) => (
                   <div key={key} className="grid gap-2">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -268,28 +265,16 @@ export default function SettingsPage() {
                   </summary>
                   <Form method="post" className="mt-4 grid gap-4">
                     <p className="text-xs leading-relaxed text-muted-foreground">{t('limitsHelp')}</p>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <InputField
-                        type="number"
-                        name="storage"
-                        label={t('storageLimit')}
-                        defaultValue={data.usage.storageLimit / MB}
-                        required
-                        min={0.000001}
-                        max={1000000}
-                        step={'any'}
-                      />
-                      <InputField
-                        type="number"
-                        name="compute"
-                        label={t('computeLimit')}
-                        defaultValue={data.usage.computeLimit / 60}
-                        required
-                        min={1}
-                        max={166666}
-                        step={'any'}
-                      />
-                    </div>
+                    <InputField
+                      type="number"
+                      name="storage"
+                      label={t('storageLimit')}
+                      defaultValue={data.usage.storageLimit / MB}
+                      required
+                      min={0.000001}
+                      max={1000000}
+                      step={'any'}
+                    />
                     <div>
                       <Button name="intent" value="limits" type="submit" variant="outline">
                         {t('save')}

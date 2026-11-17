@@ -2,9 +2,7 @@ import type { z } from 'zod';
 import { canonical, hash, thumbprint, verify, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { continuesPolicy, lineageLimit, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
-import { SignedEnvironment, verifyEnvironment, verifyReceipt } from '../shared/runtime-protocol.js';
 import { openKeyring, keyringClaim } from '../shared/keyring.js';
-import { verifyFunctionSettings } from '../shared/function-api.js';
 import { handoffContext, rotationPolicy, rotationPreparationProof, RotationPayload } from '../shared/key-rotations.js';
 import type {
   RotationEndorsement, RotationKind, RotationPreparation, RotationRequest, RotationStart, RotationView,
@@ -111,13 +109,7 @@ export class KeyRotations {
       "SELECT * FROM (SELECT 'content' AS kind,r.id,r.name,jsonb_build_object('version',r.version,'content',c.content) AS source " +
       "FROM resource_custody c JOIN resources r ON r.id=c.resource_id WHERE jsonb_path_exists(c.content->'policy'," +
       "'$.**.id ? (@ == $binding)',jsonb_build_object('binding',$1::text)) " +
-      "UNION ALL SELECT 'result',t.id,'Execution result',jsonb_build_object('receipt',t.receipt,'intent',t.request->'intent') " +
-      "FROM execution_tasks t WHERE t.receipt ? 'content' AND jsonb_path_exists(t.receipt#>'{content,policy}'," +
-      "'$.**.id ? (@ == $binding)',jsonb_build_object('binding',$1::text)) " +
-      "UNION ALL SELECT 'environment',r.id,r.name,jsonb_build_object('version',r.version,'registration',e.registration,'stoppedAt',e.stopped_at) " +
-      "FROM executor_environments e JOIN resources r ON r.id=e.resource_id WHERE e.registration#>>'{manifest,executor,id}'=$1 " +
-      "UNION ALL SELECT 'functionSettings',s.function_id,r.name,jsonb_build_object('version',s.version,'approval',s.approval) " +
-      "FROM function_settings s JOIN resources r ON r.id=s.function_id WHERE s.approval#>>'{executor,id}'=$1) items " +
+      ") items " +
       "WHERE ($2::text IS NULL OR (kind=$2 AND id=$3::uuid))",
       values, connection);
     const keyrings = selected && selected.kind !== 'keyring' ? [] : await this.db.all<ResourceRow>(
@@ -136,34 +128,23 @@ export class KeyRotations {
     // Replacing an authority's keys changes the item's authorities, which adds a handoff to its signed history; an item
     // whose history is full keeps the previous keys, so the rotation cannot finish while such an item names them.
     const full = items.flatMap(item => {
-      if (item.kind !== 'content' && item.kind !== 'result') return [];
-      const content = ProtectedContent.parse(item.kind === 'content' ? item.source.content
-        : (item.source.receipt as { content: unknown }).content);
+      if (item.kind !== 'content') return [];
+      const content = ProtectedContent.parse(item.source.content);
       return content.policy.authorities.some(value => value.id === row.previous.binding.id) &&
         (content.lineage?.length ?? 0) >= lineageLimit ? [{ kind: item.kind, id: item.id, reason: 'authority_history_full' }] : [];
     });
     return [...full, ...await this.signedBlockers(row, items, connection)];
   }
   private async signedBlockers(row: RotationRow, items: Item[], connection: Queryable) {
-    const ids = [row.previous.binding.id, ...items.filter(item => item.kind === 'content').map(item => item.id)];
-    const patterns = ids.map(id => '%' + id + '%');
     return this.db.all<{ kind: string; id: string; reason: string }>(
-      "SELECT 'execution' AS kind,id,'execution_active' AS reason FROM execution_tasks " +
-      "WHERE state IN ('queued','running','uncertain') AND request::text LIKE ANY($1::text[]) " +
-      "UNION ALL SELECT 'functionInvocation',id,'execution_active' FROM function_invocations " +
-      "WHERE state IN ('queued','running','uncertain') AND " +
-      "(request::text LIKE ANY($1::text[]) OR publication::text LIKE ANY($1::text[]) OR settings::text LIKE ANY($1::text[])) " +
-      "UNION ALL SELECT 'connectionOperation',id,'connection_busy' FROM connection_operations " +
-      "WHERE state IN ('prepared','in_flight','uncertain') AND (executor_id=$2 OR resource_id=ANY($3::uuid[])) " +
-      "UNION ALL SELECT 'oauthRelay',id,'authorization_active' FROM oauth_relays WHERE binding_id=$4::uuid AND expires_at>now() " +
-      "UNION ALL SELECT 'result',id,'legacy_result_requires_sharing' FROM execution_tasks " +
-      "WHERE receipt ? 'sealed' AND EXISTS (SELECT 1 FROM jsonb_array_elements(receipt#>'{sealed,recipients}') r " +
-      "WHERE r#>>'{header,kid}'=$4::text) " +
-      "UNION ALL SELECT 'principal',id,'key_binding_changed' FROM principals WHERE id=$2 AND NOT EXISTS " +
-      "(SELECT 1 FROM principal_key_bindings WHERE principal_id=$2 AND id=$4::uuid AND retired_at IS NULL) " +
+      "SELECT 'connectionOperation' AS kind,id,'connection_busy' AS reason FROM connection_operations " +
+      "WHERE state IN ('prepared','in_flight','uncertain') AND (executor_id=$1 OR resource_id=ANY($2::uuid[])) " +
+      "UNION ALL SELECT 'oauthRelay',id,'authorization_active' FROM oauth_relays WHERE binding_id=$3::uuid AND expires_at>now() " +
+      "UNION ALL SELECT 'principal',id,'key_binding_changed' FROM principals WHERE id=$1 AND NOT EXISTS " +
+      "(SELECT 1 FROM principal_key_bindings WHERE principal_id=$1 AND id=$3::uuid AND retired_at IS NULL) " +
       "UNION ALL SELECT 'keyReset',principal_id,'key_reset_pending' FROM challenges " +
-      "WHERE principal_id=$2 AND kind='key-reset' AND expires_at>now()",
-      [patterns, row.principal_id, items.filter(item => item.kind === 'content').map(item => item.id), row.previous.binding.id], connection);
+      "WHERE principal_id=$1 AND kind='key-reset' AND expires_at>now()",
+      [row.principal_id, items.filter(item => item.kind === 'content').map(item => item.id), row.previous.binding.id], connection);
   }
   private async preparations(id: string, connection: Queryable = this.db.pool) {
     return this.db.all<Prepared>('SELECT * FROM key_rotation_items WHERE rotation_id=$1', [id], connection);
@@ -176,9 +157,8 @@ export class KeyRotations {
       total, prepared: row.state === 'committed' ? total : prepared, blockers, items, next };
   }
   private async canRead(actor: Actor, item: Item) {
-    if (item.kind === 'environment') return true;
     try {
-      if (item.kind === 'content' || item.kind === 'result') await this.custody.read(actor, item.id);
+      if (item.kind === 'content') await this.custody.read(actor, item.id);
       else await this.custody.resources.authorization.requireResource(actor, await this.custody.resources.get(item.id), 'read');
       return true;
     } catch (error) { if (error instanceof DomainError && error.status === 403) return false; throw error; }
@@ -187,15 +167,10 @@ export class KeyRotations {
   // whose keys authorize the item, since the rotating principal only reads it or runs it.
   private signers(row: RotationRow, item: Item): string[] | null {
     const before = row.previous.binding;
-    if (item.kind === 'content' || item.kind === 'result') {
-      const { policy } = ProtectedContent.parse(item.kind === 'content' ? item.source.content :
-        (item.source.receipt as { content: unknown }).content);
+    if (item.kind === 'content') {
+      const { policy } = ProtectedContent.parse(item.source.content);
       return policy.authorities.some(value => value.id === before.id) ? null
         : [...new Set(policy.authorities.map(value => value.principalId))];
-    }
-    if (item.kind === 'functionSettings') {
-      const { author } = item.source.approval as { author: BoundKeys };
-      return author.id === before.id ? null : [author.principalId];
     }
     return null;
   }
@@ -305,15 +280,12 @@ export class KeyRotations {
     if (endorser === undefined)
       await verify(await rotationPreparationProof(row.id, row.principal_id, after.id, item.id, input.sourceDigest, payload),
         required(input.signature), before.signing, 'key-rotation-preparation');
-    else if (payload.kind !== 'content' && payload.kind !== 'result' && payload.kind !== 'functionSettings')
+    else if (payload.kind !== 'content')
       fail(403, 'forbidden', 'Prepare this item with the keys of the rotating principal.');
     if (payload.kind !== item.kind) fail(400, 'wrong_kind', 'Prepare the selected kind of item.');
     switch (payload.kind) {
-      case 'content':
-      case 'result': {
-        const source = item.kind === 'content' ? item.source.content :
-          (item.source.receipt as { content: unknown }).content;
-        const previous = await verifyContent(ProtectedContent.parse(source));
+      case 'content': {
+        const previous = await verifyContent(ProtectedContent.parse(item.source.content));
         const content = await verifyContent(payload.content);
         this.custody.metadata(content);
         if (canonical(content.policy) !== canonical(rotationPolicy(previous.policy, before, after)) ||
@@ -327,17 +299,6 @@ export class KeyRotations {
           !previous.policy.authorities.some(value => canonical(value) === canonical(priorAuthority)) ||
           (endorser !== undefined && (authority.id === after.id || authority.principalId !== endorser)))
           fail(403, 'forbidden', 'An existing authority must approve re-encryption.');
-        if (payload.kind === 'result')
-          await verifyReceipt({ ...(item.source.receipt as object), content } as Parameters<typeof verifyReceipt>[0],
-            item.source.intent as Parameters<typeof verifyReceipt>[1]);
-        break;
-      }
-      case 'environment': {
-        const previous = SignedEnvironment.parse(item.source.registration);
-        const next = await verifyEnvironment(payload.registration);
-        const expected = { ...previous.manifest, executor: after, revision: previous.manifest.revision + 1 };
-        if (canonical(next.manifest) !== canonical(expected))
-          fail(400, 'invalid_rotation_environment', 'Keep the environment configuration while replacing its executor keys.');
         break;
       }
       case 'keyring': {
@@ -349,16 +310,6 @@ export class KeyRotations {
           fail(400, 'invalid_rotation_keyring', 'Preserve the verified identities while replacing the keyring signer.');
         break;
       }
-      case 'functionSettings': {
-        const previous = await verifyFunctionSettings(item.source.approval as Parameters<typeof verifyFunctionSettings>[0]);
-        const next = await verifyFunctionSettings(payload.approval, after);
-        const expected = { ...previous, revision: previous.revision + 1, executor: after,
-          author: previous.author.id === before.id ? after : previous.author, signature: next.signature };
-        if (canonical(next) !== canonical(expected) ||
-          (endorser !== undefined && (next.author.id === after.id || next.author.principalId !== endorser)))
-          fail(400, 'invalid_rotation_settings', 'Preserve the function execution settings while replacing executor keys.');
-        break;
-      }
     }
     await this.permitted(row, payload, connection);
   }
@@ -367,25 +318,11 @@ export class KeyRotations {
   private async permitted(row: RotationRow, payload: Payload, connection: Queryable) {
     const before = row.previous.binding, after = row.replacement.binding;
     const signer = (binding: BoundKeys) => binding.id === after.id ? before : binding;
-    switch (payload.kind) {
-      case 'content':
-      case 'result': {
-        const authority = signer(policyAuthority(payload.content));
-        await this.custody.bindings.requireCurrent(authority, connection);
-        if (payload.kind === 'result')
-          await this.custody.resources.authorization.requirePrincipal({ id: authority.principalId },
-            payload.content.policy.ownerId, 'update', connection);
-        else await this.custody.resources.authorization.requireResource({ id: authority.principalId },
-          await this.custody.resources.get(payload.content.policy.id, connection), 'update', connection);
-        break;
-      }
-      case 'functionSettings': {
-        const author = signer(payload.approval.author);
-        await this.custody.bindings.requireCurrent(author, connection);
-        await this.custody.resources.authorization.requireResource({ id: author.principalId },
-          await this.custody.resources.get(payload.approval.functionId, connection), 'update', connection);
-        break;
-      }
+    if (payload.kind === 'content') {
+      const authority = signer(policyAuthority(payload.content));
+      await this.custody.bindings.requireCurrent(authority, connection);
+      await this.custody.resources.authorization.requireResource({ id: authority.principalId },
+        await this.custody.resources.get(payload.content.policy.id, connection), 'update', connection);
     }
   }
 
@@ -399,28 +336,12 @@ export class KeyRotations {
           { data: { ...resource.data, custodyRevision: payload.content.policy.revision } }, connection);
         break;
       }
-      case 'result':
-        await connection.query('UPDATE execution_tasks SET receipt=$2 WHERE id=$1',
-          [item.id, JSON.stringify({ ...(item.source.receipt as object), content: payload.content })]);
-        break;
-      case 'environment': {
-        await connection.query('UPDATE executor_environments SET registration=$2 WHERE resource_id=$1',
-          [item.id, JSON.stringify(payload.registration)]);
-        const resource = await this.custody.resources.get(item.id, connection);
-        await this.custody.resources.update(resource,
-          { data: { ...resource.data, manifestDigest: await hash(payload.registration.manifest) } }, connection);
-        break;
-      }
       case 'keyring': {
         const resource = await this.custody.resources.get(item.id, connection);
         await this.custody.resources.update(resource,
           { data: { ...resource.data, signature: payload.signature, revision: keyringClaim(payload.signature).revision } }, connection);
         break;
       }
-      case 'functionSettings':
-        await connection.query('UPDATE function_settings SET version=$2,approval=$3 WHERE function_id=$1',
-          [item.id, payload.approval.revision, JSON.stringify(payload.approval)]);
-        break;
     }
   }
 

@@ -25,7 +25,7 @@ export function connectionClient(client: Client) {
 }
 export async function saveApp(client: Client, input: {
   ownerId: string; name: string; id?: string; methodId: string; clientId: string;
-  clientSecret?: string; fields: unknown; environments?: string[];
+  clientSecret?: string; fields: unknown;
 }) {
   const selected = await catalogMethod(client, input.methodId);
   if (connectionMethod(selected).application === 'none') throw new Error('Choose a connection method that uses an application.');
@@ -33,8 +33,7 @@ export async function saveApp(client: Client, input: {
   const previous = input.id ? await operations.custody.read(Id.parse(input.id)) : undefined;
   const result = await operations.execute({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),
     methodId: input.methodId, clientId: input.clientId,
-    ...(input.id ? { resourceId: input.id, version: previous!.version } : {}),
-    ...(input.environments ? { environmentIds: input.environments } : {}) } },
+    ...(input.id ? { resourceId: input.id, version: previous!.version } : {}) } },
     { clientSecret: input.clientSecret, fields: z.record(z.string(), z.string()).parse(input.fields) });
   if (!('kind' in result) || result.kind !== 'saved') throw new Error('Finish saving the application.');
   return result.resource;

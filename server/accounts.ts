@@ -38,10 +38,6 @@ export class Accounts {
         }
         if (row.kind === 'object')
           entry.content = Buffer.from(await c.objects.store.get(row.private_data!)).toString('base64');
-        if (row.kind === 'function') {
-          entry.publication = row.data.publication ?? null;
-          entry.executionSettings = await c.db.one('SELECT version,environment_id AS "environmentId",approval FROM function_settings WHERE function_id=$1', [row.id]) ?? null;
-        }
         yield JSON.stringify(entry) + '\n';
       }
       if (rows.length < 50) break;
@@ -55,10 +51,6 @@ export class Accounts {
         [id],
       ),
     }) + '\n';
-    const results = await c.db.all<{ id: string }>(
-      "SELECT id FROM execution_tasks WHERE owner_id=$1 AND receipt ? 'content' ORDER BY id", [id]);
-    for (const result of results)
-      yield JSON.stringify({ type: 'execution-result', execution: await c.delegation.get(actor, result.id) }) + '\n';
     after = null;
     for (;;) {
       const rows: Array<{ id: string }> = await c.db.all('SELECT id FROM executions WHERE owner_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 50', [id, after]);
@@ -84,12 +76,6 @@ export class Accounts {
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [id]);
     if (rows.some((row) => row.kind === 'connection'))
       fail(409, 'connections_active', 'Disconnect services before deleting this principal.');
-    if (
-      rows.some(
-        (row) => row.kind === 'environment' && !['stopped', 'failed'].includes(String(row.data.state)),
-      )
-    )
-      fail(409, 'environment_active', 'Stop all environments before deleting this principal.');
     // The database keeps object cleanup jobs after the owning resource is removed.
     await c.db.transaction(async (connection) => {
       // Its SSH keys and hosts are held until removal, so that no key is let in with them meanwhile, and they go only
@@ -153,15 +139,12 @@ export class Accounts {
         'SELECT * FROM resources WHERE owner_id=$1 ORDER BY created_at',
         [from.id],
       );
-    const results = await this.context.db.all<{ id: string; content: CustodyContent }>(
-      "SELECT id,receipt->'content' AS content FROM execution_tasks WHERE owner_id=$1 AND receipt ? 'content' ORDER BY id", [from.id]);
     return {
       id,
       from: { id: from.id, name: from.name, publicKey: from.public_key },
       resources: await Promise.all(resources.map((row) => this.context.resources.view({ id: from.id }, row))),
       protectedItems: [...await Promise.all(resources.filter(row => isProtected(row.kind))
-        .map(async row => ({ id: row.id, version: row.version, content: await this.context.custody.get(row.id) }))),
-        ...results.map(row => ({ id: row.id, version: row.content.materialRevision, content: row.content }))],
+        .map(async row => ({ id: row.id, version: row.version, content: await this.context.custody.get(row.id) })))],
       recipients: await this.context.custody.recipients(actor.id),
     };
   }
@@ -192,37 +175,17 @@ export class Accounts {
     if (accounts.length > 1)
       fail(409, 'payment_accounts', 'Keep the payment account on one principal before merging.');
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [from.id]);
-    if (
-      rows.some(
-        (row) => row.kind === 'environment' && !['stopped', 'failed'].includes(String(row.data.state)),
-      )
-    )
-      fail(409, 'environment_active', 'Stop environments on the other account before merging.');
     const externalKeys = await c.db.one(
       `SELECT 1 FROM resource_custody c JOIN resources r ON r.id=c.resource_id
        WHERE r.owner_id<>$1 AND jsonb_path_exists(c.content,
-         '$.policy.**.principalId ? (@ == $principal)',jsonb_build_object('principal',$1::text))
-       UNION ALL SELECT 1 FROM execution_tasks WHERE owner_id<>$1 AND receipt ? 'content' AND jsonb_path_exists(receipt->'content',
          '$.policy.**.principalId ? (@ == $principal)',jsonb_build_object('principal',$1::text)) LIMIT 1`, [from.id]);
     if (externalKeys) fail(409, 'rekey_required', 'Ask other resource owners to replace the previous account keys before merging.');
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [from.id]);
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
-    if (await c.db.one(`SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain')
-      UNION ALL SELECT 1 FROM environment_processes WHERE (owner_id=$1 OR actor_id=$1 OR executor_id=$1) AND state IN ('queued','running','uncertain')
-      UNION ALL SELECT 1 FROM function_invocations WHERE (owner_id=$1 OR actor_id=$1 OR function_owner_id=$1 OR executor_id=$1) AND state IN ('queued','running','uncertain')
-      UNION ALL SELECT 1 FROM executor_environments WHERE executor_id=$1 AND stopped_at IS NULL LIMIT 1`, [from.id]))
-      fail(409, 'execution_active', 'Resolve active executions before merging accounts.');
     for (const row of rows.filter(row => isProtected(row.kind))) {
       const update = contents[row.id];
       if (!update || update.version !== row.version || update.content.policy.ownerId !== to.id)
         fail(409, 'rekey_required', 'Unlock both accounts and re-encrypt protected items for the new owner.');
-    }
-    const results = await c.db.all<{ id: string; content: CustodyContent }>(
-      "SELECT id,receipt->'content' AS content FROM execution_tasks WHERE owner_id=$1 AND receipt ? 'content' ORDER BY id", [from.id]);
-    for (const result of results) {
-      const update = contents[result.id];
-      if (!update || update.version !== result.content.materialRevision || update.content.policy.ownerId !== to.id)
-        fail(409, 'rekey_required', 'Unlock both accounts and re-encrypt their protected results for the new owner.');
     }
     await c.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
@@ -259,9 +222,6 @@ export class Accounts {
           await c.resources.changeOwner(row, to.id, connection, name);
         }
       }
-      for (const result of results)
-        await c.custody.putResult({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id },
-          { ...contents[result.id]!, name: 'Execution result' }, connection);
       // The lines the other account was given, and those drawn onto it, become this account's.
       const lines = await c.db.all<{ subject_id: string; relation: string; principal_id: string | null; resource_id: string | null }>(
         'SELECT subject_id,relation,principal_id,resource_id FROM relations WHERE subject_id=$1 OR principal_id=$1',
@@ -299,11 +259,6 @@ export class Accounts {
         from.id,
         to.id,
       ]);
-      await connection.query('UPDATE execution_tasks SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE environment_processes SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE function_invocations SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE function_invocations SET function_owner_id=$2 WHERE function_owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE environment_deletions SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       await connection.query('UPDATE audit_log SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       // Keep the source identity for signed records and immutable authorship, without allowing it to act again.
       await connection.query('DELETE FROM challenges WHERE principal_id=$1', [from.id]);

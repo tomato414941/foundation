@@ -92,79 +92,6 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}, bun
   return { f, context, app, origin, directory, run, start, close, person };
 }
 
-test('配置場所に依存せずCLIから実行環境を登録してコマンドを処理する', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'foundation-relocated-cli-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await cp(resolve('cli/dist'), directory, { recursive: true });
-  const c = await cliFixture({}, directory); t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Relocated executor', '--origin', c.origin]);
-  assert.equal(initialized.code, 0, initialized.stderr);
-  const environmentId = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
-    JSON.stringify({ command: ['node', '-e', "process.stdout.write('relocated bundle')"] })]);
-  assert.equal(started.code, 0, started.stderr);
-  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const inspected = await c.run(['api', 'GET', '/api/processes/' + JSON.parse(started.stdout).id]);
-  assert.equal(inspected.code, 0, inspected.stderr);
-  const process = JSON.parse(inspected.stdout);
-  assert.equal(process.state, 'succeeded');
-  assert.equal(process.result.stdout, 'relocated bundle');
-});
-
-test('CLIはIAM情報の取得が拒否されても実行先を登録しコマンドを処理する', async t => {
-  const actions: string[] = [];
-  const aws = createHttpServer((request, response) => {
-    let body = '';
-    request.on('data', chunk => { body += chunk; });
-    request.on('end', () => {
-      const action = new URLSearchParams(body).get('Action') ?? '';
-      actions.push(action);
-      response.setHeader('content-type', 'text/xml');
-      if (action === 'GetCallerIdentity') response.end(
-        '<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">' +
-        '<GetCallerIdentityResult><Arn>arn:aws:sts::123456789012:assumed-role/cli-test/session</Arn>' +
-        '<UserId>AROCLITESTEXAMPLE:session</UserId><Account>123456789012</Account></GetCallerIdentityResult>' +
-        '</GetCallerIdentityResponse>');
-      else {
-        response.statusCode = 403;
-        response.end('<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">' +
-          '<Error><Type>Sender</Type><Code>AccessDenied</Code><Message>IAM lookup is denied.</Message></Error></ErrorResponse>');
-      }
-    });
-  });
-  await new Promise<void>(resolve => aws.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise<void>((resolve, reject) => aws.close(error => error ? reject(error) : resolve())));
-  const awsOrigin = 'http://127.0.0.1:' + (aws.address() as { port: number }).port;
-  const c = await cliFixture({ AWS_REGION: 'us-east-1', AWS_PROFILE: '',
-    AWS_ACCESS_KEY_ID: 'cli-test-access-key', AWS_SECRET_ACCESS_KEY: 'cli-test-secret-key', AWS_SESSION_TOKEN: '',
-    AWS_ENDPOINT_URL_STS: awsOrigin, AWS_ENDPOINT_URL_IAM: awsOrigin, AWS_EC2_METADATA_DISABLED: 'true' });
-  t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Process API principal', '--origin', c.origin]);
-  assert.equal(initialized.code, 0, initialized.stderr);
-  const environmentId = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  assert.equal(JSON.parse(registered.stdout).awsPrincipal ?? null, null);
-  assert.ok(actions.includes('GetCallerIdentity'));
-  assert.ok(actions.includes('GetRole'));
-  const command = ['node', '-e', 'let text="";process.stdin.on("data",value=>text+=value);' +
-    'process.stdin.on("end",()=>process.stdout.write(JSON.stringify({text,value:process.env.VALUE,cwd:process.cwd()})))'];
-  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body', '@-'],
-    JSON.stringify({ command, workingDirectory: c.directory, environment: { VALUE: 'API value' }, stdin: 'API input' }));
-  assert.equal(started.code, 0, started.stderr);
-  const id = JSON.parse(started.stdout).id;
-  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const inspected = await c.run(['api', 'GET', '/api/processes/' + id]);
-  assert.equal(inspected.code, 0, inspected.stderr);
-  const process = JSON.parse(inspected.stdout);
-  assert.equal(process.state, 'succeeded');
-  assert.deepEqual(JSON.parse(process.result.stdout), { text: 'API input', value: 'API value', cwd: c.directory });
-});
-
 test('変数を使用権限でローカルコマンドへ渡し、内容の読み出しを制限する', async t => {
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Variable executor', '--origin', c.origin]);
@@ -452,28 +379,6 @@ test('ブラウザで承認すると、ログインを待つ CLI が本人のキ
   const saved = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8'));
   assert.equal(saved.current, person.actor.id);
   assert.equal(saved.identities.length, 1);
-});
-
-test('CLIで実行先を登録し、指定した実行先へ暗号化したコマンドを送り結果を復号する', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Executor', '--origin', c.origin]);
-  assert.equal(initialized.code, 0, initialized.stderr);
-  const id = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', id, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  assert.equal(JSON.parse(registered.stdout).environmentId, id);
-  const kept = await c.run(['keep', 'Command credential', '--stdin', '--for', id], 'command-value');
-  assert.equal(kept.code, 0, kept.stderr);
-  const resource = JSON.parse(kept.stdout);
-  const run = await c.run(['run', '--environment', id, '--inputs', JSON.stringify([
-    { name: 'TOKEN', source: { id: resource.id } },
-  ]), '--', process.execPath, '-e', 'process.stdout.write("executed:" + process.env.TOKEN)']);
-  assert.equal(run.code, 0, run.stderr);
-  const executed = await c.run(['agent', 'start', '--id', id, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const result = await c.run(['wait', JSON.parse(run.stdout).id, '--timeout', '5']);
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).results[0].stdout, 'executed:[redacted]');
 });
 
 test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示する', () => {
@@ -765,44 +670,6 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   assert.match(requests.at(-1)!.authorization, /Credential=assumed-cli-key\//);
 });
 
-test('CLIで秘密を参照する関数を保存し、指定した引数で実行して結果を受け取る', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Function principal', '--origin', c.origin]);
-  assert.equal(initialized.code, 0, initialized.stderr);
-  const environmentId = randomUUID();
-  const kept = await c.run(['keep', 'Function input', '--stdin'], 'private-function-input');
-  assert.equal(kept.code, 0, kept.stderr);
-  const sourceId = JSON.parse(kept.stdout).id;
-  const saved = await c.run(['function', 'create', '--body', '@-'], JSON.stringify({
-    name: 'CLI function', definition: { parameters: [{ name: 'message', label: 'Message' }],
-      program: { kind: 'command', command: ['node', '-e', 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({message:JSON.parse(text).message,configured:!!process.env.TOKEN})));'],
-        inputs: [{ name: 'TOKEN', source: { id: sourceId } }], timeoutSeconds: 5 }, result: 'json' },
-  }));
-  assert.equal(saved.code, 0, saved.stderr);
-  const functionId = JSON.parse(saved.stdout).id;
-  const initialSettings = await c.run(['function', 'settings', functionId]);
-  assert.equal(initialSettings.code, 0, initialSettings.stderr);
-  assert.equal(JSON.parse(initialSettings.stdout).state, 'unconfigured');
-  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
-  const configured = await c.run(['function', 'configure', functionId, '--environment', environmentId]);
-  assert.equal(configured.code, 0, configured.stderr);
-  assert.equal(JSON.parse(configured.stdout).state, 'configured');
-  const started = await c.run(['function', 'invoke', functionId, '--arguments', '{"message":"CLI invocation"}']);
-  assert.equal(started.code, 0, started.stderr);
-  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const result = await c.run(['function', 'result', JSON.parse(started.stdout).id, '--wait', '--timeout', '5']);
-  assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.deepEqual(JSON.parse(result.stdout).results[0], { message: 'CLI invocation', configured: true });
-  const cleared = await c.run(['function', 'unconfigure', functionId]);
-  assert.equal(cleared.code, 0, cleared.stderr);
-  assert.equal(JSON.parse(cleared.stdout).state, 'unconfigured');
-  const shown = await c.run(['function', 'show', functionId]);
-  assert.equal(shown.code, 0, shown.stderr);
-  assert.deepEqual(JSON.parse(shown.stdout), JSON.parse(saved.stdout));
-});
-
 test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Operation initiator', '--origin', c.origin]);
@@ -843,12 +710,12 @@ test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリ�
   );
 });
 
-test('CLIで鍵を交換すると実行環境と手元の記録を新しい鍵へ移し、旧鍵を持つ別の端末も次の実行で移る', async t => {
+test('CLIで鍵を交換すると手元の記録を新しい鍵へ移し、旧鍵を持つ別の端末も次に使うときに移る', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Rotating machine', '--origin', c.origin])).code, 0);
-  const environmentId = randomUUID();
-  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(registered.code, 0, registered.stderr);
+  const kept = await c.run(['keep', 'Rotated value', '--stdin'], 'kept-before-rotation');
+  assert.equal(kept.code, 0, kept.stderr);
+  const resource = JSON.parse(kept.stdout);
   const other = await mkdtemp(join(tmpdir(), 'foundation-cli-copy-'));
   t.after(() => rm(other, { recursive: true, force: true }));
   await cp(c.directory, other, { recursive: true });
@@ -858,53 +725,15 @@ test('CLIで鍵を交換すると実行環境と手元の記録を新しい鍵�
   assert.equal(JSON.parse(rotated.stdout).state, 'committed');
   const after = JSON.parse((await c.run(['status'])).stdout).fingerprint;
   assert.notEqual(after, before);
-  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
-    JSON.stringify({ command: ['node', '-e', "process.stdout.write('after rotation')"] })]);
-  assert.equal(started.code, 0, started.stderr);
-  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
-  assert.equal(executed.code, 0, executed.stderr);
-  const inspected = JSON.parse((await c.run(['api', 'GET', '/api/processes/' + JSON.parse(started.stdout).id])).stdout);
-  assert.equal(inspected.state, 'succeeded');
-  assert.equal(inspected.result.stdout, 'after rotation');
+  const used = await c.run(['exec', '--inputs', JSON.stringify([{ name: 'ROTATED', source: { id: resource.id } }]), '--',
+    process.execPath, '-e', "process.stdout.write(String(process.env.ROTATED === 'kept-before-rotation'))"]);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, 'true');
   const copied = await c.run(['status'], undefined, { XDG_CONFIG_HOME: other });
   assert.equal(copied.code, 0, copied.stderr);
   assert.equal(JSON.parse(copied.stdout).fingerprint, after);
   const saved = JSON.parse(await readFile(join(other, 'foundation', 'identity.json'), 'utf8'));
   assert.equal(await fingerprint(saved.identities[0].binding), after);
-});
-
-test('稼働中の実行環境は鍵の交換後に旧鍵で依頼を受け取らず、新しい鍵へ移って交換後の依頼を処理する', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Running executor', '--origin', c.origin])).code, 0);
-  const environmentId = randomUUID();
-  assert.equal((await c.run(['agent', 'start', '--id', environmentId, '--once'])).code, 0);
-  const agent = spawn(process.execPath, [resolve('cli/dist', 'agent.mjs'), 'start', '--id', environmentId],
-    { env: { ...process.env, XDG_CONFIG_HOME: c.directory, FOUNDATION_ORIGIN: c.origin }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let agentOutput = '';
-  agent.stdout.on('data', chunk => { agentOutput += chunk; });
-  agent.stderr.on('data', chunk => { agentOutput += chunk; });
-  const exited = new Promise(resolveExit => agent.once('close', resolveExit));
-  t.after(async () => { agent.kill('SIGTERM'); await exited; });
-  const waitFor = async (check: () => Promise<boolean>) => {
-    for (let attempt = 0; attempt < 150; attempt++) {
-      if (await check()) return;
-      await new Promise(resolveWait => setTimeout(resolveWait, 200));
-    }
-    assert.fail('Timed out. Agent output: ' + agentOutput);
-  };
-  await waitFor(async () => agentOutput.includes(environmentId));
-  const rotated = await c.run(['keys', 'rotate']);
-  assert.equal(rotated.code, 0, rotated.stderr);
-  assert.equal(JSON.parse(rotated.stdout).state, 'committed');
-  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body',
-    JSON.stringify({ command: ['node', '-e', "process.stdout.write('handled with new keys')"] })]);
-  assert.equal(started.code, 0, started.stderr);
-  const id = JSON.parse(started.stdout).id;
-  await waitFor(async () => JSON.parse((await c.run(['api', 'GET', '/api/processes/' + id])).stdout).state === 'succeeded');
-  assert.equal(JSON.parse((await c.run(['api', 'GET', '/api/processes/' + id])).stdout).result.stdout, 'handled with new keys');
-  const saved = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8'));
-  assert.equal(saved.identities[0].binding.generation, 2);
-  assert.equal(agent.exitCode, null);
 });
 
 test('CLIは署名で確認できない変更に確認IDを示し、APIで確認した後に同じ操作へその確認を添えて完了する', async (t) => {

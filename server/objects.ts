@@ -97,7 +97,6 @@ export class Objects {
       row = await this.resources.db.transaction(async (connection) => {
         await this.billing.reserve(
           ownerId,
-          'storage',
           body.length - Number(previous?.data.size ?? 0),
           connection,
         );

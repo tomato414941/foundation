@@ -20,7 +20,7 @@ import { ConnectionRequestReview, connectionRequestAction } from './connection-r
 import { loadRequestConnection, requestConnectionMethod } from './request-connection';
 import { DelegationReview, loadDelegationReviews } from './delegation-review';
 import { loadOperationReviews, OperationNotes, OperationReview } from './operation-review';
-import { ExecutionFacts, ExecutionOutput, ExecutionResult, executionTitle, loadExecutionDetails } from './execution-details';
+import { ExecutionResult, executionTitle, loadInitiator } from './execution-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
 import { Copy, DateText, Detail, ErrorNotice, ExternalLink, Notice, Page, Panel, ProposalText, State, usePolling } from './components';
@@ -149,13 +149,11 @@ export async function clientLoader({ params, request }: PageArgs) {
   if (['waiting', 'running'].includes(item.state) && item.from.id === account.principal?.id)
     item.code = sessionStorage.getItem('foundation.request.' + (item.delivery?.id ?? item.id)) ?? undefined;
   else sessionStorage.removeItem('foundation.request.' + (item.delivery?.id ?? item.id));
-  const details = requestConnection && item.from.id !== account.principal?.id
-    ? { steps: [], environments: [], initiator: item.creator }
-    : await loadExecutionDetails(item, !!account.principal && !account.requestId, request.signal);
+  const initiator = requestConnection && item.from.id !== account.principal?.id ? item.creator : await loadInitiator(item, request.signal);
   const unverified = account.principal && !account.requestId && item.canRespond && item.wait === 'approval' &&
     ['waiting', 'running'].includes(item.state) && await getIdentity(account.principal.id)
     ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
-  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified,
+  return { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, initiator, unverified,
     blocked: account.principal && !account.requestId ? await blockedBy(item, account.principal.id, request.signal) : null };
 }
 // Who alone can move a waiting execution on, when the one viewing it can neither continue, approve, nor cancel it, and
@@ -220,7 +218,7 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function ExecutionPage() {
-  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, details, unverified, blocked } = useLoaderData<typeof clientLoader>();
+  const { t, i18n } = useTranslation(), { item, account, current, inputForm, progress, operationError, requestMode, requestConnection, delegationReviews, operationReviews, initiator, unverified, blocked } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const pending = ['waiting', 'running'].includes(item.state), requester = item.from.id === account.principal?.id;
   const transferring = resourceTransfer(item);
@@ -259,8 +257,8 @@ export default function ExecutionPage() {
     if (step.state !== 'succeeded' && value && typeof value === 'object' && !Array.isArray(value) && value.pending === true)
       return false;
     if (recipientRequest && value && typeof value === 'object' && !Array.isArray(value) &&
-      Object.keys(value).length === 1 && value.ok === true && !details.steps[step.index]?.output) return false;
-    return details.steps[step.index]?.output || step.state === 'succeeded' && value !== null && value !== undefined;
+      Object.keys(value).length === 1 && value.ok === true) return false;
+    return step.state === 'succeeded' && value !== null && value !== undefined;
   });
   useEffect(() => {
     if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle') void revalidator.revalidate();
@@ -281,7 +279,6 @@ export default function ExecutionPage() {
             {!privateOperation && awaitingApproval && (delegationReviews[index]
               ? <DelegationReview review={delegationReviews[index]} /> : operationReviews[index] && <OperationReview rows={operationReviews[index]} />)}
             {(!recipientRequest || item.operations.length > 1) && <Detail label={t('status')}><State value={item.steps[index]?.state ?? item.state} /></Detail>}
-            {item.operations.length > 1 && details.steps[index] && <ExecutionFacts details={details.steps[index]} environments={details.environments} />}
             {pending && !privateOperation && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
               {input.multiline ? <TextareaField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
                 disabled={!item.canRespond || !pending} required={item.canRespond && pending} rows={3} /> :
@@ -307,7 +304,7 @@ export default function ExecutionPage() {
           {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
             ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
             : t(connectionAction)
-            : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
+            : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : awaitingApproval ? 'approve' : 'save')}
           {focusedConnection && requestConnection?.method?.registration.kind === 'authorization' && <ArrowUpRight aria-hidden="true" />}
         </Button>
         {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : transferring ? 'min-h-11 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost" disabled={navigation.state !== 'idle'}>{t(transferring ? 'transferDecline' : 'cancel')}</Button>}
@@ -321,12 +318,10 @@ export default function ExecutionPage() {
     </div>
   </Form>;
   const output = !focusedConnection && completedResults.length > 0 && <div className="flex min-w-0 flex-col gap-6">{completedResults.map(({ index }) => {
-    const value = item.results[index], output = details.steps[index]?.output;
-    const runtimeResult = value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'run';
+    const value = item.results[index];
     return <div key={index} className="flex min-w-0 flex-col gap-4">
       {item.operations.length > 1 && <h3 className="text-sm font-medium">{executionTitle(item.operations[index]!, i18n.language)}</h3>}
-      {runtimeResult || output && (item.operations[index]!.name === 'run.execute' || value == null) ? <ExecutionOutput output={output ?? { state: 'unavailable' }} invocation={item.operations[index]!} /> :
-        <ExecutionResult invocation={item.operations[index]!} value={value!} />}
+      <ExecutionResult invocation={item.operations[index]!} value={value!} />
     </div>;
   })}</div>;
   const blockedNotice = blocked && <Notice tone="info">
@@ -389,10 +384,9 @@ export default function ExecutionPage() {
       <Panel>
         <Detail label={t('status')}><State value={transferring && item.delivery?.state === 'declined' ? 'declined' : requestMode ? item.delivery!.state : item.state} /></Detail>
         {!requestMode && item.operations.length === 1 && <Detail label={t('functionProgram')}>{executionTitle(item.operations[0]!, i18n.language)}</Detail>}
-        <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{requestMode ? item.from.name : details.initiator.name}<Copy value={requestMode ? item.from.id : details.initiator.id} /></Detail>
+        <Detail label={t(requestMode ? 'requestedBy' : 'operationInitiator')}>{requestMode ? item.from.name : initiator.name}<Copy value={requestMode ? item.from.id : initiator.id} /></Detail>
         {requestMode && <Detail label={t('requestedTo')}>{item.to?.name ?? '—'}</Detail>}
         <Detail label={t('created')}><DateText value={item.createdAt} seconds /></Detail>
-        {!requestMode && item.operations.length === 1 && details.steps[0] && <ExecutionFacts details={details.steps[0]} environments={details.environments} />}
         {pending && (requestMode || ['approval', 'input'].includes(item.wait ?? '')) && <Detail label={t('expires')}><DateText value={item.delivery?.expiresAt ?? item.expiresAt} /></Detail>}
         {item.proposal ? <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p> :
           (item.message || requestMode) && <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>}

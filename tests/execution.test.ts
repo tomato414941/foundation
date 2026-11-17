@@ -2,13 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
-import { MemoryPayments, MemoryObjects, MemoryRunner } from './fakes.js';
-import { ApprovalRequest, EnvironmentInput, ObjectResource } from '../shared/contracts.js';
+import { MemoryPayments, MemoryObjects } from './fakes.js';
+import { ApprovalRequest, ObjectResource } from '../shared/contracts.js';
 import { buildApp } from '../server/app.js';
-import { signEnvironment } from '../shared/runtime-protocol.js';
-import { Operations } from '../shared/custody.js';
-import { CommandProcess } from '../runtime/command.js';
-import { delegatedFixture } from './delegation-support.js';
 
 test('配下のプリンシパルの支払いを支払元のアカウントで管理する', async (t) => {
   const f = await fixture(),
@@ -31,33 +27,6 @@ test('配下のプリンシパルの支払いを支払元のアカウントで�
   );
 });
 
-test('SSHでVMの起動を確認し、停止時に使用量を記録する', async t => {
-  const f = await fixture(), payments = new MemoryPayments(), runner = new MemoryRunner();
-  const c = await createContext(f.config, { db: f.db, mailer: f.mailer, payments, runner, ssh: runner.ssh });
-  t.after(f.close);
-  const owner = await f.person();
-  await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')",
-    [owner.actor.id, 'customer-' + owner.actor.id]);
-  const row = await c.environments.create(owner.actor, owner.actor.id,
-    EnvironmentInput.parse({ lifetime: { maxSeconds: 120, idleSeconds: 60 } }));
-  assert.equal(row.data.state, 'starting');
-  await c.environments.tick();
-  assert.equal((await c.resources.get(row.id)).data.state, 'running');
-  await f.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{startedAt}',to_jsonb((date_trunc('second',now())-interval '2 seconds')::text)) WHERE id=$1", [row.id]);
-  await c.environments.stop(owner.actor, await c.resources.get(row.id));
-  await f.db.pool.query("UPDATE environment_jobs SET retry_at=now() WHERE resource_id=$1", [row.id]);
-  await c.environments.tick();
-  assert.equal((await c.resources.get(row.id)).data.state, 'stopped');
-  assert.equal(runner.machines.get(row.id)!.state, 'stopped');
-  assert.ok((await c.billing.usage(owner.actor.id)).computeSeconds >= 1);
-  await c.billing.report(); await c.billing.report();
-  assert.equal(payments.events.length, 1);
-  assert.equal(runner.volumes.size, 1);
-  await c.environments.remove(owner.actor, await c.resources.get(row.id));
-  await c.environments.tick();
-  assert.equal(runner.volumes.size, 0);
-});
-
 test('オブジェクトを更新し、同時編集と保存容量の超過を拒否して現在の内容を保持する', async (t) => {
   const f = await fixture(),
     storage = new MemoryObjects(),
@@ -73,7 +42,7 @@ test('オブジェクトを更新し、同時編集と保存容量の超過を�
     "INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')",
     [owner.actor.id, 'customer-' + owner.actor.id],
   );
-  await c.billing.limits(owner.actor, owner.actor.id, 10, 3600);
+  await c.billing.limits(owner.actor, owner.actor.id, 10);
   const first = await c.objects.upload(
     owner.actor,
     owner.actor.id,
@@ -141,7 +110,7 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
   assert.equal(stale.statusCode, 409, stale.body);
 });
 
-test('支払い登録不要の利用枠を複数プリンシパルで共有し、保存容量と計算時間と同時起動数を制限する', async (t) => {
+test('支払い登録不要の利用枠を複数プリンシパルで共有し、保存容量を制限する', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const c = await createContext(
@@ -149,10 +118,8 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
       ...f.config,
       FOUNDATION_BILLING_MODE: 'included',
       FOUNDATION_INCLUDED_STORAGE_BYTES: 5,
-      FOUNDATION_INCLUDED_COMPUTE_SECONDS: 180,
-      FOUNDATION_INCLUDED_ENVIRONMENTS: 2,
     },
-    { db: f.db, storage: new MemoryObjects(), runner: new MemoryRunner() },
+    { db: f.db, storage: new MemoryObjects() },
   );
   const owners = [await f.person('First'), await f.person('Second')];
   assert.equal((await c.billing.payment(owners[0]!.actor, owners[0]!.actor.id)).required, false);
@@ -170,25 +137,10 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
     }
   }
   await c.objects.upload(owners[1]!.actor, owners[1]!.actor.id, 'all.txt', Buffer.from('abcde'), 'text/plain');
-  const start = (index: number, seconds: number) => {
-    const actor = owners[index]!.actor;
-    return c.environments.create(
-      actor,
-      actor.id,
-      EnvironmentInput.parse({ lifetime: { maxSeconds: seconds, idleSeconds: 60 } }),
-    );
-  };
-  const first = await start(0, 120);
-  const second = await start(1, 120);
-  await assert.rejects(start(0, 60), { code: 'environment_capacity' });
-  while (await c.environments.tick()) {}
-  await c.environments.stop(owners[0]!.actor, await c.resources.get(first.id));
-  await c.environments.stop(owners[1]!.actor, await c.resources.get(second.id));
-  await f.db.pool.query('UPDATE environment_jobs SET retry_at=now()');
-  while (await c.environments.tick()) {}
-  assert.equal((await start(1, 120)).data.state, 'starting');
-  await c.billing.record(owners[0]!.actor.id, 'compute', 180, 'used-compute');
-  await assert.rejects(start(0, 60), { code: 'compute_capacity' });
+  await assert.rejects(
+    c.objects.upload(owners[0]!.actor, owners[0]!.actor.id, 'more.txt', Buffer.from('a'), 'text/plain'),
+    { code: 'storage_capacity' },
+  );
 });
 
 test('支払い登録が必要な環境では、支払いの準備が整ってからオブジェクト保存を許可する', async (t) => {
@@ -209,40 +161,3 @@ test('支払い登録が必要な環境では、支払いの準備が整って�
   );
 });
 
-test('ワーカーが実行を一度だけ取得し、開始後の中断を確認待ちとして記録する', async t => {
-  const f = await delegatedFixture();
-  t.after(f.close);
-  await f.delegation.submit(f.owner.actor, f.request);
-  const claims = await Promise.all([f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id),
-    f.delegation.claim(f.executor.actor, f.environment.manifest.id, f.executor.binding.id)]);
-  assert.equal(claims.filter(Boolean).length, 1);
-  await f.delegation.dispatch(f.executor.actor, f.intent.id, claims.find(Boolean)!.lease);
-  await f.db.pool.query("UPDATE execution_tasks SET lease_until=now()-interval '1 minute' WHERE id=$1", [f.intent.id]);
-  await f.delegation.recover();
-  assert.equal((await f.delegation.get(f.owner.actor, f.intent.id)).state, 'uncertain');
-});
-
-test('実行用プログラムが環境変数とファイルと標準入力を渡し、終了結果を記録する', async () => {
-  const result = await new CommandProcess({ isolation: 'process' }).execute({
-    command: [process.execPath, '-e',
-      "const fs=require('node:fs');process.stdout.write(process.env.VALUE+'|'+fs.readFileSync(process.env.DATA_FILE)+'|'+fs.readFileSync(0));"],
-    stdin: 'input', timeoutSeconds: 10, environment: { VALUE: 'value' },
-    files: { DATA_FILE: Buffer.from('file').toString('base64') },
-  }, new AbortController().signal);
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.stdout, 'value|file|input');
-});
-
-test('実行先が名乗るAWSの身元を実行環境に載せ、名乗らなくなれば外す', async t => {
-  const f = await delegatedFixture();
-  t.after(f.close);
-  const awsPrincipal = 'arn:aws:iam::123456789012:role/' + 'project/'.repeat(35) + 'own-server';
-  const manifest = { format: 4 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
-    executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
-    capabilities: [Operations.http, Operations.connect], isolation: 'process' as const };
-  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, awsPrincipal, revision: 1 }, f.executor.keys),
-    'Own server');
-  assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, awsPrincipal);
-  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, revision: 2 }, f.executor.keys));
-  assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, undefined);
-});

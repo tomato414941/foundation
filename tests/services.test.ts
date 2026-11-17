@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { publicAddress, publicUrl } from '../server/transport.js';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { HttpRequest, Resource } from '../shared/contracts.js';
-import { Task } from '../shared/runtime-protocol.js';
+import { Resource } from '../shared/contracts.js';
 
 test('公開HTTPSの送信先を受け入れ、プライベートアドレスへの送信を拒否する', () => {
   for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111'])
@@ -146,11 +145,8 @@ test('使っている接続方式は、名前や説明を変えると接続に�
     name: 'Renamed CloudRift', definition: { ...definition, config: { ...definition.config, hint: 'Explained again.' } } } }, Resource);
   assert.equal((await f.client.api.json('/api/resources/' + connection.id, {}, Resource)).data.methodName, 'Renamed CloudRift');
 
-  const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'http',
-    request: HttpRequest.parse({ connectionId: connection.id, url: 'https://api.cloudrift.ai/api/v1/account/info', method: 'POST' }), save: {} });
-  await f.executor.tick();
-  assert.equal((await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task)))?.ok, true);
-  assert.equal(f.requests.at(-1)?.headers['X-API-Key'], 'own-method-token');
+  const used = await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id: connection.id, output: 'CLOUDRIFT_API_KEY' } }]);
+  assert.equal(used.environment.CLOUDRIFT_API_KEY, 'own-method-token');
 
   await assert.rejects(f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: relabeled.version,
     definition: { ...definition, http: { urlField: 'url', authentication: { kind: 'bearer', token: 'CLOUDRIFT_API_KEY' } } } } }, Resource),

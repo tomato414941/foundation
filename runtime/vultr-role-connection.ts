@@ -17,7 +17,7 @@ export async function vultrIdentityToken(source: 'oidc' | 'instance', signal: Ab
   if (source === 'oidc') {
     const path = process.env.VULTR_OIDC_TOKEN_FILE;
     const token = path ? await readFile(path, 'utf8') : process.env.VULTR_OIDC_TOKEN;
-    if (!token || token.length > 16384) fail(409, 'authentication_required', 'Provide the current OIDC token to this executor.');
+    if (!token || token.length > 16384) fail(409, 'authentication_required', 'Provide the current OIDC token on this machine.');
     return token.trim();
   }
   // This fixed metadata destination is used only by explicitly approved instance authentication.

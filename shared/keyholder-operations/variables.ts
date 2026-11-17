@@ -12,13 +12,11 @@ export function variableOperation(client: KeyholderClient): KeyholderOperation {
     const destination = ValueSave.parse(input);
     const previous = destination.resourceId ? await client.custody.latest(destination.resourceId) : undefined;
     if (previous && previous.version !== destination.version) throw new Error('This item changed. Reload it before saving.');
-    const environments = await Promise.all((destination.environmentIds ?? []).map(id => client.custody.environment(id)));
     const type = ContentTypes.value;
     if (previous && (previous.content.policy.contentType !== type || previous.content.policy.ownerId !== destination.ownerId))
       throw new Error('Choose the item prepared by this operation.');
-    const policy = previous && !previous.replaced && destination.environmentIds === undefined ? await client.custody.refreshRecipients(previous.content.policy)
-      : await client.custody.policy(destination.ownerId, type, environments,
-        previous?.replaced ? { replacing: previous.content.policy } : { previous: previous?.content.policy });
+    const policy = previous && !previous.replaced ? await client.custody.refreshRecipients(previous.content.policy)
+      : await client.custody.policy(destination.ownerId, type, previous ? { replacing: previous.content.policy } : {});
 
     if (material.value === undefined) throw new Error('Enter the value to save.');
     const bytes = typeof material.value === 'string' ? encode(material.value) : material.value;
