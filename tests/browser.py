@@ -1620,6 +1620,14 @@ class BrowserTests(unittest.TestCase):
         page.get_by_label("アクセストークン", exact=True).fill("vercel-browser-updated-token")
         page.get_by_role("button", name="接続する", exact=True).click()
         self.assertEqual(self.saved_connection(page, "Vercel projects")["id"], saved["id"])
+        main = page.locator("main")
+        expect(main).to_contain_text("サービス側の認証情報は使えるまま残るので、使えなくするにはサービスの管理画面で無効にしてください。")
+        expect(main.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_have_attribute("href", "https://vercel.com/account/tokens")
+        page.screenshot(path=str(ARTIFACTS / "vercel-connection-disconnect-ja.png"), full_page=True)
+        page.get_by_role("button", name="接続を解除", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="接続を解除", exact=True).click()
+        page.wait_for_url(f"**/p/{principal['id']}/services")
+        self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + saved["id"]).status, 404)
 
     def test_TailscaleのAPIアクセストークンを登録して再接続する(self):
         page, principal = self.passkey_account("Tailscale account")

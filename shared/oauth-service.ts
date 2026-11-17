@@ -1,7 +1,7 @@
 import type * as oauth from 'oauth4webapi';
 import { fail } from './errors.js';
-import type { OAuthApp, OAuthSpec, OAuthToken } from './oauth-values.js';
-import type { OutboundRequest, OutboundResponse, Transport } from './http.js';
+import type { OAuthApp, OAuthSpec } from './oauth-values.js';
+import type { OutboundResponse, Transport } from './http.js';
 
 interface ServiceContext { spec: OAuthSpec; app: OAuthApp; transport: Transport }
 export interface OAuthService {
@@ -13,10 +13,6 @@ export interface OAuthService {
   normalizeToken?(data: Record<string, unknown>): void;
   tokenParameters?(parameters: URLSearchParams): void;
   clientCredentialsParameters?(parameters: Record<string, string>): Record<string, string>;
-  revokeRequest?(context: ServiceContext & { url: string; current: OAuthToken }): OutboundRequest;
-}
-export function basicCredentials(clientId: string, secret: string) {
-  return btoa(Array.from(new TextEncoder().encode(clientId + ':' + secret), value => String.fromCharCode(value)).join(''));
 }
 const tokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), {
   dpop: () => fail(502, 'invalid_response', 'The service returned an unsupported token.'),
@@ -41,14 +37,6 @@ const openrouter: OAuthService = {
         code_challenge_method: 'S256' }) });
   },
   accessTokenField: 'key',
-};
-const githubRevocation: OAuthService = {
-  revokeRequest({ app, url, current }) {
-    return { url, method: 'DELETE', headers: {
-      authorization: 'Basic ' + basicCredentials(app.clientId, app.clientSecret ?? ''),
-      'content-type': 'application/json',
-    }, body: JSON.stringify({ access_token: current.accessToken }) };
-  },
 };
 const vultr: OAuthService = {
   tokenParameters(parameters) {
@@ -77,6 +65,5 @@ export function oauthService(spec: OAuthSpec, endpoint?: string): OAuthService {
       normalizeToken(data: Record<string, unknown>) { if (data.refresh_token === null) delete data.refresh_token; },
     } : {}),
     ...(spec.adapter === 'ebay' ? ebay : spec.adapter === 'openrouter' ? openrouter : spec.adapter === 'vultr' ? vultr : {}),
-    ...(spec.revoke?.style === 'github' ? githubRevocation : {}),
   };
 }

@@ -77,14 +77,6 @@ test('RenderのOAuth応答を端末で交換して利用時に更新し、解除
   const form = new URLSearchParams(String(f.requests.find(request =>
     request.url.endsWith('/oauth/token') && String(request.body).includes('refresh_token'))!.body));
   assert.equal(form.get('resource'), 'https://mcp.render.com/mcp');
-  const sent = f.requests.length;
-  const task = await f.client.submit(f.owner.actor.id, f.environment.manifest.id,
-    { kind: 'revoke', input: { action: 'revoke', id: saved.id } }, { sourceIds: [saved.id] });
-  await f.executor.tick();
-  const result = await f.client.result(await f.client.api.json('/api/runtime/runs/' + task.id, {}, Task));
-  assert.equal(result?.ok, true);
-  assert.deepEqual(result?.result, { kind: 'disconnected', id: saved.id, revoked: false });
-  assert.equal(f.requests.length, sent);
 });
 
 test('入力待ちの更新を取り消すと元のキーを保ち、再登録で同じ接続を更新する', async t => {

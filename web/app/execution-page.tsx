@@ -307,7 +307,7 @@ export default function ExecutionPage() {
           {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
             ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
             : t(connectionAction)
-            : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'connection.revoke' ? 'disconnect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
+            : t(awaitingApproval && requestMode ? 'approve' : current?.invocation.name === 'connection.connect' ? 'connect' : current?.invocation.name === 'run.execute' ? 'execute' : awaitingApproval ? 'approve' : 'save')}
           {focusedConnection && requestConnection?.method?.registration.kind === 'authorization' && <ArrowUpRight aria-hidden="true" />}
         </Button>
         {canDecline && <Button className={focusedConnection ? 'min-h-12 px-4 text-muted-foreground' : transferring ? 'min-h-11 px-4 text-muted-foreground' : undefined} type="submit" name="intent" value="decline" formNoValidate variant="ghost" disabled={navigation.state !== 'idle'}>{t(transferring ? 'transferDecline' : 'cancel')}</Button>}

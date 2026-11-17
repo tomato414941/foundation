@@ -21,12 +21,6 @@
           "SALESFORCE_INSTANCE_URL": "/instance_url",
           "SALESFORCE_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://login.salesforce.com/services/oauth2/revoke",
-          "style": "rfc7009",
-          "auth": "none",
-          "tokenOnly": true
-        },
         "keep": [
           "instance_url",
           "id"

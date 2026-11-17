@@ -22,11 +22,6 @@
           "LINEAR_ACCESS_TOKEN": "/accessToken",
           "LINEAR_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://api.linear.app/oauth/revoke",
-          "style": "bearer",
-          "tokenOnly": true
-        },
         "hint": "The access token is sent as \"Authorization: Bearer <token>\" to the GraphQL endpoint.",
         "scopes": {
           "default": [

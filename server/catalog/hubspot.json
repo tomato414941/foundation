@@ -22,11 +22,6 @@
           "HUBSPOT_ACCESS_TOKEN": "/accessToken",
           "HUBSPOT_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://api.hubapi.com/oauth/v1/refresh-tokens/{refreshToken}",
-          "style": "delete",
-          "tokenOnly": true
-        },
         "scopes": {
           "default": [
             "oauth"

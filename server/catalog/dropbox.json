@@ -25,11 +25,6 @@
           "DROPBOX_ACCESS_TOKEN": "/accessToken",
           "DROPBOX_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://api.dropboxapi.com/2/auth/token/revoke",
-          "style": "bearer",
-          "tokenOnly": true
-        },
         "scopes": {
           "default": [
             "account_info.read"

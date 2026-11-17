@@ -77,14 +77,13 @@ export const ConnectionMetadata = z.object({
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
-  revocable: z.literal(true).optional(),
   fields: Fields.optional(),
   aws: AwsConnectionInfo.optional(),
   ovh: OvhConnectionInfo.optional(),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
-  const { outputs, revocable } = connectionMethod(state.method);
+  const { outputs } = connectionMethod(state.method);
   const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(state.method.config.fields, state.fields) : {};
   const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
@@ -95,7 +94,6 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
     accountVerified: facts.accountVerified,
     scopes: facts.scopes, scopesStatus: facts.scopesStatus,
     outputs, state: state.state ?? 'ready',
-    ...(revocable ? { revocable } : {}),
     ...(Object.keys(fields).length ? { fields } : {}),
     ...facts.details,
   });
@@ -136,8 +134,5 @@ export function withMethod(kept: unknown, methodId: unknown, method: MethodDescr
 export const openConnection = (bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) =>
   withMethod(JSON.parse(decode(bytes)), metadata.methodId, method);
 
-export const ConnectionAction = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('refresh'), id: Id }).strict(),
-  z.object({ action: z.literal('revoke'), id: Id }).strict(),
-]);
+export const ConnectionAction = z.object({ action: z.literal('refresh'), id: Id }).strict();
 export type ConnectionCommand = z.infer<typeof ConnectionAction>;

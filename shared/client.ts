@@ -541,7 +541,7 @@ export class CustodyClient {
     const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
     for (let index = 0; index < sources.length; index++) {
       const source = sources[index]!, credential = source.policy.contentType === ContentTypes.clientCredential;
-      const use = credential && operation.kind !== 'revoke' ? Operations.refresh : Operations[operation.kind];
+      const use = credential ? Operations.refresh : Operations[operation.kind];
       const destination = credential || !request?.url ? undefined : new URL(request.url).origin;
       const permitted = source.policy.grants.some(grant => 'actor' in grant &&
         canonical(grant.actor) === canonical(this.binding) && canonical(grant.executor) === canonical(environment.manifest.executor) &&
@@ -582,7 +582,7 @@ export class CustodyClient {
     await authorizeEnvironment(environment, intent);
     const credential = (content: CustodyContent) => content.policy.contentType === ContentTypes.clientCredential;
     for (const source of sources) await authorizeUse(source, credential(source) &&
-      intent.operation !== Operations.connect && intent.operation !== Operations.revoke ? { ...intent, operation: Operations.refresh } : intent,
+      intent.operation !== Operations.connect ? { ...intent, operation: Operations.refresh } : intent,
       credential(source) ? {} : { destination: request?.url,
         destinationPending: Boolean(request?.connectionId && !request.url) });
     return prepareRun(intent, operation, this.keys);

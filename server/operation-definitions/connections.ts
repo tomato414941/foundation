@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import * as P from '../../shared/protocol.js';
-import { AppSave, AuthorizeConnection, ConnectService, Execution, RevokeConnection, ValueSave } from '../../shared/executions.js';
+import { AppSave, AuthorizeConnection, ConnectService, Execution, ValueSave } from '../../shared/executions.js';
 import { canonical } from '../../shared/authority.js';
 import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
@@ -10,15 +10,15 @@ import type { CustodyPolicy } from '../../shared/custody.js';
 import type { Catalog } from '../catalog.js';
 import type { Custody } from '../custody.js';
 import { succeeds } from '../custody.js';
-import { DomainError, fail } from '../errors.js';
-import { OperationFailed, DefinitionRegistry } from '../definitions.js';
+import { fail } from '../errors.js';
+import { DefinitionRegistry } from '../definitions.js';
 import type { Queryable } from '../database.js';
 import { requiresApp } from '../../shared/connections.js';
 import type { OperationServices } from '../builtin-definitions.js';
 import { keyholder } from './support.js';
 
-export function defineConnections(definitions: DefinitionRegistry, services: Pick<OperationServices, 'resources' | 'custody' | 'delegation' | 'catalog' | 'authorization'>) {
-  const { resources, custody, delegation, catalog, authorization } = services;
+export function defineConnections(definitions: DefinitionRegistry, services: Pick<OperationServices, 'resources' | 'custody' | 'delegation' | 'catalog'>) {
+  const { resources, custody, delegation, catalog } = services;
   const bind = definitions.bind.bind(definitions);
   // Signed encrypted writes update content under its current owner.
   definitions.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
@@ -151,28 +151,5 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
           fail(409, 'operation_changed', 'Keep the approved connection permissions.');
         const row = await custody.put(who, write);
         return { kind: 'connected', id: row.id, metadata: write.content.metadata };
-      } });
-  // Disconnecting removes what Foundation holds whatever the service answers. Only a cancelled run keeps the connection.
-  definitions.define('connection.revoke', RevokeConnection, ['接続を解除する', 'Disconnect a service'], keyholder,
-    { execution: 'keyholder', continuation: 'run', delegatedOperation: () => Operations.revoke, configure: [], environmentReason: ['外部サービスの認可を実行環境から取り消します。', 'Revoke external service access from an execution environment.'],
-      review: async (who, input) => {
-        await authorization.requireResource(who, await resources.get(RevokeConnection.parse(input).connectionId), 'delete');
-        return input;
-      },
-      complete: async (who, input, proof, execution) => {
-        const { runId } = z.object({ runId: C.Id }).strict().parse(proof), task = await delegation.get(who, runId);
-        if (!['succeeded', 'failed', 'cancelled', 'uncertain'].includes(task.state) || task.kind !== 'revoke' ||
-          task.intent.actor.principalId !== who.id || task.intent.ownerId !== input.ownerId || task.environmentId !== input.environmentId ||
-          task.intent.operationContext?.id !== execution.id || task.intent.operationContext.index !== execution.index ||
-          !task.intent.sources.some(source => source.id === input.connectionId))
-          fail(409, 'execution_required', 'Finish the revocation prepared by this operation.');
-        const result = { kind: 'run', id: task.id, state: task.state };
-        if (task.state === 'cancelled') throw new OperationFailed(result, false);
-        const connection = await resources.get(input.connectionId).catch(error => {
-          if (error instanceof DomainError && error.code === 'not_found') return null;
-          throw error;
-        });
-        if (connection) await resources.delete(who, connection);
-        return result;
       } });
 }

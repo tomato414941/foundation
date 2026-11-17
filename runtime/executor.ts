@@ -241,14 +241,14 @@ export class Executor {
       await authorizeUse(content, intent, { destination });
       await useContent(content, intent, this.keys, { destination });
     }
-    if (operation.kind === 'connect' || operation.kind === 'refresh' || operation.kind === 'revoke') {
+    if (operation.kind === 'connect' || operation.kind === 'refresh') {
       if (!this.extension) throw new Error('This executor cannot manage connections.');
       await this.extension.validate(operation.input, intent, sources);
     }
   }
 
   async executeOperation(operation: Operation, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
-    if (operation.kind === 'connect' || operation.kind === 'refresh' || operation.kind === 'revoke')
+    if (operation.kind === 'connect' || operation.kind === 'refresh')
       return this.extension!.execute(operation.input, intent, sources, signal);
     const request = this.request(operation);
     const program = operation.kind === 'function' ? functionProgram(operation.definition, operation.arguments) : operation;

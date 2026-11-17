@@ -15,7 +15,6 @@ export const FunctionSave = z.object({ ownerId: Id, name: Name, definition: Func
 export const FunctionConfigure = z.object({ functionId: Id, functionVersion: z.number().int().positive(),
   version: z.number().int().nonnegative(), environmentId: Id.nullable(),
   inputAccess: FunctionInputAccess.default({ expiresAt: null }) }).strict();
-export const RevokeConnection = z.object({ ownerId: Id, connectionId: Id, environmentId: Id }).strict();
 export const AuthorizeConnection = z.object({ ownerId: Id, connectionId: Id, version: z.number().int().positive(),
   users: z.array(Id).max(32), expiresAt: z.iso.datetime().optional() }).strict();
 export const ConnectService = z.object({ ownerId: Id, methodId: z.string().min(1).max(200),

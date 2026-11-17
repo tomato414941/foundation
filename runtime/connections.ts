@@ -75,7 +75,7 @@ export class Connections implements ExecutionExtension {
     const result = open(await useContent(content, intent, this.keys, { destination: target }));
     if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
-    if (result.state === 'reconnect' && intent.operation !== Operations.revoke)
+    if (result.state === 'reconnect')
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
   }
@@ -89,8 +89,7 @@ export class Connections implements ExecutionExtension {
     if (connectionMethod(state.method).application === 'none') return null;
     if (!requiresApp(state.method)) return 'implicitApp' in state && state.implicitApp ? state.implicitApp : AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
-    const operation = intent.operation === Operations.revoke ? Operations.revoke : Operations.refresh;
-    const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);
+    const app = await this.app(state.appId!, state.methodId, { ...intent, operation: Operations.refresh }, sources);
     if (app.generation !== state.appGeneration)
       fail(409, 'app_changed', 'Reconnect this service with the current application.');
     if (connectionMethod(state.method).requiresApp && state.method.kind !== 'aws' &&
@@ -102,7 +101,7 @@ export class Connections implements ExecutionExtension {
     const action = ConnectionAction.parse(input);
     if (intent.operation !== Operations[action.action]) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     const state = await this.material(this.source(action.id, ContentTypes.tokenSet, sources), intent);
-    if (action.action === 'refresh' || connectionMethod(state.method).revocable) await this.connectionApp(state, intent, sources);
+    await this.connectionApp(state, intent, sources);
   }
   async execute(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue> {
     const action = ConnectionAction.parse(input);
@@ -111,13 +110,8 @@ export class Connections implements ExecutionExtension {
     try {
       signal.throwIfAborted();
       const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
-      if (action.action === 'refresh') {
-        const refreshed = await this.refresh(content, state, intent, sources, signal);
-        return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
-      }
-      const provider = this.provider(state.method), revoked = connectionMethod(state.method).revocable && Boolean(provider.revoke);
-      if (revoked) await provider.revoke!(state, await this.connectionApp(state, intent, sources), signal);
-      return { kind: 'disconnected', id: content.policy.id, revoked };
+      const refreshed = await this.refresh(content, state, intent, sources, signal);
+      return { kind: 'refreshed', id: content.policy.id, ...(await this.metadata(refreshed)) };
     } finally { this.active.delete(action.id); }
   }
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,

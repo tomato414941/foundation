@@ -3,7 +3,7 @@ import { atPointer, textValue } from './values.js';
 import { publicUrl, responseJson } from './http.js';
 import type { Transport } from './http.js';
 import { DomainError, fail } from './errors.js';
-import { basicCredentials, oauthService } from './oauth-service.js';
+import { oauthService } from './oauth-service.js';
 import { expandUrl, lifetime, strings } from './oauth-values.js';
 import type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 import { connectionValues, ConnectionFieldError } from './connection-fields.js';
@@ -327,49 +327,6 @@ export class OAuth {
       await checkpoint?.(current, data);
     }
     return current;
-  }
-  async revoke(spec: OAuthSpec, app: OAuthApp, current: OAuthToken) {
-    if (!spec.revoke?.tokenOnly) throw new Error('Revoke only with an endpoint that invalidates this token alone.');
-    const url = expandUrl(spec.revoke.url, {
-      ...this.appValues(spec, app),
-      accessToken: current.accessToken,
-      refreshToken: current.refreshToken ?? '',
-    });
-    if (spec.revoke.style === 'rfc7009') {
-      const { server, client } = this.configuration(spec, app);
-      const authentication =
-        spec.revoke.auth === 'none' && spec.clientAuth !== 'none'
-          ? () => {}
-          : this.authentication(app, spec.revoke.auth ?? spec.clientAuth);
-      const response = await oauth.revocationRequest(
-        { ...server, revocation_endpoint: url },
-        client,
-        authentication,
-        current.refreshToken ?? current.accessToken,
-        this.options(),
-      );
-      try {
-        await oauth.processRevocationResponse(response);
-      } catch {
-        fail(502, 'revoke_failed', 'The service did not revoke the token.');
-      }
-      return;
-    }
-    const headers: Record<string, string> = {};
-    const auth = spec.revoke.auth ?? spec.clientAuth;
-    if (spec.revoke.style === 'bearer') headers.authorization = 'Bearer ' + current.accessToken;
-    else if (auth === 'basic')
-      headers.authorization =
-        'Basic ' + basicCredentials(app.clientId, app.clientSecret ?? '');
-    const response = await this.transport.send(oauthService(spec).revokeRequest?.({
-      spec, app, transport: this.transport, url, current,
-    }) ?? {
-      url,
-      method: spec.revoke.style === 'bearer' ? 'POST' : 'DELETE',
-      headers,
-    });
-    if (response.status >= 300)
-      fail(502, 'revoke_failed', 'The service did not revoke the token.');
   }
   outputs(spec: OAuthSpec, app: OAuthApp, value: OAuthToken): Record<string, string> {
     const data = {

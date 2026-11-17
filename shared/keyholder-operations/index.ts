@@ -8,6 +8,6 @@ export function keyholderOperations(client: KeyholderClient) {
   const operations = connectionOperations(client), functions = functionOperation(client), runs = runOperation(client);
   operations.set('variable.save', variableOperation(client));
   operations.set('function.save', functions); operations.set('function.configure', functions);
-  operations.set('run.execute', runs); operations.set('connection.revoke', runs);
+  operations.set('run.execute', runs);
   return operations;
 }

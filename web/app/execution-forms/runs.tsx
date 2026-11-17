@@ -28,11 +28,10 @@ async function destinations(input: DefinitionCall['input']): Promise<ReviewRow[]
 
 type RunData = OwnedForm & { review: ReviewRow[] };
 async function load(invocation: DefinitionCall): Promise<RunData> {
-  const { name, input } = invocation;
+  const { input } = invocation;
   const rows = reviewer({ approver: null, principals: [], inspect: true, signal: new AbortController().signal });
   const [owned, review, kept] = await Promise.all([loadOwner(invocation, undefined, true),
-    rows(name === 'connection.revoke' ? { connectionId: input.connectionId ?? null } : input.operation as Record<string, JsonValue>),
-    name === 'run.execute' ? destinations(input) : []]);
+    rows(input.operation as Record<string, JsonValue>), destinations(input)]);
   return { ...owned, review: [...review, ...kept] };
 }
 export const runForm = defineForm({ load,

@@ -22,11 +22,6 @@
           "X_ACCESS_TOKEN": "/accessToken",
           "X_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://api.x.com/2/oauth2/revoke",
-          "style": "rfc7009",
-          "tokenOnly": true
-        },
         "scopes": {
           "default": [
             "tweet.read",

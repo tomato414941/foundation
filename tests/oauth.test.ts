@@ -20,7 +20,6 @@ const definition = (options: Record<string, unknown> = {}) =>
   OAuthDefinition.parse({
     authorizeUrl: 'https://provider.test/authorize',
     tokenUrl: 'https://provider.test/token',
-    revoke: { url: 'https://provider.test/revoke', tokenOnly: true },
     ...options,
   });
 const response = (body: unknown, status = 200): OutboundResponse => ({
@@ -67,16 +66,12 @@ function checkBasic(request: OutboundRequest) {
   );
 }
 
-test('記号を含むアプリ認証情報で認可コードを交換し、更新後のトークンを失効する', async () => {
+test('記号を含むアプリ認証情報で認可コードを交換し、トークンを更新する', async () => {
   const spec = definition({ clientAuth: 'basic' });
   let grants = 0;
   const provider = new Provider((request) => {
     checkBasic(request);
     const form = new URLSearchParams(String(request.body));
-    if (request.url.endsWith('/revoke')) {
-      assert.equal(form.get('token'), 'rotated-refresh');
-      return response('');
-    }
     if (++grants === 1) {
       assert.equal(form.get('grant_type'), 'authorization_code');
       assert.equal(form.get('code'), 'authorization-code');
@@ -109,8 +104,7 @@ test('記号を含むアプリ認証情報で認可コードを交換し、更�
   assert.equal(token.accessToken, 'access-1');
   const refreshed = await oauth.refresh(spec, app, token);
   assert.equal(refreshed.accessToken, 'access-2');
-  await oauth.revoke(spec, app, refreshed);
-  assert.equal(provider.requests.length, 3);
+  assert.equal(provider.requests.length, 2);
 });
 
 test('保存済みトークンを更新し、更新用トークンと権限を引き継いで期限を維持する', async () => {
@@ -366,25 +360,16 @@ test('eBayのRuNameで認可し、独自のトークン種別で更新する', a
   assert.equal(refreshed.refreshToken, 'ebay-refresh');
 });
 
-test('GitHubの発行者を確認してトークンを取得し、そのトークンだけを取り消す', async () => {
+test('GitHubの発行者を確認してトークンを取得する', async () => {
   const spec = await builtin('github');
   const githubApp = { clientId: 'github-client', clientSecret: 'github-secret', fields: {} };
   const provider = new Provider((request) => {
-    if (request.url === spec.tokenUrl) {
-      assert.equal(request.headers?.['content-type'], 'application/json');
-      const body = JSON.parse(String(request.body));
-      assert.equal(body.client_id, githubApp.clientId);
-      assert.equal(body.client_secret, githubApp.clientSecret);
-      return response({ access_token: 'github-access', token_type: 'bearer', scope: 'repo' });
-    }
-    assert.equal(request.url, 'https://api.github.com/applications/github-client/token');
-    assert.equal(request.method, 'DELETE');
-    assert.equal(
-      Buffer.from(request.headers!.authorization!.slice(6), 'base64').toString(),
-      'github-client:github-secret',
-    );
-    assert.deepEqual(JSON.parse(String(request.body)), { access_token: 'github-access' });
-    return response('', 204);
+    assert.equal(request.url, spec.tokenUrl);
+    assert.equal(request.headers?.['content-type'], 'application/json');
+    const body = JSON.parse(String(request.body));
+    assert.equal(body.client_id, githubApp.clientId);
+    assert.equal(body.client_secret, githubApp.clientSecret);
+    return response({ access_token: 'github-access', token_type: 'bearer', scope: 'repo' });
   });
   const oauth = new OAuth(provider);
   const callback = authorization('github-code');
@@ -399,7 +384,6 @@ test('GitHubの発行者を確認してトークンを取得し、そのトー�
       { code: 'invalid_state' });
   }
   assert.equal(provider.requests.length, 1);
-  await oauth.revoke(spec, githubApp, token);
 });
 
 test('Notionの認可応答に含まれるワークスペースIDを出力する', async () => {
@@ -419,29 +403,6 @@ test('Notionの認可応答に含まれるワークスペースIDを出力する
   const oauth = new OAuth(provider);
   const token = await oauth.exchange(spec, app, authorization('notion-code'), verifier, redirect, []);
   assert.equal(oauth.outputs(spec, app, token).NOTION_WORKSPACE_ID, 'workspace-1');
-});
-
-test('Salesforceのトークンを取得し、アプリ認証不要の失効要求を送信する', async () => {
-  const spec = await builtin('salesforce');
-  const provider = new Provider((request) => {
-    if (request.url === spec.tokenUrl)
-      return response({
-        access_token: 'salesforce-access',
-        token_type: 'Bearer',
-        refresh_token: 'salesforce-refresh',
-        instance_url: 'https://example.my.salesforce.com',
-        id: 'https://login.salesforce.com/id/organization/user',
-      });
-    assert.equal(request.url, spec.revoke!.url);
-    assert.deepEqual(Object.fromEntries(new URLSearchParams(String(request.body))), {
-      token: 'salesforce-refresh',
-    });
-    return response('');
-  });
-  const oauth = new OAuth(provider);
-  const token = await oauth.exchange(spec, app, authorization('salesforce-code'), verifier, redirect, ['refresh_token']);
-  await oauth.revoke(spec, app, token);
-  assert.equal(provider.requests.length, 2);
 });
 
 test('OpenRouterのコードをPKCEで交換してAPIキーを取得する', async () => {

@@ -49,7 +49,4 @@ export class OAuthConnection implements ConnectionProvider {
   async outputs(value: ConnectionState, app: AppState | null) {
     return this.oauth().outputs(specification(value), application(app), value.oauth!);
   }
-  async revoke(value: ConnectionState, app: AppState | null, signal: AbortSignal) {
-    if (value.oauth) await this.oauth(signal).revoke(specification(value), application(app), value.oauth);
-  }
 }

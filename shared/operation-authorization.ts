@@ -2,7 +2,7 @@ import { canonical, hash } from './authority.js';
 import type { ExecutionIntent } from './custody.js';
 import { RuntimeOperation } from './runtime-protocol.js';
 import type { ExecutionOperation } from './runtime-protocol.js';
-import { RevokeConnection, RunOperation } from './executions.js';
+import { RunOperation } from './executions.js';
 import type { DefinitionCall } from './executions.js';
 import { z } from 'zod';
 
@@ -25,13 +25,6 @@ export function signedInvocation(invocation: DefinitionCall): DefinitionCall {
 export async function authorizeOperationContext(intent: ExecutionIntent, operation: ExecutionOperation) {
   const context = intent.operationContext;
   if (!context) return;
-  if (context.invocation.name === 'connection.revoke') {
-    const expected = RevokeConnection.parse(context.invocation.input);
-    if (operation.kind !== 'revoke' || canonical(operation.input) !== canonical({ action: 'revoke', id: expected.connectionId }) ||
-      expected.ownerId !== intent.ownerId || expected.environmentId !== intent.environmentId)
-      throw new Error('Revoke the reviewed connection on its selected executor.');
-    return;
-  }
   if (context.invocation.name !== 'run.execute') throw new Error('Use the reviewed operation.');
   const expected = RunOperation.parse(context.invocation.input);
   if (expected.ownerId !== intent.ownerId || expected.environmentId !== intent.environmentId || expected.operation.kind !== operation.kind)

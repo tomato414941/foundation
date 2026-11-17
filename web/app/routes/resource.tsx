@@ -5,7 +5,9 @@ import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
-import { Resource, EnvironmentDeletion, FunctionExecutionSettings } from '../../../shared/contracts';
+import { CatalogMethod, Resource, EnvironmentDeletion, FunctionExecutionSettings } from '../../../shared/contracts';
+import { catalogDefinition } from '../../../shared/connection-methods';
+import { connectionConsole } from '../../../shared/connection-fields';
 import { decode } from '../../../shared/encryption';
 import { api, ApiFailure, actionResult, formText } from '../api';
 import { decryptVariable, requireKeys } from '../keys';
@@ -17,6 +19,7 @@ import {
   DateText,
   Detail,
   ErrorNotice,
+  ExternalLink,
   Operation,
   Page,
   Panel,
@@ -28,10 +31,10 @@ import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { connectionMethodName } from '../connection-method-labels';
-import { executionClient, functionClient } from '../custody';
+import { functionClient } from '../custody';
 import { FunctionSettings } from '../function-settings';
 import { inputAccessFromForm } from '../function-access';
-import { availableEnvironments, EnvironmentChoice, environmentState } from '../environments';
+import { availableEnvironments, environmentState } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
 import { EnvironmentSSH } from '../environment-ssh';
 import { sshSettings } from '../ssh';
@@ -49,8 +52,12 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
     throw new Response('Not found', { status: 404 });
   const functionSettings = resource.kind === 'function' && resource.permissions.includes('read')
     ? await api('/functions/' + resource.id + '/execution-settings', { signal: request.signal }, FunctionExecutionSettings) : null;
-  return { resource, functionSettings, environments: resource.kind === 'connection' && resource.data.revocable ||
-    resource.kind === 'function' && resource.permissions.includes('update') ? await availableEnvironments(resource.ownerId) : [] };
+  // Removing a connection leaves its credentials valid at the service, whose console is where they are disabled.
+  const method = resource.kind === 'connection' && resource.permissions.includes('delete')
+    ? catalogDefinition(await api('/connections/' + resource.id + '/method', { signal: request.signal }, CatalogMethod)) : null;
+  return { resource, functionSettings,
+    serviceConsole: method && resource.kind === 'connection' ? connectionConsole(method, resource.data.fields) ?? null : null,
+    environments: resource.kind === 'function' && resource.permissions.includes('update') ? await availableEnvironments(resource.ownerId) : [] };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -73,13 +80,6 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       await api(`/resources/${params.id}/${intent}`, { method: 'POST', body: {} });
       return { ok: true };
     }
-    if (formText(form, 'intent') === 'disconnect') {
-      await requireKeys();
-      const result = await (await executionClient()).execute({ name: 'connection.revoke',
-        input: { ownerId: params.owner, environmentId: formText(form, 'environmentId'), connectionId: params.id } });
-      if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('execution_required');
-      return redirect('/executions/' + result.task.intent.operationContext!.id);
-    }
     await api(`${params.section === 'functions' ? '/functions' : '/resources'}/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
   });
@@ -93,7 +93,7 @@ function downloadBytes(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function ResourceDetail() {
-  const { resource: item, environments, functionSettings } = useLoaderData<typeof clientLoader>();
+  const { resource: item, environments, functionSettings, serviceConsole } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
   const { t } = useTranslation();
@@ -189,12 +189,10 @@ export default function ResourceDetail() {
             )}
             {can('delete') && (
               <Operation title={t('disconnect')} help={t('disconnectHelp')}>
-                <Confirm label={t('disconnect')} name={item.name}>
-                  {environments.length > 0 && (
-                    <><input type="hidden" name="intent" value="disconnect" />
-                      <EnvironmentChoice items={environments} /></>
-                  )}
-                </Confirm>
+                <div className="flex flex-wrap items-center gap-3">
+                  {serviceConsole && <ExternalLink href={serviceConsole}>{t('serviceConsole')}</ExternalLink>}
+                  <Confirm label={t('disconnect')} name={item.name} />
+                </div>
               </Operation>
             )}
           </div>

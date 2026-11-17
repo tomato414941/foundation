@@ -16,5 +16,4 @@ export interface ConnectionProvider {
   renew?(context: RenewalContext): Promise<ConnectionState>;
   recover?(material: ConnectionState, app: AppState | null, checkpoint: ConnectionCheckpoint): Promise<ConnectionState>;
   outputs(material: ConnectionState, app: AppState | null, signal: AbortSignal): Promise<Record<string, string>>;
-  revoke?(material: ConnectionState, app: AppState | null, signal: AbortSignal): Promise<void>;
 }

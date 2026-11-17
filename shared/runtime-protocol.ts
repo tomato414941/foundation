@@ -187,7 +187,7 @@ export async function readReceipt(
 }
 
 // What a run does, as the API and people name it. Signed intents carry the operation's id instead.
-export const RunKind = z.enum(['http', 'command', 'function', 'connect', 'refresh', 'revoke']);
+export const RunKind = z.enum(['http', 'command', 'function', 'connect', 'refresh']);
 export type RunKindName = z.infer<typeof RunKind>;
 export const Task = z.object({
   id: Id, ownerId: Id, actorId: Id, environmentId: Id, kind: RunKind,
@@ -205,7 +205,7 @@ export const RuntimeOperation = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), request: HttpRequest,
     save: z.record(z.string(), PolicyApproval).default({}) }).strict(),
   z.object({ kind: z.literal('command'), ...Command.shape }).strict(),
-  z.object({ kind: z.enum(['connect', 'refresh', 'revoke']), input: Json }).strict(),
+  z.object({ kind: z.enum(['connect', 'refresh']), input: Json }).strict(),
 ]);
 export type ExecutionOperation = z.infer<typeof RuntimeOperation>;
 export type FunctionExecution = z.infer<typeof FunctionOperation>;

@@ -22,11 +22,6 @@
           "GITLAB_ACCESS_TOKEN": "/accessToken",
           "GITLAB_TOKEN_EXPIRES_AT": "/expiresAt"
         },
-        "revoke": {
-          "url": "https://gitlab.com/oauth/revoke",
-          "style": "rfc7009",
-          "tokenOnly": true
-        },
         "scopes": {
           "default": [
             "read_user"
