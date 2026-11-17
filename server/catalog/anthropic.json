@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://platform.claude.com/docs/en/api/overview#authentication",
       "console": "https://platform.claude.com/settings/keys",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "header", "name": "x-api-key", "value": "ANTHROPIC_API_KEY" }
-      },
       "config": {
         "fields": [
           { "name": "token", "label": "API key", "secret": true, "pattern": "^\\S+$" }
@@ -28,10 +24,6 @@
       "kind": "token",
       "docs": "https://platform.claude.com/docs/en/manage-claude/admin-api",
       "console": "https://platform.claude.com/settings/admin-keys",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "header", "name": "x-api-key", "value": "ANTHROPIC_ADMIN_KEY" }
-      },
       "config": {
         "fields": [
           {

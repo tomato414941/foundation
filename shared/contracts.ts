@@ -254,27 +254,10 @@ export const OvhDefinition = z.object({
   outputs: OutputMap,
   hint: z.string().optional(),
 }).strict();
-const OutputName = z.string().regex(/^[A-Z_][A-Z0-9_]*$/);
-const HttpHeaderName = z.union([
-  z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/),
-  z.object({ output: OutputName }).strict(),
-]);
-export const HttpConnection = z.object({
-  urlField: z.string().min(1).max(100).optional(),
-  authentication: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('none') }).strict(),
-    z.object({ kind: z.literal('bearer'), token: OutputName }).strict(),
-    z.object({ kind: z.literal('basic'), username: OutputName, password: OutputName }).strict(),
-    z.object({ kind: z.literal('header'), name: HttpHeaderName, value: OutputName }).strict(),
-    z.object({ kind: z.literal('query'), name: HttpHeaderName, value: OutputName }).strict(),
-  ]),
-}).strict();
-export type HttpConnectionSpec = z.infer<typeof HttpConnection>;
 const methodMetadata = {
   name: Name,
   docs: z.url().optional(),
   console: UrlTemplate.optional(),
-  http: HttpConnection.optional(),
   preparation: z.object({
     scopeSelection: z.enum(['optional', 'required', 'hidden']).default('optional'),
     instructions: z.array(z.union([z.string().max(2000), z.object({ ja: z.string().max(2000), en: z.string().max(2000) }).strict()])).max(10).default([]),
@@ -391,7 +374,6 @@ export const ConnectionResource = z.object({
     settings: z.array(z.object({ name: z.string(), label: z.string(), value: z.string() })).default([]),
     methodName: z.string(),
     methodKind: AuthKind,
-    http: HttpConnection.optional(),
     services: z.array(z.object({ id: z.string(), name: Name })).default([]),
     account: z.string(),
     accountId: z.string().nullable().default(null),

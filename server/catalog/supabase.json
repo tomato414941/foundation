@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://supabase.com/docs/reference/api/introduction",
       "console": "https://supabase.com/dashboard/account/tokens",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "bearer", "token": "SUPABASE_ACCESS_TOKEN" }
-      },
       "config": {
         "fields": [
           {
@@ -36,10 +32,6 @@
       "name": "Supabase · Enter secret key",
       "kind": "token",
       "docs": "https://supabase.com/docs/guides/api/api-keys",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "header", "name": "apikey", "value": "SUPABASE_SECRET_KEY" }
-      },
       "config": {
         "fields": [
           {

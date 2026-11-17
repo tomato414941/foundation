@@ -179,3 +179,20 @@ test('接続先で使うOAuthアプリを接続方法に結び付けて確認す
   const application = await f.saveApp('google:oauth');
   await assert.rejects(f.authorize({ methodId: 'render:oauth', appId: application.id }), /application for this connection method/);
 });
+
+test('送り方の設定を持っていた接続方法と接続のデータから、移行でその設定を外して読めるようにする', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const definition = await f.method('cloudrift:api_key');
+  const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
+    body: { kind: 'method', name: 'Own CloudRift', definition } }, Resource);
+  const connection = await f.saveConnection({ methodId: method.id, fields: { token: 'kept-token' } });
+  // What both kept before connections stopped saying how their values are sent over HTTP.
+  const http = { urlField: 'url', authentication: { kind: 'header', name: 'X-API-Key', value: 'CLOUDRIFT_API_KEY' } };
+  await f.db.pool.query("UPDATE resources SET data=data||jsonb_build_object('http',$2::jsonb) WHERE id=ANY($1::uuid[])",
+    [[method.id, connection.id], JSON.stringify(http)]);
+  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='013-remove-http-settings'");
+  await f.db.migrate();
+  for (const id of [method.id, connection.id])
+    assert.equal('http' in (await f.client.api.json('/api/resources/' + id, {}, Resource)).data, false);
+  assert.equal((await f.inputs([{ name: 'KEY', source: { id: connection.id, output: 'CLOUDRIFT_API_KEY' } }])).environment.KEY, 'kept-token');
+});

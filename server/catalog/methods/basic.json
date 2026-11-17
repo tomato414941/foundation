@@ -1,14 +1,6 @@
 {
   "id": "http:basic",
   "name": "Basic authentication",
-  "http": {
-    "urlField": "url",
-    "authentication": {
-      "kind": "basic",
-      "username": "USERNAME",
-      "password": "PASSWORD"
-    }
-  },
   "kind": "token",
   "config": {
     "fields": [

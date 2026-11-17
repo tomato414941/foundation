@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://docs.railway.com/integrations/api#account-tokens-and-workspace-tokens",
       "console": "https://railway.com/account/tokens",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "bearer", "token": "RAILWAY_API_TOKEN" }
-      },
       "config": {
         "fields": [
           {
@@ -37,10 +33,6 @@
       "kind": "token",
       "docs": "https://docs.railway.com/integrations/api#project-token",
       "console": "https://railway.com/dashboard",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "header", "name": "Project-Access-Token", "value": "RAILWAY_TOKEN" }
-      },
       "config": {
         "fields": [
           {

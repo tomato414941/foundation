@@ -1,13 +1,6 @@
 {
   "id": "http:bearer",
   "name": "Bearer token",
-  "http": {
-    "urlField": "url",
-    "authentication": {
-      "kind": "bearer",
-      "token": "TOKEN"
-    }
-  },
   "kind": "token",
   "config": {
     "fields": [

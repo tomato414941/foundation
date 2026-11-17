@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://vercel.com/kb/guide/how-do-i-use-a-vercel-api-access-token",
       "console": "https://vercel.com/account/tokens",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "bearer", "token": "VERCEL_TOKEN" }
-      },
       "config": {
         "fields": [
           {

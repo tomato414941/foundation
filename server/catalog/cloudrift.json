@@ -10,17 +10,13 @@
       "kind": "token",
       "docs": "https://docs.cloudrift.ai/extras/rest-api",
       "console": "https://console.cloudrift.ai/console",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "header", "name": "X-API-Key", "value": "CLOUDRIFT_API_KEY" }
-      },
       "config": {
         "fields": [
           { "name": "token", "label": "API key", "secret": true, "pattern": "^\\S+$" }
         ],
         "constants": { "url": "https://api.cloudrift.ai" },
         "outputs": { "CLOUDRIFT_API_KEY": "/token" },
-        "hint": "Use CLOUDRIFT_API_KEY with API clients. HTTP connections send the API key in the X-API-Key header."
+        "hint": "Use CLOUDRIFT_API_KEY with API clients. The API takes the key in the X-API-Key header."
       }
     }
   }

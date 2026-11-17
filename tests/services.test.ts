@@ -149,6 +149,6 @@ test('使っている接続方式は、名前や説明を変えると接続に�
   assert.equal(used.environment.CLOUDRIFT_API_KEY, 'own-method-token');
 
   await assert.rejects(f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: relabeled.version,
-    definition: { ...definition, http: { urlField: 'url', authentication: { kind: 'bearer', token: 'CLOUDRIFT_API_KEY' } } } } }, Resource),
+    definition: { ...definition, config: { ...definition.config, outputs: { ...definition.config.outputs, CLOUDRIFT_TOKEN: '/token' } } } } }, Resource),
   { code: 'in_use' });
 });

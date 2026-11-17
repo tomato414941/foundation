@@ -1,16 +1,6 @@
 {
   "id": "http:header",
   "name": "API key in header",
-  "http": {
-    "urlField": "url",
-    "authentication": {
-      "kind": "header",
-      "name": {
-        "output": "HEADER_NAME"
-      },
-      "value": "API_KEY"
-    }
-  },
   "kind": "token",
   "config": {
     "fields": [

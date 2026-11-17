@@ -160,8 +160,10 @@ test('つなぎ方を中に持つ古い形の接続を、作ったときの決�
   const f = await flowFixture(() => jsonResponse({ ok: true }));
   t.after(f.close);
   const current = await f.method('cloudrift:api_key');
-  // The same method before its HTTP authentication was corrected: connections made then sealed these rules.
-  const earlier = { ...current, http: { urlField: 'url', authentication: { kind: 'bearer' as const, token: 'CLOUDRIFT_API_KEY' } } };
+  if (current.kind !== 'token') throw new Error('Expected a token method.');
+  // The same method before the pattern of its key was corrected: connections made then sealed these rules.
+  const earlier = { ...current, config: { ...current.config,
+    fields: current.config.fields.map(field => field.name === 'token' ? { ...field, pattern: '^.+$' } : field) } };
   const same = await storedEarlier(f, 'Current rules', current, 'current-rules-token');
   const changed = await storedEarlier(f, 'Earlier rules', earlier, 'earlier-rules-token');
 

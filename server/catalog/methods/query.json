@@ -1,16 +1,6 @@
 {
   "id": "http:query",
   "name": "API key in query",
-  "http": {
-    "urlField": "url",
-    "authentication": {
-      "kind": "query",
-      "name": {
-        "output": "PARAMETER_NAME"
-      },
-      "value": "API_KEY"
-    }
-  },
   "kind": "token",
   "config": {
     "fields": [

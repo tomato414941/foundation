@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://docs.primeintellect.ai/api-reference/api-keys",
       "console": "https://app.primeintellect.ai/dashboard/tokens",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "bearer", "token": "PRIME_API_KEY" }
-      },
       "config": {
         "fields": [
           {

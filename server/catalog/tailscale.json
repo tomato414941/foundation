@@ -10,10 +10,6 @@
       "kind": "token",
       "docs": "https://tailscale.com/kb/1101/api",
       "console": "https://login.tailscale.com/admin/settings/keys",
-      "http": {
-        "urlField": "url",
-        "authentication": { "kind": "bearer", "token": "TAILSCALE_API_KEY" }
-      },
       "config": {
         "fields": [
           {

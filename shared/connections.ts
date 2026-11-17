@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ApprovalMethod, AuthKind, AwsMethod, HttpConnection, Id, JsonObject, MethodDefinition, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
+import { ApprovalMethod, AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import type { MethodDescription } from './contracts.js';
 import { Fingerprint, canonical, hash } from './authority.js';
 import { connectionMethod, methodDigest, requiresApp } from './connection-methods.js';
@@ -72,7 +72,6 @@ export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
 // are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
   methodId: z.string().min(1).max(200), methodDigest: Fingerprint, methodKind: AuthKind,
-  http: HttpConnection.optional(),
   generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
@@ -88,7 +87,6 @@ export async function connectionMetadata(state: ConnectionState, facts: Connecti
   const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
     methodId: state.methodId, methodDigest: await methodDigest(state.method), methodKind: state.method.kind,
-    ...(state.method.http ? { http: state.method.http } : {}),
     generation: state.generation, authorizationDigest, appId: state.appId,
     accountId: connectionAccount(state, facts),
     accountVerified: facts.accountVerified,
