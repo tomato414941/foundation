@@ -6,7 +6,7 @@ import { buildApp } from '../server/app.js';
 
 const settings = { returnUrl: 'https://client.example/complete', refreshUrl: 'https://client.example/retry' };
 
-test('外部連携のURLを保存し、承認依頼の状態を含めた完了URLを返す', async (t) => {
+test('外部連携のURLを保存し、依頼の状態を含めた完了URLを返す', async (t) => {
   const f = await fixture();
   const context = await createContext(f.config, { db: f.db, mailer: f.mailer });
   const app = await buildApp(context);
@@ -32,8 +32,8 @@ test('外部連携のURLを保存し、承認依頼の状態を含めた完了UR
   expected.searchParams.set('state', 'pending');
   assert.equal(pending.returnUrl, expected.href);
   assert.equal(pending.refreshUrl, settings.refreshUrl);
-  const cancelled = await app.inject({ method: 'POST', url: `/api/requests/${pending.id}/cancel`, headers, payload: {} });
-  assert.equal(cancelled.statusCode, 200, cancelled.body);
-  expected.searchParams.set('state', 'cancelled');
-  assert.equal(cancelled.json().returnUrl, expected.href);
+  const withdrawn = await app.inject({ method: 'POST', url: `/api/requests/${pending.id}/withdraw`, headers, payload: {} });
+  assert.equal(withdrawn.statusCode, 200, withdrawn.body);
+  expected.searchParams.set('state', 'withdrawn');
+  assert.equal(withdrawn.json().returnUrl, expected.href);
 });
