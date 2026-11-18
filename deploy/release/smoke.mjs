@@ -124,9 +124,9 @@ try {
     assert.equal(file.kind, 'object');
     const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + caller.id + '/resources?kind=object' });
     assert.ok(listed.body.items.some(item => item.id === file.id && item.kind === 'object'));
-    const linked = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.link/executions', body: { id: file.id } });
+    const linked = await call('foundation_api', { method: 'POST', path: '/api/operations', body: { name: 'object.link', input: { id: file.id } } });
     assert.equal(linked.body.state, 'succeeded');
-    const downloaded = await fetch(linked.body.results[0].url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
+    const downloaded = await fetch(linked.body.result.url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     assert.equal(downloaded.status, 200); assert.equal(await downloaded.text(), content);
     storageVerified = true;
   }
