@@ -35,10 +35,10 @@ export interface ReviewRow { field: string; value: ReviewValue; literal?: boolea
 // Fields that only keep concurrent changes apart, never what the operation does.
 const hidden = new Set(['version', 'revision', 'methodDigest']);
 const times = new Set(['expiresAt']);
-const keys = new Set(['hostKeys', 'publicKey', 'authorizedKeys']);
+const keys = new Set(['hostKeys', 'publicKey']);
 // Fields naming an item or principal by its ID, and fields holding what the requester passes on as it is.
 const reference = (field: string) => /Ids?$/.test(field) || ['id', 'to', 'users'].includes(field);
-const data = new Set(['arguments', 'headers', 'body', 'stdin', 'default', 'data', 'settings', 'labels', 'fields', 'content', 'outputs', 'save']);
+const data = new Set(['headers', 'default', 'data', 'settings', 'labels', 'fields', 'content', 'outputs']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sshKey = /^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) ([A-Za-z0-9+/]+={0,2})(?: (.*))?$/;
 const algorithms: Record<string, string> = { 'ssh-ed25519': 'ED25519', 'ssh-rsa': 'RSA', 'ssh-dss': 'DSA',

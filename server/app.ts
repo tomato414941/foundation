@@ -83,7 +83,7 @@ export async function buildApp(context: Context) {
       info: {
         title: 'Foundation API',
         version: '1.0.0',
-        description: 'Manage principals, resources, service connections, and runs.',
+        description: 'Manage principals, resources, and service connections.',
       },
       servers: [{ url: config.origin }],
       components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer' } } },

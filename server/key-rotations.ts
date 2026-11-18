@@ -165,7 +165,7 @@ export class KeyRotations {
     } catch (error) { if (error instanceof DomainError && error.status === 403) return false; throw error; }
   }
   // Who must sign the item for the new keys: null when the rotating principal signs it itself, otherwise the principals
-  // whose keys authorize the item, since the rotating principal only reads it or runs it.
+  // whose keys authorize the item, since the rotating principal only reads it.
   private signers(row: RotationRow, item: Item): string[] | null {
     const before = row.previous.binding;
     if (item.kind === 'content') {

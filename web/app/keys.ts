@@ -134,7 +134,8 @@ function reseal(id: string, requestId?: string) {
       const client = await custodyClient(id);
       const { done, failed } = await client.reprotectPending(publish);
       publish({ done: done.length });
-      // A pass may leave an item unchanged, for example while its producer runs or a reader's keys await verification.
+      // A pass may leave an item unchanged, for example while its token is being renewed or a reader's keys await
+      // verification.
       // Check what still needs updating before reporting that everyone can open their items.
       const pending = await client.pendingProtection();
       const pendingIds = new Set(pending.map(item => item.id));

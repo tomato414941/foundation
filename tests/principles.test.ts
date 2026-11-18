@@ -103,20 +103,6 @@ test('封をする種類のそれぞれを、その種類を作る預け方で�
   for (const kind of ProtectedKinds) assert.equal(ways[madeBy[kind]].kind, kind);
 });
 
-// Why: the user decided that signatures, like seals, name things only by what identifies them; an item's name is a
-// label kept in one place, Foundation. An executor once signed the name of its environment into its registration, so
-// each registration it signed again, as after an update, put that name back over the one given in Foundation.
-// Intent: rename an environment in Foundation, have its executor sign its registration again as it does after an
-// update, and read the name back.
-// Why: the user decided that what an owner signs to allow something names it by what it does; a description or a label
-// is kept in one place, Foundation. A function's owner once signed its description and the labels of its parameters with
-// its program, so describing it again took back the approvals given to run it and to read its inputs.
-// Intent: approve a function that reads an input, describe it and its parameter again, and run it as approved.
-// Why: the user decided that what is signed names things by what identifies them. A reviewed run once named the
-// variables it keeps values in by their names, so a value went to whichever variable had that name when the run went
-// ahead: a variable renamed in between was passed over, and another that had taken its name was written over.
-// Intent: ask for a run that keeps a value in a variable, rename it and give its name to another before the run goes
-// ahead, and read both.
 // Why: the user decided that a seal holds only what it cannot do without. A connection being made once had its progress
 // sealed with the connection's name and with the method it was made through, that method's name and description
 // included, though Foundation keeps them as labels.

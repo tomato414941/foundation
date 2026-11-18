@@ -31,7 +31,7 @@ export const RotationSource = z.record(z.string(), z.unknown());
 export const RotationItem = z.object({
   kind: RotationKind, id: Id, name: Name.nullable(), sourceDigest: Fingerprint,
   state: z.enum(['pending', 'prepared', 'stale']),
-  // The principals that must sign the item when the rotating principal cannot: it only reads or runs the item.
+  // The principals that must sign the item when the rotating principal cannot: it only reads the item.
   signers: z.array(Id).nullable(), source: RotationSource.nullable(),
 });
 export const RotationRequest = z.object({

@@ -38,8 +38,4 @@ export class MemoryObjects implements ObjectStore {
   async link(id: string, _name: string, seconds: number) {
     return 'https://files.example/' + id + '?expires=' + seconds;
   }
-  async publish(name: string, body: Uint8Array, _contentType: string, seconds: number) {
-    this.objects.set('published/' + name, body.slice());
-    return 'https://files.example/published/' + name + '?expires=' + seconds;
-  }
 }
