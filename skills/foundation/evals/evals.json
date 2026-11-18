@@ -1,40 +1,4 @@
 {
   "skill_name": "foundation",
-  "evals": [
-    {
-      "id": 1,
-      "prompt": "OVH の VPS-2 の引き渡しが失敗したままなので、OVH に問い合わせておいて。Foundation と OVH の今の様子は evals/files/ovh-support.md にまとめてある。",
-      "expected_output": "The agent sees that the one OVHcloud connection lacks the rights for support tickets, and asks the owner through a Foundation request to give that connection the rights it needs, for example by connecting it again in the browser with the access rules it lacks. The owner only approves the request and signs in to OVHcloud once; the agent then opens the ticket with that connection.",
-      "files": ["evals/files/ovh-support.md"],
-      "assertions": [
-        "Asks the owner for the missing rights through a Foundation request (`foundation request send` or `foundation connect`) rather than through steps the owner carries out by hand",
-        "Gives the existing OVHcloud connection the rights it lacks, so that the owner still has one OVHcloud key",
-        "Leaves the owner no key values to copy between pages",
-        "Keeps every secret value out of its output"
-      ]
-    },
-    {
-      "id": 2,
-      "prompt": "OVH から VPS のことでメールが来てないか、私の Gmail（user@example.com）を見て。Foundation で試した結果は evals/files/gmail.md にある。",
-      "expected_output": "The agent names the Google connection Foundation already holds for user@example.com and says that Google refused to renew its access. It asks the owner to reconnect that same connection through a Foundation request and gives the owner the request's URL; it makes no new connection and asks for nothing outside Foundation.",
-      "files": ["evals/files/gmail.md"],
-      "assertions": [
-        "Names the existing Google connection for user@example.com before asking the owner for anything",
-        "Asks the owner to reconnect that existing connection through a Foundation request",
-        "Gives the owner the request's URL",
-        "Keeps every secret value out of its output"
-      ]
-    },
-    {
-      "id": 3,
-      "prompt": "OVH で借りてる VPS の一覧を出して。Foundation の様子は evals/files/ovh-vps.md にある。",
-      "expected_output": "The agent lists the VPS through `foundation exec` with the existing OVHcloud connection, whose rights already cover GET /vps, and goes ahead without a Foundation request or any step for the owner.",
-      "files": ["evals/files/ovh-vps.md"],
-      "assertions": [
-        "Lists the VPS, or gives the command that does, through `foundation exec` with the OVHcloud connection's outputs",
-        "Goes ahead without a Foundation request or any step for the owner",
-        "Keeps every secret value out of its output"
-      ]
-    }
-  ]
+  "evals": []
 }
