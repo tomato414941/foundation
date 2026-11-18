@@ -456,11 +456,13 @@ test('CloudRiftのAPIキーをCLIで保存・更新し、CLOUDRIFT_API_KEYとし
   assert.equal(used.stdout, 'CloudRift credentials delivered\n');
 });
 
-// A machine delegated to by one owner, and that owner's own client for answering what the machine asks.
-async function delegatedMachine(c: Awaited<ReturnType<typeof cliFixture>>) {
+async function connectionRequester(c: Awaited<ReturnType<typeof cliFixture>>, { delegate = false } = {}) {
   const owner = await c.person('Key owner');
-  const machine = JSON.parse((await c.run(['init', '--name', 'Asking machine', '--origin', c.origin])).stdout);
-  await c.context.relations.draw(owner.actor, { subjectId: machine.principal.id, relation: 'delegate', objectId: owner.actor.id });
+  const initialized = await c.run(['init', '--name', 'Asking machine', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const machine = JSON.parse(initialized.stdout);
+  if (delegate)
+    await c.context.relations.draw(owner.actor, { subjectId: machine.principal.id, relation: 'delegate', objectId: owner.actor.id });
   const api = { async json<T>(path: string, options: { method?: string; body?: unknown } = {}) {
     const result = await c.app.inject({ method: (options.method ?? 'GET') as 'GET', url: path,
       headers: { authorization: 'Bearer ' + owner.token }, ...(options.body !== undefined ? { payload: options.body as object } : {}) });
@@ -471,12 +473,46 @@ async function delegatedMachine(c: Awaited<ReturnType<typeof cliFixture>>) {
   const flows = new Map();
   const operations = new OperationClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
     async put(flow) { flows.set(flow.id, flow); } }, { async send() { throw new Error('No service calls are expected.'); } }, 'cli'));
-  return { owner, machine, api, operations };
+  return { owner, machine, api, custody, operations };
 }
+
+test('CLIは持ち主に一件の接続を頼み、許可された接続を使い、次から同じ接続を返す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { owner, machine, api, custody, operations } = await connectionRequester(c);
+  const connect = ['connect', 'huggingface', '--owner', owner.actor.id, '--needs', 'HF_TOKEN', '--why', 'List available models'];
+  const asked = await c.run(connect);
+  assert.equal(asked.code, 0, asked.stderr);
+  const request = JSON.parse(asked.stdout);
+  assert.deepEqual([request.kind, request.to.id], ['requested', owner.actor.id]);
+
+  await custody.trustIdentity(machine.principal.id, machine.fingerprint);
+  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await fingerprint(owner.binding)]);
+  assert.equal(trusted.code, 0, trusted.stderr);
+  const approved = await api.json<{ performed: Array<{ id: string }> }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
+  const token = 'hf_cli_scoped_connection';
+  const saved = await operations.continue(approved.performed[0]!.id, { fields: { token } });
+  if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
+  const waited = await c.run(['connect', 'wait-request', request.requestId, '--timeout', '5']);
+  assert.equal(waited.code, 0, waited.stderr);
+  const connected = JSON.parse(waited.stdout);
+  assert.deepEqual([connected.kind, connected.connectionId, connected.ownerId, connected.outputs],
+    ['connected', saved.resource.id, owner.actor.id, ['HF_TOKEN']]);
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'HF_TOKEN', source: { id: connected.connectionId, output: 'HF_TOKEN' } },
+  ]), '--', process.execPath, '-e',
+    `if (process.env.HF_TOKEN !== ${JSON.stringify(token)}) process.exit(1); console.log('connection ready');`]);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, 'connection ready\n');
+
+  const again = await c.run(connect);
+  assert.equal(again.code, 0, again.stderr);
+  const existing = JSON.parse(again.stdout);
+  assert.deepEqual([existing.kind, existing.connectionId], ['existing', saved.resource.id]);
+});
 
 test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入力された接続と出力名を返して次からはその接続を返す', async t => {
   const c = await cliFixture(); t.after(c.close);
-  const { owner, api, operations } = await delegatedMachine(c);
+  const { owner, api, operations } = await connectionRequester(c, { delegate: true });
   const asked = await c.run(['connect', 'cloudrift', '--why', 'Rent a GPU for training']);
   assert.equal(asked.code, 0, asked.stderr);
   const request = JSON.parse(asked.stdout);
@@ -505,7 +541,7 @@ test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入�
 
 test('CLIの接続依頼は必要な出力名で接続方法を選び、決まらない方法や依頼先は候補を示して止める', async t => {
   const c = await cliFixture(); t.after(c.close);
-  const { owner, machine } = await delegatedMachine(c);
+  const { owner, machine } = await connectionRequester(c, { delegate: true });
   const ambiguous = await c.run(['connect', 'runpod']);
   assert.equal(ambiguous.code, 1);
   assert.match(ambiguous.stderr, /--needs NAME or --method ID: .*runpod:token \(RUNPOD_API_KEY\)/);

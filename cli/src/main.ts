@@ -66,8 +66,8 @@ Usage: foundation <command> [options]
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   keys rotate                          Replace this identity's keys, keeping its items and sign-ins
   app NAME --method ID --client-id ID  Encrypt an application
-  connect SERVICE [--needs NAME] [--why TEXT] Ask the owner to connect a service in a browser,
-                                       or return their ready connection that gives NAME
+  connect SERVICE [--owner ID] [--needs NAME] [--why TEXT]
+                                       Find a connection you can use, or ask its owner to connect the service
   connect --method ID --fields JSON    Encrypt and save a connection on this device
   connect wait ID                      Continue the operation after service authorization
   connect wait-request ID              Wait for the owner to finish a requested connection
@@ -661,9 +661,11 @@ async function main(argv: string[]) {
       if (!chosen) throw new Error('Name a service, such as foundation connect cloudrift, or choose --method ID.');
       if (service || chosen.method.registration.kind === 'input') {
         const connectionOwnerId = await connectionOwner(client, current.principal.id, args.values.owner);
+        const connectionOwnerView = current.principals.find(principal => principal.id === connectionOwnerId);
         const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
         const found = args.values.new || args.values.connection ? null
-          : await existingConnection(client, connectionOwnerId, chosen.service, wanted);
+          : await existingConnection(client, { owner: connectionOwnerId, canListOwner: !!connectionOwnerView,
+            service: chosen.service, outputs: wanted });
         if (found) {
           await output({ kind: 'existing', ...connectionOutput(found),
             next: 'Use this connection, or add --new to ask for another.' }, args);
@@ -671,6 +673,7 @@ async function main(argv: string[]) {
         }
         const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
           name: args.values.name, appId: args.values.app, connectionId: args.values.connection,
+          userId: connectionOwnerView?.permissions.includes('use') ? undefined : current.principal.id,
           scopes: args.values.scopes === undefined ? undefined : z.array(z.string()).parse(await json(args.values.scopes, [])) });
         await output({ kind: 'requested', requestId: request.id, to: request.to,
           method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: await linked(request.url, client.identity),

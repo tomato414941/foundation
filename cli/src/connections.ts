@@ -81,7 +81,7 @@ export async function connectionOwner(client: Client, self: string, named?: stri
     {}, listOf(Relation));
   const owners = lines.items;
   if (owners.length === 1) return owners[0]!.objectId;
-  if (!owners.length) throw new Error('No principal delegates to this machine. Choose --owner ID, or ask for delegation with foundation request-access.');
+  if (!owners.length) throw new Error('Choose the principal to ask with --owner ID.');
   throw new Error('Several principals delegate to this machine. Choose one with --owner: ' +
     owners.map(line => line.objectId + ' (' + line.objectName + ')').join(', '));
 }
@@ -108,14 +108,23 @@ export async function chooseMethod(client: Client, input: { service?: string; me
     Number(b.registration.kind === 'input') - Number(a.registration.kind === 'input'));
   return { service, method: candidates[0]! };
 }
-// A ready connection of the owner's to the service that already gives every value wanted.
-export async function existingConnection(client: Client, owner: string, service: CatalogService, outputs: string[]) {
+// A ready connection the caller may use, from the owner's list or among items shared with the caller.
+export async function existingConnection(client: Client, input: {
+  owner: string; canListOwner: boolean; service: CatalogService; outputs: string[];
+}) {
+  const { owner, canListOwner, service, outputs } = input;
+  const matches = (item: z.infer<typeof Resource>): item is Connection => item.ownerId === owner &&
+    item.kind === 'connection' && item.permissions.includes('reveal') && item.data.state === 'ready' &&
+    item.data.services.some(entry => entry.id === service.id) && outputs.every(name => item.data.outputs.includes(name));
+  if (!canListOwner) {
+    const shared = await client.json('/api/resources/shared', {}, listOf(Resource));
+    return shared.items.find(matches) ?? null;
+  }
   let after: string | null = null;
   do {
     const page: { items: z.infer<typeof Resource>[]; next: string | null } = await client.json('/api/principals/' + owner + '/resources?' +
       new URLSearchParams({ kind: 'connection', limit: '200', ...(after ? { after } : {}) }), {}, listOf(Resource));
-    const found = page.items.find((item): item is Connection => item.kind === 'connection' && item.data.state === 'ready' &&
-      item.data.services.some(entry => entry.id === service.id) && outputs.every(name => item.data.outputs.includes(name)));
+    const found = page.items.find(matches);
     if (found) return found;
     after = page.next;
   } while (after);
@@ -127,11 +136,13 @@ export function connectionOutput(connection: Connection) {
 // Asks the owner to make the connection in their browser, entering what it needs there.
 export async function requestConnection(client: Client, input: {
   owner: string; method: CatalogConnectionMethod; why?: string; name?: string; appId?: string; connectionId?: string; scopes?: string[];
+  userId?: string;
 }) {
   return client.json('/api/requests', { method: 'POST', body: { to: input.owner, message: input.why ?? '', operations: [{
     name: 'connection.connect', input: { ownerId: input.owner, methodId: input.method.id,
       name: Name.parse(input.name ?? input.method.defaultName),
       ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),
+      ...(!input.connectionId && input.userId ? { users: [input.userId] } : {}),
       ...(input.scopes ? { scopes: input.scopes } : {}) } }] } }, RequestView);
 }
 // Waits for the owner to answer, then for the connection they made.
