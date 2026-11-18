@@ -234,7 +234,9 @@ export default function RequestPage() {
     : focusedConnection ? t(connectionAction)
     : done ?? (ended ? t(ended) : null) ?? (recipientRequest && !item.proposal && item.operations.length === 1
       ? operationTitle(item.operations[0]!, i18n.language) : t('request'));
-  const showSteps = waiting || active && !!current || !recipientRequest && item.operations.length > 1;
+  // The steps show while the request waits, while this browser makes or authorizes one of its operations, and to its
+  // requester when it asks for several.
+  const showSteps = waiting || active && (!!current || !!progress) || !recipientRequest && item.operations.length > 1;
   const results = made.filter(operation => operation.state === 'succeeded' && operation.result !== null &&
     !(recipientRequest && operation.result && typeof operation.result === 'object' && !Array.isArray(operation.result) &&
       Object.keys(operation.result).length === 1 && operation.result.ok === true));
