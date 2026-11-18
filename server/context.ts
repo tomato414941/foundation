@@ -104,14 +104,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations,
     oauthRelays,
   };
-  if (options.migrate) {
-    const [{ removeEnvironments }, { splitExecutions }] = await Promise.all([
-      import('./migrations/remove-environments.js'), import('./migrations/split-executions.js'),
-    ]);
-    await removeEnvironments(db, vault);
-    await splitExecutions(db, vault);
-    await db.assertReady();
-  }
   return context;
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;
