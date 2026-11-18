@@ -124,6 +124,15 @@ test('npm の示すダイジェストと違う中身や、provenance を確か�
   await assert.rejects(readdir(place), { code: 'ENOENT' });
 });
 
+test('npm が想定外の形で答えたときは、そう示す', async t => {
+  const place = await directory(t);
+  await assert.rejects(downloadRelease('29.1.0', undefined, { fetcher: async () => Response.json({ name: packageName }), directory: place }),
+    /npm described the Foundation CLI in an unexpected form/);
+  const material = await trust();
+  assert.throws(() => checkProvenance({ attestation: [] }, '29.1.0', published.sha512, material),
+    /npm listed the attestations of the Foundation CLI 29\.1\.0 in an unexpected form/);
+});
+
 test('サーバーが別の版の CLI で公開されていれば、その版を示し、上げ方を添える', async () => {
   const answering = (body: unknown, status = 200) => async () => Response.json(body, { status });
   const release = (cliVersion: string) => ({ commit: 'a'.repeat(40), cliVersion, cliSha256: 'b'.repeat(64), verifiedAt: new Date().toISOString() });

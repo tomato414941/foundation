@@ -57,7 +57,9 @@ async function read(fetcher: Fetcher, url: string) {
 // Accepts the provenance only when Sigstore's certificate authority and transparency log show that the release
 // workflow on main signed it, and when it names the package by exactly these bytes.
 export function checkProvenance(attestations: unknown, version: string, sha512: string, trust: TrustMaterial) {
-  const provenance = Attestations.parse(attestations).attestations.filter(item => item.predicateType === provenanceType);
+  const listed = Attestations.safeParse(attestations);
+  if (!listed.success) throw new Error('npm listed the attestations of the Foundation CLI ' + version + ' in an unexpected form.');
+  const provenance = listed.data.attestations.filter(item => item.predicateType === provenanceType);
   if (provenance.length !== 1)
     throw new Error('npm holds no single build provenance for the Foundation CLI ' + version + '.');
   const bundle = bundleFromJSON(provenance[0]!.bundle);
@@ -71,9 +73,11 @@ export function checkProvenance(attestations: unknown, version: string, sha512: 
   const envelope = bundle.content.dsseEnvelope;
   if (envelope.payloadType !== 'application/vnd.in-toto+json')
     throw new Error('The provenance of ' + version + ' is not an in-toto statement.');
-  const statement = Statement.parse(JSON.parse(envelope.payload.toString('utf8')));
+  const statement = Statement.safeParse(JSON.parse(envelope.payload.toString('utf8')));
+  if (!statement.success)
+    throw new Error('The provenance of ' + version + ' does not describe a build by ' + releaseWorkflow + '.');
   const name = 'pkg:npm/' + encodeURIComponent('@tomato414941') + '/foundation@' + version;
-  if (!statement.subject.some(subject => subject.name === name && subject.digest.sha512 === sha512))
+  if (!statement.data.subject.some(subject => subject.name === name && subject.digest.sha512 === sha512))
     throw new Error('The provenance of ' + version + ' names other package contents than npm served.');
 }
 async function checkWithSigstore(attestations: unknown, version: string, sha512: string) {
@@ -90,7 +94,9 @@ export async function downloadRelease(current: string, requested: string | undef
   { fetcher?: Fetcher; check?: ProvenanceCheck; directory?: string } = {},
 ): Promise<{ current: string; newest: string } | { version: string; file: string }> {
   if (requested !== undefined && !stable.test(requested)) throw new Error('Name a release as MAJOR.MINOR.PATCH.');
-  const packument = Packument.parse(await (await read(fetcher, registry + '/' + encodeURIComponent(packageName))).json());
+  const listed = Packument.safeParse(await (await read(fetcher, registry + '/' + encodeURIComponent(packageName))).json());
+  if (!listed.success) throw new Error('npm described the Foundation CLI in an unexpected form.');
+  const packument = listed.data;
   const newest = Object.keys(packument.versions).filter(version => stable.test(version)).sort(compareVersions).at(-1);
   if (!newest) throw new Error('npm lists no release of the Foundation CLI.');
   const version = requested ?? newest;
