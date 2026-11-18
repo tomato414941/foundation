@@ -21,6 +21,13 @@ ORIGIN = "http://localhost:" + os.environ.get("FOUNDATION_TEST_PORT", "3458")
 ARTIFACTS = Path("test-results/browser")
 
 
+# The operation an approved request made at the given place in its order.
+def performed(page, request_id, position=0):
+    request = page.request.get(ORIGIN + "/api/requests/" + request_id).json()
+    made = next(item for item in request["performed"] if item["position"] == position)
+    return page.request.get(ORIGIN + "/api/operations/" + made["id"]).json()
+
+
 class BrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -237,14 +244,14 @@ class BrowserTests(unittest.TestCase):
             self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
             owner.goto(url.split("#")[0])
             expect(owner.get_by_text("Linked AIに、Linked ownerが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
-            expect(owner.get_by_role("listitem").filter(has_text="リソースの作成・閲覧・変更・削除・実行")).to_be_visible()
+            expect(owner.get_by_role("listitem").filter(has_text="リソースの作成・閲覧・変更・削除・使用")).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="接続情報や変数などの機密情報の閲覧")).to_be_visible()
             expect(owner.get_by_text("プリンシパルの管理・共有権限や支払い設定の変更は含まれません。", exact=True)).to_be_visible()
             self.select(owner, "言語", "English")
             expect(owner.get_by_text("Allow Linked AI to operate resources owned by Linked owner.", exact=True)).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="Read private content, including connection credentials and variables")).to_be_visible()
             self.select(owner, "Language", "日本語")
-            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、このリクエストを開き直してください。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、この依頼を開き直してください。", exact=True)).to_be_visible()
             expect(owner.get_by_role("button", name="承認", exact=True)).to_be_disabled()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-unverified-ja.png"), full_page=True)
             owner.set_viewport_size({"width": 390, "height": 844})
@@ -456,7 +463,7 @@ class BrowserTests(unittest.TestCase):
         peer.get_by_role("button", name="内容を表示", exact=True).click()
         expect(peer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
 
-    def test_委任リクエストの作成元と承認するプリンシパルを確認する(self):
+    def test_委任の依頼の作成元と承認するプリンシパルを確認する(self):
         sender, _ = self.passkey_account("Delegation requester")
         receiver, principal = self.passkey_account("Delegation approver")
         response = sender.request.post(ORIGIN + "/api/requests", data={
@@ -471,7 +478,7 @@ class BrowserTests(unittest.TestCase):
         receiver.goto(asked["url"])
         expect(receiver.get_by_text("Delegation requesterに、Delegation approverが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
 
-    def test_委任リクエストの操作対象から委任先と委任元を確認して承認する(self):
+    def test_委任の依頼の操作対象から委任先と委任元を確認して承認する(self):
         owner, principal = self.passkey_account("Delegation owner")
         sender, _ = self.passkey_account("Request coordinator")
         delegate, recipient = self.passkey_account("Delegate worker")
@@ -498,25 +505,21 @@ class BrowserTests(unittest.TestCase):
         relations = owner.request.get(ORIGIN + "/api/relations?object=" + workspace["id"] + "&relation=delegate").json()["items"]
         self.assertIn(recipient["id"], [item["subjectId"] for item in relations])
 
-    def test_続けられない実行を開くと続けられるプリンシパルと承認の依頼が届いていないことを示す(self):
+    def test_承認された依頼の操作を続けられるのが相手だけのとき依頼した側には相手を待っていることを示す(self):
+        sender, _ = self.passkey_account("Waiting requester")
         owner, principal = self.passkey_account("Chancellor Rigel")
-        response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "dev-ovh-sg"}, headers={"origin": ORIGIN})
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+            "name": "variable.save", "input": {"ownerId": "$approver", "name": "Awaited value", "value": ""},
+            "inputs": [{"pointer": "/value", "label": "Value", "secret": True}]}]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
-        agent = response.json()
-        owner.goto(f"{ORIGIN}/p/{agent['id']}/settings/credentials/new?kind=key")
-        owner.get_by_role("textbox", name="名前", exact=True).fill("Machine key")
-        owner.get_by_role("button", name="追加", exact=True).click()
-        token = owner.get_by_role("textbox", name="APIキー", exact=True).input_value().split(".")[0]
-        started = urllib.request.urlopen(urllib.request.Request(ORIGIN + "/api/executions", method="POST",
-            headers={"authorization": "Bearer " + token, "content-type": "application/json"},
-            data=json.dumps({"operations": [{"name": "connection.connect", "input": {
-                "ownerId": agent["id"], "methodId": "cloudrift:api_key", "name": "CloudRift"}}]}).encode()), timeout=10)
-        execution = json.load(started)
-        self.assertEqual(execution["state"], "waiting")
-        owner.goto(ORIGIN + "/executions/" + execution["id"])
-        expect(owner.get_by_role("status").filter(has_text="この実行はdev-ovh-sgだけが続けられます。")).to_be_visible()
-        expect(owner.get_by_text("承認の依頼はまだ届いていません。あなたが入力や承認をするには、dev-ovh-sgに承認の依頼を送ってもらってください（CLI では foundation request）。")).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "execution-blocked-ja.png"), full_page=True)
+        asked = response.json()
+        approved = owner.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/approve", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(approved.ok, approved.text())
+        self.assertEqual([item["state"] for item in approved.json()["performed"]], ["stopped"])
+        sender.goto(asked["url"])
+        expect(sender.get_by_role("status")).to_have_text("Chancellor Rigelが操作を続けるのを待っています。")
+        expect(sender.get_by_role("link", name="変数を保存する", exact=True)).to_be_visible()
+        sender.screenshot(path=str(ARTIFACTS / "request-waiting-ja.png"), full_page=True)
 
     def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
@@ -953,7 +956,7 @@ class BrowserTests(unittest.TestCase):
         expect(verification.get_by_text("Transfer recipientの公開鍵を検証しました。", exact=True)).to_be_visible()
         verification.close()
         sender.get_by_role("button", name="所有者を変更", exact=True).click()
-        sender.wait_for_url("**/executions/*")
+        sender.wait_for_url("**/requests/*")
         execution_link = sender.url
         change = "Transferred variable の所有者を Transfer recipient に変更"
         expect(sender.get_by_role("heading", name="所有者の変更", exact=True)).to_be_visible()
@@ -979,9 +982,8 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="パスキーでサインイン", exact=True).click()
         receiver.wait_for_url("**/requests/*")
         self.assertEqual(urlparse(receiver.url).path, urlparse(transfer_link).path)
-        self.assertEqual(urlparse(receiver.url).fragment, urlparse(transfer_link).fragment)
         expect(receiver.get_by_role("heading", name="所有者の変更", exact=True)).to_be_visible()
-        expect(receiver.get_by_text("Transfer senderからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Transfer senderからの依頼", exact=True)).to_be_visible()
         expect(receiver.get_by_text(change, exact=True)).to_be_visible()
         expect(receiver.get_by_role("button", name="拒否", exact=True)).to_be_enabled()
         receiver.set_viewport_size({"width": 390, "height": 844})
@@ -1021,7 +1023,7 @@ class BrowserTests(unittest.TestCase):
         expect(sender.get_by_role("heading", name="所有者を変更 — report.txt", exact=True)).to_be_visible()
         sender.get_by_role("textbox", name="新しい所有者のプリンシパルID", exact=True).fill(recipient["id"])
         sender.get_by_role("button", name="所有者を変更", exact=True).click()
-        sender.wait_for_url("**/executions/*")
+        sender.wait_for_url("**/requests/*")
         expect(sender.get_by_role("heading", name="所有者の変更", exact=True)).to_be_visible()
         expect(sender.get_by_role("status")).to_have_text("Public item recipientの承認待ち")
         expect(sender.get_by_text("report.txt の所有者を Public item recipient に変更", exact=True)).to_be_visible()
@@ -1029,7 +1031,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
         transfer_link = sender.locator('main a[href^="/requests/"]').get_attribute("href")
         receiver.goto(ORIGIN + transfer_link)
-        expect(receiver.get_by_text("Public item senderからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Public item senderからの依頼", exact=True)).to_be_visible()
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_text("完了", exact=True).first).to_be_visible()
         received = receiver.request.get(ORIGIN + "/api/resources/" + resource_id).json()
@@ -1040,29 +1042,29 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(Path(download.value.path()).read_bytes(), b"transferred file")
         receiver.screenshot(path=str(ARTIFACTS / "resource-transfer-public-received-ja.png"), full_page=True)
 
-    def test_譲渡を拒否または取り消すと所有者を保ち結果を表示する(self):
+    def test_譲渡の依頼を拒否または取り下げると所有者を保ち結果を表示する(self):
         sender, owner = self.passkey_account("Declining transfer sender")
         receiver, recipient = self.passkey_account("Declining transfer recipient")
         self.trust(sender, receiver, recipient)
-        for action in ["decline", "cancel"]:
+        for action in ["decline", "withdraw"]:
             with self.subTest(action=action):
                 path = self.variable(sender, owner, "Declined variable " + action, "kept by sender")
                 resource_id = path.rsplit("/", 1)[1]
                 sender.get_by_role("link", name="所有者を変更", exact=True).click()
                 sender.get_by_role("textbox", name="新しい所有者のプリンシパルID", exact=True).fill(recipient["id"])
                 sender.get_by_role("button", name="所有者を変更", exact=True).click()
-                sender.wait_for_url("**/executions/*")
+                sender.wait_for_url("**/requests/*")
                 execution_link = sender.url
                 if action == "decline":
                     receiver.goto(execution_link)
                     receiver.wait_for_url("**/requests/*")
                     receiver.get_by_role("button", name="拒否", exact=True).click()
-                    expect(receiver.get_by_role("status")).to_have_text("承認されませんでした")
+                    expect(receiver.get_by_role("status")).to_have_text("断られた")
                     receiver.screenshot(path=str(ARTIFACTS / "resource-transfer-declined-ja.png"), full_page=True)
-                    expect(sender.get_by_text("承認されませんでした", exact=True)).to_be_visible(timeout=15000)
+                    expect(sender.get_by_text("断られた", exact=True)).to_be_visible(timeout=15000)
                 else:
-                    sender.get_by_role("button", name="リクエストを取り消す", exact=True).click()
-                    expect(sender.get_by_text("キャンセル済み", exact=True)).to_be_visible()
+                    sender.get_by_role("button", name="依頼を取り下げる", exact=True).click()
+                    expect(sender.get_by_text("取り下げ", exact=True)).to_be_visible()
                 self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
 
     def test_メンバー追加と所有者変更で変数を引き継ぐ(self):
@@ -1091,7 +1093,7 @@ class BrowserTests(unittest.TestCase):
         owner.goto(f"{ORIGIN}/p/{project['id']}/settings/general")
         owner.get_by_role("textbox", name="新しい所有者のプリンシパルID").fill(new_owner["id"])
         owner.get_by_role("button", name="所有者を変更", exact=True).click()
-        owner.wait_for_url("**/executions/*")
+        owner.wait_for_url("**/requests/*")
         change = "Shared project の所有者を Project successor に変更"
         expect(owner.get_by_text(change, exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "transfer-request-ja.png"), full_page=True)
@@ -1448,7 +1450,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(saved["data"]["methodId"], "runpod:mcp-oauth")
         self.assertEqual(len(registrations), 1)
 
-    def test_HFの登録をリクエストして所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
+    def test_HFの登録を依頼して所有者の画面で完了しAIへ使用許可を渡して履歴を確認する(self):
         import tempfile
         sender, _ = self.passkey_account("HF requester")
         owner, principal = self.passkey_account("HF owner")
@@ -1460,15 +1462,15 @@ class BrowserTests(unittest.TestCase):
         asked = response.json()
         owner.goto(asked["url"])
         expect(owner.get_by_role("heading", name="Hugging Faceに接続", exact=True)).to_be_visible()
-        expect(owner.get_by_text("HF requesterからのリクエスト", exact=True)).to_be_visible()
+        expect(owner.get_by_text("HF requesterからの依頼", exact=True)).to_be_visible()
         owner.get_by_label("ユーザーアクセストークン", exact=True).fill("hf_browser_registration")
         owner.screenshot(path=str(ARTIFACTS / "hf-request-input-ja.png"), full_page=True)
         print("Rendered HF request: " + owner.locator("main").inner_text(), flush=True)
         owner.get_by_role("button", name="接続する", exact=True).click()
         expect(owner.get_by_role("heading", name="Hugging Faceへの接続が完了しました", exact=True)).to_be_visible()
-        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
+        completed = performed(sender, asked["id"])
         self.assertEqual(completed["state"], "succeeded")
-        connection_id = completed["results"][0]["id"]
+        connection_id = completed["result"]["id"]
         connection_path = f"{ORIGIN}/p/{principal['id']}/services/{connection_id}"
         owner.goto(connection_path)
         expect(owner.get_by_role("heading", name="Hugging Face", exact=True)).to_be_visible()
@@ -1503,16 +1505,16 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, env=environment)
             self.assertEqual(trusted.returncode, 0, trusted.stderr)
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
-            permission = subprocess.run(["node", "cli/dist/cli.mjs", "execution", "start", "--body", json.dumps({
-                "responderId": principal["id"], "message": "モデルの保存・取得に接続を使います。",
+            permission = subprocess.run(["node", "cli/dist/cli.mjs", "request", "send", "--body", json.dumps({
+                "to": principal["id"], "message": "モデルの保存・取得に接続を使います。",
                 "operations": [{"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id,
                     "version": connection["version"], "users": [agent["id"]]
                 }}]
             })], capture_output=True, text=True, env=environment)
             self.assertEqual(permission.returncode, 0, permission.stderr)
-            permission_execution = json.loads(permission.stdout)
-            owner.goto(ORIGIN + "/requests/" + permission_execution["requests"][0])
+            permission_request = json.loads(permission.stdout)
+            owner.goto(ORIGIN + "/requests/" + permission_request["id"])
             expect(owner.get_by_text("Hugging Face", exact=True)).to_be_visible()
             expect(owner.get_by_text("Model assistant", exact=True).last).to_be_visible()
             expect(owner.get_by_text("接続を使用する相手", exact=True)).to_be_visible()
@@ -1546,22 +1548,28 @@ class BrowserTests(unittest.TestCase):
             self.select(owner, "言語", "English")
             expect(owner.get_by_text("Allow using and renewing this connection. These recipients can read the credentials until the owner removes them.", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-en.png"), full_page=True)
-            owner.get_by_role("button", name="Cancel", exact=True).click()
-            expect(owner.get_by_role("status")).to_have_text("The request was cancelled")
+            owner.get_by_role("button", name="Decline", exact=True).click()
+            expect(owner.get_by_role("status")).to_have_text("You declined the request")
             self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + repeated_request["id"]).json()["state"], "declined")
             self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()["version"], connection["version"])
             self.select(owner, "Language", "日本語")
             owner.set_viewport_size({"width": 1440, "height": 1050})
-        owner.goto(f"{ORIGIN}/p/{principal['id']}/runs")
-        execution_link = owner.locator(f'a[href="/executions/{asked["executionId"]}"]')
-        expect(execution_link).to_have_count(1)
-        expect(execution_link).to_contain_text("サービスに接続する")
-        owner.screenshot(path=str(ARTIFACTS / "unified-execution-history-ja.png"), full_page=True)
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/operations")
+        operation_link = owner.locator(f'a[href="/operations/{completed["id"]}"]')
+        expect(operation_link).to_have_count(1)
+        expect(operation_link).to_contain_text("サービスに接続する")
+        expect(operation_link).to_contain_text("依頼から")
+        owner.screenshot(path=str(ARTIFACTS / "operation-history-ja.png"), full_page=True)
+        operation_link.click()
+        expect(owner.get_by_role("heading", name="サービスに接続する", exact=True)).to_be_visible()
+        expect(owner.get_by_role("link", name="依頼を開く", exact=True)).to_have_attribute("href", "/requests/" + asked["id"])
+        owner.screenshot(path=str(ARTIFACTS / "operation-ja.png"), full_page=True)
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/operations")
         self.select(owner, "言語", "English")
         owner.set_viewport_size({"width": 390, "height": 844})
         expect(owner.locator("html")).to_have_attribute("lang", "en")
         self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
-        owner.screenshot(path=str(ARTIFACTS / "unified-execution-history-mobile-en.png"), full_page=True)
+        owner.screenshot(path=str(ARTIFACTS / "operation-history-mobile-en.png"), full_page=True)
 
     def test_所有するAIの接続を本人の一覧で検索し持ち主を確認して開く(self):
         page, principal = self.passkey_account("Connection owner")
@@ -1636,7 +1644,7 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_label("クライアントシークレット", exact=True)).to_be_visible()
         expect(page.get_by_label("コールバックURL", exact=True)).to_have_value(ORIGIN + "/oauth/callback")
 
-    def test_リクエスト画面で機密の変数を入力して承認すると暗号化して保存する(self):
+    def test_依頼の画面で機密の変数を入力して承認すると暗号化して保存する(self):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver", mobile=True)
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
@@ -1649,7 +1657,7 @@ class BrowserTests(unittest.TestCase):
         asked = response.json()
         receiver.goto(asked["url"])
         expect(receiver.get_by_role("heading", name="変数を保存する", exact=True)).to_be_visible()
-        expect(receiver.get_by_text("Value requesterからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Value requesterからの依頼", exact=True)).to_be_visible()
         expect(receiver.get_by_text("作業で使用する値を保存してください。", exact=True)).to_be_visible()
         expect(receiver.get_by_text("Requested variable", exact=True)).to_be_visible()
         receiver.get_by_role("textbox", name="値", exact=True).fill("requested-private-value")
@@ -1662,16 +1670,16 @@ class BrowserTests(unittest.TestCase):
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_role("heading", name="変数を保存しました", exact=True)).to_be_visible(timeout=15000)
         expect(receiver.get_by_role("link", name="Requested variable", exact=True)).to_be_visible()
-        result = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["results"][0]
+        result = performed(sender, asked["id"])["result"]
         receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
         receiver.get_by_role("button", name="内容を表示", exact=True).click()
         expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
 
-    def test_リクエスト内容を確認して承認し新しいプリンシパルを作成する(self):
+    def test_依頼の内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
         receiver, principal = self.passkey_account("Approver")
         sender.goto(ORIGIN + "/requests/new")
-        sender.get_by_role("textbox", name="リクエスト先のプリンシパルID").fill(principal["id"])
+        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
         sender.get_by_role("textbox", name="メッセージ", exact=True).fill("Create a project account")
         sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Approved project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
@@ -1686,7 +1694,7 @@ class BrowserTests(unittest.TestCase):
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
 
-    def test_SSH接続先の登録リクエストで接続先と鍵の指紋を確認して承認する(self):
+    def test_SSH接続先の登録の依頼で接続先と鍵の指紋を確認して承認する(self):
         sender, _ = self.passkey_account("SSH requester")
         receiver, principal = self.passkey_account("SSH approver")
         name = b"ssh-ed25519"
@@ -1722,9 +1730,9 @@ class BrowserTests(unittest.TestCase):
         print("Rendered SSH host result: " + main.inner_text(), flush=True)
         receiver.screenshot(path=str(ARTIFACTS / "ssh-host-result-ja.png"), full_page=True)
         approved = sender.request.get(ORIGIN + "/api/requests/" + receiver.url.rsplit("/", 1)[1]).json()
-        self.assertEqual(approved["state"], "accepted")
+        self.assertEqual(approved["state"], "approved")
 
-    def test_SSH鍵での接続許可のリクエストで接続先と鍵を見分けて承認し反映前であることを確認する(self):
+    def test_SSH鍵での接続許可の依頼で接続先と鍵を見分けて承認し反映前であることを確認する(self):
         sender, _ = self.passkey_account("Access requester")
         receiver, principal = self.passkey_account("Access approver")
         def public_key():
@@ -1761,28 +1769,28 @@ class BrowserTests(unittest.TestCase):
         print("Rendered SSH access result: " + main.inner_text(), flush=True)
         receiver.screenshot(path=str(ARTIFACTS / "ssh-access-result-ja.png"), full_page=True)
 
-    def test_取り消されたリクエストを開くと取り消されたことと依頼された処理を示す(self):
+    def test_取り下げられた依頼を開くと取り下げられたことと依頼された操作を示す(self):
         sender, _ = self.passkey_account("Cancelling requester")
         receiver, principal = self.passkey_account("Cancelled approver")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
             {"name": "principal.create", "input": {"ownerId": "$approver", "name": "Withdrawn project"}}]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
-        cancelled = sender.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/cancel", data={}, headers={"origin": ORIGIN})
-        self.assertTrue(cancelled.ok, cancelled.text())
+        withdrawn = sender.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/withdraw", data={}, headers={"origin": ORIGIN})
+        self.assertTrue(withdrawn.ok, withdrawn.text())
         receiver.goto(asked["url"])
-        expect(receiver.get_by_role("heading", name="リクエストはキャンセルされました", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("status")).to_have_text("リクエストはキャンセルされました")
+        expect(receiver.get_by_role("heading", name="依頼は取り下げられました", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("status")).to_have_text("依頼は取り下げられました")
         expect(receiver.locator("main")).to_contain_text("プリンシパルを作る")
         expect(receiver.get_by_role("button", name="承認", exact=True)).to_have_count(0)
-        receiver.screenshot(path=str(ARTIFACTS / "request-cancelled-ja.png"), full_page=True)
+        receiver.screenshot(path=str(ARTIFACTS / "request-withdrawn-ja.png"), full_page=True)
 
-    def test_通常のログインがある端末でリクエスト専用リンクを開いてリクエストを承認する(self):
+    def test_通常のログインがある端末で依頼専用リンクを開いて依頼を承認する(self):
         sender, _ = self.passkey_account("Link requester")
         owner, principal = self.passkey_account("Link approver")
         viewer, _ = self.passkey_account("Existing session")
         sender.goto(ORIGIN + "/requests/new")
-        sender.get_by_role("textbox", name="リクエスト先のプリンシパルID").fill(principal["id"])
+        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
         sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Link project", "ownerId": "$approver"}}]))
         sender.get_by_role("button", name="作成", exact=True).click()
         sender.wait_for_url("**/requests/*")
@@ -1800,7 +1808,7 @@ class BrowserTests(unittest.TestCase):
         projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Link project", [item["name"] for item in projects])
 
-    def test_複数の処理を含むリクエストで目的と各処理を確認して承認し結果を開く(self):
+    def test_複数の操作を含む依頼で目的と各操作を確認して承認し結果を開く(self):
         sender, _ = self.passkey_account("Project requester")
         receiver, principal = self.passkey_account("Project approver", mobile=True)
         names = ["Research project", "Delivery project"]
@@ -1811,7 +1819,7 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         receiver.goto(asked["url"])
-        expect(receiver.get_by_text("Project requesterからのリクエスト", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("Project requesterからの依頼", exact=True)).to_be_visible()
         expect(receiver.get_by_text("調査と納品の作業場所を作成してください。", exact=True)).to_be_visible()
         expect(receiver.get_by_role("heading", name="1. プリンシパルを作る", exact=True)).to_be_visible()
         expect(receiver.get_by_role("heading", name="2. プリンシパルを作る", exact=True)).to_be_visible()
@@ -1821,9 +1829,9 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("status")).to_have_text("完了")
         for name in names:
             expect(receiver.get_by_role("link", name=name, exact=True)).to_be_visible()
-        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
-        self.assertEqual(completed["state"], "succeeded")
-        self.assertEqual([result["name"] for result in completed["results"]], names)
+        made = [performed(sender, asked["id"], position) for position in range(len(names))]
+        self.assertEqual([operation["state"] for operation in made], ["succeeded", "succeeded"])
+        self.assertEqual([operation["result"]["name"] for operation in made], names)
         receiver.get_by_role("link", name=names[-1], exact=True).click()
         expect(receiver.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
 
@@ -1986,7 +1994,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(parse_qs(exchanges[0])["code"], ["browser-google-code"])
         page.screenshot(path=str(ARTIFACTS / "google-browser-registration-ja.png"), full_page=True)
 
-    def test_再接続のリクエストからGoogleで認証し同じ接続を更新する(self):
+    def test_再接続の依頼からGoogleで認証し同じ接続を更新する(self):
         owner, principal = self.passkey_account("Mail owner", mobile=True)
         sender, _ = self.passkey_account("Mail assistant")
         connection, exchanges = self.google_connection(owner, principal)
@@ -2006,7 +2014,7 @@ class BrowserTests(unittest.TestCase):
         asked = response.json()
         owner.goto(asked["url"])
         expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
-        expect(owner.get_by_text("Mail assistantからのリクエスト", exact=True)).to_be_visible()
+        expect(owner.get_by_text("Mail assistantからの依頼", exact=True)).to_be_visible()
         expect(owner.get_by_text("Mail account", exact=True)).to_be_visible()
         button = owner.get_by_role("button", name="Googleで再接続する", exact=True)
         expect(button).to_be_in_viewport()
@@ -2017,17 +2025,17 @@ class BrowserTests(unittest.TestCase):
         button.click()
         expect(owner.get_by_role("heading", name="Google authorization", exact=True)).to_be_visible()
         self.assertEqual(authorizations[-1]["scope"], ["https://www.googleapis.com/auth/gmail.readonly"])
-        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "accepted")
-        self.assertEqual(sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "waiting")
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "approved")
+        self.assertEqual(performed(sender, asked["id"])["state"], "in_progress")
         owner.goto(asked["url"])
         expect(owner.get_by_role("status")).to_have_text("Googleでの操作を完了してください。")
         owner.screenshot(path=str(ARTIFACTS / "google-request-authorizing-ja.png"), full_page=True)
         owner.get_by_role("link", name="Googleで続ける", exact=True).click()
         owner.get_by_role("link", name="Allow requested access", exact=True).click()
         expect(owner.get_by_role("heading", name="Googleの再接続が完了しました", exact=True)).to_be_visible()
-        completed = sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()
+        completed = performed(sender, asked["id"])
         self.assertEqual(completed["state"], "succeeded")
-        self.assertEqual(completed["results"][0]["id"], connection["id"])
+        self.assertEqual(completed["result"]["id"], connection["id"])
         updated = owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()
         self.assertEqual(updated["name"], connection["name"])
         self.assertEqual(updated["data"]["scopes"], connection["data"]["scopes"])
@@ -2039,7 +2047,7 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("heading", name="Reconnected to Google", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-complete-mobile-en.png"), full_page=True)
 
-    def test_接続の依頼専用リンクから本人確認して再接続をキャンセルする(self):
+    def test_接続の依頼専用リンクから本人確認して再接続を断る(self):
         owner, principal = self.passkey_account("Sign-in owner", mobile=True)
         sender, _ = self.passkey_account("Sign-in assistant")
         connection, _ = self.google_connection(owner, principal)
@@ -2061,18 +2069,18 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
         expect(owner.get_by_role("button", name="Googleで再接続する", exact=True)).to_be_enabled()
         self.assertIsNone(owner.request.get(ORIGIN + "/api/session").json()["requestId"])
-        owner.get_by_role("button", name="キャンセル", exact=True).click()
-        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
+        owner.get_by_role("button", name="断る", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
         self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
-        owner.screenshot(path=str(ARTIFACTS / "google-request-cancelled-mobile-ja.png"), full_page=True)
+        owner.screenshot(path=str(ARTIFACTS / "google-request-declined-mobile-ja.png"), full_page=True)
         self.select(owner, "言語", "English")
-        expect(owner.get_by_role("heading", name="Reconnection to Google cancelled", exact=True)).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "google-request-cancelled-mobile-en.png"), full_page=True)
+        expect(owner.get_by_role("heading", name="Declined to reconnect Google", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "google-request-declined-mobile-en.png"), full_page=True)
         self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
         sender.goto(asked["url"])
-        expect(sender.get_by_text("承認されませんでした", exact=True)).to_be_visible()
+        expect(sender.get_by_text("断られた", exact=True)).to_be_visible()
 
-    def test_再接続で権限や利用者を確認し認証前と認証中にキャンセルする(self):
+    def test_再接続で権限や利用者を確認し認証前に断り認証中にやめる(self):
         owner, principal = self.passkey_account("Permissions owner")
         sender, requester = self.passkey_account("Permissions assistant")
         connection, exchanges = self.google_connection(owner, principal)
@@ -2089,8 +2097,8 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
         expect(owner.get_by_role("listitem").filter(has_text="Gmailでメールを送信する")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-permissions-ja.png"), full_page=True)
-        owner.get_by_role("button", name="キャンセル", exact=True).click()
-        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
+        owner.get_by_role("button", name="断る", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
         self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
         self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
         body["operations"][0]["input"]["scopes"] = connection["data"]["scopes"]
@@ -2105,8 +2113,8 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_text("認証情報の閲覧と、接続の使用・更新を許可します。持ち主が外すまで続きます。", exact=True)).to_be_visible()
         expect(owner.get_by_role("listitem").filter(has_text="Gmailのメールと設定を読む")).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-access-ja.png"), full_page=True)
-        owner.get_by_role("button", name="キャンセル", exact=True).click()
-        expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
+        owner.get_by_role("button", name="断る", exact=True).click()
+        expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
         del body["operations"][0]["input"]["users"]
         response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
@@ -2121,7 +2129,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("link", name="Cancel authorization", exact=True).click()
         expect(owner).to_have_url(asked["url"])
         expect(owner.get_by_role("heading", name="Googleの再接続をキャンセルしました", exact=True)).to_be_visible()
-        self.assertEqual(sender.request.get(ORIGIN + "/api/executions/" + asked["executionId"]).json()["state"], "cancelled")
+        self.assertEqual(performed(sender, asked["id"])["state"], "cancelled")
         self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
         self.assertEqual(len(exchanges), 1)
 
@@ -2163,10 +2171,10 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("確認コードで接続")
         expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("GitHub device application")
         page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
+        expect(page.locator("code").filter(has_text="foundation operation continue")).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "github-device-cli-ja.png"), full_page=True)
 
-    def test_デバイス認証のリクエストでコードを表示しサービスでの許可と拒否と期限切れを反映する(self):
+    def test_デバイス認証の依頼でコードを表示しサービスでの許可と拒否と期限切れを反映する(self):
         owner, principal = self.passkey_account("Device connection owner")
         sender, requester = self.passkey_account("Device connection requester")
         created = owner.request.post(ORIGIN + "/api/principals/" + principal["id"] + "/resources", data={
@@ -2227,9 +2235,9 @@ class BrowserTests(unittest.TestCase):
                 state["result"] = result
                 expect(owner.get_by_text(message, exact=True)).to_be_visible(timeout=15000)
                 if result == "approved":
-                    completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+                    completed = performed(sender, request["id"])
                     self.assertEqual(completed["state"], "succeeded")
-                    saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+                    saved = owner.request.get(ORIGIN + "/api/resources/" + completed["result"]["id"]).json()
                     self.assertEqual(saved["data"]["methodId"], method["id"])
                     self.assertEqual(saved["data"]["appId"], app_id)
 
@@ -2247,10 +2255,10 @@ class BrowserTests(unittest.TestCase):
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-input-ja.png")), full_page=True)
                 print("Rendered " + service + " OAuth: " + page.locator("main").inner_text(), flush=True)
                 page.get_by_role("button", name="接続する", exact=True).click()
-                expect(page.locator("code").filter(has_text="foundation execution continue")).to_be_visible()
+                expect(page.locator("code").filter(has_text="foundation operation continue")).to_be_visible()
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-cli-registration-ja.png")), full_page=True)
 
-    def test_OVHのサービスアカウントの接続をリクエストすると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
+    def test_OVHのサービスアカウントの接続を依頼すると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
         owner, principal = self.passkey_account("OVH service account owner")
         sender, requester = self.passkey_account("OVH service account requester")
         asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
@@ -2263,12 +2271,12 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_label("クライアントシークレット", exact=True).fill("request-client-secret")
         owner.get_by_role("button", name="接続する", exact=True).click()
         expect(owner.get_by_role("heading", name="OVHcloudへの接続が完了しました", exact=True)).to_be_visible()
-        completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+        completed = performed(sender, request["id"])
         self.assertEqual(completed["state"], "succeeded")
-        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["result"]["id"]).json()
         self.assertEqual((saved["data"]["methodId"], saved["data"]["fields"]), ("ovh:client_credentials", {"apiRegion": "ca"}))
 
-    def test_OVH接続のリクエストを受け手のブラウザで入力して完了する(self):
+    def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
         owner, principal = self.passkey_account("OVH request owner")
         sender, requester = self.passkey_account("OVH requester")
         asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
@@ -2282,9 +2290,9 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_label("Consumer Key", exact=True).fill("request-consumer")
         owner.get_by_role("button", name="接続する", exact=True).click()
         expect(owner.get_by_role("heading", name="OVHcloudへの接続が完了しました", exact=True)).to_be_visible()
-        completed = sender.request.get(ORIGIN + "/api/executions/" + request["executionId"]).json()
+        completed = performed(sender, request["id"])
         self.assertEqual(completed["state"], "succeeded")
-        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        saved = owner.request.get(ORIGIN + "/api/resources/" + completed["result"]["id"]).json()
         self.assertEqual(saved["data"]["methodId"], "ovh:api_key")
         owner.screenshot(path=str(ARTIFACTS / "ovh-request-registration-ja.png"), full_page=True)
 

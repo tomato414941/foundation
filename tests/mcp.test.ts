@@ -62,15 +62,15 @@ test('MCPからオブジェクトのAPIを調べ、オブジェクトを保存�
   };
   const schema = await call('foundation_schema', {});
   assert.ok((schema.paths as string[]).includes('/api/principals/{id}/objects'));
-  const saved = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.create/executions', body: {
+  const saved = await call('foundation_api', { method: 'POST', path: '/api/operations', body: { name: 'object.create', input: {
     ownerId: owner.actor.id, name: 'mcp.txt', contentType: 'text/plain', bytes: Buffer.from('From MCP').toString('base64url'),
-  } });
-  const execution = saved.body as { state: string; results: Array<{ id: string; kind: string }> };
-  assert.equal(execution.state, 'succeeded'); assert.equal(execution.results[0]!.kind, 'object');
-  const file = execution.results[0]!;
+  } } });
+  const made = saved.body as { state: string; result: { id: string; kind: string } };
+  assert.equal(made.state, 'succeeded'); assert.equal(made.result.kind, 'object');
+  const file = made.result;
   const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + owner.actor.id + '/resources?kind=object' });
   assert.equal((listed.body as { items: Array<{ id: string }> }).items[0]?.id, file.id);
-  const link = await call('foundation_api', { method: 'POST', path: '/api/definitions/object.link/executions', body: { id: file.id } });
-  const linked = link.body as { state: string; results: Array<{ url: string }> };
-  assert.equal(linked.state, 'succeeded'); assert.ok(linked.results[0]?.url.startsWith('https://files.example/'));
+  const link = await call('foundation_api', { method: 'POST', path: '/api/operations', body: { name: 'object.link', input: { id: file.id } } });
+  const linked = link.body as { state: string; result: { url: string } };
+  assert.equal(linked.state, 'succeeded'); assert.ok(linked.result.url.startsWith('https://files.example/'));
 });

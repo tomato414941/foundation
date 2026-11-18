@@ -2,7 +2,7 @@ import { InputField, TextareaField } from '../form-fields';
 import { Form, redirect, useActionData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/request-new';
-import { ApprovalRequest } from '../../../shared/contracts';
+import { RequestView } from '../../../shared/operations';
 import { actionResult, api, formText, jsonField, signedIn } from '../api';
 import { ErrorNotice, JsonField, Page, SaveBar } from '../components';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -23,7 +23,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
           expiresInMinutes: Number(formText(form, 'expires')),
         },
       },
-      ApprovalRequest,
+      RequestView,
     );
     if (result.code) sessionStorage.setItem('foundation.request.' + result.id, result.code);
     return redirect('/requests/' + result.id);

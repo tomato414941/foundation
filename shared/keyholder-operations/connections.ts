@@ -1,4 +1,4 @@
-import { AppSave, AuthorizeConnection, ConnectService, Execution } from '../executions.js';
+import { AppSave, AuthorizeConnection, ConnectService } from '../operations.js';
 import { CatalogMethod, Id, Resource, listOf } from '../contracts.js';
 import type { JsonValue } from '../contracts.js';
 import { canonical } from '../authority.js';
@@ -9,8 +9,8 @@ import { decode, encode } from '../encryption.js';
 import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from '../connection-methods.js';
 import { connectionPolicy, withUsers } from '../connection-policy.js';
 import { registrationMaterial, registrationApplication } from '../connection-registration.js';
-import type { ExecutionResultView, PrivateOperationInput } from '../execution-client.js';
-import type { KeyholderClient, KeyholderOperation, KeyholderPlan } from './types.js';
+import type { KeyholderPlan, OperationResultView, PrivateOperationInput } from '../operation-client.js';
+import type { KeyholderClient, KeyholderOperation } from './types.js';
 
 class ConnectionOperations {
   private readonly connectionNames = new Map<string, string>();
@@ -21,8 +21,9 @@ class ConnectionOperations {
     this.connectionNames.set(id, selected.defaultName);
     return catalogDefinition(selected);
   }
-  private async prepareFields(plan: KeyholderPlan, material: PrivateOperationInput): Promise<ExecutionResultView | null> {
-    const id = plan.id, { name, input } = plan.invocation;
+  // The service settings the operation is made with, filled with those entered on this device.
+  private async prepareFields(plan: KeyholderPlan, material: PrivateOperationInput): Promise<OperationResultView | null> {
+    const { name, input } = plan;
     const method = await this.method(String(input.methodId)), definitions = method.kind === 'aws' ? [] : method.config.fields;
     let fields = visibleConnectionFields(definitions, material.fields ?? {});
     if (name === 'connection.connect' && input.appId) {
@@ -32,14 +33,12 @@ class ConnectionOperations {
     }
     const prepared = input.fields as Record<string, string> | undefined;
     const completed = suppliedConnectionFields(definitions, prepared ?? {}, fields);
-    if (Object.entries(fields).some(([key, value]) => prepared?.[key] !== value)) {
-      await this.client.configure(id, { fields: completed });
-      return this.client.continue(id, material);
-    }
+    if (Object.entries(fields).some(([key, value]) => prepared?.[key] !== value))
+      return this.client.proceed(await this.client.configure(plan, { fields: completed }), material);
     return null;
   }
-  async authorize(plan: KeyholderPlan): Promise<ExecutionResultView> {
-    const id = plan.id, { input } = plan.invocation;
+  async authorize(plan: KeyholderPlan): Promise<OperationResultView> {
+    const id = plan.id, { input } = plan;
     const permission = AuthorizeConnection.parse(input), previous = await this.client.custody.read(permission.connectionId);
     if (previous.version !== permission.version || previous.content.policy.ownerId !== permission.ownerId ||
       previous.content.policy.contentType !== ContentTypes.tokenSet) throw new Error('Review the current connection before changing its permissions.');
@@ -48,12 +47,12 @@ class ConnectionOperations {
     const current = await this.client.custody.api.json('/api/resources/' + permission.connectionId, {}, Resource);
     const resource = await this.client.custody.save(current.name, await this.client.custody.reveal(permission.connectionId), policy,
       { previous, metadata: previous.content.metadata,
-        commit: async write => Resource.parse((await this.client.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
-    return { kind: 'saved', resource, executionId: id };
+        commit: async write => Resource.parse((await this.client.commit(plan, write as unknown as JsonValue)).result) });
+    return { kind: 'saved', resource, operationId: id };
   }
-  async saveApplication(plan: KeyholderPlan, material: PrivateOperationInput): Promise<ExecutionResultView> {
+  async saveApplication(plan: KeyholderPlan, material: PrivateOperationInput): Promise<OperationResultView> {
     const prepared = await this.prepareFields(plan, material); if (prepared) return prepared;
-    const id = plan.id, { input } = plan.invocation;
+    const id = plan.id, { input } = plan;
     const destination = AppSave.parse(input);
     const previous = destination.resourceId ? await this.client.custody.latest(destination.resourceId) : undefined;
     if (previous && previous.version !== destination.version) throw new Error('This item changed. Reload it before saving.');
@@ -75,42 +74,32 @@ class ConnectionOperations {
     bytes = encode(canonical(app)); metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
       fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, fields) };
     const resource = await this.client.custody.save(destination.name, bytes, policy, { previous, metadata,
-      commit: async write => Resource.parse((await this.client.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
-    return { kind: 'saved' as const, resource, executionId: id };
+      commit: async write => Resource.parse((await this.client.commit(plan, write as unknown as JsonValue)).result) });
+    return { kind: 'saved' as const, resource, operationId: id };
   }
-  async connect(plan: KeyholderPlan, material: PrivateOperationInput): Promise<ExecutionResultView> {
-    const prepared = await this.prepareFields(plan, material); if (prepared) return prepared;
-    const id = plan.id, { input } = plan.invocation;
+  async connect(plan: KeyholderPlan, material: PrivateOperationInput): Promise<OperationResultView> {
     if (plan.continuation?.kind === 'connection') return this.client.connections.progress(plan.continuation.id);
+    const prepared = await this.prepareFields(plan, material); if (prepared) return prepared;
+    const id = plan.id, { input } = plan;
     const connection = ConnectService.parse(input), method = await this.method(connection.methodId);
-    if (!connection.name) {
-      await this.client.configure(id, { name: this.connectionNames.get(connection.methodId) ?? method.name });
-      return this.client.continue(id, material);
-    }
-    if (material.scopes && !connection.scopes && (method.kind === 'oauth' || method.kind === 'ovh')) {
-      await this.client.configure(id, { scopes: material.scopes });
-      return this.client.continue(id, material);
-    }
+    if (!connection.name)
+      return this.client.proceed(await this.client.configure(plan, { name: this.connectionNames.get(connection.methodId) ?? method.name }), material);
+    if (material.scopes && !connection.scopes && (method.kind === 'oauth' || method.kind === 'ovh'))
+      return this.client.proceed(await this.client.configure(plan, { scopes: material.scopes }), material);
     if (material.scopes && connection.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
       canonical(selectScopes(method.config.scopes, material.scopes).sort()) !== canonical(selectScopes(method.config.scopes, connection.scopes).sort()))
       throw new Error('Use the service permissions prepared by this operation.');
-    let appId = connection.appId;
-    if (requiresApp(method) && !appId) {
+    // An application the connection needs is saved first, as an operation of its own.
+    if (requiresApp(method) && !connection.appId) {
       if (!connection.clientId) throw new Error('Enter the application client ID.');
-      const app = AppMaterial.parse({ format: 1, methodId: connection.methodId, clientId: connection.clientId,
-        generation: crypto.randomUUID(), fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
-        ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}) });
-      const policy = await this.client.custody.policy(connection.ownerId, ContentTypes.clientCredential);
-      const saved = await this.client.custody.save((connection.name ?? method.name).slice(0, 185) + ' application', encode(canonical(app)), policy,
-        { metadata: { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
-            fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, app.fields) },
-          commit: async write => {
-            const prepared = await this.client.custody.api.json('/api/executions/' + id + '/preparation', { method: 'POST',
-              body: { index: plan.index, proof: write } }, Execution);
-            return this.client.custody.api.json('/api/resources/' + prepared.operations[plan.index]!.input.appId, {}, Resource);
-          } });
-      appId = saved.id;
+      const application = await this.saveApplication(await this.client.review({ name: 'app.save', input: { ownerId: connection.ownerId,
+        name: (connection.name ?? method.name).slice(0, 185) + ' application', methodId: connection.methodId,
+        clientId: connection.clientId, ...(connection.fields ? { fields: connection.fields } : {}) } }),
+      { ...(material.clientSecret ? { clientSecret: material.clientSecret } : {}), ...(material.fields ? { fields: material.fields } : {}) });
+      if (!('kind' in application) || application.kind !== 'saved') throw new Error('Save the application for this connection.');
+      return this.client.proceed(await this.client.configure(plan, { appId: application.resource.id }), material);
     }
+    const appId = connection.appId;
     if (!connectionMethod(method).browserAuthorization) {
       if (await methodDigest(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
       const previous = connection.connectionId ? await this.client.custody.latest(connection.connectionId) : undefined;
@@ -126,18 +115,13 @@ class ConnectionOperations {
       const resource = await this.client.custody.save(connection.name ?? method.name, sealedConnection(state), policy,
         { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
           commit: async write => {
-            const completed = await this.client.complete(id, plan.index, write as unknown as JsonValue);
-            const result = completed.results[plan.index] as { id: string };
-            return this.client.custody.api.json('/api/resources/' + result.id, {}, Resource);
+            const made = await this.client.commit(plan, write as unknown as JsonValue);
+            return this.client.custody.api.json('/api/resources/' + Id.parse((made.result as { id?: unknown } | null)?.id), {}, Resource);
           } });
-      return { kind: 'saved', resource, executionId: id };
+      return { kind: 'saved', resource, operationId: id };
     }
-    return this.client.connections.start({ ownerId: connection.ownerId,
-      name: connection.name ?? method.name, methodId: connection.methodId, method, appId,
-      connectionId: connection.connectionId,
-      fields: suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}),
-      scopes: connection.scopes, users: connection.users, redirectUri: connection.redirectUri,
-      execution: { id, index: plan.index } });
+    return this.client.connections.start(plan, method,
+      suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, connection.fields ?? {}, material.fields ?? {}));
   }
 }
 export function connectionOperations(client: KeyholderClient) {

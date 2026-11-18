@@ -4,7 +4,7 @@ import { flowFixture, jsonResponse } from './flow-support.js';
 import { decode } from '../shared/encryption.js';
 import { ConnectionMaterial } from '../shared/connections.js';
 import { ConnectionClient } from '../shared/connection-client.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import { TokenConnection } from '../runtime/token-connection.js';
 import { VultrRoleConnection } from '../runtime/vultr-role-connection.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -245,13 +245,12 @@ test('ブラウザでVultrのOAuth接続を準備し、CLIで認可を継続す�
     providerId: 'provider-1', authorizationEndpoint: 'https://console.vultr.com/oauth/authorize',
   });
   const browser = new ConnectionClient(f.client, f.connections.store, f.transport, 'browser');
-  const operations = new ExecutionClient(f.client, browser);
-  const started = await operations.execute({ name: 'connection.connect', input: {
+  const operations = new OperationClient(f.client, browser);
+  const started = await operations.perform({ name: 'connection.connect', input: {
     ownerId: f.owner.actor.id, methodId: 'vultr:oauth', appId: application.id, name: 'Vultr',
   } });
-  assert.equal(started.kind, 'cli');
-  if (started.kind !== 'cli') return;
-  assert.equal(started.command, 'foundation execution continue ' + started.flow.execution.id);
+  if (!('flow' in started) || started.kind !== 'cli') throw new Error('Expected CLI continuation.');
+  assert.equal(started.command, 'foundation operation continue ' + started.flow.operationId);
   const continued = await f.connections.progress(started.flow.id);
   assert.equal(continued.kind, 'authorize');
   if (continued.kind !== 'authorize') return;

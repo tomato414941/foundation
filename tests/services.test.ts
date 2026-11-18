@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { publicAddress, publicUrl } from '../server/transport.js';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { Resource } from '../shared/contracts.js';
+import { OperationView, RequestView } from '../shared/operations.js';
 
 test('公開HTTPSの送信先を受け入れ、プライベートアドレスへの送信を拒否する', () => {
   for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111'])
@@ -78,12 +79,15 @@ test('RenderのOAuth応答を端末で交換して利用時に更新し、解除
   assert.equal(form.get('resource'), 'https://mcp.render.com/mcp');
 });
 
-test('入力待ちの更新を取り消すと元のキーを保ち、再登録で同じ接続を更新する', async t => {
+test('依頼された接続の更新をやめると元のキーを保ち、再登録で同じ接続を更新する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const saved = await f.saveConnection({ methodId: 'render:token', fields: { token: 'original' } });
-  const update = await f.operations.start({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-    methodId: 'render:token', connectionId: saved.id, name: saved.name } });
-  await f.client.api.json('/api/executions/' + update.id + '/cancel', { method: 'POST', body: {} });
+  const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
+    { name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'render:token', connectionId: saved.id, name: saved.name } }] } },
+  RequestView);
+  const approved = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, RequestView);
+  const stopped = await f.client.api.json('/api/operations/' + approved.performed[0]!.id + '/cancel', { method: 'POST', body: {} }, OperationView);
+  assert.equal(stopped.state, 'cancelled');
   assert.equal((await f.client.connection(saved.id)).fields!.token, 'original');
   const replacement = await f.saveConnection({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'updated' } });
   assert.equal(replacement.id, saved.id);

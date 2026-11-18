@@ -11,12 +11,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
 import {
-  ApprovalRequest,
   Credential,
   Id,
   Input,
   Name,
-  RequestInput,
   Resource,
   Sealed,
   listOf,
@@ -31,9 +29,9 @@ import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureW
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { IdentityVerificationRequired, transferResource } from '../../shared/client.js';
-import { executionClient } from './executions.js';
-import { ExecutionInput, ExecutionResponse, Invocation, DefinitionDescription, Execution } from '../../shared/executions.js';
-import { OperationMaterial } from '../../shared/execution-client.js';
+import { operationClient } from './operations.js';
+import { Invocation, OperationKind, OperationView, RequestApproval, RequestCreate, RequestView } from '../../shared/operations.js';
+import { OperationMaterial } from '../../shared/operation-client.js';
 import { startMcp } from './mcp.js';
 import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOutput, connectionOwner, existingConnection, flowOutput,
   requestConnection, saveApp, startConnection } from './connections.js';
@@ -53,13 +51,13 @@ Usage: foundation <command> [options]
   identity use ID                      Make a saved identity the default
   request-access [--to ID] [--wait]     Ask another principal to delegate access to this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
-  definition list                      List processing definitions and their inputs
-  execution start --body JSON          Prepare operations and return their continuation URL
-  execution history                   List executions visible to this principal
-  execution respond ID --body JSON     Supply public inputs and consent
-  execution cancel ID                  Cancel a prepared operation
-  execution run NAME --body JSON       Execute an operation (private material via --fields)
-  execution continue ID [--fields JSON] Resume an operation awaiting private input
+  operation kinds                      List the kinds of operation and their inputs
+  operation perform NAME --body JSON   Make an operation (private material via --fields)
+  operation list                       List the operations made by or for this principal
+  operation get ID                     Show an operation
+  operation continue ID [--fields JSON] Make an operation not made yet or that failed, or finish one
+                                       waiting on its service
+  operation cancel ID                  Stop an operation not made yet or waiting on its service
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
@@ -68,15 +66,19 @@ Usage: foundation <command> [options]
   connect SERVICE [--needs NAME] [--why TEXT] Ask the owner to connect a service in a browser,
                                        or return their ready connection that gives NAME
   connect --method ID --fields JSON    Encrypt and save a connection on this device
-  connect wait ID                      Continue after service authorization
+  connect wait ID                      Continue the operation after service authorization
   connect wait-request ID              Wait for the owner to finish a requested connection
   keep NAME (--file FILE | --stdin)    Encrypt and save a variable
   transfer ID --to ID                  Transfer an item after the recipient accepts it
   read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
-  retry ID                             Continue an execution using its saved consent
-  request --body JSON                  Create an approval request
-  request wait ID [--timeout SECONDS]  Wait for an approval request
+  request send --body JSON             Ask another principal to make operations
+  request list                         List the requests sent or received
+  request get ID                       Show a request
+  request approve ID [--body JSON]     Approve a request, supplying what it asks for
+  request decline ID                   Decline a request
+  request withdraw ID                  Withdraw a request this principal sent
+  request wait ID [--timeout SECONDS]  Wait for a request to be answered
   export --output FILE                 Download an encrypted account export
   ssh-key create NAME (--store | --private-key-output FILE) Make an SSH key and register its public key
   ssh-key add NAME (--public-key KEY | --private-key FILE) Register an existing SSH key
@@ -404,9 +406,9 @@ async function waitFor<T>(fetcher: () => Promise<T>, state: (value: T) => string
   const deadline = Date.now() + timeout * 1000;
   while (true) {
     const value = await fetcher();
-    if (!['pending', 'running', 'queued'].includes(state(value))) return value;
+    if (state(value) !== 'pending') return value;
     if (Date.now() >= deadline)
-      throw new Error('The operation is still pending. Run the wait command again to continue.');
+      throw new Error('The request is still pending. Run the wait command again to continue.');
     await delay(1500);
   }
 }
@@ -432,8 +434,8 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const operations = executionClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
-  const completed = await operations.execute({ name: 'variable.save', input: { ownerId: owner, name,
+  const operations = operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
+  const completed = await operations.perform({ name: 'variable.save', input: { ownerId: owner, name,
     ...(existing ? { resourceId: existing.id, version: previous!.version } : {}) } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
   const result = completed.resource;
@@ -444,7 +446,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
 // key with it. When registering fails, the variable just made is removed again.
 async function withNewVariable(client: Client, owner: string, name: string, content: Uint8Array,
   register: (variableId: string) => Promise<ResourceView>) {
-  const completed = await executionClient(client).execute({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
+  const completed = await operationClient(client).perform({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
   const variable = completed.resource;
   try { return await register(variable.id); } catch (error) {
@@ -610,35 +612,21 @@ async function main(argv: string[]) {
       fields: await json(args.values.fields, {}) });
     await output(resource, args); return 0;
   }
-  if (command === 'definition') {
-    if ((args.positionals[0] ?? 'list') !== 'list') throw new Error('Use foundation definition list.');
-    await output(await client.json('/api/definitions', {}, listOf(DefinitionDescription)), args); return 0;
-  }
-  if (command === 'execution') {
-    const action = args.positionals[0] ?? 'list';
-    if (action === 'list') await output(await client.json('/api/definitions', {}, listOf(DefinitionDescription)), args);
-    else if (action === 'history') await output(await client.json('/api/executions', {}, listOf(Execution)), args);
-    else if (action === 'get') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, Execution), args);
-    else if (action === 'start') await output(await client.json('/api/executions', { method: 'POST', body: ExecutionInput.parse(await json(args.values.body, {})) }, Execution), args);
-    else if (action === 'respond') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/respond', { method: 'POST', body: ExecutionResponse.parse(await json(args.values.body, {})) }, Execution), args);
-    else if (action === 'cancel') await output(await client.json('/api/executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')) + '/cancel', { method: 'POST', body: {} }, Execution), args);
-    else if (action === 'run' || action === 'continue') {
+  if (command === 'operation') {
+    const action = args.positionals[0] ?? 'list', id = () => Id.parse(requireArgument(args.positionals[1], 'Supply an operation ID.'));
+    if (action === 'kinds') await output(await client.json('/api/operation-kinds', {}, listOf(OperationKind)), args);
+    else if (action === 'list') await output(await client.json('/api/operations', {}, listOf(OperationView)), args);
+    else if (action === 'get') await output(await client.json('/api/operations/' + id(), {}, OperationView), args);
+    else if (action === 'cancel') await output(await client.json('/api/operations/' + id() + '/cancel', { method: 'POST', body: {} }, OperationView), args);
+    else if (action === 'perform' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
-      const invocation = action === 'run' ? Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) }) : null;
-      if (invocation) {
-        const catalog = await client.json('/api/definitions', {}, listOf(DefinitionDescription));
-        const definition = catalog.items.find(item => item.name === invocation.name);
-        if (!definition) throw new Error('Choose an available operation.');
-        if (definition.execution === 'server') {
-          await output(await client.json('/api/definitions/' + invocation.name + '/executions', { method: 'POST', body: invocation.input }), args);
-          return 0;
-        }
-      }
-      const operations = executionClient(client);
-      const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
-        : await operations.execute(invocation!, material);
+      const operations = operationClient(client);
+      const result = action === 'continue' ? await operations.continue(id(), material)
+        : await operations.perform(Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'),
+          input: await json(args.values.body, {}) }), material);
       await output('flow' in result ? flowOutput(result) : result, args);
-    } else throw new Error('Choose execution list, start, respond, run, get, continue, or cancel.');
+      return 'state' in result && ['failed', 'uncertain', 'cancelled', 'declined', 'withdrawn', 'expired'].includes(result.state) ? 1 : 0;
+    } else throw new Error('Choose operation kinds, perform, list, get, continue, or cancel.');
     return 0;
   }
   if (command === 'connect') {
@@ -646,7 +634,7 @@ async function main(argv: string[]) {
     const service = args.positionals[0] && !actions.includes(args.positionals[0]) ? args.positionals[0] : undefined;
     const action = service ? 'start' : args.positionals[0] ?? 'start';
     if (action === 'wait-request') {
-      const request = await client.json('/api/requests/' + Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.')), {}, ApprovalRequest);
+      const request = await client.json('/api/requests/' + Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.')), {}, RequestView);
       const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
       await output(result, args);
       return result.kind === 'connected' ? 0 : 1;
@@ -670,7 +658,7 @@ async function main(argv: string[]) {
         const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
           name: args.values.name, appId: args.values.app, connectionId: args.values.connection,
           scopes: args.values.scopes === undefined ? undefined : z.array(z.string()).parse(await json(args.values.scopes, [])) });
-        await output({ kind: 'requested', requestId: request.id, executionId: request.executionId, to: request.to,
+        await output({ kind: 'requested', requestId: request.id, to: request.to,
           method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: await linked(request.url, client.identity),
           expiresAt: request.expiresAt,
           next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait-request ' + request.id }, args);
@@ -688,10 +676,10 @@ async function main(argv: string[]) {
       aws: args.values.aws ? await json(args.values.aws) : undefined,
       redirectUri: args.values['redirect-uri'] });
     else {
-      const executionId = Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.'));
-      const execution = await client.json('/api/executions/' + executionId, {}, Execution);
-      if (!execution.waiting?.continuation) { await output(execution, args); return execution.state === 'succeeded' ? 0 : 1; }
-      const id = execution.waiting.continuation.id;
+      const operationId = Id.parse(requireArgument(args.positionals[1], 'Supply an operation ID.'));
+      const operation = await client.json('/api/operations/' + operationId, {}, OperationView);
+      if (!operation.continuation) { await output(operation, args); return operation.state === 'succeeded' ? 0 : 1; }
+      const id = operation.continuation.id;
       if (action === 'cancel') progress = await flowClient.cancel(id);
       else if (action === 'complete') {
         const value = await text(requireArgument(args.values.parameters, 'Supply the authorization response with --parameters.'));
@@ -709,14 +697,6 @@ async function main(argv: string[]) {
     }
     await output(flowOutput(progress), args);
     return ['failed', 'cancelled'].includes(progress.kind) ? 1 : 0;
-  }
-  if (command === 'retry') {
-    const id = Id.parse(requireArgument(args.positionals[0], 'Supply a saved execution ID.'));
-    const execution = await client.json('/api/executions/' + id, {}, Execution);
-    if (execution.state === 'failed')
-      await client.json('/api/executions/' + id + '/resume', { method: 'POST', body: {} }, Execution);
-    await output(await executionClient(client).continue(id), args);
-    return 0;
   }
   if (command === 'api' || command === 'schema') {
     const method =
@@ -790,17 +770,27 @@ async function main(argv: string[]) {
       .parse(await json(args.values.inputs, []));
     return execute(await localInputs(client, inputs), commandArguments);
   }
-  if (command === 'request-access' || command === 'request') {
-    if (command === 'request' && args.positionals[0] === 'wait') {
-      const id = Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.'));
-      const result = await waitFor(
-        () => client.json('/api/requests/' + id, {}, ApprovalRequest),
-        (value) => value.state,
-        seconds(args.values.timeout, 1800),
-      );
+  if (command === 'request' && (args.positionals[0] ?? 'list') !== 'send') {
+    const action = args.positionals[0] ?? 'list', id = () => Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.'));
+    if (action === 'list') { await output(await client.json('/api/requests', {}, listOf(RequestView)), args); return 0; }
+    if (action === 'wait') {
+      const result = await waitFor(() => client.json('/api/requests/' + id(), {}, RequestView), value => value.state,
+        seconds(args.values.timeout, 1800));
       await output(result, args);
-      return result.state === 'accepted' ? 0 : 1;
+      return result.state === 'approved' ? 0 : 1;
     }
+    const answer = ({ get: '', approve: '/approve', decline: '/decline', withdraw: '/withdraw' } as Record<string, string>)[action];
+    if (answer === undefined) throw new Error('Choose request send, list, get, approve, decline, withdraw, or wait.');
+    const result = answer ? await client.json('/api/requests/' + id() + answer, { method: 'POST',
+      body: action === 'approve' ? RequestApproval.parse(await json(args.values.body, {})) : {} }, RequestView)
+      : await client.json('/api/requests/' + id(), {}, RequestView);
+    // What the approval left for this device to make, such as what only its keys can seal, goes on from the operation.
+    const stopped = result.performed.find(made => made.state !== 'succeeded');
+    await output({ ...result, ...(action === 'approve' && stopped?.state === 'stopped'
+      ? { next: 'Run foundation operation continue ' + stopped.id } : {}) }, args);
+    return 0;
+  }
+  if (command === 'request-access' || command === 'request') {
     const input =
       command === 'request-access'
         ? {
@@ -816,18 +806,18 @@ async function main(argv: string[]) {
         : await json(requireArgument(args.values.body, 'Supply the request as --body JSON.'));
     const request = await client.json(
       '/api/requests',
-      { method: 'POST', body: RequestInput.parse(input) },
-      ApprovalRequest,
+      { method: 'POST', body: RequestCreate.parse(input) },
+      RequestView,
     );
     await output({ ...request, url: await linked(request.url, client.identity) }, args);
     if (args.values.wait) {
       const result = await waitFor(
-        () => client.json('/api/requests/' + request.id, {}, ApprovalRequest),
+        () => client.json('/api/requests/' + request.id, {}, RequestView),
         (value) => value.state,
         seconds(args.values.timeout, 1800),
       );
       await output(result, { ...args, values: { ...args.values, force: true } });
-      return result.state === 'accepted' ? 0 : 1;
+      return result.state === 'approved' ? 0 : 1;
     }
     return 0;
   }

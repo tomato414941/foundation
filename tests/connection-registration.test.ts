@@ -5,18 +5,18 @@ import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
 import { activeConnectionField } from '../shared/connection-fields.js';
 import { CustodyClient } from '../shared/client.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
 import { JournalTrust } from '../runtime/trust.js';
 import { MemoryJournal } from './delegation-support.js';
 import { decode, encode } from '../shared/encryption.js';
-import { Execution } from '../shared/executions.js';
+import { OperationView } from '../shared/operations.js';
 import { canonical } from '../shared/authority.js';
 import { DomainError } from '../server/errors.js';
 
 function browser(f: Awaited<ReturnType<typeof flowFixture>>, custody = f.client) {
-  return new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'browser'));
+  return new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'browser'));
 }
 const valueFor = (name: string) => name === 'url' ? 'https://receiver.example/webhook' :
   name === 'domain' ? 'example.com' : name === 'tenant' ? 'common' :
@@ -43,7 +43,7 @@ test('サービスへアクセスできない端末でも入力式の認証情�
           JSON.stringify({ type: 'service_account', client_email: 'robot@example.iam.gserviceaccount.com' }) : valueFor(field.name))]));
     const fields = Object.fromEntries(definitions.filter(field => activeConnectionField(field, entered))
       .map(field => [field.name, entered[field.name]!]));
-    const saved = await client.execute({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
+    const saved = await client.perform({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
       methodId: method.id, name: method.id, ...(method.registration.kind === 'input' && method.kind === 'oauth' ? { clientId: 'application-id' } : {}) } },
       { fields, clientSecret: 'private-application-secret', ...(method.kind === 'aws' ? { aws: {
         authentication: { kind: 'access_key', accessKeyId: 'AKIATESTREGISTRATION', secretAccessKey: 'private-aws-secret' }, region: 'ap-northeast-1',
@@ -57,7 +57,7 @@ test('サービスへアクセスできない端末でも入力式の認証情�
       assert.equal(application.clientId, 'application-id'); assert.equal(application.clientSecret, 'private-application-secret');
     } else for (const field of definitions.filter(field => activeConnectionField(field, fields)))
       assert.equal(material.fields![field.name], fields[field.name]);
-    const completed = await custody.api.json('/api/executions/' + saved.executionId, {}, Execution);
+    const completed = await custody.api.json('/api/operations/' + saved.operationId, {}, OperationView);
     assert.equal(completed.state, 'succeeded');
     const encrypted = await custody.read(saved.resource.id);
     assert.ok(encrypted.content.sealed.ciphertext.length > 0);
@@ -95,7 +95,7 @@ test('ブラウザの認可応答を暗号化して中継し、別のブラウ�
     return jsonResponse({ access_token: 'browser-token', refresh_token: 'browser-refresh', token_type: 'Bearer', expires_in: 3600 });
   }); t.after(f.close);
   const app = await f.saveApp('google:oauth'), first = browser(f);
-  const started = await first.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
+  const started = await first.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
   if (!('kind' in started) || started.kind !== 'authorize') throw new Error('Expected authorization.');
   const state = new URL(started.url).searchParams.get('state')!;
   const callback = await f.app.inject('/oauth/callback?state=' + state + '&code=browser-code');
@@ -103,12 +103,12 @@ test('ブラウザの認可応答を暗号化して中継し、別のブラウ�
   const row = await f.db.one<{ sealed: unknown }>('SELECT sealed FROM oauth_relays WHERE id=$1', [started.flow.id]);
   assert.ok(row?.sealed);
   assert.equal(JSON.stringify(row).includes('browser-code'), false);
-  const second = browser(f), connected = await second.continue(started.flow.execution.id);
+  const second = browser(f), connected = await second.continue(started.flow.operationId);
   if (!('kind' in connected) || connected.kind !== 'connected') throw new Error('Expected a saved connection.');
   const material = await f.client.connection(connected.id);
   assert.equal(material.oauth?.accessToken, 'browser-token');
   assert.equal(material.oauth?.refreshToken, 'browser-refresh');
-  assert.equal((await f.client.api.json('/api/executions/' + started.flow.execution.id, {}, Execution)).state, 'succeeded');
+  assert.equal((await f.client.api.json('/api/operations/' + started.flow.operationId, {}, OperationView)).state, 'succeeded');
 });
 
 test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻ったブラウザからCLIの続行を案内する', async t => {
@@ -117,18 +117,18 @@ test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻�
     return jsonResponse({ access_token: 'cli-token', token_type: 'bearer', scope: 'read:user' });
   }); t.after(f.close);
   const app = await f.saveApp('github:oauth'), client = browser(f);
-  const started = await client.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id } });
+  const started = await client.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id } });
   if (!('kind' in started) || started.kind !== 'cli') throw new Error('Expected CLI continuation.');
-  assert.equal(started.command, 'foundation execution continue ' + started.flow.execution.id);
-  const cli = new ExecutionClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client), f.transport, 'cli'));
-  const authorization = await cli.continue(started.flow.execution.id);
+  assert.equal(started.command, 'foundation operation continue ' + started.flow.operationId);
+  const cli = new OperationClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client), f.transport, 'cli'));
+  const authorization = await cli.continue(started.flow.operationId);
   if (!('kind' in authorization) || authorization.kind !== 'authorize') throw new Error('Expected authorization.');
   const state = new URL(authorization.url).searchParams.get('state')!;
   const callback = await f.app.inject('/oauth/callback?state=' + state + '&code=cli-code&iss=' + encodeURIComponent('https://github.com/login/oauth'));
   assert.equal(callback.statusCode, 302);
   const returning = await client.connections.progress(started.flow.id);
   if (returning.kind !== 'cli') throw new Error('Expected CLI continuation.');
-  assert.equal(returning.command, 'foundation connect wait ' + started.flow.execution.id);
+  assert.equal(returning.command, 'foundation connect wait ' + started.flow.operationId);
   const connected = await cli.connections.progress(started.flow.id);
   if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
   const saved = await f.client.api.json('/api/resources/' + connected.id, {}, Resource);
@@ -147,8 +147,8 @@ test('代理のCLIでGitHubの認可応答を受け取り、指定した所有�
   const identity = f.delegate, trust = new JournalTrust(new MemoryJournal());
   await trust.rememberBinding(f.owner.binding);
   const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
-  const cli = new ExecutionClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'cli'));
-  const started = await cli.execute({ name: 'connection.connect', input: {
+  const cli = new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'cli'));
+  const started = await cli.perform({ name: 'connection.connect', input: {
     ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id,
   } });
   if (!('kind' in started) || started.kind !== 'authorize') throw new Error('Expected authorization.');
@@ -170,7 +170,7 @@ test('認可コードをstateと結び付け、並行して画面を開いても
   const f = await flowFixture(async () => { received(); await gate; return jsonResponse({ access_token: 'once-token', token_type: 'Bearer' }); });
   t.after(f.close);
   const app = await f.saveApp('google:oauth'), client = browser(f);
-  const started = await client.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
+  const started = await client.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
   if (!('kind' in started) || started.kind !== 'authorize') throw new Error('Expected authorization.');
   await assert.rejects(client.connections.complete(started.flow.id, 'state=another-flow&code=foreign'), /does not match/);
   const completing = client.connections.complete(started.flow.id, 'state=' + new URL(started.url).searchParams.get('state')! + '&code=valid');
@@ -185,7 +185,7 @@ test('認可コードをstateと結び付け、並行して画面を開いても
 test('ブラウザで交換できなかったコードを捨て、CLIで新しい認可を開始する', async t => {
   const f = await flowFixture(() => { throw new DomainError(409, 'browser_exchange_unavailable', 'Browser exchange failed.'); }); t.after(f.close);
   const app = await f.saveApp('google:oauth'), client = browser(f);
-  const started = await client.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
+  const started = await client.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'google:oauth', appId: app.id } });
   if (!('kind' in started) || started.kind !== 'authorize') throw new Error('Expected authorization.');
   const original = new URL(started.url).searchParams.get('state')!;
   await f.app.inject('/oauth/callback?state=' + original + '&code=used-code');

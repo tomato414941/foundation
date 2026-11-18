@@ -17,7 +17,7 @@ import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.j
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 import { CustodyClient } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import { JournalTrust } from '../runtime/trust.js';
 import { MemoryJournal } from './delegation-support.js';
 
@@ -173,7 +173,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   assert.equal(joined.code, 0, joined.stderr);
   const request = JSON.parse(joined.stdout);
   assert.match(request.code, /^[A-Z0-9]{8}$/);
-  assert.equal(request.canRespond, false);
+  assert.equal(request.canAnswer, false);
   const approved = await c.app.inject({
     method: 'POST',
     url: '/api/requests/' + request.id + '/approve',
@@ -183,7 +183,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   assert.equal(approved.statusCode, 200, approved.body);
   const waited = await c.run(['request', 'wait', request.id, '--timeout', '5']);
   assert.equal(waited.code, 0, waited.stderr);
-  assert.equal(JSON.parse(waited.stdout).state, 'accepted');
+  assert.equal(JSON.parse(waited.stdout).state, 'approved');
   const status = await c.run(['status']);
   assert.equal(status.code, 0, status.stderr);
   assert.ok(JSON.parse(status.stdout).principals.some((item: { id: string }) => item.id === owner.actor.id));
@@ -375,7 +375,7 @@ test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示�
   }
 });
 
-test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端末での使用を確認する', async t => {
+test('CLIでAPIキーを暗号化して接続し、その操作の結果と端末での使用を確かめる', async t => {
   const c = await cliFixture(); t.after(c.close);
   assert.equal((await c.run(['init', '--name', 'Connection owner', '--origin', c.origin])).code, 0);
   const start = await c.run(['connect', '--method', 'render:token', '--name', 'Render REST', '--fields', '@-'],
@@ -383,7 +383,7 @@ test('CLIでAPIキーを暗号化して登録し、同じ実行の結果と端�
   assert.equal(start.code, 0, start.stderr);
   const saved = JSON.parse(start.stdout);
   assert.equal(saved.kind, 'connected');
-  const completed = await c.run(['execution', 'get', saved.id]);
+  const completed = await c.run(['operation', 'get', saved.id]);
   assert.equal(completed.code, 0, completed.stderr);
   assert.equal(JSON.parse(completed.stdout).state, 'succeeded');
   const used = await c.run(['exec', '--inputs', JSON.stringify([
@@ -469,7 +469,7 @@ async function delegatedMachine(c: Awaited<ReturnType<typeof cliFixture>>) {
   } };
   const custody = new CustodyClient(api, c.origin, owner.binding, owner.keys, new JournalTrust(new MemoryJournal()));
   const flows = new Map();
-  const operations = new ExecutionClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
+  const operations = new OperationClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
     async put(flow) { flows.set(flow.id, flow); } }, { async send() { throw new Error('No service calls are expected.'); } }, 'cli'));
   return { owner, machine, api, operations };
 }
@@ -487,8 +487,8 @@ test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入�
   const received = await api.json<{ message: string; state: string }>('/api/requests/' + request.requestId);
   assert.deepEqual([received.message, received.state], ['Rent a GPU for training', 'pending']);
   const waiting = c.run(['connect', 'wait-request', request.requestId, '--timeout', '30']);
-  await api.json('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
-  const saved = await operations.continue(request.executionId, { fields: { token: 'cloudrift_requested_key' } });
+  const approved = await api.json<{ performed: Array<{ id: string }> }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
+  const saved = await operations.continue(approved.performed[0]!.id, { fields: { token: 'cloudrift_requested_key' } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
   const waited = await waiting;
   assert.equal(waited.code, 0, waited.stderr);
@@ -541,15 +541,15 @@ test('CLIの鍵で保存した接続を検証済みの相手へ渡し受け取�
   assert.equal(trusted.code, 0, trusted.stderr);
   const transferred = await c.run(['transfer', id, '--to', recipient.actor.id]);
   assert.equal(transferred.code, 0, transferred.stderr);
-  const execution = JSON.parse(transferred.stdout);
-  assert.equal(execution.wait, 'approval');
+  const asked = JSON.parse(transferred.stdout);
+  assert.equal(asked.state, 'pending');
   assert.match(transferred.stderr, /until the recipient accepts/);
   assert.match(transferred.stderr, /Unverified delegate/);
   assert.match(transferred.stderr, /cannot open the item after the transfer/);
   assert.equal((await c.context.resources.get(id)).owner_id, identity.principalId);
-  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + execution.requests[0] + '/approve',
+  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
     headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
-  assert.equal(response.json().state, 'accepted', response.body);
+  assert.equal(response.json().state, 'approved', response.body);
   assert.equal((await c.context.resources.get(id)).owner_id, recipient.actor.id);
   const content = (await c.context.custody.read(recipient.actor, id)).content;
   const material = JSON.parse(new TextDecoder().decode(await reveal(content, recipient.binding, recipient.keys.encryption)));
@@ -565,14 +565,16 @@ test('秘密鍵のないCLIから暗号化していない項目を渡し相手�
     FOUNDATION_ORIGIN: c.origin, FOUNDATION_TOKEN: sender.token, FOUNDATION_PRINCIPAL_ID: sender.actor.id,
   });
   assert.equal(result.code, 0, result.stderr);
-  const execution = JSON.parse(result.stdout);
-  assert.equal(execution.wait, 'approval');
+  const asked = JSON.parse(result.stdout);
+  assert.equal(asked.state, 'pending');
   assert.equal((await c.context.resources.get(file.id)).owner_id, sender.actor.id);
-  const response = await c.app.inject({ method: 'POST', url: '/api/executions/' + execution.id + '/respond',
+  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
     headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
   assert.equal(response.statusCode, 200, response.body);
-  assert.equal(response.json().results[0].ownerId, recipient.actor.id);
-  assert.equal(response.json().results[0].version, file.version + 1);
+  const made = await c.app.inject({ url: '/api/operations/' + response.json().performed[0].id,
+    headers: { authorization: 'Bearer ' + recipient.token } });
+  assert.equal(made.json().result.ownerId, recipient.actor.id);
+  assert.equal(made.json().result.version, file.version + 1);
 });
 
 test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLとトークンを端末で使用する', async t => {
@@ -646,25 +648,29 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   assert.match(requests.at(-1)!.authorization, /Credential=assumed-cli-key\//);
 });
 
-test('CLIで別のプリンシパルへ操作を渡し、同じ実行のURLと完了結果を確認する', async t => {
+test('CLIで別のプリンシパルに操作を依頼し、承認されたあと行われた操作と履歴を確かめる', async t => {
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Operation initiator', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const recipient = await c.person('Operation recipient');
-  const prepared = await c.run(['execution', 'start', '--body', '@-'], JSON.stringify({ responderId: recipient.actor.id,
+  const sent = await c.run(['request', 'send', '--body', '@-'], JSON.stringify({ to: recipient.actor.id,
     operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } }] }));
-  assert.equal(prepared.code, 0, prepared.stderr);
-  const execution = JSON.parse(prepared.stdout);
-  assert.equal(new URL(execution.url).pathname, '/executions/' + execution.id);
-  assert.equal(execution.wait, 'approval');
-  await c.context.executions.respond(recipient.actor, execution.id);
-  const read = await c.run(['execution', 'get', execution.id]);
+  assert.equal(sent.code, 0, sent.stderr);
+  const request = JSON.parse(sent.stdout);
+  assert.equal(new URL(request.url).pathname, '/requests/' + request.id);
+  assert.equal(request.state, 'pending');
+  await c.context.requests.approve(recipient.actor, request.id);
+  const read = await c.run(['request', 'get', request.id]);
   assert.equal(read.code, 0, read.stderr);
-  assert.equal(JSON.parse(read.stdout).state, 'succeeded');
-  assert.equal(JSON.parse(read.stdout).results[0].name, 'CLI handoff result');
-  const history = await c.run(['execution', 'history']);
-  assert.equal(history.code, 0, history.stderr);
-  assert.ok(JSON.parse(history.stdout).items.some((item: { id: string }) => item.id === execution.id));
+  const answered = JSON.parse(read.stdout);
+  assert.equal(answered.state, 'approved');
+  const made = await c.run(['operation', 'get', answered.performed[0].id]);
+  assert.equal(made.code, 0, made.stderr);
+  assert.equal(JSON.parse(made.stdout).state, 'succeeded');
+  assert.equal(JSON.parse(made.stdout).result.name, 'CLI handoff result');
+  const requests = await c.run(['request', 'list']);
+  assert.equal(requests.code, 0, requests.stderr);
+  assert.ok(JSON.parse(requests.stdout).items.some((item: { id: string }) => item.id === request.id));
 });
 
 test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリンクに、この端末の公開鍵の指紋を付ける', async t => {

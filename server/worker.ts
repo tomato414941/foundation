@@ -35,7 +35,10 @@ export class Worker {
   start() {
     if (!this.stopped) return;
     this.stopped = false;
-    this.schedule(() => this.context.executions.recoverAll(), 15_000);
+    this.schedule(async () => {
+      await this.context.operations.recoverAll();
+      await this.context.operations.advanceAll();
+    }, 15_000);
     this.schedule(() => this.context.connectionOperations.recover(), 15_000);
     this.schedule(async () => {
       await this.context.billing.measureStorage();
@@ -47,7 +50,8 @@ export class Worker {
       await this.context.db.pool.query('DELETE FROM oauth_relays WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM sessions WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM request_links WHERE expires_at<now()');
-      await this.context.executions.expireAll();
+      await this.context.operations.expireAll();
+      await this.context.requests.expireAll();
     }, 60_000);
   }
   async stop() {

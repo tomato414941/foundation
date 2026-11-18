@@ -29,8 +29,8 @@ export const RenewalOperation = z.object({
 export const PrepareRenewal = z.object({ id: Id, resourceId: Id, expectedRevision: z.number().int().positive() }).strict();
 export const Fence = z.object({ fence: z.string().regex(/^\d+$/) }).strict();
 export const RenewalResult = Fence.extend({ content: ProtectedContent }).strict();
-export const RegisterRelay = z.object({ id: Id, executionId: Id, index: z.number().int().nonnegative(), stateDigest: Fingerprint, expiresAt: Time }).strict();
-export const OAuthRelay = z.object({ id: Id, executionId: Id, context: z.string(),
+export const RegisterRelay = z.object({ id: Id, operationId: Id, stateDigest: Fingerprint, expiresAt: Time }).strict();
+export const OAuthRelay = z.object({ id: Id, operationId: Id, context: z.string(),
   sealed: Sealed.nullable(), expiresAt: Time, receivedAt: Time.nullable() }).strict();
 export const relayContext = (origin: string, id: string) => 'oauth-callback:' + origin + ':' + id;
 export { ProtectedContent };

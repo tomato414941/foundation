@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Client } from './client.js';
-import { executionClient } from './executions.js';
-import { ApprovalRequest, CatalogEntry, CatalogMethod, Id, Name, Relation, Resource, listOf } from '../../shared/contracts.js';
+import { operationClient } from './operations.js';
+import { CatalogEntry, CatalogMethod, Id, Name, Relation, Resource, listOf } from '../../shared/contracts.js';
 import type { CatalogConnectionMethod, CatalogService } from '../../shared/contracts.js';
-import { Execution } from '../../shared/executions.js';
+import { OperationView, RequestView } from '../../shared/operations.js';
+import type { RequestRecordView } from '../../shared/operations.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 import { AwsConnectionInput } from '../../shared/aws.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
@@ -21,7 +22,7 @@ export async function method(client: Client, id: string) {
   return definition;
 }
 export function connectionClient(client: Client) {
-  return executionClient(client).connections;
+  return operationClient(client).connections;
 }
 export async function saveApp(client: Client, input: {
   ownerId: string; name: string; id?: string; methodId: string; clientId: string;
@@ -29,9 +30,9 @@ export async function saveApp(client: Client, input: {
 }) {
   const selected = await catalogMethod(client, input.methodId);
   if (connectionMethod(selected).application === 'none') throw new Error('Choose a connection method that uses an application.');
-  const operations = executionClient(client);
+  const operations = operationClient(client);
   const previous = input.id ? await operations.custody.read(Id.parse(input.id)) : undefined;
-  const result = await operations.execute({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),
+  const result = await operations.perform({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),
     methodId: input.methodId, clientId: input.clientId,
     ...(input.id ? { resourceId: input.id, version: previous!.version } : {}) } },
     { clientSecret: input.clientSecret, fields: z.record(z.string(), z.string()).parse(input.fields) });
@@ -44,7 +45,7 @@ export async function startConnection(client: Client, input: {
 }) {
   const selected = await catalogMethod(client, input.methodId);
   const existing = input.connectionId ? await client.json('/api/resources/' + Id.parse(input.connectionId), {}, Resource) : null;
-  const result = await executionClient(client).execute({ name: 'connection.connect', input: {
+  const result = await operationClient(client).perform({ name: 'connection.connect', input: {
     ownerId: input.ownerId, methodId: input.methodId,
     name: Name.parse(input.name ?? existing?.name ?? selected.defaultName),
     ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),
@@ -55,14 +56,14 @@ export async function startConnection(client: Client, input: {
   if (!('flow' in result)) throw new Error('Continue the pending connection.');
   return result;
 }
-export function flowOutput(progress: FlowProgress | { kind: 'saved'; resource: z.infer<typeof Resource>; executionId: string }) {
-  if (progress.kind === 'saved') return { kind: 'connected', id: progress.executionId, connectionId: progress.resource.id, resource: progress.resource };
-  return { kind: progress.kind, id: progress.flow.execution.id,
+export function flowOutput(progress: FlowProgress | { kind: 'saved'; resource: z.infer<typeof Resource>; operationId: string }) {
+  if (progress.kind === 'saved') return { kind: 'connected', id: progress.operationId, connectionId: progress.resource.id, resource: progress.resource };
+  return { kind: progress.kind, id: progress.flow.operationId,
     ...(progress.kind === 'pending' ? { state: 'running' } : {}),
     ...(progress.kind === 'authorize' ? { authorizationUrl: progress.url,
       ...(progress.device ? { userCode: progress.device.userCode, verificationUri: progress.device.verificationUri,
         expiresAt: new Date(progress.device.expiresAt).toISOString() } : {}),
-      next: (progress.device ? 'Open the URL and enter the user code, then run foundation connect wait ' : 'Open the URL, then run foundation connect wait ') + progress.flow.execution.id } : {}),
+      next: (progress.device ? 'Open the URL and enter the user code, then run foundation connect wait ' : 'Open the URL, then run foundation connect wait ') + progress.flow.operationId } : {}),
     ...(progress.kind === 'cli' ? { next: progress.command } : {}),
     ...(progress.kind === 'connected' ? { connectionId: progress.id } : {}),
     ...(progress.kind === 'failed' ? { error: progress.error } : {}),
@@ -131,22 +132,22 @@ export async function requestConnection(client: Client, input: {
     name: 'connection.connect', input: { ownerId: input.owner, methodId: input.method.id,
       name: Name.parse(input.name ?? input.method.defaultName),
       ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-      ...(input.scopes ? { scopes: input.scopes } : {}) } }] } }, ApprovalRequest);
+      ...(input.scopes ? { scopes: input.scopes } : {}) } }] } }, RequestView);
 }
 // Waits for the owner to answer, then for the connection they made.
-export async function awaitRequestedConnection(client: Client, request: z.infer<typeof ApprovalRequest>, timeout: number) {
+export async function awaitRequestedConnection(client: Client, request: RequestRecordView, timeout: number) {
   const deadline = Date.now() + timeout * 1000;
   while (true) {
-    const answer = await client.json('/api/requests/' + request.id, {}, ApprovalRequest);
-    if (!['pending', 'accepted'].includes(answer.state)) return { kind: answer.state, requestId: request.id };
-    const execution = await client.json('/api/executions/' + request.executionId, {}, Execution);
-    if (execution.state === 'succeeded') {
-      const connection = await client.json('/api/resources/' + Id.parse((execution.results[0] as { id?: unknown } | null)?.id), {}, Resource);
+    const answer = await client.json('/api/requests/' + request.id, {}, RequestView);
+    if (!['pending', 'approved'].includes(answer.state)) return { kind: answer.state, requestId: request.id };
+    const made = answer.performed[0];
+    if (made && ['succeeded', 'failed', 'cancelled', 'uncertain'].includes(made.state)) {
+      const operation = await client.json('/api/operations/' + made.id, {}, OperationView);
+      if (operation.state !== 'succeeded') return { kind: operation.state, requestId: request.id, operationId: operation.id, error: operation.error };
+      const connection = await client.json('/api/resources/' + Id.parse((operation.result as { id?: unknown } | null)?.id), {}, Resource);
       if (connection.kind !== 'connection') throw new Error('The request did not make a connection.');
-      return { kind: 'connected', requestId: request.id, ...connectionOutput(connection) };
+      return { kind: 'connected', requestId: request.id, operationId: operation.id, ...connectionOutput(connection) };
     }
-    if (['failed', 'cancelled', 'uncertain'].includes(execution.state))
-      return { kind: execution.state, requestId: request.id, error: execution.error };
     if (Date.now() >= deadline)
       throw new Error('The owner has not finished yet. Run foundation connect wait-request ' + request.id + ' to keep waiting.');
     await delay(1500);

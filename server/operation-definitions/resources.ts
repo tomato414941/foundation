@@ -3,7 +3,6 @@ import * as C from '../../shared/contracts.js';
 import { ResourceTransfer } from '../../shared/protocol.js';
 import { isProtected } from '../../shared/protected.js';
 import { methodDigest } from '../../shared/connection-methods.js';
-import { Execution } from '../../shared/executions.js';
 import { fail } from '../errors.js';
 import { DefinitionRegistry } from '../definitions.js';
 import type { OperationServices } from '../builtin-definitions.js';
@@ -87,5 +86,5 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
     return resources.view(who, await relations.transferResource(who, row.id, input.to, input.version));
   });
   bind({ name: 'resource.transfer', method: 'POST', path: '/api/resources/:id/transfer', schema: { params: C.IdParams,
-    body: ResourceTransfer, response: { 200: C.Resource, 202: Execution } }, input: withId });
+    body: ResourceTransfer, response: { 200: C.Resource } }, input: withId });
 }

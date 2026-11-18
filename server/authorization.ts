@@ -19,7 +19,7 @@ export interface Actor {
   requestId?: string;
   approvalId?: string;
   approvalIndex?: number;
-  // Who agreed, for the other side of a change the actor makes, to the specific execution it is made under.
+  // Who agreed, for the other side of a change the actor makes, to the request it is made under.
   agreedBy?: string;
   // The confirmation sent with the call, for a change that takes more than its token.
   confirmation?: string;
@@ -160,7 +160,7 @@ export class Authorization {
       `SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1 AND retired_at IS NULL)
       AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now())))
       AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now()))
-      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM executions WHERE id=$4 AND actor_id=$1 AND response='accepted' AND (state='running' OR state='waiting' AND wait='input') AND expires_at>now())) AS active`,
+      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM requests WHERE id=$4 AND state='approved' AND (answered_by=$1 OR from_id=$1))) AS active`,
       [actor.id, actor.credentialId ?? null, actor.sessionId ?? null, actor.approvalId ?? null],
       connection,
     );

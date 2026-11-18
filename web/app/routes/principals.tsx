@@ -44,7 +44,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       objectId = formText(form, 'objectId') || params.owner;
     const remove = formText(form, 'intent') === 'remove';
     const changed = await api('/relations', { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId } }, Changed);
-    if ('id' in changed) return redirect('/executions/' + changed.id);
+    if ('id' in changed) return redirect('/requests/' + changed.id);
     const signedIn = (await session()).principal;
     if (!sealing.includes(relation) || !signedIn) return { ok: true };
     // The line is changed. Sealing its items again needs the private key, which a passkey may first have to open.

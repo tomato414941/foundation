@@ -2,7 +2,8 @@ import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/requests';
-import { ApprovalRequest, listOf } from '../../../shared/contracts';
+import { listOf } from '../../../shared/contracts';
+import { RequestView } from '../../../shared/operations';
 import { api, signedIn } from '../api';
 import { DateText, Empty, Page, Paging, State, usePolling } from '../components';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -10,7 +11,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   return api(
     '/requests?' + new URL(request.url).searchParams,
     { signal: request.signal },
-    listOf(ApprovalRequest),
+    listOf(RequestView),
   );
 }
 export default function Requests() {
@@ -18,7 +19,7 @@ export default function Requests() {
   const data = useLoaderData<typeof clientLoader>();
   const [search] = useSearchParams();
   usePolling(
-    data.items.some((item) => ['pending', 'running'].includes(item.state)),
+    data.items.some((item) => item.state === 'pending'),
     15000,
   );
   return (

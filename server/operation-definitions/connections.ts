@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import * as P from '../../shared/protocol.js';
-import { AppSave, AuthorizeConnection, ConnectService, Execution, ValueSave } from '../../shared/executions.js';
+import { AppSave, AuthorizeConnection, ConnectService, ValueSave } from '../../shared/operations.js';
 import { canonical } from '../../shared/authority.js';
 import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
@@ -12,8 +12,6 @@ import type { Custody } from '../custody.js';
 import { succeeds } from '../custody.js';
 import { fail } from '../errors.js';
 import { DefinitionRegistry } from '../definitions.js';
-import type { Queryable } from '../database.js';
-import { requiresApp } from '../../shared/connections.js';
 import type { OperationServices } from '../builtin-definitions.js';
 import { keyholder } from './support.js';
 
@@ -23,7 +21,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
   // Signed encrypted writes update content under its current owner.
   definitions.define('custody.write', P.ProtectedWrite, ['機密情報を保存する', 'Save private content'], async (who, input) => resources.view(who, await custody.put(who, input)));
   bind({ name: 'custody.write', method: 'PUT', path: '/api/resources/:id/custody', schema: { params: C.IdParams,
-    body: P.ProtectedWrite, response: { 200: C.Resource, 202: Execution } }, input: (params, body) => {
+    body: P.ProtectedWrite, response: { 200: C.Resource } }, input: (params, body) => {
       const input = P.ProtectedWrite.parse(body);
       if (params.id !== input.content.policy.id) fail(400, 'wrong_resource', 'Save the encrypted content at its approved destination.');
       return input;
@@ -52,7 +50,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       fail(409, 'operation_changed', 'Use the service settings approved by this operation.');
   };
   const savePrivate = async (who: Parameters<Custody['put']>[0], input: z.infer<typeof ValueSave> | z.infer<typeof AppSave>,
-    proof: C.JsonValue, type: string, connection?: Queryable) => {
+    proof: C.JsonValue, type: string) => {
     const write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
     if (policy.ownerId !== input.ownerId || policy.contentType !== type || write.name !== input.name ||
       (input.resourceId && policy.id !== input.resourceId) || write.version !== input.version ||
@@ -61,13 +59,13 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
     if ('methodId' in input && (write.content.metadata.methodId !== input.methodId || write.content.metadata.clientId !== input.clientId))
       fail(409, 'operation_changed', 'Save the application prepared by this operation.');
     if ('methodId' in input) await requireFields(who, input, write.content.metadata);
-    return resources.view(who, await custody.put(who, write, connection));
+    return resources.view(who, await custody.put(who, write));
   };
   definitions.define('variable.save', ValueSave, ['変数を保存する', 'Save a variable'], keyholder,
-    { execution: 'keyholder', configure: ['name'], secret: pointer => pointer === '/value',
+    { keyholder: true, configure: ['name'], secret: pointer => pointer === '/value',
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.value) });
   definitions.define('app.save', AppSave, ['アプリを保存する', 'Save an application'], keyholder,
-    { execution: 'keyholder', configure: ['name', 'clientId', 'fields'],
+    { keyholder: true, configure: ['name', 'clientId', 'fields'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       review: reviewFields, resolve: reviewFields,
       complete: (who, input, proof) => savePrivate(who, input, proof, ContentTypes.clientCredential) });
@@ -84,7 +82,7 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       fail(409, 'operation_changed', 'Use the principals approved for this connection.');
   };
   definitions.define('connection.authorize', AuthorizeConnection, ['接続の使用を許可する', 'Authorize connection use'], keyholder,
-    { execution: 'keyholder', configure: [], complete: async (who, input, proof) => {
+    { keyholder: true, configure: [], complete: async (who, input, proof) => {
       const write = P.ProtectedWrite.parse(proof), previous = await custody.get(input.connectionId);
       const row = await resources.get(input.connectionId), policy = write.content.policy;
       if (row.version !== input.version || write.version !== input.version || write.name !== row.name ||
@@ -97,17 +95,8 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
       return resources.view(who, await custody.put(who, write));
     } });
   definitions.define('connection.connect', ConnectService, ['サービスに接続する', 'Connect a service'], keyholder,
-    { execution: 'keyholder', continuation: 'connection', configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
+    { keyholder: true, continuation: 'connection', configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
-      prepareInput: async (who, input, proof, connection) => {
-        const method = await catalog.method(who, input.methodId);
-        if (!requiresApp(method) || !input.clientId || input.appId || await methodDigest(method) !== input.methodDigest)
-          fail(409, 'operation_changed', 'Prepare the application approved for this connection.');
-        const app = await savePrivate(who, AppSave.parse({ ownerId: input.ownerId,
-          name: (input.name ?? method.name).slice(0, 185) + ' application', methodId: input.methodId,
-          clientId: input.clientId, fields: input.fields }), proof, ContentTypes.clientCredential, connection);
-        return { ...input, appId: app.id, fields: app.kind === 'app' ? app.data.fields : input.fields };
-      },
       review: async (who, input) => {
         const digest = await methodDigest(await catalog.method(who, z.string().parse(input.methodId)));
         if (input.methodDigest && input.methodDigest !== digest) fail(409, 'changed', 'The connection method changed. Review it again.');
@@ -129,11 +118,11 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
           write.content.metadata.methodId !== input.methodId || write.content.metadata.methodDigest !== input.methodDigest ||
           write.content.metadata.methodKind !== method.kind ||
           write.content.metadata.appId !== (input.appId ?? null) || write.content.metadata.state !== 'ready')
-          fail(409, 'operation_changed', 'Save the connection approved by this execution.');
+          fail(409, 'operation_changed', 'Save the connection approved by this operation.');
         await requireFields(who, input, write.content.metadata);
         if (input.scopes && (method.kind === 'oauth' || method.kind === 'ovh') &&
           canonical([...selectScopes(method.config.scopes, input.scopes)].sort()) !== canonical([...z.array(z.string()).parse(write.content.metadata.scopes)].sort()))
-          fail(409, 'operation_changed', 'Save the service permissions approved by this execution.');
+          fail(409, 'operation_changed', 'Save the service permissions approved by this operation.');
         // A connection sealed only for keys its signer has since replaced is connected anew, without its users.
         const binding = (await custody.bindings.current(who.id)).binding;
         if (input.users) await approvedUsers(policy, input.users);

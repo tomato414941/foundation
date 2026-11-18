@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { CatalogMethod, Principal, Resource, listOf } from '../../../shared/contracts';
 import type { CatalogConnectionMethod } from '../../../shared/contracts';
-import type { DefinitionCall } from '../../../shared/executions';
+import type { OperationCall } from '../../../shared/operations';
 import type { ConnectionState } from '../../../shared/connections';
 import { api, formText, ApiFailure } from '../api';
 import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionSettings, connectionFields } from '../connection-form';
@@ -15,7 +15,7 @@ import { connectionInitialValues } from '../connection-form';
 import { defineForm } from './types';
 import { loadOwner, OwnerFields } from './common';
 
-async function load(invocation: DefinitionCall) {
+async function load(invocation: OperationCall) {
   const connecting = invocation.name === 'connection.connect', authorizing = invocation.name === 'connection.authorize';
   const base = await loadOwner(invocation);
   const ownerId = String(invocation.input.ownerId);
@@ -38,7 +38,7 @@ async function load(invocation: DefinitionCall) {
   return { ...base, method, apps, connection, users, initial };
 }
 type Data = Awaited<ReturnType<typeof load>>;
-export function connectionSubmission(input: DefinitionCall['input'], form: FormData, method: CatalogConnectionMethod, previous?: ConnectionState) {
+export function connectionSubmission(input: OperationCall['input'], form: FormData, method: CatalogConnectionMethod, previous?: ConnectionState) {
   const settings = connectionSettings(method, form, previous);
   const appId = formText(form, 'appId');
   return { input: { ...input, name: input.name ?? (formText(form, 'name') || method.defaultName),

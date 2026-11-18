@@ -53,8 +53,15 @@ export class Accounts {
     }) + '\n';
     after = null;
     for (;;) {
-      const rows: Array<{ id: string }> = await c.db.all('SELECT id FROM executions WHERE owner_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 50', [id, after]);
-      for (const row of rows) yield JSON.stringify({ type: 'execution', execution: await c.executions.get(actor, row.id, false) }) + '\n';
+      const rows: Array<{ id: string }> = await c.db.all('SELECT id FROM requests WHERE owner_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 50', [id, after]);
+      for (const row of rows) yield JSON.stringify({ type: 'request', request: await c.requests.get(actor, row.id) }) + '\n';
+      if (rows.length < 50) break;
+      after = rows.at(-1)!.id;
+    }
+    after = null;
+    for (;;) {
+      const rows: Array<{ id: string }> = await c.db.all('SELECT id FROM operations WHERE owner_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 50', [id, after]);
+      for (const row of rows) yield JSON.stringify({ type: 'operation', operation: await c.operations.get(actor, row.id) }) + '\n';
       if (rows.length < 50) break;
       after = rows.at(-1)!.id;
     }
@@ -89,21 +96,25 @@ export class Accounts {
         'DELETE FROM resource_references WHERE resource_id IN (SELECT id FROM resources WHERE owner_id=$1)',
         [id],
       );
-      // What it did with others stays in their history, and what still waits there for it ends. The operations it
-      // kept to itself go with it, while those it asked another to answer stay with the one asked.
+      // What it did with others stays in their history, and what still waits there for it ends: the operations it was
+      // to make stop, what it asked for is withdrawn, and what it was asked ends unanswered. The requests it kept to
+      // itself go with it, while those another principal sent or answered stay, with the operations they made.
       await connection.query(
-        "UPDATE executions SET state='cancelled',response='cancelled',wait=NULL,revision=revision+1 WHERE state IN ('waiting','running') AND (actor_id=$1 OR creator_id=$1 OR responder_id=$1)",
+        "UPDATE operations SET state='cancelled',updated_at=now(),revision=revision+1 WHERE state IN ('stopped','in_progress') AND actor_id=$1",
         [id],
       );
       await connection.query(
-        "UPDATE requests SET state='cancelled',answered_at=now() WHERE state='pending' AND (from_id=$1 OR to_id=$1)",
+        "UPDATE requests SET state=CASE WHEN from_id=$1 THEN 'withdrawn' ELSE 'expired' END,answered_at=now() WHERE state='pending' AND (from_id=$1 OR to_id=$1)",
         [id],
       );
-      await connection.query('UPDATE executions SET owner_id=NULL WHERE owner_id=$1 AND responder_id<>$1', [id]);
+      const shared = 'SELECT id FROM requests WHERE from_id<>$1 OR answered_by<>$1';
+      await connection.query(`UPDATE operations SET owner_id=NULL WHERE owner_id=$1 AND request_id IN (${shared})`, [id]);
+      await connection.query(`UPDATE requests SET owner_id=NULL WHERE owner_id=$1 AND id IN (${shared})`, [id]);
       await connection.query(
-        'DELETE FROM executions WHERE owner_id IS NULL AND creator_id=$1 AND (responder_id IS NULL OR responder_id=$1)',
+        'DELETE FROM requests WHERE owner_id IS NULL AND from_id=$1 AND (answered_by IS NULL OR answered_by=$1)',
         [id],
       );
+      await connection.query('DELETE FROM operations WHERE owner_id IS NULL AND request_id IS NULL AND actor_id=$1', [id]);
       await connection.query('DELETE FROM principals WHERE id=$1', [id]);
     });
   }
@@ -238,13 +249,16 @@ export class Accounts {
             [subject, line.relation, target, line.resource_id],
           );
       }
+      // What either made stays with the one they become; what is still to be made or answered ends.
       await connection.query(
-        "UPDATE executions SET state=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE state END,response=CASE WHEN state IN ('waiting','running') THEN 'cancelled' ELSE response END,wait=NULL,revision=revision+1,owner_id=CASE WHEN owner_id=$1 OR owner_id IS NULL AND creator_id=$1 THEN $2 ELSE owner_id END,responder_id=CASE WHEN responder_id=$1 THEN $2 ELSE responder_id END WHERE owner_id=$1 OR creator_id=$1 OR responder_id=$1 OR actor_id=$1",
+        `UPDATE operations SET state=CASE WHEN state IN ('stopped','in_progress') THEN 'cancelled' ELSE state END,
+        owner_id=CASE WHEN owner_id=$1 THEN $2 ELSE owner_id END,revision=revision+1,updated_at=now() WHERE owner_id=$1 OR actor_id=$1`,
         [from.id, to.id],
       );
       await connection.query(`UPDATE requests SET to_id=CASE WHEN to_id=$1 THEN $2 ELSE to_id END,
-        state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
-        answered_at=CASE WHEN state='pending' THEN now() ELSE answered_at END WHERE from_id=$1 OR to_id=$1`, [from.id, to.id]);
+        owner_id=CASE WHEN owner_id=$1 THEN $2 ELSE owner_id END,answered_by=CASE WHEN answered_by=$1 THEN $2 ELSE answered_by END,
+        state=CASE WHEN state='pending' AND from_id=$1 THEN 'withdrawn' WHEN state='pending' THEN 'expired' ELSE state END,
+        answered_at=CASE WHEN state='pending' THEN now() ELSE answered_at END WHERE from_id=$1 OR to_id=$1 OR owner_id=$1 OR answered_by=$1`, [from.id, to.id]);
       await connection.query(
         "UPDATE credentials SET principal_id=$2,private_wrap=NULL,data=CASE WHEN kind='key' AND NOT data ? 'publicKey' THEN data||jsonb_build_object('publicKey',$3::jsonb) ELSE data END WHERE principal_id=$1",
         [from.id, to.id, JSON.stringify(from.public_key)],

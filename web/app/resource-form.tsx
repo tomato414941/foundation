@@ -14,14 +14,14 @@ import type { ConnectionState } from '../../shared/connections';
 import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable, requireKeys } from './keys';
-import { executionClient, custodyClient } from './custody';
+import { operationClient, custodyClient } from './custody';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath, sectionFor } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
-import { connectionSubmission } from './execution-forms/connections';
+import { connectionSubmission } from './operation-forms/connections';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -138,7 +138,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
       await requireKeys();
-      const client = await executionClient();
+      const client = await operationClient();
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
       const methodId = selected.id;
@@ -149,7 +149,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const prepared = connectionSubmission({ ownerId: owner, methodId,
         name: name || existing?.name || selected.defaultName,
         ...(connectionId ? { connectionId } : {}) }, form, selected, previous);
-      const progress = await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
+      const progress = await client.perform({ name: 'connection.connect', input: prepared.input }, prepared.material);
       if ('kind' in progress && progress.kind === 'saved') return redirect(resourcePath(progress.resource));
       if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);
@@ -168,10 +168,10 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     let body: Record<string, unknown> = { kind, name };
     if (kind === 'variable' || kind === 'app') {
       await requireKeys();
-      const client = await executionClient();
+      const client = await operationClient();
       const file = form.get('file');
       const value = file instanceof File && file.name ? new Uint8Array(await file.arrayBuffer()) : String(form.get('value') ?? '');
-      const result = await client.execute({ name: kind === 'app' ? 'app.save' : 'variable.save', input: {
+      const result = await client.perform({ name: kind === 'app' ? 'app.save' : 'variable.save', input: {
         ownerId: owner, name,
         ...(existing ? { resourceId: existing.id, version } : {}),
         ...(kind === 'app' ? { methodId: formText(form, 'methodId'), clientId: formText(form, 'clientId') } : {}),

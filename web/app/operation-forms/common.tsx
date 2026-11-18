@@ -1,11 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { Principal } from '../../../shared/contracts';
-import type { DefinitionCall } from '../../../shared/executions';
+import type { OperationCall } from '../../../shared/operations';
 import { api, ApiFailure } from '../api';
 import { Detail } from '../components';
 import { InputField } from '../form-fields';
 
-export async function loadOwner(invocation: DefinitionCall, ownerId = String(invocation.input.ownerId)) {
+export async function loadOwner(invocation: OperationCall, ownerId = String(invocation.input.ownerId)) {
   const owner = await api('/principals/' + ownerId, {}, Principal).catch(error => {
     if (error instanceof ApiFailure && error.status === 403) return { name: ownerId };
     throw error;

@@ -1,15 +1,15 @@
 import type { ReactNode } from 'react';
-import type { DefinitionCall } from '../../../shared/executions';
-import type { PrivateOperationInput } from '../../../shared/execution-client';
+import type { OperationCall } from '../../../shared/operations';
+import type { PrivateOperationInput } from '../../../shared/operation-client';
 
-export interface Submission { input: DefinitionCall['input']; material: PrivateOperationInput; }
+export interface Submission { input: OperationCall['input']; material: PrivateOperationInput; }
 interface OperationForm<T> {
-  load(invocation: DefinitionCall): Promise<T>;
+  load(invocation: OperationCall): Promise<T>;
   submit(data: T, form: FormData): Submission;
   Fields(props: { data: T; requestPrincipalId?: string }): ReactNode;
 }
 export interface RegisteredForm {
-  load(invocation: DefinitionCall): Promise<unknown>;
+  load(invocation: OperationCall): Promise<unknown>;
   submit(data: unknown, form: FormData): Submission;
   Fields(props: { data: unknown; requestPrincipalId?: string }): ReactNode;
 }

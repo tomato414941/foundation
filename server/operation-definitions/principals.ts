@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import * as P from '../../shared/protocol.js';
-import { Execution } from '../../shared/executions.js';
 import { DefinitionRegistry } from '../definitions.js';
 import type { OperationServices } from '../builtin-definitions.js';
 import { bodyObject, idInput, withId, ok } from './support.js';
@@ -41,7 +40,7 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
   });
   for (const [name, method] of [['relation.draw', 'POST'], ['relation.erase', 'DELETE']] as const)
     bind({ name, method, path: '/api/relations', schema: { body: line,
-      response: { 200: C.Ok, 202: Execution } }, input: (_params, body) => body });
+      response: { 200: C.Ok } }, input: (_params, body) => body });
   const revoke = idInput.extend({ principalId: C.Id });
   definitions.define('principal.revoke', revoke, ['アクセスを取り消す', 'Revoke access'], async (who, input) => {
     await relations.revoke(who, input.id, input.principalId); return ok();
@@ -53,6 +52,6 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
     await principals.get(input.id); await relations.transfer(who, input.id, input.to, input.contents); return ok();
   }, { confirmation: input => relations.transferConfirmation(input.id, input.to) });
   bind({ name: 'principal.transfer', method: 'POST', path: '/api/principals/:id/transfer', bodyLimit: 32 * 1024 * 1024,
-    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok, 202: Execution } }, input: withId });
+    schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok } }, input: withId });
 
 }

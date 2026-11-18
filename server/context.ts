@@ -30,7 +30,7 @@ import { Custody } from './custody.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { builtinDefinitions } from './builtin-definitions.js';
-import { Executions } from './executions.js';
+import { Operations } from './operations.js';
 
 export interface Dependencies {
   db?: Database;
@@ -60,7 +60,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
     custody = new Custody(resources, bindings, relations, config.origin),
     connectionOperations = new ConnectionOperations(custody),
-    oauthRelays = new OAuthRelays(resources, bindings, config.origin, () => executions);
+    oauthRelays = new OAuthRelays(resources, bindings, config.origin, () => operations);
   const keyRotations = new KeyRotations(custody);
   principals.keySharing = new KeySharing(custody);
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config));
@@ -69,8 +69,11 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const sshAccess = new SSHAccess(db, resources, audit, confirmations);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
     objects, billing, integrations, custody, sshAccess });
-  const executions = new Executions(db, vault, authorization, definitions, audit, principals, config.origin, confirmations);
-  const requests = new Requests(db, authorization, authentication, config.origin, executions);
+  // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an
+  // approved request makes its operations.
+  let requests: Requests;
+  const operations = new Operations(db, vault, authorization, definitions, principals, config.origin, confirmations, () => requests);
+  requests = new Requests(db, vault, authorization, authentication, definitions, principals, audit, confirmations, config.origin, operations);
   const context = {
     config,
     db,
@@ -93,7 +96,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     integrations,
     requests,
     definitions,
-    executions,
+    operations,
     devices,
     bindings,
     keyrings,
@@ -102,17 +105,11 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     oauthRelays,
   };
   if (options.migrate) {
-    const [{ migrateExecutions }, { migrateRequests }, { migrateFiles }, { migrateStorage }, { migrateDelegates }, { removeEnvironments }] = await Promise.all([
-      import('./migrations/migrate-executions.js'), import('./migrations/migrate-requests.js'),
-      import('./migrations/migrate-files.js'), import('./migrations/migrate-storage.js'), import('./migrations/migrate-delegates.js'),
-      import('./migrations/remove-environments.js'),
+    const [{ removeEnvironments }, { splitExecutions }] = await Promise.all([
+      import('./migrations/remove-environments.js'), import('./migrations/split-executions.js'),
     ]);
-    await migrateExecutions(db, vault);
-    await migrateRequests(db);
-    await migrateFiles(db, vault);
-    await migrateStorage(db, vault);
-    await migrateDelegates(db, vault);
     await removeEnvironments(db, vault);
+    await splitExecutions(db, vault);
     await db.assertReady();
   }
   return context;

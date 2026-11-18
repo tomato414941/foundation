@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { CustodyClient } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
 import { JournalTrust } from '../runtime/trust.js';
 import { MemoryJournal } from './delegation-support.js';
 import { flowOutput } from '../cli/src/connections.js';
 import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
 import { Resource } from '../shared/contracts.js';
-import { Execution } from '../shared/executions.js';
+import { OperationView } from '../shared/operations.js';
 import { canonical } from '../shared/authority.js';
 import { decode, encode } from '../shared/encryption.js';
 import { DomainError } from '../shared/errors.js';
@@ -28,11 +28,11 @@ async function cli(f: Fixture, delegate = false) {
   await trust.rememberBinding(f.delegate.binding);
   const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
   const store = new RemoteFlowStore(custody), connections = new ConnectionClient(custody, store, f.transport, 'cli');
-  return { custody, store, connections, operations: new ExecutionClient(custody, connections) };
+  return { custody, store, connections, operations: new OperationClient(custody, connections) };
 }
 async function start(f: Fixture, client: Awaited<ReturnType<typeof cli>>) {
   const app = await f.saveApp('github:device');
-  const progress = await client.operations.execute({ name: 'connection.connect', input: {
+  const progress = await client.operations.perform({ name: 'connection.connect', input: {
     ownerId: f.owner.actor.id, methodId: 'github:device', appId: app.id, scopes: ['repo', 'gist'],
   } });
   if (!('kind' in progress) || progress.kind !== 'authorize' || !progress.device) throw new Error('Expected a device code.');
@@ -57,7 +57,7 @@ test('代理のCLIで確認コードを表示し、確認間隔を守って続�
   assert.equal(shown.userCode, authorization.user_code);
   assert.equal(shown.authorizationUrl, authorization.verification_uri);
   assert.equal(shown.verificationUri, authorization.verification_uri);
-  assert.match(shown.next!, new RegExp('foundation connect wait ' + progress.flow.execution.id));
+  assert.match(shown.next!, new RegExp('foundation connect wait ' + progress.flow.operationId));
   assert.equal(JSON.stringify(shown).includes(authorization.device_code), false);
   const sealed = await first.custody.api.json('/api/operation-continuations/' + progress.flow.id);
   assert.equal(JSON.stringify(sealed).includes(authorization.device_code), false);
@@ -160,7 +160,7 @@ test('同時に確認しても一度だけ問い合わせ、キャンセル済�
   try { assert.equal((await client.connections.cancel(progress.flow.id)).kind, 'cancelled'); }
   finally { release(); }
   assert.ok((await finished).every(result => result.status === 'rejected'));
-  const execution = await f.client.api.json('/api/executions/' + progress.flow.execution.id, {}, Execution);
-  assert.equal(execution.state, 'cancelled');
+  const operation = await f.client.api.json('/api/operations/' + progress.flow.operationId, {}, OperationView);
+  assert.equal(operation.state, 'cancelled');
   assert.equal(f.requests.filter(request => request.url === tokenUrl).length, 1);
 });

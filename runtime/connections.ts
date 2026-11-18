@@ -52,7 +52,7 @@ export class Connections {
   }
   private source(id: string, type: typeof ContentTypes.clientCredential | typeof ContentTypes.tokenSet, sources: CustodyContent[]) {
     const content = sources.find(source => source.policy.id === id && source.policy.contentType === type);
-    if (!content) fail(409, 'input_required', 'Include the connection and its application in this execution.');
+    if (!content) fail(409, 'input_required', 'Include the connection and its application in the inputs.');
     return content;
   }
   // The method a connection names, as the server hands it over, once its rules match the digest in the connection's

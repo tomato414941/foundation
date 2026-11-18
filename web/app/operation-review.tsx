@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Principal, Resource } from '../../shared/contracts';
 import type { JsonValue, ResourceView } from '../../shared/contracts';
-import type { ExecutionView } from '../../shared/executions';
+import type { RequestRecordView } from '../../shared/operations';
 import { api, ApiFailure } from './api';
 import { DateText, Detail } from './components';
 import { hasSection, resourcePath } from './navigation';
@@ -112,9 +112,9 @@ export function reviewer({ approver, requester, principals, inspect, signal }: R
   return rows;
 }
 
-export function loadOperationReviews(operations: ExecutionView['operations'], context: ReviewContext) {
+export function loadOperationReviews(operations: RequestRecordView['operations'], context: ReviewContext) {
   const rows = reviewer(context);
-  return Promise.all(operations.map(operation => operation.execution === 'keyholder' ? null : rows(operation.input)));
+  return Promise.all(operations.map(operation => operation.keyholder ? null : rows(operation.input)));
 }
 
 // An item by its name, with what tells it apart from others of the same name where its name alone would not.

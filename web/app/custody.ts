@@ -5,7 +5,7 @@ import type { BoundKeys, KeyMaterial } from '../../shared/authority';
 import type { CustodyContent, CustodyPolicy } from '../../shared/custody';
 import { ConnectionClient } from '../../shared/connection-client';
 import { RemoteFlowStore } from '../../shared/operation-continuations';
-import { ExecutionClient } from '../../shared/execution-client';
+import { OperationClient } from '../../shared/operation-client';
 import { api, ApiFailure, session } from './api';
 import { getIdentity, rememberRecipientAccess } from './keys';
 import { stored } from './storage';
@@ -58,7 +58,7 @@ export async function connectionClient() {
   const custody = await custodyClient();
   return new ConnectionClient(custody, new RemoteFlowStore(custody));
 }
-export async function executionClient() {
+export async function operationClient() {
   const connections = await connectionClient();
-  return new ExecutionClient(connections.custody, connections);
+  return new OperationClient(connections.custody, connections);
 }

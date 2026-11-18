@@ -1,9 +1,6 @@
-import type { DefinitionCall, OperationWaiting } from '../executions.js';
-import type { ExecutionClient, ExecutionResultView, PrivateOperationInput } from '../execution-client.js';
+import type { KeyholderPlan, OperationClient, OperationResultView, PrivateOperationInput } from '../operation-client.js';
 
-export type KeyholderPlan = OperationWaiting & { id: string };
 export interface KeyholderOperation {
-  prepare?(invocation: DefinitionCall): Promise<DefinitionCall>;
-  continue(plan: KeyholderPlan, material: PrivateOperationInput): Promise<ExecutionResultView>;
+  continue(plan: KeyholderPlan, material: PrivateOperationInput): Promise<OperationResultView>;
 }
-export type KeyholderClient = Pick<ExecutionClient, 'custody' | 'connections' | 'records' | 'configure' | 'complete' | 'continue'>;
+export type KeyholderClient = Pick<OperationClient, 'custody' | 'connections' | 'records' | 'configure' | 'commit' | 'proceed' | 'review'>;

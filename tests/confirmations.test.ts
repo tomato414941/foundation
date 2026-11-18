@@ -164,20 +164,19 @@ test('パスキーが持つ包みは署名だけでは置き換えずパスキ�
     await s.signed(person, first))).statusCode, 200);
 });
 
-test('盗んだトークンで管理権限の線を自分の主体へ引くには確認を求め、実行定義を経ても同じ確認を求める', async t => {
+test('盗んだトークンで管理権限の線を自分の主体へ引くには確認を求め、操作として送っても同じ確認を求める', async t => {
   const s = await setup(); t.after(s.close);
   const victim = await s.f.person('Victim'), attacker = await s.f.person('Attacker');
   for (const relation of ['credential_manager', 'member']) {
     const line = { subjectId: attacker.actor.id, relation, objectId: victim.actor.id };
     const refusals = [
       await s.call('POST', '/api/relations', victim.token, line),
-      await s.call('POST', '/api/executions', victim.token, { operations: [{ name: 'relation.draw', input: line }] }),
-      await s.call('POST', '/api/definitions/relation.draw/executions', victim.token, line),
+      await s.call('POST', '/api/operations', victim.token, { name: 'relation.draw', input: line }),
     ];
     for (const refused of refusals) assert.equal(refused.json().error?.code, 'confirmation_required', refused.body);
     assert.equal((await s.call('GET', credentials(victim.actor.id), attacker.token)).statusCode, 403);
   }
-  assert.equal(await s.f.db.one("SELECT 1 FROM executions WHERE creator_id=$1 AND state='failed'", [victim.actor.id]), undefined);
+  assert.equal(await s.f.db.one('SELECT 1 FROM operations WHERE actor_id=$1', [victim.actor.id]), undefined);
   const line = { subjectId: attacker.actor.id, relation: 'credential_manager', objectId: victim.actor.id };
   const refused = await s.call('POST', '/api/relations', victim.token, line);
   assert.equal((await s.call('POST', '/api/relations', victim.token, line, await s.signed(victim, refused))).statusCode, 200);
@@ -201,7 +200,7 @@ test('所有者は対象の秘密鍵なしに自分の確認で所有する主�
   const proposed = await s.call('POST', '/api/principals/' + agent + '/transfer', owner.token, { to: next.actor.id }, confirmation);
   assert.equal(proposed.statusCode, 202, proposed.body);
   assert.equal((await s.call('GET', '/api/confirmations/' + confirmation, owner.token)).json().state, 'held');
-  const answered = await s.call('POST', '/api/executions/' + proposed.json().id + '/respond', next.token, {});
+  const answered = await s.call('POST', '/api/requests/' + proposed.json().id + '/approve', next.token, {});
   assert.equal(answered.statusCode, 200, answered.body);
   assert.equal((await s.f.principals.get(agent)).owner_id, next.actor.id);
   assert.equal(await s.f.db.one('SELECT 1 FROM challenges WHERE id=$1', [confirmation]), undefined);

@@ -10,7 +10,7 @@ import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
 import { canonical, hash } from '../shared/authority.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
 
@@ -26,10 +26,10 @@ type Flow = Awaited<ReturnType<typeof flowFixture>>;
 // readers open.
 const ways = {
   // A value entered by its owner, kept as a variable.
-  variable: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
+  variable: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
     { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode('the same value') }))) },
   // A private key made by the CLI and kept as a variable, as foundation ssh-key create --store does.
-  sshKey: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
+  sshKey: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
     { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode(newSSHKey().privateKey) }))) },
   // An API key entered for a connection.
   connection: { kind: 'connection', deposit: async (f: Flow, name: string) =>
@@ -57,7 +57,7 @@ const ways = {
     return item(f, id);
   } },
   // An application's client secret.
-  app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.execute(
+  app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
     { name: 'app.save', input: { ownerId: f.owner.actor.id, name, methodId: 'github:oauth', clientId: 'the-same-client' } },
     { clientSecret: 'the-same-secret', fields: {} }))) },
 } satisfies Record<string, { kind: ProtectedKindName; deposit: (f: Flow, name: string) => Promise<Opened> }>;
@@ -149,8 +149,8 @@ test('つなぎかけの接続の進み具合は、接続とつなぎ方の名�
     const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
       body: { kind: 'method', name, definition: { ...definition, config: { ...definition.config, hint: description } } } }, Resource);
     const store = new RemoteFlowStore(f.client);
-    const operations = new ExecutionClient(f.client, new ConnectionClient(f.client, store, f.transport, 'cli'));
-    const progress = await operations.execute({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
+    const operations = new OperationClient(f.client, new ConnectionClient(f.client, store, f.transport, 'cli'));
+    const progress = await operations.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
       methodId: method.id, name } });
     if (!('flow' in progress)) throw new Error('Expected a connection being made.');
     const sealed = JSON.stringify(await store.records.get(progress.flow.id, z.unknown()));

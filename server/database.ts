@@ -4,9 +4,9 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, 'independent-operation-executions', 'independent-request-delivery', '002-ssh-environments', '003-files', '004-storage', '005-ownership', '006-delegates', '007-principal-history', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names', '012-remove-environments', '013-remove-http-settings', '014-seal-format'];
+const RequiredMigrations = [SchemaMigration, '002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names', '012-remove-environments', '013-remove-http-settings', '014-seal-format', '015-requests-and-operations'];
 // The migrations written in SQL alone, applied in order.
-const SqlMigrations = ['002-ssh-environments', '005-ownership', '007-principal-history', '008-key-rotations', '009-ssh-access',
+const SqlMigrations = ['002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access',
   '010-output-names', '011-run-output-names', '013-remove-http-settings', '014-seal-format'];
 export class Database {
   readonly pool: pg.Pool;
@@ -26,11 +26,11 @@ export class Database {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
       const installed = await this.one<{ principals: string | null; migrations: string | null }>(
         "SELECT to_regclass('principals') AS principals,to_regclass('schema_migrations') AS migrations", [], client);
+      // An empty database starts from the current schema; one in use goes on from the migrations it has applied.
       if (!installed?.migrations || !await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [SchemaMigration], client)) {
-        const schema = await readFile(new URL(installed?.principals ? './migrations/001-foundation.sql' : './schema.sql', import.meta.url), 'utf8');
-        await client.query(schema);
-        const names = installed?.principals ? [SchemaMigration] : RequiredMigrations;
-        for (const name of names) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
+        if (installed?.principals) throw new Error('This database was not prepared by Foundation migrations.');
+        await client.query(await readFile(new URL('./schema.sql', import.meta.url), 'utf8'));
+        for (const name of RequiredMigrations) await client.query('INSERT INTO schema_migrations(name) VALUES($1) ON CONFLICT DO NOTHING', [name]);
       }
       for (const name of SqlMigrations)
         if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [name], client)) {

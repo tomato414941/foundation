@@ -2,7 +2,7 @@ import { redirect } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/connection-complete';
 import { Id, Resource } from '../../../shared/contracts';
-import { Execution } from '../../../shared/executions';
+import { OperationView } from '../../../shared/operations';
 import { Notice, Page } from '../components';
 import { connectionClient } from '../custody';
 import { api, signedIn } from '../api';
@@ -12,10 +12,11 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const id = Id.safeParse(new URL(request.url).searchParams.get('flow'));
   if (id.success) {
     const progress = await (await connectionClient()).progress(id.data);
-    const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
-    if (execution.requests.length) return redirect('/requests/' + execution.requests.at(-1));
+    // A connection a request asked for goes back to that request.
+    const operation = await api('/operations/' + progress.flow.operationId, {}, OperationView);
+    if (operation.request) return redirect('/requests/' + operation.request.id);
     if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
-    return redirect('/executions/' + progress.flow.execution.id);
+    return redirect('/operations/' + operation.id);
   }
   return null;
 }

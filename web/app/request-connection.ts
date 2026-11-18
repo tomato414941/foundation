@@ -1,4 +1,4 @@
-import type { DefinitionCall } from '../../shared/executions';
+import type { OperationCall } from '../../shared/operations';
 import { CatalogMethod, Principal, Resource, listOf } from '../../shared/contracts';
 import { api, ApiFailure } from './api';
 
@@ -9,7 +9,7 @@ export async function requestConnectionMethod(id: string, signal?: AbortSignal) 
   return method;
 }
 
-export async function loadRequestConnection(invocation: DefinitionCall, signal?: AbortSignal, inspect = true) {
+export async function loadRequestConnection(invocation: OperationCall, signal?: AbortSignal, inspect = true) {
   const { input } = invocation;
   const name = typeof input.name === 'string' ? input.name : '';
   const reconnecting = typeof input.connectionId === 'string';

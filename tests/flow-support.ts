@@ -8,7 +8,7 @@ import type { OutboundRequest, OutboundResponse, Transport } from '../server/tra
 import { CustodyClient } from '../shared/client.js';
 import type { JsonApi } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
-import { ExecutionClient } from '../shared/execution-client.js';
+import { OperationClient } from '../shared/operation-client.js';
 import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { canonical } from '../shared/authority.js';
@@ -50,7 +50,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const flows = new Map<string, ConnectionFlow>();
   const connections = new ConnectionClient(client, { async get(id) { return structuredClone(flows.get(id) ?? null); },
     async put(flow) { flows.set(flow.id, structuredClone(flow)); } }, transport, 'cli');
-  const operations = new ExecutionClient(client, connections);
+  const operations = new OperationClient(client, connections);
   // The owner's own machine opens connections and renews their tokens, as the CLI does.
   const journal = new MemoryJournal();
   const runtimeConnections = new Connections(f.owner.binding, f.owner.keys, new HttpBroker(api(f.owner.token)).connections(),
@@ -75,8 +75,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     scopes?: string[];
     connectionId?: string; appId?: string; aws?: AwsConnectionRequest }) {
     const { fields, scopes, aws, ...configuration } = input;
-    const definition = await method(input.methodId);
-    return operations.execute({ name: 'connection.connect', input: { ...configuration,
+    return operations.perform({ name: 'connection.connect', input: { ...configuration,
       name: input.name ?? 'Account', ownerId: f.owner.actor.id,
       ...(scopes ? { scopes } : {}) } }, { fields, scopes, aws });
   }

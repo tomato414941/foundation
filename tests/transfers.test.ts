@@ -7,7 +7,7 @@ import type { RecipientAccess } from '../shared/client.js';
 import { fingerprint, verifyBinding } from '../shared/authority.js';
 import { protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
-import { Execution } from '../shared/executions.js';
+import { OperationView, RequestView } from '../shared/operations.js';
 import { Resource } from '../shared/contracts.js';
 import { TransferRecipients } from '../shared/protocol.js';
 import { JournalTrust } from '../runtime/trust.js';
@@ -54,8 +54,8 @@ test('受け取り先が鍵を作り直したら検証へ案内し新しい鍵�
   });
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(binding));
-  const execution = Execution.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
-  await f.api(f.stranger.token).json('/api/requests/' + execution.requests[0] + '/approve', { method: 'POST', body: {} });
+  const asked = RequestView.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
+  await f.api(f.stranger.token).json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} });
   const received = await f.custody.read(f.stranger.actor, f.resource.id);
   assert.equal(decode(await reveal(received.content, binding, keys.encryption)), 'confidential-value');
 });
@@ -74,16 +74,16 @@ test('変数と接続とアプリを一回の操作で暗号化し直し受け�
   const app = await f.saveApp('github:oauth');
   for (const resource of [f.resource, connection, app]) {
     const previous = await client.read(resource.id), bytes = await client.reveal(resource.id);
-    const execution = Execution.parse(await transfer(client, resource.id, f.stranger.actor.id));
-    assert.equal(execution.wait, 'approval');
+    const asked = RequestView.parse(await transfer(client, resource.id, f.stranger.actor.id));
+    assert.equal(asked.state, 'pending'); assert.equal(asked.proposal?.kind, 'transfer');
     assert.equal((await f.resources.get(resource.id)).owner_id, f.owner.actor.id);
     assert.deepEqual(await f.custody.read(f.owner.actor, resource.id), { content: previous.content, version: previous.version });
     await assert.rejects(f.custody.read(f.stranger.actor, resource.id), { code: 'forbidden' });
-    assert.deepEqual(notices.at(-1), { id: execution.id, name: resource.name, operation: 'transfer', excluded: [
+    assert.deepEqual(notices.at(-1), { id: asked.id, name: resource.name, operation: 'transfer', excluded: [
       { id: unknown.actor.id, name: 'Unverified delegate', code: 'identity_untrusted' }] });
     const approval = await f.api(f.stranger.token).json<{ state: string }>(
-      '/api/requests/' + execution.requests[0] + '/approve', { method: 'POST', body: {} });
-    assert.equal(approval.state, 'accepted');
+      '/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} });
+    assert.equal(approval.state, 'approved');
     const transferred = await f.custody.read(f.stranger.actor, resource.id);
     assert.equal((await f.resources.get(resource.id)).owner_id, f.stranger.actor.id);
     assert.deepEqual(await reveal(transferred.content, f.stranger.binding, f.stranger.keys.encryption), bytes);
@@ -109,14 +109,21 @@ test('変数と接続とアプリを一回の操作で暗号化し直し受け�
   }
 });
 
-test('受け取り承認までに項目が更新されたら現在の持ち主と新しい値を保つ', async t => {
+// The request stays approved, and its transfer stops short, for its requester to look at.
+async function failedTransfer(f: Awaited<ReturnType<typeof flowFixture>>, id: string, code: string) {
+  const approved = await f.api(f.stranger.token).json('/api/requests/' + id + '/approve', { method: 'POST', body: {} }, RequestView);
+  assert.equal(approved.state, 'approved');
+  const made = await f.client.api.json('/api/operations/' + approved.performed[0]!.id, {}, OperationView);
+  assert.equal(made.state, 'failed'); assert.equal(made.error?.code, code);
+}
+
+test('受け取り承認までに項目が更新されたら譲渡を行わず、現在の持ち主と新しい値を保つ', async t => {
   const f = await flowFixture(); t.after(f.close);
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
-  const execution = Execution.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
+  const asked = RequestView.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
   const previous = await f.client.read(f.resource.id);
   await f.client.save(f.resource.name, encode('updated while awaiting acceptance'), previous.content.policy, { previous });
-  await assert.rejects(f.api(f.stranger.token).json('/api/requests/' + execution.requests[0] + '/approve', { method: 'POST', body: {} }),
-    { code: 'changed' });
+  await failedTransfer(f, asked.id, 'changed');
   assert.equal((await f.resources.get(f.resource.id)).owner_id, f.owner.actor.id);
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'updated while awaiting acceptance');
 });
@@ -134,13 +141,13 @@ test('署名済みの譲渡内容と指定した受け取り先が一致して�
 test('暗号化していない項目は秘密鍵を開かずに譲渡を依頼し承認後の項目を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const file = await f.resources.insert(f.owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
-  const execution = Execution.parse(await transferResource(f.api(f.owner.token), file.id, f.stranger.actor.id,
+  const asked = RequestView.parse(await transferResource(f.api(f.owner.token), file.id, f.stranger.actor.id,
     () => { throw new Error('This device has no private keys.'); }));
-  assert.equal(execution.wait, 'approval');
+  assert.equal(asked.state, 'pending');
   assert.equal((await f.resources.get(file.id)).owner_id, f.owner.actor.id);
-  const completed = await f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond',
-    { method: 'POST', body: {} }, Execution);
-  const received = Resource.parse(completed.results[0]);
+  const approved = await f.api(f.stranger.token).json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, RequestView);
+  const completed = await f.api(f.stranger.token).json('/api/operations/' + approved.performed[0]!.id, {}, OperationView);
+  const received = Resource.parse(completed.result);
   assert.equal(received.id, file.id);
   assert.equal(received.ownerId, f.stranger.actor.id);
   assert.equal(received.version, file.version + 1);
@@ -173,13 +180,12 @@ test('暗号化していない項目も現在の版を指定して渡し古い�
   assert.equal((await f.resources.get(file.id)).owner_id, f.owner.actor.id);
 });
 
-test('暗号化していない項目を承認待ちの間に更新したら更新後の値を現在の所有者に保つ', async t => {
+test('暗号化していない項目を承認待ちの間に更新したら譲渡を行わず、更新後の値を現在の所有者に保つ', async t => {
   const f = await flowFixture(); t.after(f.close);
   const file = await f.resources.insert(f.owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
-  const execution = Execution.parse(await transfer(f.client, file.id, f.stranger.actor.id));
+  const asked = RequestView.parse(await transfer(f.client, file.id, f.stranger.actor.id));
   const changed = await f.resources.rename(f.owner.actor, file, 'revised.txt');
-  await assert.rejects(f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond',
-    { method: 'POST', body: {} }), { code: 'changed' });
+  await failedTransfer(f, asked.id, 'changed');
   const current = await f.resources.get(file.id);
   assert.equal(current.owner_id, f.owner.actor.id);
   assert.equal(current.name, changed.name);
@@ -201,13 +207,12 @@ test('内容を保存すると現在の所有者を保ち値を更新する', as
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'updated by its owner');
 });
 
-test('承認待ちの間に受け取り先の公開鍵が変わったら現在の所有者が引き続き内容を読めるようにする', async t => {
+test('承認待ちの間に受け取り先の公開鍵が変わったら譲渡を行わず、現在の所有者が引き続き内容を読めるようにする', async t => {
   const f = await flowFixture(); t.after(f.close);
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
-  const execution = Execution.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
+  const asked = RequestView.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
   await rotateKeys(f.keyRotations, f.stranger);
-  await assert.rejects(f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond',
-    { method: 'POST', body: {} }), { code: 'key_binding_changed' });
+  await failedTransfer(f, asked.id, 'key_binding_changed');
   assert.equal((await f.resources.get(f.resource.id)).owner_id, f.owner.actor.id);
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
 });
@@ -218,28 +223,29 @@ test('譲渡を依頼したキーが承認前に取り消されたら現在の�
   const client = new CustodyClient(f.api(credential.token), f.config.origin, f.owner.binding, f.owner.keys,
     new JournalTrust(new MemoryJournal()));
   await client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
-  const execution = Execution.parse(await transfer(client, f.resource.id, f.stranger.actor.id));
+  const asked = RequestView.parse(await transfer(client, f.resource.id, f.stranger.actor.id));
   await f.authentication.removeCredential(await f.confirmed(f.owner, { action: 'credential.remove', principalId: f.owner.actor.id,
     credentialId: credential.credential.id }), f.owner.actor.id, credential.credential.id);
-  const approval = await f.app.inject({ method: 'POST', url: '/api/executions/' + execution.id + '/respond',
+  const approval = await f.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
     headers: { authorization: 'Bearer ' + f.stranger.token }, payload: {} });
   assert.equal(approval.statusCode, 401, approval.body);
+  assert.equal((await f.client.api.json('/api/requests/' + asked.id, {}, RequestView)).state, 'pending');
   assert.equal((await f.resources.get(f.resource.id)).owner_id, f.owner.actor.id);
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');
 });
 
-for (const kind of ['variable', 'object'] as const) for (const action of ['decline', 'cancel'] as const)
-  test(kind + 'の譲渡を' + (action === 'decline' ? '拒否' : '取消') + 'すると現在の所有者と内容を保つ', async t => {
+for (const kind of ['variable', 'object'] as const) for (const action of ['decline', 'withdraw'] as const)
+  test(kind + 'の譲渡の依頼を' + (action === 'decline' ? '断る' : '取り下げる') + 'と現在の所有者と内容を保つ', async t => {
     const f = await flowFixture(); t.after(f.close);
     await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
     const item = kind === 'variable' ? f.resource
       : await f.resources.insert(f.owner.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
-    const execution = Execution.parse(await transfer(f.client, item.id, f.stranger.actor.id));
+    const asked = RequestView.parse(await transfer(f.client, item.id, f.stranger.actor.id));
     const stopped = await f.api(action === 'decline' ? f.stranger.token : f.owner.token).json(
-      '/api/executions/' + execution.id + '/' + action, { method: 'POST', body: {} }, Execution);
-    assert.equal(stopped.state, 'cancelled');
-    await assert.rejects(f.api(f.stranger.token).json('/api/executions/' + execution.id + '/respond',
-      { method: 'POST', body: {} }), { code: 'execution_changed' });
+      '/api/requests/' + asked.id + '/' + action, { method: 'POST', body: {} }, RequestView);
+    assert.equal(stopped.state, action === 'decline' ? 'declined' : 'withdrawn');
+    await assert.rejects(f.api(f.stranger.token).json('/api/requests/' + asked.id + '/approve',
+      { method: 'POST', body: {} }), { code: 'request_answered' });
     const current = await f.resources.get(item.id);
     assert.equal(current.owner_id, f.owner.actor.id);
     assert.equal(current.version, item.version);

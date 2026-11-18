@@ -2,7 +2,7 @@ import { Form, Link, redirect, useActionData, useLoaderData } from 'react-router
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/connection-flow';
 import { Resource } from '../../../shared/contracts';
-import { Execution } from '../../../shared/executions';
+import { OperationView } from '../../../shared/operations';
 import { api, actionResult, formText, signedIn } from '../api';
 import { connectionClient } from '../custody';
 import { requireKeys } from '../keys';
@@ -15,8 +15,7 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   return actionResult(async () => {
     const progress = await (await connectionClient()).progress(params.id);
     if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
-    const execution = await api('/executions/' + progress.flow.execution.id, {}, Execution);
-    const name = execution.operations[progress.flow.execution.index]?.input.name;
+    const name = (await api('/operations/' + progress.flow.operationId, {}, OperationView)).input.name;
     return { ...progress, name: typeof name === 'string' ? name : null };
   });
 }

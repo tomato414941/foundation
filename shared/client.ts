@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Execution } from './executions.js';
+import { RequestView } from './operations.js';
 import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
 import { catalogDefinition, methodDigest, methodRules } from './connection-methods.js';
 import { connectionLabels, connectionMetadata, openConnection, sealedConnection } from './connections.js';
@@ -47,11 +47,6 @@ export class IdentityVerificationRequired extends ClientFailure {
     super(recipient.code, 'Verify the public keys of ' + recipient.name + ' (' + recipient.id + ') before continuing.');
   }
 }
-export class SubmissionPending extends Error {
-  constructor(readonly id: string) {
-    super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
-  }
-}
 const errorIs = (error: unknown, ...codes: Array<string | number>) => !!error && typeof error === 'object' &&
   (('code' in error && codes.includes(String(error.code))) || ('status' in error && codes.includes(Number(error.status))));
 // Items without encrypted content use the same transfer operation without opening this device's private keys.
@@ -60,7 +55,7 @@ export async function transferResource(api: JsonApi, id: string, to: string, ope
   const resource = await api.json('/api/resources/' + Id.parse(id), {}, Resource);
   if (isProtected(resource.kind)) return (await open()).transferProtected(resource, to);
   return api.json('/api/resources/' + id + '/transfer', { method: 'POST', body: { to, version: resource.version } },
-    z.union([Resource, Execution]));
+    z.union([Resource, RequestView]));
 }
 export class CustodyClient {
   private verifiedKeys?: Promise<Map<string, KeyringEntryValue>>;
@@ -364,7 +359,7 @@ export class CustodyClient {
     const content = await protect(await reveal(previous.content, this.binding, this.keys.encryption), policy, previous.content.materialRevision + 1,
       this.binding, this.keys, previous.content.metadata, previous.content);
     const result = await this.api.json(path, { method: 'POST',
-      body: { to, content, version: previous.version } }, z.union([Resource, Execution]));
+      body: { to, content, version: previous.version } }, z.union([Resource, RequestView]));
     if ('kind' in result) await this.trust.rememberContent(content);
     this.onRecipientAccess?.({ id: result.id, name: resource.name, operation: 'transfer', excluded: this.exclusions.get(to) ?? [] });
     // The recipient verifies the sender from the link it received, rather than trusting a key supplied by the server.

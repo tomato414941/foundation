@@ -104,42 +104,47 @@ CREATE TABLE resource_references (
 );
 -- The records of what principals did name who acted by id alone: deleting a principal neither waits for them nor
 -- removes them from the history of others. What a principal owns still goes with it.
-CREATE TABLE executions (
+-- A request asks a principal, or whoever enters its code, to make operations. Who asked and what it asked for are kept
+-- encrypted in its record; it ends approved, declined, withdrawn or expired.
+CREATE TABLE requests (
   id uuid PRIMARY KEY,
-  actor_id uuid NOT NULL,
-  creator_id uuid NOT NULL,
+  from_id uuid NOT NULL,
+  to_id uuid,
   owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
-  responder_id uuid,
   message text NOT NULL DEFAULT '',
+  record text NOT NULL,
   proposal jsonb,
   code_hash text,
   attempts integer NOT NULL DEFAULT 0,
-  response text NOT NULL DEFAULT 'none' CHECK(response IN ('none','pending','accepted','declined','cancelled','expired')),
-  state text NOT NULL CHECK(state IN ('waiting','running','succeeded','failed','uncertain','cancelled')),
-  wait text CHECK(wait IN ('approval','input','execution')),
-  snapshot text NOT NULL,
+  state text NOT NULL CHECK(state IN ('pending','approved','declined','withdrawn','expired')),
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  answered_at timestamptz,
+  answered_by uuid
+);
+CREATE INDEX requests_from ON requests(from_id,created_at DESC);
+CREATE INDEX requests_to ON requests(to_id,state,created_at DESC);
+-- An operation changes something in Foundation. Its input, result and the sign-in it was made with are kept encrypted
+-- in its record; one a request asked for names that request and its place in it.
+CREATE TABLE operations (
+  id uuid PRIMARY KEY,
+  request_id uuid REFERENCES requests(id) ON DELETE CASCADE,
+  position integer,
+  owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  actor_id uuid NOT NULL,
+  name text NOT NULL,
+  state text NOT NULL CHECK(state IN ('stopped','in_progress','succeeded','failed','uncertain','cancelled')),
+  record text NOT NULL,
   revision integer NOT NULL DEFAULT 1,
   lease_token uuid,
   lease_until timestamptz,
-  expires_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX executions_actor ON executions(actor_id,created_at DESC);
-CREATE INDEX executions_recipient ON executions(responder_id,state,created_at);
-CREATE TABLE requests (
-  id uuid PRIMARY KEY,
-  execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-  from_id uuid NOT NULL,
-  to_id uuid,
-  message text NOT NULL DEFAULT '',
-  purpose text NOT NULL CHECK(purpose IN ('input','approval')),
-  state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','accepted','declined','cancelled','expired')),
-  expires_at timestamptz NOT NULL,
+  expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
-  answered_at timestamptz
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(request_id,position)
 );
-CREATE UNIQUE INDEX request_pending ON requests(execution_id) WHERE state='pending';
-CREATE INDEX request_recipient ON requests(to_id,state,created_at);
+CREATE INDEX operations_actor ON operations(actor_id,created_at DESC);
+CREATE INDEX operations_owner ON operations(owner_id,created_at DESC);
 CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE operation_continuations (
   id uuid PRIMARY KEY,
@@ -221,8 +226,7 @@ CREATE TABLE connection_operations (
 CREATE UNIQUE INDEX connection_current_operation ON connection_operations(resource_id) WHERE state IN ('prepared','in_flight','uncertain');
 CREATE TABLE oauth_relays (
   id uuid PRIMARY KEY,
-  execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
-  operation_index integer NOT NULL,
+  operation_id uuid NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
   actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   binding_id uuid NOT NULL,
   state_digest text NOT NULL UNIQUE,

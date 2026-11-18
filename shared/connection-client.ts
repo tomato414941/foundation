@@ -9,7 +9,8 @@ import { decode, open, base64url } from './encryption.js';
 import { AppMaterial, ConnectionMaterial, connectionMetadata, connectionLabels, keptConnection, sealedConnection, withMethod } from './connections.js';
 import type { ConnectionState } from './connections.js';
 import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from './connection-methods.js';
-import { Execution, WaitingOperation } from './executions.js';
+import { ConnectService, OperationView, serviceStep } from './operations.js';
+import type { KeyholderPlan } from './operation-client.js';
 import { BrowserTransport } from './http.js';
 import type { Transport } from './http.js';
 import { connectionPolicy } from './connection-policy.js';
@@ -29,7 +30,7 @@ export const FlowRecord = z.object({
   policy: AccessPolicy, previousPolicyDigest: z.string().nullable(),
   step: z.enum(['start', 'cli', 'authorize', 'exchange', 'commit', 'connected', 'cancelled', 'failed']),
   createdAt: z.iso.datetime(), expiresAt: z.number(),
-  execution: z.object({ id: Id, index: z.number().int().nonnegative() }).strict(),
+  operationId: Id,
   url: z.url().nullable(), connectionId: Id.nullable(),
   authorizationState: z.string(), verifier: z.string(), redirectUri: z.url(),
   ovh: OvhAuthorization.optional(), material: JsonObject.optional(), proof: ProtectedWrite.omit({ name: true, labels: true }).optional(),
@@ -41,7 +42,7 @@ export const FlowRecord = z.object({
 }).strict();
 export type ConnectionFlow = z.infer<typeof FlowRecord>;
 export interface FlowStore { get(id: string): Promise<ConnectionFlow | null>; put(flow: ConnectionFlow): Promise<void> }
-export const FlowView = FlowRecord.pick({ id: true, ownerId: true, execution: true, error: true }).strip();
+export const FlowView = FlowRecord.pick({ id: true, ownerId: true, operationId: true, error: true }).strip();
 export type ConnectionFlowView = z.infer<typeof FlowView>;
 export type FlowProgress = { kind: 'authorize'; flow: ConnectionFlowView; url: string;
     device?: { userCode: string; verificationUri: string; expiresAt: number } }
@@ -66,42 +67,28 @@ export class ConnectionClient {
       throw new Error('Open this connection with its initiating identity.');
     return flow;
   }
-  async start(input: { ownerId: string; name: string; methodId: string; method: MethodDescription;
-    appId?: string; fields?: Record<string, string>; scopes?: string[]; users?: string[];
-    connectionId?: string; redirectUri?: string; execution: { id: string; index: number } }): Promise<FlowProgress> {
-    const active = await this.custody.api.json('/api/executions/' + input.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
-    if (active.index !== input.execution.index || active.invocation.name !== 'connection.connect' ||
-      active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
-      active.invocation.input.methodDigest !== await methodDigest(input.method) ||
-      active.invocation.input.appId && active.invocation.input.appId !== input.appId ||
-      active.invocation.input.name && active.invocation.input.name !== input.name)
+  // Starts authorizing at the service for the operation that makes the connection, which then waits on it.
+  async start(plan: KeyholderPlan, method: MethodDescription, fields: Record<string, string>): Promise<FlowProgress> {
+    const input = ConnectService.parse(plan.input);
+    if (plan.name !== 'connection.connect' || input.methodDigest !== await methodDigest(method) || !input.name)
       throw new Error('Use the connection prepared by this operation.');
-    for (const [key, value] of Object.entries(active.invocation.input.fields as Record<string, string> ?? {}))
-      if (value && input.fields?.[key] !== value) throw new Error('Use the service settings prepared by this operation.');
-    if (!connectionMethod(input.method).browserAuthorization || input.method.kind === 'token' || input.method.kind === 'aws')
+    for (const [key, value] of Object.entries(input.fields ?? {}))
+      if (value && fields[key] !== value) throw new Error('Use the service settings prepared by this operation.');
+    if (!connectionMethod(method).browserAuthorization || method.kind === 'token' || method.kind === 'aws')
       throw new Error('Choose a browser authorization method.');
-    const scopes = selectScopes(input.method.config.scopes, input.scopes);
-    if (active.invocation.input.scopes && canonical(scopes.slice().sort()) !==
-      canonical(selectScopes(input.method.config.scopes, active.invocation.input.scopes as string[]).sort()))
-      throw new Error('Use the service permissions prepared by this operation.');
-    const values = { ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
-      ...(!active.invocation.input.name ? { name: input.name } : {}) };
-    if (Object.keys(values).length) await this.custody.api.json('/api/executions/' + input.execution.id + '/input',
-      { method: 'PATCH', body: { index: input.execution.index, values } }, Execution);
+    const scopes = selectScopes(method.config.scopes, input.scopes);
     const previous = input.connectionId ? await this.custody.latest(input.connectionId) : undefined;
     if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId))
       throw new Error('Choose a connection belonging to this owner.');
-    const appId = connectionMethod(input.method).requiresApp ? Id.parse(input.appId) : null;
+    const appId = connectionMethod(method).requiresApp ? Id.parse(input.appId) : null;
     const savedApp = appId ? AppMaterial.parse(JSON.parse(decode(await this.custody.reveal(appId)))) : null;
-    const app = registrationApplication({ ...input, app: savedApp });
+    const app = registrationApplication({ methodId: input.methodId, method, appId: appId ?? undefined, app: savedApp });
     const policy = await connectionPolicy(this.custody, input.ownerId, previous, input.users);
-    const execution = await this.custody.api.json('/api/executions/' + input.execution.id, {}, Execution);
     const id = crypto.randomUUID(), flow: ConnectionFlow = {
-      id, ownerId: input.ownerId, registration: { methodId: input.methodId, methodDigest: await methodDigest(input.method), appId, app,
-        fields: input.fields ?? {}, scopes }, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
-      step: this.device === 'browser' && browserExchange(input.method) === 'unavailable' ? 'cli' : 'start',
-      createdAt: new Date().toISOString(), expiresAt: input.method.kind === 'oauth' && input.method.config.grantType === DEVICE_CODE_GRANT
-        ? Date.parse(execution.expiresAt) : Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt)), execution: input.execution,
+      id, ownerId: input.ownerId, registration: { methodId: input.methodId, methodDigest: input.methodDigest, appId, app,
+        fields, scopes }, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
+      step: this.device === 'browser' && browserExchange(method) === 'unavailable' ? 'cli' : 'start',
+      createdAt: new Date().toISOString(), expiresAt: Date.now() + this.window(method), operationId: plan.id,
       url: null, connectionId: null, authorizationState: nonce(), verifier: nonce(), redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback',
       exchangeDevice: this.device,
     };
@@ -111,9 +98,23 @@ export class ConnectionClient {
         !redirect.username && !redirect.password && !redirect.hash && !redirect.search))
       throw new Error('Use the Foundation callback or a callback on this computer.');
     await this.store.put(flow);
-    await this.custody.api.json('/api/executions/' + flow.execution.id + '/continuation', { method: 'PUT',
-      body: { index: flow.execution.index, continuation: { kind: 'connection', id } } }, Execution);
+    const continuation = { kind: 'connection' as const, id };
+    await (plan.held
+      ? this.custody.api.json('/api/operations/' + plan.id + '/continuation', { method: 'PUT', body: { continuation } }, OperationView)
+      : this.custody.api.json('/api/operations', { method: 'POST',
+        body: { id: plan.id, name: plan.name, input: plan.input, continuation } }, OperationView));
     return this.progress(id);
+  }
+  // How long authorizing at the service may take: a code entered on another device may take as long as the operation
+  // waits on its service.
+  private window(method: MethodDescription) {
+    return method.kind === 'oauth' && method.config.grantType === DEVICE_CODE_GRANT ? serviceStep : 600_000;
+  }
+  private operation(flow: ConnectionFlow) {
+    return this.custody.api.json('/api/operations/' + flow.operationId, {}, OperationView);
+  }
+  private async perform(flow: ConnectionFlow, proof: z.infer<typeof ProtectedWrite>) {
+    await this.custody.api.json('/api/operations/' + flow.operationId + '/perform', { method: 'POST', body: { proof } }, OperationView);
   }
   private view(flow: ConnectionFlow) { return FlowView.parse(flow); }
   // The method a connection is made through, read from where it is kept and checked against the rules it started with.
@@ -135,8 +136,7 @@ export class ConnectionClient {
   }
   // The name the connection gets: a label Foundation keeps with the operation that makes it.
   private async name(flow: ConnectionFlow, method: MethodDescription) {
-    const execution = await this.custody.api.json('/api/executions/' + flow.execution.id, {}, Execution);
-    return Name.parse(execution.operations[flow.execution.index]?.input.name ?? method.name);
+    return Name.parse((await this.operation(flow)).input.name ?? method.name);
   }
   // The write that saves the connection, as it was first sent: what is kept of it, with the connection's name and labels.
   private async write(flow: ConnectionFlow, state: ConnectionState) {
@@ -148,9 +148,8 @@ export class ConnectionClient {
       ...(device ? { device: { userCode: device.userCode, verificationUri: device.verificationUri, expiresAt: flow.expiresAt } } : {}) };
   }
   private async awaitingAuthorization(flow: ConnectionFlow) {
-    const active = await this.custody.api.json('/api/executions/' + flow.execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
-    if (active.index !== flow.execution.index || active.continuation?.id !== flow.id ||
-      active.invocation.input.methodDigest !== flow.registration.methodDigest)
+    const active = await this.operation(flow);
+    if (active.state !== 'in_progress' || active.continuation?.id !== flow.id || active.input.methodDigest !== flow.registration.methodDigest)
       throw new Error('Continue the connection that is awaiting authorization.');
   }
   private async currentApplication(flow: ConnectionFlow) {
@@ -217,7 +216,7 @@ export class ConnectionClient {
     return this.accept(flow.id);
   }
   private cli(flow: ConnectionFlow): FlowProgress {
-    return { kind: 'cli', flow: this.view(flow), command: (flow.step === 'authorize' ? 'foundation connect wait ' : 'foundation execution continue ') + flow.execution.id };
+    return { kind: 'cli', flow: this.view(flow), command: (flow.step === 'authorize' ? 'foundation connect wait ' : 'foundation operation continue ') + flow.operationId };
   }
   private async authorize(flow: ConnectionFlow) {
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');
@@ -244,7 +243,7 @@ export class ConnectionClient {
       return { kind: 'authorize' as const, flow: this.view(flow), url: flow.url };
     }
     if (flow.redirectUri === this.custody.origin + '/oauth/callback') await this.custody.api.json('/api/oauth/relays', { method: 'POST',
-      body: { id: flow.id, executionId: flow.execution.id, index: flow.execution.index,
+      body: { id: flow.id, operationId: flow.operationId,
         stateDigest: await hash(flow.authorizationState), expiresAt: new Date(flow.expiresAt).toISOString() } }, OAuthRelay);
     const result = await authorizeRegistration(registration, this.transport, flow.authorizationState, flow.verifier, flow.redirectUri);
     flow.step = 'authorize'; flow.url = result.url;
@@ -255,8 +254,7 @@ export class ConnectionClient {
   async progress(id: string, relay = true): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step === 'connected') {
-      if (flow.proof) await this.custody.api.json('/api/executions/' + flow.execution.id + '/complete',
-        { method: 'POST', body: { index: flow.execution.index, proof: await this.write(flow, await this.state(flow)) } }, Execution);
+      if (flow.proof) await this.perform(flow, await this.write(flow, await this.state(flow)));
       return { kind: 'connected', flow: this.view(flow), id: flow.connectionId! };
     }
     if (flow.step === 'cancelled') return { kind: 'cancelled', flow: this.view(flow) };
@@ -269,11 +267,9 @@ export class ConnectionClient {
     }
     if (flow.step === 'cli') {
       if (this.device === 'browser') return this.cli(flow);
-      const execution = await this.custody.api.json('/api/executions/' + flow.execution.id, {}, Execution);
+      const waiting = await this.operation(flow);
       flow.step = 'start'; flow.exchangeDevice = 'cli'; flow.authorizationState = nonce(); flow.verifier = nonce();
-      const method = await this.method(flow);
-      flow.expiresAt = method.kind === 'oauth' && method.config.grantType === DEVICE_CODE_GRANT
-        ? Date.parse(execution.expiresAt) : Math.min(Date.now() + 600_000, Date.parse(execution.expiresAt));
+      flow.expiresAt = Math.min(Date.now() + this.window(await this.method(flow)), Date.parse(waiting.expiresAt ?? new Date().toISOString()));
       delete flow.error; await this.store.put(flow);
     }
     if (flow.step === 'start') return this.authorize(flow);
@@ -298,7 +294,7 @@ export class ConnectionClient {
     }
     if (relay && flow.redirectUri === this.custody.origin + '/oauth/callback') {
       const response = await this.custody.api.json('/api/oauth/relays/' + id, {}, OAuthRelay);
-      if (response.id !== id || response.executionId !== flow.execution.id || response.context !== relayContext(this.custody.origin, id))
+      if (response.id !== id || response.operationId !== flow.operationId || response.context !== relayContext(this.custody.origin, id))
         throw new Error('The authorization response belongs to another connection.');
       if (response.sealed) return this.complete(id, decode(await open(response.sealed, this.custody.keys.encryption,
         this.custody.binding.id, response.context)));
@@ -340,8 +336,7 @@ export class ConnectionClient {
     const commit = async (write: z.infer<typeof ProtectedWrite>) => {
       const { name: _name, labels: _labels, ...proof } = write;
       flow.proof = proof; await this.store.put(flow);
-      await this.custody.api.json('/api/executions/' + flow.execution.id + '/complete',
-        { method: 'POST', body: { index: flow.execution.index, proof: write } }, Execution);
+      await this.perform(flow, write);
       return this.custody.api.json('/api/resources/' + flow.policy.id, {}, Resource);
     };
     if (flow.proof) await commit(await this.write(flow, state));
@@ -352,7 +347,7 @@ export class ConnectionClient {
   }
   async cancel(id: string): Promise<FlowProgress> {
     const flow = await this.flow(id);
-    await this.custody.api.json('/api/executions/' + flow.execution.id + '/cancel', { method: 'POST', body: {} }, Execution);
+    await this.custody.api.json('/api/operations/' + flow.operationId + '/cancel', { method: 'POST', body: {} }, OperationView);
     flow.step = 'cancelled'; await this.store.put(flow);
     return { kind: 'cancelled', flow: this.view(flow) };
   }

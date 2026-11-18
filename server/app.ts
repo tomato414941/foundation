@@ -24,7 +24,7 @@ import { routesResources } from './routes-resources.js';
 import { routesCustody } from './routes-custody.js';
 import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
-import { routesExecutions } from './routes-executions.js';
+import { routesOperations } from './routes-operations.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesKeyRotations } from './routes-key-rotations.js';
@@ -142,13 +142,12 @@ export async function buildApp(context: Context) {
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
       const ownRequest = '/api/requests/' + request.actor.requestId;
-      const delivery = await context.db.one<{ execution_id: string }>('SELECT execution_id FROM requests WHERE id=$1', [request.actor.requestId]);
-      const ownExecution = delivery ? '/api/executions/' + delivery.execution_id : '';
+      // The operations its request made are opened by ID, and their own checks keep them to that request.
       if (
         path !== '/api/session' &&
         !path.startsWith('/api/auth/') &&
         path !== ownRequest &&
-        !(request.method === 'GET' && path === ownExecution) &&
+        !(request.method === 'GET' && /^\/api\/operations\/[0-9a-f-]{36}$/.test(path)) &&
         !path.startsWith(ownRequest + '/') &&
         !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
         path !== '/oauth/callback'
@@ -501,7 +500,7 @@ export async function buildApp(context: Context) {
       return context.audit.list(request.params.id, request.query.limit, request.query.after);
     },
   );
-  await routesExecutions(app, context);
+  await routesOperations(app, context);
   await routesResources(app, context);
   await routesCustody(app, context);
   await routesSSH(app, context);

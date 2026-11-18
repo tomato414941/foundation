@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { MemoryPayments, MemoryObjects } from './fakes.js';
-import { ApprovalRequest, ObjectResource } from '../shared/contracts.js';
+import { ObjectResource } from '../shared/contracts.js';
+import { RequestView } from '../shared/operations.js';
 import { buildApp } from '../server/app.js';
 
 test('配下のプリンシパルの支払いを支払元のアカウントで管理する', async (t) => {
@@ -102,7 +103,7 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
       contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } }] } });
   assert.equal(asked.statusCode, 201, asked.body);
   const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
-  assert.equal(answered.statusCode, 200, answered.body); assert.equal(ApprovalRequest.parse(answered.json()).state, 'accepted');
+  assert.equal(answered.statusCode, 200, answered.body); assert.equal(RequestView.parse(answered.json()).state, 'approved');
   const content = await app.inject({ url: '/api/resources/' + file.id + '/content', headers });
   assert.equal(content.body, 'two');
   const stale = await app.inject({ method: 'PUT', url: '/api/resources/' + file.id + '/content?version=' + file.version,

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { useTranslation } from 'react-i18next';
 import { Id, Principal, RelationInput } from '../../shared/contracts';
-import type { ExecutionView } from '../../shared/executions';
+import type { RequestRecordView } from '../../shared/operations';
 import { api, ApiFailure } from './api';
 
 const NamedPrincipal = Principal.pick({ id: true, name: true });
@@ -11,7 +11,7 @@ const Delegation = RelationInput.extend({ subjectId: Participant, objectId: Part
 type ReviewPrincipal = NamedPrincipal | null;
 export interface DelegationReviewData { subject: ReviewPrincipal; object: ReviewPrincipal; }
 
-export async function loadDelegationReviews(operations: ExecutionView['operations'], {
+export async function loadDelegationReviews(operations: RequestRecordView['operations'], {
   approver, requester, principals, inspect, signal,
 }: {
   approver: NamedPrincipal | null; requester: NamedPrincipal; principals: NamedPrincipal[]; inspect: boolean; signal: AbortSignal;

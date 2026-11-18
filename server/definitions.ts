@@ -3,28 +3,28 @@ import type { Actor } from './authorization.js';
 import { DomainError, fail } from './errors.js';
 import type { JsonValue, OperationTitle } from '../shared/contracts.js';
 import { JsonObject } from '../shared/contracts.js';
-import { Invocation } from '../shared/executions.js';
-import type { DefinitionCall } from '../shared/executions.js';
-import type { Queryable } from './database.js';
+import { Invocation } from '../shared/operations.js';
+import type { OperationCall } from '../shared/operations.js';
 import type { ConfirmationOperation } from '../shared/confirmations.js';
 
 type Title = readonly [string, string] | ((input: Record<string, JsonValue>) => readonly [string, string]);
 export class OperationFailed extends DomainError {
   constructor(readonly result: JsonValue, readonly uncertain: boolean) {
-    super(409, uncertain ? 'execution_uncertain' : 'execution_failed', uncertain
-      ? 'Check the result before starting this operation again.' : 'The execution did not complete successfully.');
+    super(409, uncertain ? 'operation_uncertain' : 'operation_failed', uncertain
+      ? 'Check the result before making this operation again.' : 'The operation did not complete successfully.');
   }
 }
 export interface ProcessingDefinition {
   name: string;
   schema: z.ZodType;
   title: Title;
-  execution: 'server' | 'keyholder';
+  // Whether the actor's device seals what the operation saves, and sends it to make the operation.
+  keyholder: boolean;
   configure: readonly string[];
   secret(pointer: string): boolean;
   execute(actor: Actor, input: unknown): Promise<JsonValue>;
-  complete?: (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) => Promise<JsonValue>;
-  prepareInput?: (actor: Actor, input: unknown, proof: JsonValue, connection: Queryable) => Promise<Record<string, JsonValue>>;
+  // Makes an operation its actor's device sealed what it saves for, from what the device sent.
+  complete?: (actor: Actor, input: unknown, proof: JsonValue) => Promise<JsonValue>;
   resolve?: (actor: Actor, input: unknown) => Promise<Record<string, JsonValue>>;
   review?: (actor: Actor, input: Record<string, JsonValue>) => Promise<Record<string, JsonValue>>;
   resultView?: (result: JsonValue) => JsonValue;
@@ -49,26 +49,23 @@ export class DefinitionRegistry {
   readonly endpoints: OperationEndpoint[] = [];
   define<T extends z.ZodType>(name: string, schema: T, title: Title,
     execute: (actor: Actor, input: z.output<T>) => Promise<unknown>,
-    options: { execution?: 'server' | 'keyholder'; configure?: readonly string[]; secret?: (pointer: string) => boolean;
-      complete?: (actor: Actor, input: z.output<T>, proof: JsonValue, execution: { id: string; index: number }) => Promise<unknown>;
-      prepareInput?: (actor: Actor, input: z.output<T>, proof: JsonValue, connection: Queryable) => Promise<unknown>;
+    options: { keyholder?: boolean; configure?: readonly string[]; secret?: (pointer: string) => boolean;
+      complete?: (actor: Actor, input: z.output<T>, proof: JsonValue) => Promise<unknown>;
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
       review?: ProcessingDefinition['review']; resultView?: ProcessingDefinition['resultView'];
       continuation?: ProcessingDefinition['continuation'];
       confirmation?: (input: z.output<T>) => Promise<ConfirmationOperation | null> } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
-    this.definitions.set(name, { name, schema, title, execution: options.execution ?? 'server',
+    this.definitions.set(name, { name, schema, title, keyholder: options.keyholder ?? false,
       configure: options.configure ?? [], secret: options.secret ?? (() => false),
       ...(options.review ? { review: options.review } : {}),
       ...(options.resultView ? { resultView: options.resultView } : {}),
       ...(options.continuation ? { continuation: options.continuation } : {}),
       ...(options.confirmation ? { confirmation: (input: unknown) => options.confirmation!(schema.parse(input)) } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
-      ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue, execution: { id: string; index: number }) =>
-        await options.complete!(actor, schema.parse(input), proof, execution) as JsonValue } : {}),
-      ...(options.prepareInput ? { prepareInput: async (actor: Actor, input: unknown, proof: JsonValue, connection: Queryable) =>
-        JsonObject.parse(await options.prepareInput!(actor, schema.parse(input), proof, connection)) } : {}),
+      ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue) =>
+        await options.complete!(actor, schema.parse(input), proof) as JsonValue } : {}),
       ...(options.resolve ? { resolve: async (actor: Actor, input: unknown) =>
         JsonObject.parse(await options.resolve!(actor, schema.parse(input))) } : {}) });
   }
@@ -81,21 +78,21 @@ export class DefinitionRegistry {
     if (!definition) fail(400, 'operation_unavailable', 'Choose an available operation.');
     return definition;
   }
-  describe(invocation: DefinitionCall): OperationTitle {
+  describe(invocation: OperationCall): OperationTitle {
     const definition = this.get(invocation.name);
     const [ja, en] = typeof definition.title === 'function' ? definition.title(invocation.input) : definition.title;
     return { ja, en };
   }
-  prepare(invocation: DefinitionCall) {
+  prepare(invocation: OperationCall) {
     const definition = this.get(invocation.name);
     return { definition, invocation: { name: invocation.name, input: JsonObject.parse(definition.schema.parse(invocation.input)) } };
   }
-  async prepareFor(actor: Actor, invocation: DefinitionCall) {
+  async prepareFor(actor: Actor, invocation: OperationCall) {
     const prepared = this.prepare(invocation);
     if (prepared.definition.resolve) prepared.invocation.input = await prepared.definition.resolve(actor, prepared.invocation.input);
     return this.prepare(prepared.invocation);
   }
-  configure(input: DefinitionCall, values: Record<string, JsonValue>) {
+  configure(input: OperationCall, values: Record<string, JsonValue>) {
     const invocation = structuredClone(input), definition = this.get(invocation.name);
     const fill = (previous: JsonValue | undefined, value: JsonValue): JsonValue => {
       if (previous == null || previous === '') return value;
@@ -114,9 +111,9 @@ export class DefinitionRegistry {
     }
     return invocation;
   }
-  async execute(actor: Actor, invocation: DefinitionCall) {
+  async execute(actor: Actor, invocation: OperationCall) {
     const prepared = this.prepare(invocation);
-    if (prepared.definition.execution !== 'server') fail(400, 'keyholder_required', 'Continue this operation with your encryption keys.');
+    if (prepared.definition.keyholder) fail(400, 'keyholder_required', 'Make this operation with your encryption keys.');
     return prepared.definition.execute(actor, prepared.invocation.input);
   }
 }

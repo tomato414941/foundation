@@ -473,20 +473,6 @@ export type RequestedOperation = z.infer<typeof Operation>;
 // What an operation does, in the words shown to the one asked to approve it: Japanese and English.
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
-export const DisplayedOperation = Operation.extend({ title: OperationTitle,
-  execution: z.enum(['server', 'keyholder']), configure: z.array(z.string()) });
-export const RequestInput = z
-  .object({
-    to: Id.optional(),
-    executionId: Id.optional(),
-    message: z.string().max(1000).default(''),
-    operations: z.array(Operation).min(1).max(8).optional(),
-    expiresInMinutes: z.number().int().min(1).max(1440).default(30),
-  })
-  .strict().superRefine((value, context) => {
-    if (!!value.executionId === !!value.operations)
-      context.addIssue({ code: 'custom', message: 'Choose an execution or supply processing definitions.' });
-  });
 const Named = z.object({ id: Id, name: Name });
 // A change its requester has made its own side of, waiting on the side the request is sent to: a line that needs both
 // its ends, or something passed to a new owner. The requester makes it once that side agrees.
@@ -494,24 +480,6 @@ export const Proposal = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('line'), subject: Named, relation: RelationName, object: Named }),
   z.object({ kind: z.literal('transfer'), item: Named, to: Named }),
 ]);
-export const ApprovalRequest = z.object({
-  id: Id,
-  executionId: Id,
-  from: Principal.pick({ id: true, name: true }),
-  to: Principal.pick({ id: true, name: true }).nullable(),
-  message: z.string(),
-  purpose: z.enum(['input', 'approval']),
-  state: z.enum(['pending', 'accepted', 'declined', 'cancelled', 'expired']),
-  createdAt: Time,
-  expiresAt: Time,
-  url: z.url(),
-  code: z.string().optional(),
-  returnUrl: z.url().nullable(),
-  refreshUrl: z.url().nullable(),
-  canRespond: z.boolean(),
-  canCancel: z.boolean(),
-});
-export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const DeviceRequest = z.object({
   id: Id,
   name: Name,

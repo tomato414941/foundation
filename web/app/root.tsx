@@ -120,7 +120,7 @@ export default function App() {
       ['variables', prefix + '/variables', Variable],
       ['storage', prefix + '/storage', Folder],
       ['principals', prefix + '/principals', Users],
-      ['runs', prefix + '/runs', History],
+      ['operations', prefix + '/operations', History],
     ],
     [
       ['requests', '/requests', Inbox],

@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { Ok } from '../../shared/contracts';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
-import { ClientFailure, SubmissionPending } from '../../shared/client';
-import { Execution } from '../../shared/executions';
+import { ClientFailure } from '../../shared/client';
+import { RequestView } from '../../shared/operations';
 import type { PrincipalView } from '../../shared/contracts';
 import { heldKeys } from './keys';
 import { confirmChange } from './confirm';
@@ -55,8 +55,8 @@ export async function api<T = unknown>(
     );
   return schema ? schema.parse(value) : (value as T);
 }
-// A change returns its result or an execution awaiting input or consent.
-export const Changed = z.union([Ok, Execution]);
+// A change returns its result, or the request it became when it needs another principal's agreement.
+export const Changed = z.union([Ok, RequestView]);
 export async function session(request?: Request): Promise<SessionView> {
   return api('/session', { signal: request?.signal }, Session);
 }
@@ -94,7 +94,7 @@ export function jsonField<T>(form: FormData, name: string, fallback: T): T {
   }
 }
 export function errorCode(error: unknown) {
-  return error instanceof SubmissionPending ? 'submission_pending' : error instanceof ApiFailure || error instanceof ClientFailure
+  return error instanceof ApiFailure || error instanceof ClientFailure
     ? error.code
     : error instanceof Error && ['NotAllowedError', 'AbortError', 'WebAuthnError'].includes(error.name)
       ? 'passkey_cancelled'

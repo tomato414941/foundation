@@ -1,4 +1,4 @@
-import { ValueSave } from '../executions.js';
+import { ValueSave } from '../operations.js';
 import { Resource } from '../contracts.js';
 import type { JsonValue } from '../contracts.js';
 import { ContentTypes } from '../custody.js';
@@ -7,7 +7,7 @@ import type { KeyholderClient, KeyholderOperation } from './types.js';
 
 export function variableOperation(client: KeyholderClient): KeyholderOperation {
   return { continue: async (plan, material) => {
-    const id = plan.id, { input } = plan.invocation;
+    const id = plan.id, { input } = plan;
 
     const destination = ValueSave.parse(input);
     const previous = destination.resourceId ? await client.custody.latest(destination.resourceId) : undefined;
@@ -21,7 +21,7 @@ export function variableOperation(client: KeyholderClient): KeyholderOperation {
     if (material.value === undefined) throw new Error('Enter the value to save.');
     const bytes = typeof material.value === 'string' ? encode(material.value) : material.value;
     const resource = await client.custody.save(destination.name, bytes, policy, { previous,
-      commit: async write => Resource.parse((await client.complete(id, plan.index, write as unknown as JsonValue)).results[plan.index]) });
-    return { kind: 'saved' as const, resource, executionId: id };
+      commit: async write => Resource.parse((await client.commit(plan, write as unknown as JsonValue)).result) });
+    return { kind: 'saved' as const, resource, operationId: id };
   } };
 }

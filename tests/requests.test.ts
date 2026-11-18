@@ -5,9 +5,8 @@ import { confirmedCall } from './confirmation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
-import { ApprovalRequest } from '../shared/contracts.js';
 import { flowFixture } from './flow-support.js';
-import { Execution } from '../shared/executions.js';
+import { OperationView, RequestView } from '../shared/operations.js';
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する', async (t) => {
   const f = await fixture(),
@@ -50,11 +49,12 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
     payload: { code: pending.code },
   });
   assert.equal(answer.statusCode, 200, answer.body);
-  assert.equal(answer.json().state, 'accepted');
+  assert.equal(answer.json().state, 'approved');
+  assert.deepEqual(answer.json().performed.map((made: { state: string }) => made.state), ['succeeded']);
   assert.equal(await context.authorization.holds(device.actor.id, principal(person.actor.id), 'use'), true);
   assert.equal(await context.authorization.can(person.actor, principal(device.actor.id), 'manage_credentials'), true);
   const polled = await app.inject({ url: '/api/requests/' + pending.id, headers });
-  assert.equal(polled.json().state, 'accepted');
+  assert.equal(polled.json().state, 'approved');
 });
 
 test('依頼専用リンクでその依頼を承認し、通常のAPI操作を拒否する', async (t) => {
@@ -111,9 +111,12 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
     payload: { values: [{ '/name': 'New group' }] },
   });
   assert.equal(answer.statusCode, 200, answer.body);
-  assert.equal(answer.json().state, 'accepted');
-  const execution = await app.inject({ url: '/api/executions/' + asked.json().executionId, headers });
-  assert.equal(execution.json().results[0].name, 'New group');
+  assert.equal(answer.json().state, 'approved');
+  const made = await app.inject({ url: '/api/operations/' + answer.json().performed[0].id, headers });
+  assert.equal(made.statusCode, 200, made.body);
+  assert.equal(made.json().result.name, 'New group'); assert.equal(made.json().canPerform, false);
+  const performing = await app.inject({ method: 'POST', url: '/api/operations/' + answer.json().performed[0].id + '/perform', headers, payload: {} });
+  assert.equal(performing.statusCode, 403, performing.body);
   const repeated = await app.inject({
     method: 'POST',
     url: '/api/requests/' + asked.json().id + '/redeem',
@@ -122,30 +125,48 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
   assert.equal(repeated.statusCode, 400, repeated.body);
 });
 
-test('依頼の承諾後にトークンを暗号化して保存し、実行から作成結果を確認する', async t => {
+test('依頼の承認後にトークンを手元で暗号化して保存し、依頼した側も行われた操作の結果を確かめる', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-      methodId: 'github:token', name: 'Requested connection' } }] } }, ApprovalRequest);
-  const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
-  assert.equal(answer.state, 'accepted');
-  const started = await f.operations.continue(asked.executionId, { fields: { token: 'owner-provided-key' } });
+      methodId: 'github:token', name: 'Requested connection' } }] } }, RequestView);
+  const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, RequestView);
+  assert.equal(answer.state, 'approved'); assert.equal(answer.performed[0]?.state, 'stopped');
+  const started = await f.operations.continue(answer.performed[0]!.id, { fields: { token: 'owner-provided-key' } });
   if (!('kind' in started) || started.kind !== 'saved') throw new Error('Expected a saved connection.');
-  const completed = await sender.json('/api/executions/' + asked.executionId, {}, Execution);
-  assert.equal(completed.state, 'succeeded');
-  assert.equal((completed.results[0] as { id: string }).id, started.resource.id);
+  const made = await sender.json('/api/operations/' + answer.performed[0]!.id, {}, OperationView);
+  assert.equal(made.state, 'succeeded'); assert.deepEqual(made.request, { id: asked.id, position: 0 });
+  assert.equal((made.result as { id: string }).id, started.resource.id);
+  assert.equal(JSON.stringify(made).includes('owner-provided-key'), false);
 });
 
-test('依頼を取り消すと入力待ちの実行を取り消し、その実行の再開を拒否する', async t => {
+test('依頼を取り下げると、承認も操作もされないまま取り下げとして残る', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
     operations: [{ name: 'connection.connect', input: { ownerId: f.owner.actor.id,
-      methodId: 'render:token', name: 'Requested' } }] } }, ApprovalRequest);
-  assert.equal((await sender.json('/api/requests/' + asked.id + '/cancel', { method: 'POST', body: {} }, ApprovalRequest)).state, 'cancelled');
-  const resumed = await f.operations.continue(asked.executionId, { fields: { token: 'provided-key' } });
-  assert.equal('state' in resumed && resumed.state, 'cancelled');
+      methodId: 'render:token', name: 'Requested' } }] } }, RequestView);
+  await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/withdraw', { method: 'POST', body: {} }), { code: 'forbidden' });
+  const withdrawn = await sender.json('/api/requests/' + asked.id + '/withdraw', { method: 'POST', body: {} }, RequestView);
+  assert.equal(withdrawn.state, 'withdrawn'); assert.equal(withdrawn.canWithdraw, false);
+  await assert.rejects(f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }), { code: 'request_answered' });
+  assert.deepEqual((await f.client.api.json('/api/requests/' + asked.id, {}, RequestView)).performed, []);
+});
+
+test('断った依頼と期限が切れた依頼は承認できず、操作も行われない', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const sender = f.api(f.stranger.token);
+  const ask = (name: string) => sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
+    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name } }] } }, RequestView);
+  const declined = await ask('Declined group'), expired = await ask('Expired group');
+  assert.equal((await f.client.api.json('/api/requests/' + declined.id + '/decline', { method: 'POST', body: {} }, RequestView)).state, 'declined');
+  await f.context.db.pool.query("UPDATE requests SET expires_at=now()-interval '1 second' WHERE id=$1", [expired.id]);
+  assert.equal((await sender.json('/api/requests/' + expired.id, {}, RequestView)).state, 'expired');
+  for (const request of [declined, expired])
+    await assert.rejects(f.client.api.json('/api/requests/' + request.id + '/approve', { method: 'POST', body: {} }), { code: 'request_answered' });
+  const groups = await f.context.db.all("SELECT id FROM principals WHERE name IN ('Declined group','Expired group')");
+  assert.equal(groups.length, 0);
 });
 
 test('依頼の各操作は、承認する人が読む名前を日本語と英語で持ち、呼び出しの形は見せずに済む', async (t) => {
@@ -163,10 +184,7 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     const response = await confirmedCall(app, device.keys, { method: 'POST', url: '/api/requests', headers,
       payload: { ...(to ? { to } : {}), operations } });
     assert.equal(response.statusCode, 201, response.body);
-    const request = ApprovalRequest.parse(response.json());
-    const execution = await app.inject({ url: '/api/executions/' + request.executionId, headers });
-    assert.equal(execution.statusCode, 200, execution.body);
-    return Execution.parse(execution.json()).operations.map(operation => operation.title);
+    return RequestView.parse(response.json()).operations.map(operation => operation.title);
   };
   assert.deepEqual(await ask([{ name: 'relation.draw', input: { relation: 'delegate', objectId: '$approver', subjectId: device.actor.id } }]),
     [{ ja: '権限を委任する', en: 'Delegate access' }]);

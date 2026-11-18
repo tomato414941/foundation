@@ -1,7 +1,7 @@
 import type { Actor } from './authorization.js';
 import type { Resources } from './resources.js';
 import type { Bindings } from './bindings.js';
-import type { Executions } from './executions.js';
+import type { Operations } from './operations.js';
 import type { SealedContent } from '../shared/contracts.js';
 import { hash } from '../shared/authority.js';
 import { encode, seal } from '../shared/encryption.js';
@@ -10,39 +10,39 @@ import { fail, required } from './errors.js';
 import { iso } from './database.js';
 
 interface RelayRow {
-  id: string; execution_id: string; operation_index: number; actor_id: string; binding_id: string; state_digest: string;
+  id: string; operation_id: string; actor_id: string; binding_id: string; state_digest: string;
   callback_digest: string | null; sealed: SealedContent | null; expires_at: Date; received_at: Date | null;
 }
 export class OAuthRelays {
-  constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string, readonly executions: () => Executions) {}
+  constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string, readonly operations: () => Operations) {}
   get db() { return this.resources.db; }
-  private async active(actor: Actor, row: Pick<RelayRow, 'execution_id' | 'operation_index' | 'id'>) {
-    const { plan } = await this.executions().input(actor, row.execution_id);
-    if (plan.index !== row.operation_index || plan.invocation.name !== 'connection.connect' ||
-      plan.continuation?.kind !== 'connection' || plan.continuation.id !== row.id)
+  // The connection an operation waits on its service for, which the callback is relayed to.
+  private async active(actor: Actor, row: Pick<RelayRow, 'operation_id' | 'id'>) {
+    const { row: operation, snapshot } = await this.operations().waiting(actor, row.operation_id);
+    if (operation.name !== 'connection.connect' || snapshot.continuation?.kind !== 'connection' || snapshot.continuation.id !== row.id)
       fail(409, 'connection_expired', 'Start the connection again.');
+    return operation;
   }
-  async register(actor: Actor, input: { id: string; executionId: string; index: number; stateDigest: string; expiresAt: string }) {
-    const { row: execution, plan } = await this.executions().input(actor, input.executionId);
-    if (plan.index !== input.index || plan.invocation.name !== 'connection.connect' ||
-      plan.continuation?.kind !== 'connection' || plan.continuation.id !== input.id ||
-      Date.parse(input.expiresAt) <= Date.now() || Date.parse(input.expiresAt) > Date.now() + 600_000 ||
-      Date.parse(input.expiresAt) > execution.expires_at.getTime())
+  async register(actor: Actor, input: { id: string; operationId: string; stateDigest: string; expiresAt: string }) {
+    const operation = await this.active(actor, { operation_id: input.operationId, id: input.id }).catch(() =>
+      fail(403, 'forbidden', 'Create a callback for the connection that is awaiting authorization.'));
+    if (Date.parse(input.expiresAt) <= Date.now() || Date.parse(input.expiresAt) > Date.now() + 600_000 ||
+      operation.expires_at && Date.parse(input.expiresAt) > operation.expires_at.getTime())
       fail(403, 'forbidden', 'Create a callback for the connection that is awaiting authorization.');
     const { binding } = await this.bindings.current(actor.id);
     const row = await this.db.one<RelayRow>(
-      `INSERT INTO oauth_relays(id,execution_id,operation_index,actor_id,binding_id,state_digest,expires_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET state_digest=$6,expires_at=$7,
-       sealed=CASE WHEN oauth_relays.state_digest=$6 THEN oauth_relays.sealed ELSE NULL END,
-       callback_digest=CASE WHEN oauth_relays.state_digest=$6 THEN oauth_relays.callback_digest ELSE NULL END,
-       received_at=CASE WHEN oauth_relays.state_digest=$6 THEN oauth_relays.received_at ELSE NULL END
-       WHERE oauth_relays.execution_id=$2 AND oauth_relays.operation_index=$3 AND oauth_relays.actor_id=$4 AND oauth_relays.binding_id=$5 RETURNING *`,
-      [input.id, input.executionId, input.index, actor.id, binding.id, input.stateDigest, input.expiresAt]);
+      `INSERT INTO oauth_relays(id,operation_id,actor_id,binding_id,state_digest,expires_at)
+       VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET state_digest=$5,expires_at=$6,
+       sealed=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.sealed ELSE NULL END,
+       callback_digest=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.callback_digest ELSE NULL END,
+       received_at=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.received_at ELSE NULL END
+       WHERE oauth_relays.operation_id=$2 AND oauth_relays.actor_id=$3 AND oauth_relays.binding_id=$4 RETURNING *`,
+      [input.id, input.operationId, actor.id, binding.id, input.stateDigest, input.expiresAt]);
     if (!row) fail(409, 'flow_exists', 'Use a new connection.');
     return this.view(row);
   }
   private view(row: RelayRow) {
-    return { id: row.id, executionId: row.execution_id, context: relayContext(this.origin, row.id),
+    return { id: row.id, operationId: row.operation_id, context: relayContext(this.origin, row.id),
       sealed: row.sealed, expiresAt: iso(row.expires_at), receivedAt: row.received_at ? iso(row.received_at) : null };
   }
   async get(actor: Actor, id: string) {
