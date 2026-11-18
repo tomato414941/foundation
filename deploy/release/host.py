@@ -13,11 +13,23 @@ from manifest import digest, update_environment, validate, write_json
 
 
 KEPT_IMAGES = 3
+# What a server that still opens items sealed in the earlier form has, and what one that no longer opens them lacks.
+EARLIER_FORM_READER = "/app/dist/shared/custody-legacy.js"
+# Items still sealed in the earlier form that a device could open and seal again: one of the keys they are sealed for is
+# the current key of a principal that is also among their authorities.
+RESEALABLE_EARLIER_ITEMS = (
+    "SELECT count(*) FROM resource_custody c WHERE c.content->'policy'->>'format' IS DISTINCT FROM '3' AND EXISTS ("
+    "SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'readers') r "
+    "JOIN jsonb_array_elements(c.content->'policy'->'authorities') a ON a->>'id' = r->>'id' "
+    "JOIN principal_key_bindings b ON b.binding->>'id' = r->>'id' AND b.retired_at IS NULL)")
 
 
 class Deployment:
-    def __init__(self, manifest, root="/opt/foundation", env="/etc/foundation/v1.env", schema_change=False, expected_current=None):
+    def __init__(self, manifest, root="/opt/foundation", env="/etc/foundation/v1.env", schema_change=False, expected_current=None,
+                 leave_earlier_items=0):
+        if leave_earlier_items < 0: raise ValueError("Leave no fewer than zero items in the earlier form.")
         self.manifest = validate(manifest)
+        self.leave_earlier_items = leave_earlier_items
         self.root, self.env = Path(root), Path(env)
         self.directory = self.root / "releases" / manifest["commit"]
         self.schema_change = schema_change
@@ -77,6 +89,30 @@ class Deployment:
         output = self.run("docker", "exec", "foundation-v1-foundation-1", "node", "/app/deploy/release/smoke.mjs")
         print(output.decode(), end="", flush=True)
 
+    def opens_earlier_form(self, image=None):
+        # Whether the running server, or the one in the image, still opens items sealed in the earlier form.
+        if image is None:
+            return subprocess.run(["docker", "exec", "foundation-v1-foundation-1", "test", "-e", EARLIER_FORM_READER],
+                                  capture_output=True).returncode == 0
+        container = self.run("docker", "create", image).decode().strip()
+        try:
+            return subprocess.run(["docker", "cp", container + ":" + EARLIER_FORM_READER, "-"], capture_output=True).returncode == 0
+        finally:
+            self.run("docker", "rm", "-v", container)
+
+    def resealable_earlier_items(self):
+        return int(self.run("docker", "exec", "-e", "PGOPTIONS=-c default_transaction_read_only=on", "foundation-v1-postgres-1",
+                            "psql", "-U", "foundation", "-d", "foundation", "-At", "-c", RESEALABLE_EARLIER_ITEMS).decode().strip())
+
+    def check_earlier_items(self, image):
+        # A release that stops opening items sealed in the earlier form waits while their owners' devices could still seal
+        # some of them again, apart from those its operator chose to leave unopened.
+        if not self.opens_earlier_form() or self.opens_earlier_form(image): return
+        count = self.resealable_earlier_items()
+        if count > self.leave_earlier_items:
+            raise RuntimeError(str(count) + " item(s) sealed in the earlier form can still be opened and sealed again by their owners' "
+                               "devices. Seal them again before this release, or leave them with leave_earlier_items.")
+
     def execute(self):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.expected_current:
@@ -104,6 +140,7 @@ class Deployment:
         self.changed_schema = hashlib.sha256(previous_schema).hexdigest() != self.manifest["schemaSha256"]
         if self.changed_schema and not self.schema_change:
             raise RuntimeError("Database schema changes require an explicit migration release.")
+        self.check_earlier_items(image)
         (self.directory / "previous.env").write_bytes(self.previous)
         (self.directory / "previous.env").chmod(0o600)
         (self.directory / "previous-compose.yaml").write_bytes(self.previous_compose)
@@ -151,13 +188,14 @@ def main():
     parser.add_argument("manifest")
     parser.add_argument("--allow-schema-change", action="store_true")
     parser.add_argument("--expected-current", required=True)
+    parser.add_argument("--leave-earlier-items", type=int, default=0)
     args = parser.parse_args()
     lock_path = Path("/opt/foundation/releases/deploy.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         Deployment(json.loads(Path(args.manifest).read_text()), schema_change=args.allow_schema_change,
-                   expected_current=args.expected_current).execute()
+                   expected_current=args.expected_current, leave_earlier_items=args.leave_earlier_items).execute()
 
 
 if __name__ == "__main__":

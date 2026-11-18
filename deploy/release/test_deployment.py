@@ -9,9 +9,11 @@ from manifest import digest, update_environment
 
 
 class SimulatedDeployment(Deployment):
-    def __init__(self, *args, fail=False, old_schema=None, running_commit=None, **kwargs):
+    def __init__(self, *args, fail=False, old_schema=None, running_commit=None, running_opens=False, image_opens=False,
+                 resealable=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.fail, self.old_schema = fail, old_schema or b"schema"
+        self.running_opens, self.image_opens, self.resealable = running_opens, image_opens, resealable
         self.applied, self.removed = [], []
         self.images = ["sha256:new", "sha256:previous", "sha256:older", "sha256:oldest", "sha256:ancient"]
         self.running_commit = running_commit or self.manifest["commit"]
@@ -40,6 +42,12 @@ class SimulatedDeployment(Deployment):
 
     def verify(self):
         if self.fail: raise RuntimeError("The function failed.")
+
+    def opens_earlier_form(self, image=None):
+        return self.running_opens if image is None else self.image_opens
+
+    def resealable_earlier_items(self):
+        return self.resealable
 
 
 class DeploymentTests(unittest.TestCase):
@@ -95,6 +103,26 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "explicit migration"):
             self.deployment(old_schema=b"previous schema").execute()
         self.assertEqual(self.env.read_text(), self.original)
+
+    def test_stops_before_changing_production_when_it_would_stop_opening_items_devices_can_still_seal_again(self):
+        deployment = self.deployment(running_opens=True, resealable=3, leave_earlier_items=2)
+        with self.assertRaisesRegex(RuntimeError, "3 item\\(s\\) sealed in the earlier form"):
+            deployment.execute()
+        self.assertEqual(self.env.read_text(), self.original)
+        self.assertEqual(deployment.applied, [])
+        self.assertFalse((deployment.directory / "previous.env").exists())
+
+    def test_leaves_the_earlier_items_its_operator_chose_to_leave(self):
+        self.deployment(running_opens=True, resealable=2, leave_earlier_items=2).execute()
+        self.assertIn(self.manifest["image"], self.env.read_text())
+
+    def test_releases_without_counting_earlier_items_while_the_new_server_still_opens_them(self):
+        self.deployment(running_opens=True, image_opens=True, resealable=5).execute()
+        self.assertIn(self.manifest["image"], self.env.read_text())
+
+    def test_releases_without_counting_earlier_items_once_the_running_server_no_longer_opens_them(self):
+        self.deployment(resealable=5).execute()
+        self.assertIn(self.manifest["image"], self.env.read_text())
 
     def test_reuses_completed_deployment_when_retrying_publication(self):
         first = self.deployment(); first.execute()

@@ -41,6 +41,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest")
     parser.add_argument("--allow-schema-change", action="store_true")
+    parser.add_argument("--leave-earlier-items", type=int, default=0)
     args = parser.parse_args()
     manifest = validate(json.loads(Path(args.manifest).read_text()))
     instance = os.environ["FOUNDATION_INSTANCE_ID"]
@@ -65,6 +66,7 @@ def main():
     directory = "/opt/foundation/releases/" + manifest["commit"] + "/installer"
     script = "set -eu\numask 077\nmkdir -p '" + directory + "'\nprintf '%s' '" + encoded + "' | base64 -d | tar -xz -C '" + directory + "'\n"
     script += "python3 '" + directory + "/host.py' '" + directory + "/manifest.json' --expected-current '" + current + "'" + (" --allow-schema-change" if args.allow_schema_change else "")
+    script += " --leave-earlier-items " + str(int(args.leave_earlier_items))
     invocation(instance, [script])
 
 
