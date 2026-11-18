@@ -870,29 +870,63 @@ class BrowserTests(unittest.TestCase):
         prompt.get_by_role("button", name="確認する", exact=True).click()
         expect(page.get_by_role("listitem").filter(has_text=address)).to_have_count(0)
 
-    def test_以前の形のまま残った接続は一覧と画面に出て解除でき_つなぎ直そうとすると理由を示す(self):
-        page, principal = self.passkey_account("Earlier connection owner")
-        connection, _ = self.google_connection(page, principal)
-        marked = page.request.post(ORIGIN + "/__test/earlier-form/" + connection["id"])
-        self.assertTrue(marked.ok, marked.text())
-        self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + connection["id"] + "/custody").json()["error"]["code"],
-                         "content_outdated")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services")
-        expect(page.locator("main").get_by_text("Mail account", exact=True).first).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-list-ja.png"), full_page=True)
-        self.assertEqual(page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"], [])
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection['id']}")
-        expect(page.get_by_role("heading", name="Mail account", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-ja.png"), full_page=True)
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_text("この項目は以前の形で暗号化されたままなので、どの端末でも開けません。削除してから、接続し直すか保存し直してください。",
-                                exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-reconnect-ja.png"), full_page=True)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection['id']}")
-        page.get_by_role("button", name="接続を解除", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="接続を解除", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/services")
-        self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + connection["id"]).status, 404)
+    def test_前の形式で封じた変数を鍵を持つブラウザが開いたときに今の形式で封じ直す(self):
+        import re, tempfile
+        page, principal = self.passkey_account("Expiring owner")
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            login = subprocess.Popen(["node", "cli/dist/cli.mjs", "login", "--name", "Expiring laptop", "--origin", ORIGIN],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+            shown = ""
+            for _ in range(200):
+                shown += login.stderr.readline()
+                if "enter the code" in shown:
+                    break
+            page.goto(re.search(r"Open (\S+)", shown).group(1))
+            page.get_by_role("textbox", name="確認コード", exact=True).fill(re.search(r"code ([A-Z0-9]{4}-[A-Z0-9]{4})", shown).group(1))
+            page.get_by_role("button", name="許可", exact=True).click()
+            login.communicate(timeout=60)
+            self.assertEqual(login.returncode, 0)
+            variable_id = str(uuid.uuid4())
+            stored = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", f"""
+                import {{ readFile }} from 'node:fs/promises';
+                import {{ sign }} from './shared/authority.ts';
+                import {{ ContentTypes, contentContext }} from './shared/custody.ts';
+                import {{ seal }} from './shared/encryption.ts';
+                const file = JSON.parse(await readFile('{home}/foundation/identity.json', 'utf8'));
+                const me = file.identities.find(item => item.principalId === file.current);
+                // Sealed as the earlier policy did, with a grant that has since expired.
+                const grant = {{ actor: me.binding, executor: me.binding, operations: ['85bb00b6-ca1e-478d-94ca-a217f0c73e49'],
+                  functionDigests: [], origins: [], callerProgram: true, expiresAt: new Date(Date.now() - 60_000).toISOString() }};
+                const policy = {{ format: 2, origin: '{ORIGIN}', id: '{variable_id}', ownerId: me.principalId, contentType: ContentTypes.value,
+                  revision: 1, authorities: [me.binding], readers: [me.binding], grants: [grant], producers: [] }};
+                const bytes = new TextEncoder().encode('saved in the earlier format');
+                const value = {{ policy, authorityId: me.binding.id, authorization: await sign(policy, me.keys.signing, 'access-policy'),
+                  materialRevision: 1, updatedAt: new Date().toISOString(), creationRunId: null, metadata: {{ bytes: bytes.length }},
+                  signerId: me.binding.id, sealed: await seal(bytes, [{{ id: me.binding.id, publicKey: me.binding.encryption }}],
+                    await contentContext(policy, 1)) }};
+                const content = {{ ...value, signature: await sign(value, me.keys.signing, 'resource') }};
+                const response = await fetch('{ORIGIN}/__test/stored-item', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }},
+                  body: JSON.stringify({{ ownerId: me.principalId, kind: 'variable', name: 'Earlier token', content,
+                    data: {{ bytes: bytes.length, recipients: [me.principalId], custodyRevision: 1 }} }}) }});
+                if (!response.ok) throw new Error(await response.text());
+            """], capture_output=True, text=True, env=environment)
+            self.assertEqual(stored.returncode, 0, stored.stderr)
+        pending = lambda: page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
+        self.assertEqual(pending(), [{"id": variable_id, "reason": "format", "remove": []}])
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables")
+        for _ in range(50):
+            if not pending():
+                break
+            page.wait_for_timeout(200)
+        self.assertEqual(pending(), [])
+        policy = page.request.get(f"{ORIGIN}/api/resources/{variable_id}/custody").json()["content"]["policy"]
+        self.assertEqual(policy["format"], 3)
+        self.assertEqual([reader["principalId"] for reader in policy["readers"]], [principal["id"]])
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables/{variable_id}")
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved in the earlier format")
 
     def test_項目を渡す相手の公開鍵を検証し受け取り承認で所有者を変更する(self):
         sender, owner = self.passkey_account("Transfer sender")

@@ -8,6 +8,8 @@ import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { ContentTypes, ProtectedContent, contentLimit, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
 import type { CustodyContent, PolicyParties } from '../shared/custody.js';
+import { EarlierContent, isEarlier } from '../shared/custody-legacy.js';
+import type { EarlierSealed } from '../shared/custody-legacy.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
@@ -70,7 +72,7 @@ export class Custody {
     }
     await this.resources.references(content.policy.id, values.map(value => value.id), connection);
   }
-  private async replacePending(previous: CustodyContent, next: CustodyContent, connection: Queryable) {
+  private async replacePending(previous: CustodyContent | EarlierSealed, next: CustodyContent, connection: Queryable) {
     const pending = await this.resources.db.one<{ id: string; state: string }>(
       "SELECT id,state FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
       [previous.policy.id], connection);
@@ -83,34 +85,34 @@ export class Custody {
     await connection.query("UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1", [pending.id]);
   }
 
-  // The item as sealed. One still sealed in an earlier form opens on no device any more: it is deleted, and connected or
-  // saved again.
-  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
-    const row = await this.resources.db.one<{ content: { policy?: { format?: unknown } } }>(
+  // The item as stored: until one of its authorities seals it again, it may still be sealed under the earlier policy.
+  async stored(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent | EarlierSealed> {
+    const row = await this.resources.db.one<{ content: unknown }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
     if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers.');
-    if (row.content.policy?.format !== 3)
-      fail(409, 'content_outdated', 'This item is sealed in an earlier form that no device opens. Delete it, then connect or save it again.');
-    return ProtectedContent.parse(row.content);
+    return z.union([ProtectedContent, EarlierContent]).parse(row.content);
+  }
+  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
+    const content = await this.stored(id, connection);
+    if (isEarlier(content)) fail(409, 'reseal_required', 'One of its authorities must seal this item again before it can be used.');
+    return content;
   }
 
-  // Items this identity can seal again without anyone deciding anything, where it uses what the owner holds: those whose
-  // readers no longer match who may open them: not yet sealed for everyone who uses what the owner holds, as for a new
-  // delegate, still sealed for one that may no longer open them, as for a delegate whose line was erased, or sealed for
-  // keys that someone has since replaced. The server cannot do it, because only the item's readers can open it. The list
-  // only says where to look, and each item is sealed again on its own. An item sealed in an earlier form opens nowhere,
-  // so it is left out.
+  // Items this identity can seal again without anyone deciding anything: those still sealed under the earlier policy and,
+  // where it uses what the owner holds, those whose readers no longer match who may open them: not yet sealed for
+  // everyone who uses what the owner holds, as for a new delegate, still sealed for one that may no longer open them, as
+  // for a delegate whose line was erased, or sealed for keys that someone has since replaced. The server cannot do it,
+  // because only the item's readers can open it. The list only says where to look, and each item is sealed again on its own.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
-    type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[]; authorities: BoundKeys[] };
+    type Row = { id: string; kind: string; owner_id: string; readers: BoundKeys[]; authorities: BoundKeys[]; current: boolean };
     const rows = await this.resources.db.all<Row>(
       `SELECT c.resource_id AS id, r.kind, r.owner_id, c.content->'policy'->'readers' AS readers,
-         c.content->'policy'->'authorities' AS authorities
+         c.content->'policy'->'authorities' AS authorities, c.content->'policy'->>'format'='3' AS current
        FROM resource_custody c JOIN resources r ON r.id=c.resource_id
-       WHERE c.content->'policy'->>'format'='3'
-         AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
+       WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
        ORDER BY 1`, [binding.id]);
     const named = (row: Row) => [...row.readers, ...row.authorities];
     const current = new Map((await this.resources.db.all<{ principal_id: string; id: string }>(
@@ -126,15 +128,16 @@ export class Custody {
       if (!found.has(key)) found.set(key, new Set(await this.resources.authorization.find(principal, row.kind, 'reveal')));
       return found.get(key)!.has(row.id);
     };
-    const items: Array<{ id: string; remove: string[] }> = [];
+    const items: Array<{ id: string; reason: 'recipients' | 'format'; remove: string[] }> = [];
     for (const row of rows) {
+      if (!row.current) { items.push({ id: row.id, reason: 'format', remove: [] }); continue; }
       if (!owners.has(row.owner_id)) continue;
       if (!recipients.has(row.owner_id))
         recipients.set(row.owner_id, (await this.recipients(row.owner_id)).map(recipient => recipient.binding.id));
       const remove = new Set<string>();
       for (const reader of row.readers) if (!(await opens(reader.principalId, row))) remove.add(reader.principalId);
       if (remove.size || recipients.get(row.owner_id)!.some(id => !row.readers.some(reader => reader.id === id)) || replaced(row))
-        items.push({ id: row.id, remove: [...remove] });
+        items.push({ id: row.id, reason: 'recipients', remove: [...remove] });
     }
     return items;
   }
@@ -158,7 +161,7 @@ export class Custody {
 
   async read(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
-    const content = await this.get(id);
+    const content = await this.stored(id);
     const { binding } = await this.bindings.current(actor.id);
     // Sealed for keys the reader has since replaced, the item still goes to it, to seal its next value with the
     // current keys; nothing opens what is sealed there.
@@ -211,7 +214,7 @@ export class Custody {
         if (transfer) await this.resources.principals.get(transfer.to, connection);
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
         const previous = await this.resources.db.one('SELECT 1 FROM resource_custody WHERE resource_id=$1', [policy.id], connection)
-          ? { content: await this.get(policy.id, connection) } : undefined;
+          ? { content: await this.stored(policy.id, connection) } : undefined;
         if (previous && !succeeds(previous.content.policy, binding)) {
           if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
             fail(403, 'forbidden', 'The existing policy must authorize its editor.');
@@ -300,7 +303,7 @@ export class Custody {
   private async projectRoles(content: CustodyContent, connection: Queryable) {
     const { policy } = content, holders = new Set(await this.resources.authorization.holders(principal(policy.ownerId), 'use', connection));
     const previous = await this.resources.db.one('SELECT 1 FROM resource_custody WHERE resource_id=$1', [policy.id], connection)
-      ? (await this.get(policy.id, connection)).policy : undefined;
+      ? (await this.stored(policy.id, connection)).policy : undefined;
     const named = new Set(previous ? [...previous.readers, ...previous.authorities]
       .map(binding => binding.principalId).concat(previous.observers ?? []) : []);
     const recorded = new Set((await this.resources.db.all<{ subject_id: string }>(

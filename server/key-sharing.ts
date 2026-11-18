@@ -20,11 +20,8 @@ export class KeySharing {
     const descendants = await resources.authorization.find(target, 'principal', 'stands', connection);
     // Whoever would open what the principal holds once it has its new owner: the readers its items are sealed for.
     const change: Change = { owners: { [target]: owner } };
-    // An item sealed in an earlier form opens nowhere, so it is not sealed again and stays as it is.
     const rows = await resources.db.all<Pick<ResourceRow, 'id' | 'owner_id' | 'name' | 'version'>>(
-      `SELECT r.id,r.owner_id,r.name,r.version FROM resources r LEFT JOIN resource_custody c ON c.resource_id=r.id
-       WHERE r.kind IN ('variable','connection','app') AND r.owner_id=ANY($1::uuid[])
-         AND (c.resource_id IS NULL OR c.content->'policy'->>'format'='3') ORDER BY r.id`,
+      `SELECT id,owner_id,name,version FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id`,
       [descendants], connection);
     const items = [];
     for (const row of rows) {

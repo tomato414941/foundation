@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { canonical, hash, thumbprint, verify, verifyBinding } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { continuesPolicy, lineageLimit, policyAuthority, ProtectedContent, verifyContent } from '../shared/custody.js';
+import { isEarlier } from '../shared/custody-legacy.js';
 import { openKeyring, keyringClaim } from '../shared/keyring.js';
 import { handoffContext, rotationPolicy, rotationPreparationProof, RotationPayload } from '../shared/key-rotations.js';
 import type {
@@ -105,11 +106,10 @@ export class KeyRotations {
   private async items(row: RotationRow, connection: Queryable = this.db.pool,
     selected?: { kind: Kind; id: string }): Promise<Item[]> {
     const values = [row.previous.binding.id, selected?.kind ?? null, selected?.id ?? null];
-    // An item sealed in an earlier form opens nowhere, so it keeps the keys it names.
     const items = await this.db.all<Item>(
       "SELECT * FROM (SELECT 'content' AS kind,r.id,r.name,jsonb_build_object('version',r.version,'content',c.content) AS source " +
-      "FROM resource_custody c JOIN resources r ON r.id=c.resource_id WHERE c.content->'policy'->>'format'='3' AND " +
-      "jsonb_path_exists(c.content->'policy','$.**.id ? (@ == $binding)',jsonb_build_object('binding',$1::text)) " +
+      "FROM resource_custody c JOIN resources r ON r.id=c.resource_id WHERE jsonb_path_exists(c.content->'policy'," +
+      "'$.**.id ? (@ == $binding)',jsonb_build_object('binding',$1::text)) " +
       ") items " +
       "WHERE ($2::text IS NULL OR (kind=$2 AND id=$3::uuid))",
       values, connection);
@@ -128,6 +128,10 @@ export class KeyRotations {
   private async blockers(row: RotationRow, items: Item[], connection: Queryable = this.db.pool) {
     // Replacing an authority's keys changes the item's authorities, which adds a handoff to its signed history; an item
     // whose history is full keeps the previous keys, so the rotation cannot finish while such an item names them.
+    // An item still sealed under the earlier policy is sealed again by its owner's devices before its keys are replaced.
+    const earlier = items.filter(item => item.kind === 'content' && isEarlier(item.source.content as { policy: { format: number } }))
+      .map(item => ({ kind: item.kind, id: item.id, reason: 'reseal_required' }));
+    if (earlier.length) return earlier;
     const full = items.flatMap(item => {
       if (item.kind !== 'content') return [];
       const content = ProtectedContent.parse(item.source.content);

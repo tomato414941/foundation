@@ -35,12 +35,14 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
-// An item left as an earlier version of Foundation sealed it, which no device opens any more.
-app.post<{ Params: { id: string } }>('/__test/earlier-form/:id', async request => {
-  await context.db.pool.query("UPDATE resource_custody SET content=jsonb_set(content,'{policy,format}','2') WHERE resource_id=$1",
-    [request.params.id]);
-  return { ok: true };
-});
+// An item as an earlier version of Foundation stored it, which no current client writes.
+app.post<{ Body: { ownerId: string; kind: 'variable'; name: string; content: { policy: { id: string } }; data: Record<string, string | number | string[]> } }>(
+  '/__test/stored-item', async request => {
+    const { ownerId, kind, name, content, data } = request.body;
+    await context.resources.insert(ownerId, kind, name, data, { id: content.policy.id });
+    await context.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [content.policy.id, JSON.stringify(content)]);
+    return { id: content.policy.id };
+  });
 // A passkey registered where the browser could not wrap the private key for it.
 app.post<{ Params: { id: string } }>('/__test/credentials/:id/unwrap', async request => {
   await context.db.pool.query('UPDATE credentials SET private_wrap=NULL WHERE id=$1', [request.params.id]);
