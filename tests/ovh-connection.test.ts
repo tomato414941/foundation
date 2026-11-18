@@ -3,40 +3,11 @@ import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
 import { ovhAccessRules } from '../shared/ovh.js';
-import { OvhApi, ovhSignature } from '../runtime/ovh.js';
-import { decode } from '../shared/encryption.js';
-import type { OutboundRequest } from '../server/transport.js';
 
 const keys = { applicationKey: 'application-id', applicationSecret: 'application-secret', consumerKey: 'consumer-key' };
 const apiBases = { eu: 'https://eu.api.ovh.com/1.0', ca: 'https://ca.api.ovh.com/1.0', us: 'https://api.us.ovhcloud.com/1.0' };
 
-function authenticated(request: OutboundRequest, base: string, consumerKey = keys.consumerKey) {
-  assert.ok(request.url.startsWith(base + '/'));
-  assert.equal(request.headers?.['X-Ovh-Application'], keys.applicationKey);
-  assert.equal(request.headers?.['X-Ovh-Consumer'], consumerKey);
-  const timestamp = Number(request.headers?.['X-Ovh-Timestamp']);
-  assert.equal(request.headers?.['X-Ovh-Signature'], ovhSignature({ ...keys, consumerKey }, request, timestamp));
-}
-
-test('OVHの署名を送信するURL、メソッド、本文、時刻に結び付ける', () => {
-  const request = { url: apiBases.ca + '/vps/vps-abc/reboot', method: 'POST', body: '{"type":"soft"}' };
-  assert.equal(ovhSignature(keys, request, 1369159111), '$1$' + '62055bac5e31401ec6412d188cb3c698f91192a3');
-});
-
-test('OVHの時刻で署名したAPIリクエストを選択した接続先へ送信する', async () => {
-  const requests: OutboundRequest[] = [];
-  const api = new OvhApi({ async send(request) {
-    requests.push(request);
-    return request.url.endsWith('/auth/time') ? jsonResponse(1369159111) : jsonResponse(['vps-abc']);
-  } });
-  const sent = await api.send(apiBases.ca, keys, { url: apiBases.ca + '/vps', method: 'GET' });
-  assert.equal(sent.status, 200);
-  assert.equal(Number(requests[1]!.headers?.['X-Ovh-Timestamp']), 1369159111);
-  authenticated(requests[1]!, apiBases.ca);
-  await assert.rejects(api.send(apiBases.ca, keys, { url: apiBases.eu + '/vps' }), { code: 'invalid_destination' });
-});
-
-test('OVHのAPI Keysを各地域で暗号化して保存し、利用時に署名する', async t => {
+test('OVHのAPI Keysを各地域で暗号化して保存し、地域を認可の内容に含める', async t => {
   for (const apiRegion of ['eu', 'ca', 'us'] as const) await t.test(apiRegion, async t => {
     const f = await flowFixture(); t.after(f.close);
     const saved = await f.saveConnection({ methodId: 'ovh:api_key', fields: { apiRegion, ...keys } });
@@ -47,9 +18,6 @@ test('OVHのAPI Keysを各地域で暗号化して保存し、利用時に署名
     assert.deepEqual(metadata.fields, { apiRegion });
     const changed = ConnectionMaterial.parse({ ...material, fields: { ...material.fields, apiRegion: apiRegion === 'ca' ? 'eu' : 'ca' } });
     assert.notEqual((await connectionMetadata(changed)).authorizationDigest, metadata.authorizationDigest);
-    const request = { url: apiBases[apiRegion] + '/vps', method: 'GET' };
-    assert.ok(ovhSignature({ applicationKey: material.fields!.applicationKey!, applicationSecret: material.fields!.applicationSecret!,
-      consumerKey: material.fields!.consumerKey! }, request, 1369159111).startsWith('$1$'));
   });
 });
 

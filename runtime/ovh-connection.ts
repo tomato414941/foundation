@@ -4,8 +4,8 @@ import { connectionValues } from '../shared/connection-fields.js';
 import { textValue, atPointer } from '../shared/values.js';
 import { fail } from '../server/errors.js';
 import type { ConnectionProvider } from './connection-provider.js';
-import type { OvhCredentials } from './ovh.js';
 
+interface OvhCredentials { applicationKey: string; applicationSecret: string; consumerKey: string }
 function specification(value: ConnectionState) {
   if (value.method.kind !== 'ovh') throw new Error('Use an OVH connection provider.');
   return value.method.config;

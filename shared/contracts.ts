@@ -440,14 +440,11 @@ export const Resource = z.discriminatedUnion('kind', [
   SSHHostResource,
 ]);
 export type ResourceView = z.infer<typeof Resource>;
-export type VariableView = z.infer<typeof VariableResource>;
 export type ConnectionView = z.infer<typeof ConnectionResource>;
-export type ObjectView = z.infer<typeof ObjectResource>;
 export const NewResource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
   z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),
 ]);
-export type NewResourceInput = z.infer<typeof NewResource>;
 export const UpdateResource = z
   .object({
     version: z.number().int().positive(),
@@ -489,7 +486,6 @@ export const DeviceRequest = z.object({
   createdAt: Time,
   expiresAt: Time,
 });
-export type DeviceView = z.infer<typeof DeviceRequest>;
 export const Payment = z.object({
   available: z.boolean(),
   required: z.boolean(),
@@ -515,7 +511,6 @@ export const Settings = z
 export const listOf = <T extends z.ZodType>(schema: T) =>
   z.object({ items: z.array(schema), next: z.string().nullable().default(null) });
 export const IdParams = z.object({ id: Id });
-export const OwnerParams = z.object({ owner: Id });
 export const PageQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   after: z.string().optional(),

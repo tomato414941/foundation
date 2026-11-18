@@ -7,4 +7,3 @@ export const DeviceAuthorization = z.object({
   expiresAt: z.number().int().positive(),
   intervalSeconds: z.number().int().positive(), nextPollAt: z.number().int().positive(),
 }).strict();
-export type DeviceAuthorizationState = z.infer<typeof DeviceAuthorization>;

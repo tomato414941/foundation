@@ -12,7 +12,6 @@ export const OvhConnectionInfo = z.object({
   rules: z.array(OvhAccessRule), allowedIPs: z.array(z.string()).nullable(),
   expiresAt: z.number().nullable(),
 }).strict();
-export type OvhInfo = z.infer<typeof OvhConnectionInfo>;
 
 export function ovhAccessRules(scopes: string[]) {
   return scopes.map(scope => {

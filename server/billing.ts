@@ -6,11 +6,6 @@ import type { Configuration } from './config.js';
 import type { Audit } from './audit.js';
 import { fail, required } from './errors.js';
 
-export interface PaymentAccount {
-  customerId: string;
-  subscriptionId: string | null;
-  status: string;
-}
 export interface PaymentEvent {
   id: string;
   customerId: string;
