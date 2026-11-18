@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { AuthorizedKeysFile, SSHAddress, SSHFingerprint, SSHPublicKey } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
-import { OvhConnectionInfo } from './ovh.js';
 
 if (typeof window !== 'undefined') z.config({ jitless: true });
 
@@ -386,7 +385,6 @@ export const ConnectionResource = z.object({
     generation: Id.optional(),
     authorizationDigest: z.string().optional(),
     aws: AwsConnectionInfo.optional(),
-    ovh: OvhConnectionInfo.optional(),
   }),
 });
 export const ServiceResource = z.object({

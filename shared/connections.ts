@@ -8,7 +8,6 @@ import { fail } from './errors.js';
 import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
 import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
 import { ConnectionFacts, connectionFacts } from './connection-facts.js';
-import { OvhConnectionInfo } from './ovh.js';
 import type { ConnectionFactValues } from './connection-facts.js';
 import { documentAccount, publicConnectionFields, visibleConnectionFields } from './connection-fields.js';
 export { requiresApp } from './connection-methods.js';
@@ -42,7 +41,7 @@ export const ConnectionMaterial = z.union([
     facts: ConnectionFacts.optional(), oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: ApprovalMethod, fields: Fields,
     oauth: unusedMaterial, aws: unusedMaterial }).strict(),
-  z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, ovh: OvhConnectionInfo.optional(), requestedScopes: z.array(z.string()).optional(),
+  z.object({ ...materialMetadata, method: OvhMethod, fields: Fields, requestedScopes: z.array(z.string()).optional(),
     oauth: unusedMaterial, aws: unusedMaterial }).strict(),
   z.object({ ...materialMetadata, method: AwsMethod, aws: AwsConnectionMaterial,
     oauth: unusedMaterial, fields: unusedMaterial }).strict(),
@@ -78,7 +77,6 @@ export const ConnectionMetadata = z.object({
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
   fields: Fields.optional(),
   aws: AwsConnectionInfo.optional(),
-  ovh: OvhConnectionInfo.optional(),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {

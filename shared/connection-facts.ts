@@ -33,15 +33,9 @@ export function tokenConnectionFacts(state: ConnectionState): ConnectionFactValu
 }
 export function ovhConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'ovh') throw new Error('Use OVH connection material.');
-  const info = 'ovh' in state ? state.ovh : undefined;
-  if (!info) {
-    const scopes = 'requestedScopes' in state ? state.requestedScopes : undefined;
-    return ConnectionFacts.parse({ accountId: null, accountVerified: false,
-      scopes: scopes ?? [], scopesStatus: scopes ? 'requested' : 'unknown', authorization: {}, details: {} });
-  }
-  return ConnectionFacts.parse({ accountId: info.user ? info.account + '/' + info.user : info.account, accountVerified: true,
-    scopes: info.rules.map(rule => rule.method + ' ' + rule.path),
-    scopesStatus: 'reported', authorization: { ovh: info }, details: { ovh: info } });
+  const scopes = 'requestedScopes' in state ? state.requestedScopes : undefined;
+  return ConnectionFacts.parse({ accountId: null, accountVerified: false,
+    scopes: scopes ?? [], scopesStatus: scopes ? 'requested' : 'unknown', authorization: {}, details: {} });
 }
 export function awsConnectionFacts(state: ConnectionState): ConnectionFactValues {
   if (state.method.kind !== 'aws' || !state.aws) throw new Error('Use AWS connection material.');

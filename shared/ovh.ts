@@ -4,14 +4,6 @@ export const OvhAccessRule = z.object({
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
   path: z.string().min(1).max(1000).regex(/^\/[^\s\u0000]*$/),
 }).strict();
-export const OvhConnectionInfo = z.object({
-  account: z.string().min(1), identities: z.array(z.string()),
-  user: z.string().nullable(), description: z.string().nullable(),
-  roles: z.array(z.string()).nullable(),
-  credentialId: z.number().int().positive(),
-  rules: z.array(OvhAccessRule), allowedIPs: z.array(z.string()).nullable(),
-  expiresAt: z.number().nullable(),
-}).strict();
 
 export function ovhAccessRules(scopes: string[]) {
   return scopes.map(scope => {

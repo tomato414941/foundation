@@ -29,9 +29,6 @@ export class OvhConnection implements ConnectionProvider {
   needsRenewal() { return false; }
   async outputs(value: ConnectionState, app: AppState | null) {
     if (value.method.kind !== 'ovh') throw new Error('Use OVH connection material.');
-    const info = 'ovh' in value ? value.ovh : undefined;
-    if (info && info.expiresAt !== null && info.expiresAt <= Date.now())
-      fail(409, 'reconnect_required', 'Reconnect OVHcloud with a current API key.');
     const fields = specification(value).authorization === 'consumer_key'
       ? { ...this.values(value, app), ...this.credentials(value, app) } : this.values(value, app);
     return Object.fromEntries(Object.entries(specification(value).outputs)
