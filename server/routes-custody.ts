@@ -55,10 +55,10 @@ export async function routesCustody(app: ApiApp, context: Context) {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.Reprotection) } },
   }, async request => ({ items: await custody.pending(actor(request), request.params.id), next: null }));
   app.get('/api/resources/:id/custody', {
-    schema: { params: C.IdParams, response: { 200: P.StoredRead } },
+    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
   app.get('/api/custody/:id', {
-    schema: { params: C.IdParams, response: { 200: P.StoredRead } },
+    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
   app.put('/api/custody/:id', {
     schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: P.ProtectedRead } },

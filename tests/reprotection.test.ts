@@ -1,15 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { flowFixture, jsonResponse } from './flow-support.js';
-import { sealedEarlier, use } from './earlier-support.js';
+import { flowFixture } from './flow-support.js';
+import { rotationStart } from './key-rotation-support.js';
 import { ContentTypes, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
-import { canonical, hash } from '../shared/authority.js';
-import { methodDigest, methodRules } from '../shared/connection-methods.js';
-import type { MethodDescription } from '../shared/contracts.js';
-import { ConnectionMaterial, connectionMetadata, sealedConnection } from '../shared/connections.js';
+import { Resource, listOf } from '../shared/contracts.js';
 
-const minutes = (count: number) => new Date(Date.now() + count * 60_000).toISOString();
 test('委任先が64件の項目を開けるように暗号化し直す間の進捗を通知する', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
@@ -32,54 +28,6 @@ test('委任先が64件の項目を開けるように暗号化し直す間の進
   assert.equal(decode(await reveal(shared.content, delegate.binding, delegate.keys.encryption)), 'value 62');
 });
 
-test('前の形式で封じた項目は持ち主の端末が開くときに今の形式で封じ直し、まだ自分で使えた相手を読み手にする', async (t) => {
-  const f = await flowFixture();
-  t.after(f.close);
-  const user = await f.person('Connection user'), expired = await f.person('Former user');
-  for (const person of [user, expired]) await f.client.trust.rememberBinding(person.binding);
-  const id = await sealedEarlier(f, 'variable', 'Earlier value', encode('kept value'), { bytes: 10 },
-    [use(user.binding, minutes(60)), use(expired.binding, minutes(-1))]);
-  assert.deepEqual(await f.client.pendingProtection(), [{ id, reason: 'format', remove: [] }]);
-  await assert.rejects(f.custody.read(user.actor, id), { code: 'forbidden' });
-
-  assert.equal(decode(await f.client.reveal(id)), 'kept value');
-  const { content } = await f.client.read(id);
-  assert.equal(content.policy.format, 3);
-  assert.equal(content.policy.revision, 2);
-  assert.deepEqual(content.policy.readers.map(reader => reader.principalId).sort(),
-    [f.owner.actor.id, f.delegate.actor.id, user.actor.id].sort());
-  assert.deepEqual(content.policy.authorities.map(authority => authority.principalId).sort(), [f.owner.actor.id, f.delegate.actor.id].sort());
-  const opened = await f.custody.read(user.actor, id);
-  assert.equal(decode(await reveal(opened.content as typeof content, user.binding, user.keys.encryption)), 'kept value');
-  await assert.rejects(f.custody.read(expired.actor, id), { code: 'forbidden' });
-  assert.deepEqual(await f.client.pendingProtection(), []);
-});
-
-test('前の形式の接続は、送り方の設定だけが違う決まりなら今の決まりとして署名し直してそのまま使い、ほかが違えばつなぎ直しを求める', async (t) => {
-  const f = await flowFixture();
-  t.after(f.close);
-  const method = await f.method('cloudrift:api_key');
-  // How the method once said to send the key over HTTP, which connections made then signed with its rules.
-  const http = { urlField: 'url', authentication: { kind: 'header', name: 'X-API-Key', value: 'CLOUDRIFT_API_KEY' } };
-  const connection = async (name: string, token: string, rules: object) => {
-    const state = ConnectionMaterial.parse({ format: 3, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(),
-      appId: null, appGeneration: null, fields: { token } });
-    const metadata = { ...await connectionMetadata(state), http, methodDigest: await hash(rules) };
-    return sealedEarlier(f, 'connection', name, sealedConnection(state), metadata,
-      [], { ...metadata, methodName: method.name, account: '', services: [{ id: 'cloudrift', name: 'CloudRift' }] });
-  };
-  const same = await connection('Same rules', 'same-rules-token', { ...methodRules(method), http });
-  const changed = await connection('Changed rules', 'changed-rules-token', { ...methodRules(method), http, docs: 'changed' });
-  const used = async (id: string) =>
-    (await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id, output: 'CLOUDRIFT_API_KEY' } }])).environment.CLOUDRIFT_API_KEY;
-  assert.equal(await used(same), 'same-rules-token');
-  const resealed = (await f.client.read(same)).content.metadata;
-  assert.equal(resealed.methodDigest, await methodDigest(method));
-  assert.equal('http' in resealed, false);
-  await assert.rejects(used(changed), { code: 'reconnect_required' });
-  assert.equal((await f.client.read(changed)).content.policy.format, 3);
-});
-
 test('持ち主の端末は未検証の代理を知らせ、検証済みの代理が項目を開けるように暗号化し直す', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
@@ -89,7 +37,7 @@ test('持ち主の端末は未検証の代理を知らせ、検証済みの代�
     await f.db.pool.query("INSERT INTO relations(subject_id,relation,principal_id) VALUES($1,'delegate',$2)", [agent.actor.id, f.owner.actor.id]);
 
   const items = [saved.id, f.resource.id].sort();
-  assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, reason: 'recipients', remove: [] })));
+  assert.deepEqual(await f.client.pendingProtection(), items.map(id => ({ id, remove: [] })));
   const pending = await f.client.reprotectPending();
   assert.deepEqual(pending.done, []);
   assert.deepEqual(pending.failed.map(item => item.id), items);
@@ -126,7 +74,7 @@ test('委任先の線を外すと、まだ封じてある項目も委任先に�
 
   await f.client.api.json('/api/relations', { method: 'DELETE', body: line });
   await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
-  assert.deepEqual((await f.client.pendingProtection()).find(item => item.id === saved.id), { id: saved.id, reason: 'recipients', remove: [ai.actor.id] });
+  assert.deepEqual((await f.client.pendingProtection()).find(item => item.id === saved.id), { id: saved.id, remove: [ai.actor.id] });
   assert.deepEqual((await f.client.reprotectPending()).failed, []);
   const { content } = await f.client.read(saved.id);
   assert.equal(content.policy.readers.some(reader => reader.principalId === ai.actor.id), false);
@@ -154,50 +102,31 @@ test('トークン更新中の項目があっても委任先の線を引け、�
   assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [busy.id]);
 });
 
-// A CloudRift connection as the earliest format sealed it, with its method inside, stored as it was then.
-async function storedEarlier(f: Awaited<ReturnType<typeof flowFixture>>, name: string, method: MethodDescription & { http?: object },
-  token: string) {
-  const material = { format: 2, methodId: 'cloudrift:api_key', method, generation: crypto.randomUUID(), appId: null,
-    appGeneration: null, fields: { token } };
-  // What the earliest format signed beside such content: everything but the digest of the method's rules.
-  const { http: _http, ...rules } = method;
-  const { methodDigest: _methodDigest, ...metadata } = await connectionMetadata(ConnectionMaterial.parse({ ...material, method: rules, format: 3 }));
-  // The labels stored with it then: what its method was called, and an account.
-  return sealedEarlier(f, 'connection', name, encode(canonical(material)), metadata, [],
-    { ...metadata, methodName: method.name, account: '' });
-}
-
-test('つなぎ方を中に持つ古い形の接続を、作ったときの決まりのまま持ち主の端末が封じ直し、決まりが今と同じものをそのまま使う', async (t) => {
-  const f = await flowFixture(() => jsonResponse({ ok: true }));
-  t.after(f.close);
-  const current = await f.method('cloudrift:api_key');
-  if (current.kind !== 'token') throw new Error('Expected a token method.');
-  // The same method before the pattern of its key was corrected: connections made then sealed these rules.
-  const earlier = { ...current, config: { ...current.config,
-    fields: current.config.fields.map(field => field.name === 'token' ? { ...field, pattern: '^.+$' } : field) } };
-  // The current method as connections made while methods still said how to send their values over HTTP sealed it.
-  const same = await storedEarlier(f, 'Current rules', { ...current, http: { urlField: 'url',
-    authentication: { kind: 'header', name: 'X-API-Key', value: 'CLOUDRIFT_API_KEY' } } }, 'current-rules-token');
-  const changed = await storedEarlier(f, 'Earlier rules', earlier, 'earlier-rules-token');
-
-  assert.deepEqual((await f.client.pendingProtection()).sort((a, b) => a.id.localeCompare(b.id)),
-    [same, changed].sort().map(id => ({ id, reason: 'format', remove: [] })));
-  assert.deepEqual(await f.client.reprotectPending(), { done: [same, changed].sort(), failed: [] });
-  assert.deepEqual(await f.client.pendingProtection(), []);
-  assert.equal((await f.client.connection(same)).fields!.token, 'current-rules-token');
-
-  const used = async (id: string) =>
-    (await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id, output: 'CLOUDRIFT_API_KEY' } }])).environment.CLOUDRIFT_API_KEY;
-  assert.equal(await used(same), 'current-rules-token');
-  await assert.rejects(used(changed), { code: 'reconnect_required' });
-});
-
-test('封じ直す前の古い形の接続も、持ち主はキーを入れ直さずにつなぎ直せる', async (t) => {
+test('以前の形のまま残った項目は、開こうとすると理由を示して断り、一覧・封じ直し・鍵の作り直し・削除は止めない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const id = await storedEarlier(f, 'Earlier connection', await f.method('cloudrift:api_key'), 'kept-token');
-  const reconnected = await f.saveConnection({ methodId: 'cloudrift:api_key', connectionId: id, name: 'Earlier connection', fields: {} });
-  assert.equal(reconnected.id, id);
-  assert.equal((await f.client.connection(id)).fields!.token, 'kept-token');
-  assert.deepEqual(await f.client.pendingProtection(), []);
+  const ai = await f.person('Agent');
+  await f.client.trust.rememberBinding(ai.binding);
+  const earlier = await f.saveConnection({ methodId: 'cloudrift:api_key', name: 'Earlier account', fields: { token: 'earlier-token' } });
+  // What production keeps of an item that no device sealed again in the current form.
+  await f.db.pool.query("UPDATE resource_custody SET content=jsonb_set(content,'{policy,format}','2') WHERE resource_id=$1", [earlier.id]);
+  for (const read of [() => f.client.read(earlier.id), () => f.custody.read(f.owner.actor, earlier.id)])
+    await assert.rejects(read(), { code: 'content_outdated' });
+  const listed = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources?kind=connection', {}, listOf(Resource));
+  assert.deepEqual(listed.items.map(item => item.id), [earlier.id]);
+
+  await f.client.api.json('/api/relations', { method: 'POST', body: { subjectId: ai.actor.id, relation: 'delegate', objectId: f.owner.actor.id } });
+  assert.deepEqual(await f.client.pendingProtection(), [{ id: f.resource.id, remove: [] }]);
+  assert.deepEqual(await f.client.reprotectPending(), { done: [f.resource.id], failed: [] });
+  assert.equal(decode(await reveal((await f.custody.read(ai.actor, f.resource.id)).content, ai.binding, ai.keys.encryption)).length > 0, true);
+
+  // Replacing the owner's keys goes over the items sealed now and leaves the earlier one as it is.
+  const { input } = await rotationStart(f.owner);
+  assert.deepEqual((await f.keyRotations.start(f.owner.actor, f.owner.actor.id, input)).blockers, []);
+  const rotation = await f.keyRotations.get(f.owner.actor, f.owner.actor.id, input.id, 100);
+  assert.ok(rotation.items.some(item => item.id === f.resource.id));
+  assert.equal(rotation.items.some(item => item.id === earlier.id), false);
+  await f.keyRotations.cancel(f.owner.actor, f.owner.actor.id, input.id);
+  await f.client.api.json('/api/resources/' + earlier.id, { method: 'DELETE' });
+  await assert.rejects(f.client.api.json('/api/resources/' + earlier.id, {}, Resource), { status: 404 });
 });

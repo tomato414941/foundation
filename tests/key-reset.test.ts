@@ -131,5 +131,5 @@ test('共有した相手が公開鍵を作り直すと、所有者が暗号化�
   await f.keyResets.request(friend.actor, friend.actor.id);
   await wait(f, friend.actor.id);
   await reset(f, friend);
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, reason: 'recipients', remove: [] }]);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [] }]);
 });

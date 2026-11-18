@@ -3,13 +3,11 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { sealedEarlier } from './earlier-support.js';
 import { encode } from '../shared/encryption.js';
 import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
 import { newSSHKey } from '../cli/src/ssh-access.js';
-import { canonical, hash } from '../shared/authority.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
@@ -39,22 +37,6 @@ const ways = {
     const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
       body: { kind: 'method', name, definition: await f.method('cloudrift:api_key') } }, Resource);
     return item(f, (await f.saveConnection({ methodId: method.id, fields: { token: 'the-same-token' } })).id);
-  } },
-  // An OAuth token of a connection sealed in the earlier format, with its method of the name given and its account's
-  // display name, as its owner's device seals it again.
-  earlier: { kind: 'connection', deposit: async (f: Flow, name: string) => {
-    const generation = crypto.randomUUID();
-    const material = { format: 2, methodId: 'openrouter:oauth', method: { ...await f.method('openrouter:oauth'), name },
-      generation, appId: null, appGeneration: null, oauth: { accessToken: 'the-same-token', expiresAt: null, scopes: [],
-        scopesStatus: 'unknown', account: '', accountName: name, accountVerified: false, extra: {}, facts: {} } };
-    // What the earlier format signed beside it, which named the method by id alone.
-    const metadata = { methodId: 'openrouter:oauth', methodKind: 'oauth', generation, authorizationDigest: await hash({ generation }),
-      appId: null, accountId: null, accountVerified: false, scopes: [], scopesStatus: 'unknown', outputs: ['OPENROUTER_API_KEY'],
-      state: 'ready' };
-    const id = await sealedEarlier(f, 'connection', 'Earlier connection', encode(canonical(material)), metadata, [],
-      { ...metadata, methodName: name, account: '' });
-    await f.client.reprotectPending();
-    return item(f, id);
   } },
   // An application's client secret.
   app: { kind: 'app', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
