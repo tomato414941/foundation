@@ -27,8 +27,7 @@
         "hint": "SALESFORCE_INSTANCE_URL is the org's API base URL (<SALESFORCE_INSTANCE_URL>/services/data/...).",
         "scopes": {
           "default": [
-            "refresh_token",
-            "id"
+            "refresh_token"
           ],
           "separator": " ",
           "docs": "https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_oauth_tokens_scopes.htm"
