@@ -111,3 +111,22 @@ export async function downloadRelease(current: string, requested: string | undef
   await secureWrite(file, bytes, true);
   return { version, file };
 }
+
+// Names the CLI release a Foundation server was released with when it is not this one. The number is only shown:
+// what to install comes from npm and is checked against the release workflow.
+export async function releaseNote(origin: string, current: string, fetcher: Fetcher = fetch) {
+  let release: unknown;
+  try {
+    const response = await fetcher(new URL('/api/release', origin).href, { redirect: 'error', signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return null;
+    release = await response.json();
+  } catch { return null; }
+  const parsed = z.object({ cliVersion: z.string().regex(stable) }).safeParse(release);
+  if (!parsed.success) return null;
+  const server = parsed.data.cliVersion, order = compareVersions(server, current);
+  if (order === 0) return null;
+  return order > 0
+    ? 'This CLI is ' + current + ', and ' + origin + ' was released with CLI ' + server +
+      '. Update the CLI: run foundation update, then install the file it names.'
+    : 'This CLI is ' + current + ', newer than CLI ' + server + ', which ' + origin + ' was released with.';
+}

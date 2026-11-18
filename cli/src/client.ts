@@ -12,8 +12,16 @@ export class ApiError extends Error {
     readonly status: number,
     message: string,
     readonly details?: unknown,
+    // The Foundation server that answered, when one did.
+    readonly origin?: string,
   ) {
     super(message);
+  }
+}
+// A server answer this CLI cannot read, as when the server was released with another CLI.
+export class UnreadableResponse extends Error {
+  constructor(readonly origin: string, readonly path: string, readonly error: z.ZodError) {
+    super('Foundation answered ' + path + ' in a form this CLI does not read.');
   }
 }
 export class Client {
@@ -62,12 +70,14 @@ export class Client {
           'http_error',
           response.status,
           'Foundation returned HTTP ' + response.status + '.',
+          undefined,
+          this.identity.origin,
         );
       }
       const needed = ConfirmationNeeded.safeParse(detail.error.details);
       if (!options.confirmation && confirmationCodes.includes(detail.error.code) && needed.success)
         return this.response(path, { ...options, confirmation: await this.confirm(needed.data) });
-      throw new ApiError(detail.error.code, response.status, detail.error.message, detail.error.details);
+      throw new ApiError(detail.error.code, response.status, detail.error.message, detail.error.details, this.identity.origin);
     }
     return response;
   }
@@ -89,7 +99,7 @@ export class Client {
       }
       throw new ApiError('confirmation_required', 403, 'Prove confirmation ' + view.id + ' with ' + view.methods.join(' or ') +
         ' through /api/confirmations/' + view.id + ', then send the same request again with it' +
-        ' (foundation api --confirmation ' + view.id + ').', { ...needed, confirmationId: view.id });
+        ' (foundation api --confirmation ' + view.id + ').', { ...needed, confirmationId: view.id }, this.identity.origin);
     });
   }
   async json<T = unknown>(
@@ -99,7 +109,10 @@ export class Client {
   ): Promise<T> {
     const response = await this.response(path, options);
     const value: unknown = response.status === 204 ? null : await response.json();
-    return schema ? schema.parse(value) : (value as T);
+    if (!schema) return value as T;
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) throw new UnreadableResponse(this.identity.origin, path, parsed.error);
+    return parsed.data;
   }
   async session() {
     return this.json('/api/session', {}, Session);

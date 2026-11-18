@@ -23,7 +23,7 @@ import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, signBinding, SignedBinding } from '../../shared/authority.js';
-import { Client, ApiError } from './client.js';
+import { Client, ApiError, UnreadableResponse } from './client.js';
 import { currentIdentity, rotateIdentity } from './keys.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
@@ -37,7 +37,7 @@ import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOut
   requestConnection, saveApp, startConnection } from './connections.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
 import { newSSHKey, sshAccess, withStoredKey } from './ssh-access.js';
-import { downloadRelease, releaseWorkflow } from './releases.js';
+import { downloadRelease, releaseNote, releaseWorkflow } from './releases.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
 const help = `Foundation ${packageInfo.version}
@@ -847,6 +847,9 @@ async function main(argv: string[]) {
 try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
+  // A server that was released with another CLI says which one, so that a mismatch is not mistaken for another fault.
+  const answered = error instanceof ApiError || error instanceof UnreadableResponse ? error.origin : undefined;
+  const note = answered ? await releaseNote(answered, packageInfo.version) : null;
   const message =
     error instanceof IdentityVerificationRequired
       ? error.recipient.name + ' (' + error.recipient.id + '): ' +
@@ -855,11 +858,13 @@ try {
         ' --fingerprint <verified-fingerprint> and repeat this operation.'
       : error instanceof ApiError
       ? error.code + ': ' + error.message + (error.details === undefined ? '' : '\n' + JSON.stringify(error.details))
+      : error instanceof UnreadableResponse
+        ? error.message + (note ? '' : '\n' + z.prettifyError(error.error))
       : error instanceof z.ZodError
         ? 'Check the command inputs against foundation schema.'
         : error instanceof Error
           ? error.message
           : 'The command failed.';
-  process.stderr.write('foundation: ' + message + '\n');
+  process.stderr.write('foundation: ' + message + (note ? '\n' + note : '') + '\n');
   process.exitCode = 1;
 }
