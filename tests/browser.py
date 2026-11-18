@@ -1693,6 +1693,11 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
+        sender.reload()
+        made = sender.get_by_role("main").get_by_role("listitem").filter(has_text="プリンシパルを作る")
+        expect(made).to_contain_text("完了")
+        expect(sender.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
+        sender.screenshot(path=str(ARTIFACTS / "request-sent-approved-ja.png"), full_page=True)
 
     def test_SSH接続先の登録の依頼で接続先と鍵の指紋を確認して承認する(self):
         sender, _ = self.passkey_account("SSH requester")
