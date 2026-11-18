@@ -80,12 +80,6 @@ def main():
         {"Effect": "Allow", "Action": ["ssm:GetCommandInvocation", "ssm:ListCommands"], "Resource": "*"},
     ]}
     configure_role(role, trust, "release", policy)
-    # The host runs no environments, so its role keeps no policy for them.
-    host = "foundation-host-InstanceRole-zM9VZF8jRg4y"
-    policies = aws("iam", "list-role-policies", "--role-name", host)["PolicyNames"]
-    for name in ["foundation-environments", "foundation-release-images"]:
-        if name in policies:
-            aws("iam", "delete-role-policy", "--role-name", host, "--policy-name", name)
     body = {"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
     subprocess.run(["gh", "api", "--method", "PUT", "repos/tomato414941/foundation/environments/production", "--input", "-"],
                    input=json.dumps(body), text=True, check=True, stdout=subprocess.DEVNULL)
