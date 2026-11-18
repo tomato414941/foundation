@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
-import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
+import { AppMaterial } from '../shared/connections.js';
 import { activeConnectionField } from '../shared/connection-fields.js';
 import { CustodyClient } from '../shared/client.js';
 import { OperationClient } from '../shared/operation-client.js';

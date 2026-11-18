@@ -45,7 +45,7 @@ const authentications = (): AwsConnectionRequest['authentication'][] => [
 
 test('アクセスキー・一時認証情報・実行端末の認証情報をSDKに渡す', async t => {
   for (const authentication of authentications()) await t.test(authentication.kind, async t => {
-    environment(t); const { calls } = sts(t);
+    environment(t); sts(t);
     const result = await new AwsConnections().obtain({ authentication, region: 'us-west-2' });
     const ambient = authentication.kind === 'environment';
     assert.deepEqual(result.credentials, { AWS_ACCESS_KEY_ID: ambient ? 'environment-key' : 'input-key',

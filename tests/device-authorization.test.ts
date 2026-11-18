@@ -8,7 +8,7 @@ import { RemoteFlowStore } from '../shared/operation-continuations.js';
 import { JournalTrust } from '../runtime/trust.js';
 import { MemoryJournal } from './delegation-support.js';
 import { flowOutput } from '../cli/src/connections.js';
-import { AppMaterial, ConnectionMaterial } from '../shared/connections.js';
+import { AppMaterial } from '../shared/connections.js';
 import { Resource } from '../shared/contracts.js';
 import { OperationView } from '../shared/operations.js';
 import { canonical } from '../shared/authority.js';

@@ -41,11 +41,6 @@ app.post<{ Params: { id: string } }>('/__test/earlier-form/:id', async request =
     [request.params.id]);
   return { ok: true };
 });
-// A passkey registered where the browser could not wrap the private key for it.
-app.post<{ Params: { id: string } }>('/__test/credentials/:id/unwrap', async request => {
-  await context.db.pool.query('UPDATE credentials SET private_wrap=NULL WHERE id=$1', [request.params.id]);
-  return { ok: true };
-});
 // A week has passed since the principal asked for new keys.
 app.post<{ Params: { id: string } }>('/__test/key-reset/:id/ready', async request => {
   await context.db.pool.query("UPDATE challenges SET data=data||jsonb_build_object('readyAt',$2::text) WHERE kind='key-reset' AND principal_id=$1",

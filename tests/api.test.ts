@@ -6,10 +6,9 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
-import { delegatedFixture } from './delegation-support.js';
 import { confirmedCall } from './confirmation-support.js';
 import { AccessPolicy, ContentTypes, protect } from '../shared/custody.js';
-import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
+import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 
 test('OAuthの認可応答を開始したプリンシパルへ暗号化して中継し、同じ応答を受け付ける', async t => {
   const f = await flowFixture(); t.after(f.close);
