@@ -31,7 +31,7 @@ export class FileJournal implements Journal {
     try {
       const stat = await lstat(path);
       if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o077)))
-        throw new Error('The execution journal must use private regular files.');
+        throw new Error('The journal must use private regular files.');
       const envelope = z.string().max(32_000_000).parse(JSON.parse(await readFile(path, 'utf8')));
       const decrypted = await compactDecrypt(envelope, await importJWK(this.privateKeys.encryption, 'ECDH-ES+A256KW'), {
         keyManagementAlgorithms: ['ECDH-ES+A256KW'], contentEncryptionAlgorithms: ['A256GCM'],
@@ -53,7 +53,7 @@ export class FileJournal implements Journal {
     const context = this.context(id), record = { context, value };
     const signature = await sign(record, this.privateKeys.signing, 'journal');
     const bytes = encode(canonical({ ...record, signature }));
-    if (bytes.byteLength > 20_000_000) throw new Error('The execution record is too large.');
+    if (bytes.byteLength > 20_000_000) throw new Error('The journal entry is too large.');
     const envelope = await new CompactEncrypt(bytes).setProtectedHeader({
       alg: 'ECDH-ES+A256KW', enc: 'A256GCM', kid: this.binding.id, ctx: context,
     }).encrypt(await importJWK(this.binding.encryption, 'ECDH-ES+A256KW'));
