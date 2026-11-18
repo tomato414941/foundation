@@ -114,18 +114,17 @@ test('アプリを開けない読み手は接続を更新せず、アプリも�
   } finally { await f.close(); }
 });
 
-test('更新で権限が変わった接続を確認待ちにして、利用者の再承認を要求する', async () => {
+test('更新で権限が変わった接続も、そのまま更新して使う', async () => {
   const f = await setup(request => request.url.endsWith('/token')
     ? response({ access_token: 'broad-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read write' })
     : response({ id: 'account-1', name: 'Account' }));
   try {
     const c = await f.storedConnection();
-    await assert.rejects(f.connections.outputs(c.content, c.sources, new AbortController().signal),
-      { code: 'connection_review' });
-    assert.equal((await f.operations.state(f.delegate.actor, c.content.policy.id))!.state, 'uncertain');
-    assert.equal((await f.custody.read(f.owner.actor, c.content.policy.id)).content.materialRevision, 1);
-    await assert.rejects(f.connections.outputs(c.content, c.sources, new AbortController().signal),
-      { code: 'connection_busy' });
+    const used = await f.connections.outputs(c.content, c.sources, new AbortController().signal);
+    assert.ok(Object.values(used.values).includes('broad-access'));
+    const updated = await f.custody.get(c.content.policy.id);
+    assert.equal(updated.materialRevision, 2);
+    assert.deepEqual(updated.metadata.scopes, ['read', 'write']);
   } finally { await f.close(); }
 });
 
@@ -157,7 +156,7 @@ test('トークン更新の送信前に通信が途切れた場合、予約を�
   } finally { await f.close(); }
 });
 
-test('再承認が必要な接続を保留したまま、別の接続の復旧を完了する', async () => {
+test('確定できなかった更新を、あとで端末がまとめて確定する', async () => {
   let refreshes = 0;
   const f = await setup(request => request.url.endsWith('/token')
     ? response({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600,
@@ -167,10 +166,10 @@ test('再承認が必要な接続を保留したまま、別の接続の復旧�
     const first = await f.storedConnection('Changed permissions'), second = await f.storedConnection('Unchanged permissions');
     const offline = new Connections(f.delegate.binding, f.delegate.keys,
       { ...f.broker, async commit() { throw new Error('offline'); } }, f.journal, f.transport);
-    await assert.rejects(offline.outputs(first.content, first.sources, new AbortController().signal), { code: 'connection_review' });
+    await assert.rejects(offline.outputs(first.content, first.sources, new AbortController().signal), { code: 'connection_uncertain' });
     await assert.rejects(offline.outputs(second.content, second.sources, new AbortController().signal), { code: 'connection_uncertain' });
-    assert.equal((await f.connections.reconcile()).length, 1);
+    assert.deepEqual(await f.connections.reconcile(), []);
+    assert.equal((await f.custody.get(first.content.policy.id)).materialRevision, 2);
     assert.equal((await f.custody.get(second.content.policy.id)).materialRevision, 2);
-    assert.equal((await f.operations.state(f.delegate.actor, first.content.policy.id))!.state, 'uncertain');
   } finally { await f.close(); }
 });

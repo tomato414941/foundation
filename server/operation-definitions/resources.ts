@@ -2,7 +2,6 @@ import { z } from 'zod';
 import * as C from '../../shared/contracts.js';
 import { ResourceTransfer } from '../../shared/protocol.js';
 import { isProtected } from '../../shared/protected.js';
-import { methodDigest } from '../../shared/connection-methods.js';
 import { fail } from '../errors.js';
 import { DefinitionRegistry } from '../definitions.js';
 import type { OperationServices } from '../builtin-definitions.js';
@@ -50,12 +49,6 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
           });
         } else if (row.kind === 'method') {
           const definition = C.MethodDefinition.parse({ ...body.definition, name: body.name ?? row.name });
-          const previous = C.MethodDefinition.parse(row.data);
-          const reference = await resources.db.one(
-            "SELECT 1 FROM resource_references ref JOIN resources r ON r.id=ref.resource_id WHERE ref.referenced_id=$1 AND r.kind IN ('connection','app') LIMIT 1", [row.id]);
-          // Connections name their method by the digest of its rules: a method in use takes new labels, but not new rules.
-          if (reference && await methodDigest(previous) !== await methodDigest(definition))
-            fail(409, 'in_use', 'Create another connection method to change how existing connections authenticate.');
           row = await resources.update(row, { data: definition, ...(body.name ? { name: body.name } : {}) });
         } else fail(400, 'wrong_kind', 'This item does not have an editable definition.');
       }

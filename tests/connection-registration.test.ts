@@ -78,12 +78,9 @@ test('アプリ認証を登録し、利用時にトークンを取得して同�
   }); t.after(f.close);
   const app = await f.saveApp('ovh:client_credentials', 'App', { apiRegion: 'ca' });
   const saved = await f.saveConnection({ methodId: 'ovh:client_credentials', appId: app.id });
-  const registered = await f.client.read(saved.id);
   assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', 'https://ca.api.ovh.com/1.0/vps'))?.ok, true);
   assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', 'https://ca.api.ovh.com/1.0/vps'))?.ok, true);
-  const used = await f.client.read(saved.id);
   assert.equal(grants, 2);
-  assert.equal(used.content.metadata.authorizationDigest, registered.content.metadata.authorizationDigest);
   const material = await f.client.connection(saved.id);
   assert.equal(material.oauth?.accessToken, 'use-token-2');
 });

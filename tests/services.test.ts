@@ -138,7 +138,7 @@ test('選択した実行先のワークロード権限でIAMロールを引き�
   assert.ok(obtained.every(item => item === role.arn + ':' + role.externalId));
 });
 
-test('使っている接続方式は、名前や説明を変えると接続にも新しい名前で出てそのまま使え、決まりは変えられない', async t => {
+test('使っている接続方式の名前や説明や決まりを変えると、接続はそのまま新しい内容で使える', async t => {
   const f = await flowFixture(() => jsonResponse({ ok: true })); t.after(f.close);
   const definition = await f.method('cloudrift:api_key');
   const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources', { method: 'POST',
@@ -152,7 +152,8 @@ test('使っている接続方式は、名前や説明を変えると接続に�
   const used = await f.inputs([{ name: 'CLOUDRIFT_API_KEY', source: { id: connection.id, output: 'CLOUDRIFT_API_KEY' } }]);
   assert.equal(used.environment.CLOUDRIFT_API_KEY, 'own-method-token');
 
-  await assert.rejects(f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: relabeled.version,
-    definition: { ...definition, config: { ...definition.config, outputs: { ...definition.config.outputs, CLOUDRIFT_TOKEN: '/token' } } } } }, Resource),
-  { code: 'in_use' });
+  await f.client.api.json('/api/resources/' + method.id, { method: 'PATCH', body: { version: relabeled.version,
+    definition: { ...definition, config: { ...definition.config, outputs: { ...definition.config.outputs, CLOUDRIFT_TOKEN: '/token' } } } } }, Resource);
+  const changed = await f.inputs([{ name: 'TOKEN', source: { id: connection.id, output: 'CLOUDRIFT_TOKEN' } }]);
+  assert.equal(changed.environment.TOKEN, 'own-method-token');
 });

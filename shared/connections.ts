@@ -1,12 +1,11 @@
 import { z } from 'zod';
 import { ApprovalMethod, AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import type { MethodDescription } from './contracts.js';
-import { Fingerprint, canonical, hash } from './authority.js';
-import { connectionMethod, methodDigest, requiresApp } from './connection-methods.js';
+import { Fingerprint, canonical } from './authority.js';
+import { connectionMethod, requiresApp } from './connection-methods.js';
 import { decode, encode } from './encryption.js';
 import { fail } from './errors.js';
 import { AwsConnectionMaterial, AwsConnectionInfo } from './aws.js';
-import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
 import { ConnectionFacts, connectionFacts } from './connection-facts.js';
 import type { ConnectionFactValues } from './connection-facts.js';
 import { documentAccount, publicConnectionFields, visibleConnectionFields } from './connection-fields.js';
@@ -67,26 +66,26 @@ export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
 export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
   clientId: z.string().max(1000), generation: Id, fields: Fields.optional() }).strict();
-// Signed with the encrypted content. It names the method by id and by the digest of the method's rules; display names
-// are not part of it: they travel as labels.
+// Signed with the encrypted content. It names the method by id; display names are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
-  methodId: z.string().min(1).max(200), methodDigest: Fingerprint, methodKind: AuthKind,
-  generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
+  methodId: z.string().min(1).max(200), methodKind: AuthKind,
+  generation: Id, appId: Id.nullable(),
   accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
   fields: Fields.optional(),
   aws: AwsConnectionInfo.optional(),
+  // Connections signed while Foundation approved method rules, accounts and permissions still carry these, and keep
+  // them when their readers change. Nothing reads them.
+  methodDigest: Fingerprint.optional(), authorizationDigest: Fingerprint.optional(),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {
   const { outputs } = connectionMethod(state.method);
   const fields = state.method.kind !== 'aws' && state.fields ? visibleConnectionFields(state.method.config.fields, state.fields) : {};
-  const authorizationDigest = await hash(connectionAuthorization(state, facts));
   return ConnectionMetadata.parse({
-    methodId: state.methodId, methodDigest: await methodDigest(state.method), methodKind: state.method.kind,
-    generation: state.generation, authorizationDigest, appId: state.appId,
-    accountId: connectionAccount(state, facts),
+    methodId: state.methodId, methodKind: state.method.kind, generation: state.generation, appId: state.appId,
+    accountId: facts.accountVerified ? facts.accountId : null,
     accountVerified: facts.accountVerified,
     scopes: facts.scopes, scopesStatus: facts.scopesStatus,
     outputs, state: state.state ?? 'ready',

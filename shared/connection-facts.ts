@@ -5,8 +5,7 @@ import type { ConnectionState } from './connections.js';
 import { awsAuthorization, awsConnectionInfo, stableAwsArn } from './aws.js';
 
 const commonFacts = new Set(['format', 'generation', 'methodId', 'method', 'appId', 'appGeneration', 'account',
-  'accountId', 'accountVerified', 'scopes', 'scopesStatus', 'outputs', 'state', 'methodKind', 'methodDigest',
-  'authorizationDigest']);
+  'accountId', 'accountVerified', 'scopes', 'scopesStatus', 'outputs', 'state', 'methodKind']);
 const extensions = JsonObject.refine(value => Object.keys(value).every(key => !commonFacts.has(key)),
   'Keep method-specific facts separate from common facts.');
 

@@ -2,13 +2,13 @@ import { z } from 'zod';
 import type { CustodyClient } from './client.js';
 import { CatalogMethod, DEVICE_CODE_GRANT, Id, JsonObject, Name, Resource, listOf } from './contracts.js';
 import type { MethodDescription } from './contracts.js';
-import { Fingerprint, canonical, hash } from './authority.js';
+import { canonical, hash } from './authority.js';
 import { AccessPolicy, ContentTypes } from './custody.js';
 import { OAuthRelay, ProtectedWrite, relayContext } from './protocol.js';
 import { decode, open, base64url } from './encryption.js';
 import { AppMaterial, ConnectionMaterial, connectionMetadata, connectionLabels, keptConnection, sealedConnection, withMethod } from './connections.js';
 import type { ConnectionState } from './connections.js';
-import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from './connection-methods.js';
+import { catalogDefinition, connectionMethod, selectScopes } from './connection-methods.js';
 import { ConnectService, OperationView, serviceStep } from './operations.js';
 import type { KeyholderPlan } from './operation-client.js';
 import { BrowserTransport } from './http.js';
@@ -20,12 +20,12 @@ import { RunPodApproval, startRunPodApproval, pollRunPodApproval } from './runpo
 import { DeviceAuthorization } from './oauth-device.js';
 import { OAuth } from './oauth.js';
 
-// The progress of a connection being made, sealed for the device that makes it. It names its method by id and by the
-// digest of the method's rules, and keeps what it has of the connection and of the write that saves it without the
-// method and without the names and labels Foundation keeps.
+// The progress of a connection being made, sealed for the device that makes it. It names its method by id, and keeps
+// what it has of the connection and of the write that saves it without the method and without the names and labels
+// Foundation keeps.
 export const FlowRecord = z.object({
   id: Id, ownerId: Id,
-  registration: z.object({ methodId: z.string().min(1), methodDigest: Fingerprint, appId: Id.nullable(), app: AppMaterial.nullable(),
+  registration: z.object({ methodId: z.string().min(1), appId: Id.nullable(), app: AppMaterial.nullable(),
     fields: z.record(z.string(), z.string()), scopes: z.array(z.string()) }).strict(),
   policy: AccessPolicy, previousPolicyDigest: z.string().nullable(),
   step: z.enum(['start', 'cli', 'authorize', 'exchange', 'commit', 'connected', 'cancelled', 'failed']),
@@ -70,7 +70,7 @@ export class ConnectionClient {
   // Starts authorizing at the service for the operation that makes the connection, which then waits on it.
   async start(plan: KeyholderPlan, method: MethodDescription, fields: Record<string, string>): Promise<FlowProgress> {
     const input = ConnectService.parse(plan.input);
-    if (plan.name !== 'connection.connect' || input.methodDigest !== await methodDigest(method) || !input.name)
+    if (plan.name !== 'connection.connect' || !input.name)
       throw new Error('Use the connection prepared by this operation.');
     for (const [key, value] of Object.entries(input.fields ?? {}))
       if (value && fields[key] !== value) throw new Error('Use the service settings prepared by this operation.');
@@ -85,7 +85,7 @@ export class ConnectionClient {
     const app = registrationApplication({ methodId: input.methodId, method, appId: appId ?? undefined, app: savedApp });
     const policy = await connectionPolicy(this.custody, input.ownerId, previous, input.users);
     const id = crypto.randomUUID(), flow: ConnectionFlow = {
-      id, ownerId: input.ownerId, registration: { methodId: input.methodId, methodDigest: input.methodDigest, appId, app,
+      id, ownerId: input.ownerId, registration: { methodId: input.methodId, appId, app,
         fields, scopes }, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
       step: this.device === 'browser' && browserExchange(method) === 'unavailable' ? 'cli' : 'start',
       createdAt: new Date().toISOString(), expiresAt: Date.now() + this.window(method), operationId: plan.id,
@@ -117,18 +117,15 @@ export class ConnectionClient {
     await this.custody.api.json('/api/operations/' + flow.operationId + '/perform', { method: 'POST', body: { proof } }, OperationView);
   }
   private view(flow: ConnectionFlow) { return FlowView.parse(flow); }
-  // The method a connection is made through, read from where it is kept and checked against the rules it started with.
+  // The method a connection is made through, read from where it is kept.
   private async method(flow: ConnectionFlow): Promise<MethodDescription> {
     const selected = (await this.custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod))).items
       .find(item => item.id === flow.registration.methodId);
-    const method = selected && catalogDefinition(selected);
-    if (!method || await methodDigest(method) !== flow.registration.methodDigest)
-      throw new Error('The connection method changed. Start the connection again.');
-    return method;
+    if (!selected) throw new Error('The connection method is no longer available. Start the connection again.');
+    return catalogDefinition(selected);
   }
   private async registration(flow: ConnectionFlow) {
-    const { methodDigest: _methodDigest, ...registration } = flow.registration;
-    return { ...registration, method: await this.method(flow) };
+    return { ...flow.registration, method: await this.method(flow) };
   }
   // The connection made so far, with the method it is made through.
   private async state(flow: ConnectionFlow) {
@@ -149,7 +146,7 @@ export class ConnectionClient {
   }
   private async awaitingAuthorization(flow: ConnectionFlow) {
     const active = await this.operation(flow);
-    if (active.state !== 'in_progress' || active.continuation?.id !== flow.id || active.input.methodDigest !== flow.registration.methodDigest)
+    if (active.state !== 'in_progress' || active.continuation?.id !== flow.id)
       throw new Error('Continue the connection that is awaiting authorization.');
   }
   private async currentApplication(flow: ConnectionFlow) {

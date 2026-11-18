@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
-import { methodDigest } from '../shared/connection-methods.js';
-import { connectionAuthorization } from '../shared/connection-authorization.js';
 import { connectionFacts } from '../shared/connection-facts.js';
 import { AwsConnection } from '../runtime/aws-connection.js';
 import { OAuthConnection } from '../runtime/oauth-connection.js';
@@ -49,8 +47,7 @@ test('各方式のProviderが秘密を含まないメタデータを認証情報
     const facts = providers[state.method.kind].facts(state), metadata = await connectionMetadata(state, facts);
     assert.deepEqual(facts, connectionFacts(state));
     assert.equal(JSON.stringify(facts).includes('private-'), false);
-    assert.equal(connectionAuthorization(state, facts).account, metadata.accountId);
-    assert.equal(metadata.methodDigest, await methodDigest(state.method));
+    assert.equal(metadata.accountId, facts.accountVerified ? facts.accountId : null);
     assert.deepEqual(metadata.scopes, facts.scopes);
   });
 });

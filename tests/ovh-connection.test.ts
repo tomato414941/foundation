@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
-import { ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
+import { connectionMetadata } from '../shared/connections.js';
 import { ovhAccessRules } from '../shared/ovh.js';
 
 const keys = { applicationKey: 'application-id', applicationSecret: 'application-secret', consumerKey: 'consumer-key' };
 const apiBases = { eu: 'https://eu.api.ovh.com/1.0', ca: 'https://ca.api.ovh.com/1.0', us: 'https://api.us.ovhcloud.com/1.0' };
 
-test('OVHのAPI Keysを各地域で暗号化して保存し、地域を認可の内容に含める', async t => {
+test('OVHのAPI Keysを各地域で暗号化して保存し、地域を公開の設定として示す', async t => {
   for (const apiRegion of ['eu', 'ca', 'us'] as const) await t.test(apiRegion, async t => {
     const f = await flowFixture(); t.after(f.close);
     const saved = await f.saveConnection({ methodId: 'ovh:api_key', fields: { apiRegion, ...keys } });
@@ -16,8 +16,6 @@ test('OVHのAPI Keysを各地域で暗号化して保存し、地域を認可の
     assert.equal(material.fields!.applicationSecret, keys.applicationSecret);
     const metadata = await connectionMetadata(material);
     assert.deepEqual(metadata.fields, { apiRegion });
-    const changed = ConnectionMaterial.parse({ ...material, fields: { ...material.fields, apiRegion: apiRegion === 'ca' ? 'eu' : 'ca' } });
-    assert.notEqual((await connectionMetadata(changed)).authorizationDigest, metadata.authorizationDigest);
   });
 });
 

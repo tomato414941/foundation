@@ -32,7 +32,8 @@ export type ReviewValue =
   | { kind: 'group'; rows: ReviewRow[] };
 export interface ReviewRow { field: string; value: ReviewValue; literal?: boolean }
 
-// Fields that only keep concurrent changes apart, never what the operation does.
+// Fields that never say what the operation does: those that keep concurrent changes apart, and the method digest that
+// connect operations made before Foundation stopped pinning methods still hold in the history.
 const hidden = new Set(['version', 'revision', 'methodDigest']);
 const times = new Set(['expiresAt']);
 const keys = new Set(['hostKeys', 'publicKey']);

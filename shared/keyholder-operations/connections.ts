@@ -6,7 +6,7 @@ import { ContentTypes } from '../custody.js';
 import { AppMaterial, connectionLabels, connectionMetadata, requiresApp, sealedConnection } from '../connections.js';
 import { suppliedConnectionFields, visibleConnectionFields } from '../connection-fields.js';
 import { decode, encode } from '../encryption.js';
-import { catalogDefinition, connectionMethod, methodDigest, selectScopes } from '../connection-methods.js';
+import { catalogDefinition, connectionMethod, selectScopes } from '../connection-methods.js';
 import { connectionPolicy, withUsers } from '../connection-policy.js';
 import { registrationMaterial, registrationApplication } from '../connection-registration.js';
 import type { KeyholderPlan, OperationResultView, PrivateOperationInput } from '../operation-client.js';
@@ -101,7 +101,6 @@ class ConnectionOperations {
     }
     const appId = connection.appId;
     if (!connectionMethod(method).browserAuthorization) {
-      if (await methodDigest(method) !== connection.methodDigest) throw new Error('Review the current connection method.');
       const previous = connection.connectionId ? await this.client.custody.latest(connection.connectionId) : undefined;
       if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
         throw new Error('Choose a connection belonging to this owner.');

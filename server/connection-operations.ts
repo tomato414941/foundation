@@ -94,9 +94,8 @@ export class ConnectionOperations {
       const { binding } = await this.custody.bindings.current(actor.id, connection);
       if (content.signerId !== binding.id || content.policy.id !== operation.resource_id ||
         previous.materialRevision !== operation.expected_revision || content.materialRevision !== operation.expected_revision + 1 ||
-        await hash(content.policy) !== await hash(previous.policy) ||
-        content.metadata.authorizationDigest !== previous.metadata.authorizationDigest)
-        fail(409, 'changed', 'A token update must preserve the approved account, method, permissions, and recipients.');
+        await hash(content.policy) !== await hash(previous.policy))
+        fail(409, 'changed', 'A token update must replace this revision of the connection for the same recipients.');
       const resource = await this.custody.resources.get(operation.resource_id, connection);
       await connection.query('UPDATE resource_custody SET content=$2 WHERE resource_id=$1',
         [operation.resource_id, JSON.stringify(content)]);

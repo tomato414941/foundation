@@ -620,7 +620,6 @@ const words: Record<string, [string, string]> = {
   pagination: ['ページ送り', 'Pagination'],
   'state.ready': ['接続済み', 'Connected'],
   'state.reconnect': ['再接続が必要', 'Reconnect required'],
-  'state.review': ['確認待ち', 'Awaiting review'],
   'state.disconnecting': ['解除中', 'Disconnecting'],
   'state.failed': ['失敗', 'Failed'],
   'state.succeeded': ['完了', 'Completed'],

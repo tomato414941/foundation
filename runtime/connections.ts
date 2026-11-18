@@ -3,7 +3,7 @@ import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, connectionMetadata, openConnection, requiresApp, sealedConnection } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
-import { connectionMethod, methodDigest } from '../shared/connection-methods.js';
+import { connectionMethod } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
 import { ContentTypes, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyContent } from '../shared/custody.js';
@@ -55,21 +55,10 @@ export class Connections {
     if (!content) fail(409, 'input_required', 'Include the connection and its application in the inputs.');
     return content;
   }
-  // The method a connection names, as the server hands it over, once its rules match the digest in the connection's
-  // signed metadata: the server cannot change what a connection does.
-  private async method(content: CustodyContent) {
-    if (typeof content.metadata.methodDigest !== 'string')
-      fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
-    const method = await this.broker.method(content.policy.id);
-    if (await methodDigest(method) !== content.metadata.methodDigest)
-      fail(409, 'reconnect_required', 'Reconnect this service: its connection method changed.');
-    return method;
-  }
+  // A connection is used with the method the server keeps for it now.
   private async material(content: CustodyContent) {
-    const method = await this.method(content);
+    const method = await this.broker.method(content.policy.id);
     const result = openConnection(await reveal(content, this.binding, this.keys.encryption), content.metadata, method);
-    if ((await this.metadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
-      fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
     if (result.state === 'reconnect')
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
@@ -105,8 +94,6 @@ export class Connections {
 
   private async refreshed(record: Renewal, material: ConnectionState) {
     const metadata = await this.metadata(material);
-    if (metadata.authorizationDigest !== record.previous.metadata.authorizationDigest)
-      fail(409, 'connection_review', 'Review the changed service account or permissions before sharing the updated connection.');
     record.material = material;
     record.content = await renewContent(record.previous, sealedConnection(material), this.binding, this.keys, metadata);
     record.phase = 'settled';
@@ -138,7 +125,7 @@ export class Connections {
     } catch (error) {
       if (record.phase === 'prepared') await this.broker.abort(id, operation.fence);
       else await this.broker.uncertain(id, operation.fence).catch(() => {});
-      if (error instanceof DomainError && ['connection_review', 'reconnect_required', 'account_changed', 'authorization_failed', 'service_rate_limit'].includes(error.code)) throw error;
+      if (error instanceof DomainError && ['reconnect_required', 'account_changed', 'authorization_failed', 'service_rate_limit'].includes(error.code)) throw error;
       fail(409, 'connection_uncertain', 'Check the token update before using this connection again.');
     }
   }

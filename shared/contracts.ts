@@ -380,10 +380,9 @@ export const ConnectionResource = z.object({
     scopes: z.array(z.string()),
     scopesStatus: z.enum(['unknown', 'requested', 'reported']).default('unknown'),
     outputs: z.array(z.string()),
-    state: z.enum(['ready', 'reconnect', 'review', 'disconnecting', 'uncertain']),
+    state: z.enum(['ready', 'reconnect', 'disconnecting', 'uncertain']),
     appId: Id.nullable(),
     generation: Id.optional(),
-    authorizationDigest: z.string().optional(),
     aws: AwsConnectionInfo.optional(),
   }),
 });

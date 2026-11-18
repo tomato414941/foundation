@@ -3,7 +3,7 @@ import * as C from '../../shared/contracts.js';
 import * as P from '../../shared/protocol.js';
 import { AppSave, AuthorizeConnection, ConnectService, ValueSave } from '../../shared/operations.js';
 import { canonical } from '../../shared/authority.js';
-import { connectionMethod, methodDigest, selectScopes } from '../../shared/connection-methods.js';
+import { connectionMethod, selectScopes } from '../../shared/connection-methods.js';
 import { publicConnectionFields, ConnectionFieldError } from '../../shared/connection-fields.js';
 import { ContentTypes } from '../../shared/custody.js';
 import type { PolicyParties } from '../../shared/custody.js';
@@ -98,25 +98,22 @@ export function defineConnections(definitions: DefinitionRegistry, services: Pic
     { keyholder: true, continuation: 'connection', configure: ['name', 'appId', 'clientId', 'users', 'fields', 'scopes'],
       secret: pointer => pointer === '/clientSecret' || /^\/fields\/[^/]+$/.test(pointer),
       review: async (who, input) => {
-        const digest = await methodDigest(await catalog.method(who, z.string().parse(input.methodId)));
-        if (input.methodDigest && input.methodDigest !== digest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        await catalog.method(who, z.string().parse(input.methodId));
         await sameService(who, z.object({ connectionId: C.Id.optional(), methodId: z.string() }).parse(input));
-        return { ...await reviewFields(who, input), methodDigest: digest };
+        return reviewFields(who, input);
       },
       resolve: async (who, input) => {
-        const digest = await methodDigest(await catalog.method(who, input.methodId));
-        if (input.methodDigest && input.methodDigest !== digest) fail(409, 'changed', 'The connection method changed. Review it again.');
+        await catalog.method(who, input.methodId);
         await sameService(who, input);
-        return { ...await reviewFields(who, input), methodDigest: digest };
+        return reviewFields(who, input);
       },
       complete: async (who, input, proof) => {
         await sameService(who, input);
         const method = await catalog.method(who, input.methodId), write = P.ProtectedWrite.parse(proof), policy = write.content.policy;
         const previous = input.connectionId ? await custody.get(input.connectionId) : null;
-        if (await methodDigest(method) !== input.methodDigest || policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
+        if (policy.ownerId !== input.ownerId || policy.contentType !== ContentTypes.tokenSet ||
           write.name !== (input.name ?? method.name) || input.connectionId && policy.id !== input.connectionId ||
-          write.content.metadata.methodId !== input.methodId || write.content.metadata.methodDigest !== input.methodDigest ||
-          write.content.metadata.methodKind !== method.kind ||
+          write.content.metadata.methodId !== input.methodId || write.content.metadata.methodKind !== method.kind ||
           write.content.metadata.appId !== (input.appId ?? null) || write.content.metadata.state !== 'ready')
           fail(409, 'operation_changed', 'Save the connection approved by this operation.');
         await requireFields(who, input, write.content.metadata);

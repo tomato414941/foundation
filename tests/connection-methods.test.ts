@@ -170,7 +170,6 @@ test('初期スコープを選び直し、必須スコープと選択内容を�
     assert.deepEqual(tokenRequests.map(request => new URLSearchParams(String(request.body)).get('scope')), [expected.join(' ')]);
     const renewed = await f.client.read(saved.id);
     assert.ok(renewed.content.materialRevision > 1);
-    assert.equal(renewed.content.metadata.authorizationDigest, registered.content.metadata.authorizationDigest);
   });
 });
 
