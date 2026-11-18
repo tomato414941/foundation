@@ -37,6 +37,7 @@ import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOut
   requestConnection, saveApp, startConnection } from './connections.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
 import { newSSHKey, sshAccess, withStoredKey } from './ssh-access.js';
+import { downloadRelease, releaseWorkflow } from './releases.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
 const help = `Foundation ${packageInfo.version}
@@ -49,6 +50,8 @@ Usage: foundation <command> [options]
   status                               Show this machine and its accessible principals
   identity list                        List the identities saved on this machine
   identity use ID                      Make a saved identity the default
+  update [VERSION]                     Download the newest CLI release, or VERSION, check that the
+                                       Foundation release workflow built it, and name the file to install
   request-access [--to ID] [--wait]     Ask another principal to delegate access to this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   operation kinds                      List the kinds of operation and their inputs
@@ -566,6 +569,17 @@ async function main(argv: string[]) {
   }
   if (command === 'identity') {
     await identity(args);
+    return 0;
+  }
+  if (command === 'update') {
+    const release = await downloadRelease(packageInfo.version, args.positionals[0]);
+    if (!('file' in release)) {
+      await output(release, args);
+      return 0;
+    }
+    const file = /^[\w@%+=:,./-]+$/.test(release.file) ? release.file : "'" + release.file.replaceAll("'", "'\\''") + "'";
+    await output({ ...release, builtBy: releaseWorkflow,
+      next: 'Install it with: npm install --global --ignore-scripts ' + file }, args);
     return 0;
   }
   const client = new Client(await currentIdentity(await readIdentity(args.values.origin, args.values.principal)));
