@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { RequestView } from './operations.js';
 import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
-import { catalogDefinition, methodDigest, methodRules } from './connection-methods.js';
-import { connectionLabels, connectionMetadata, openConnection, sealedConnection } from './connections.js';
-import { earlierConnection } from './connection-legacy.js';
+import { catalogDefinition } from './connection-methods.js';
+import { openConnection } from './connections.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { endorsementPayload, RotationRequest } from './key-rotations.js';
 import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, verifyBinding, verifiesReplacement } from './authority.js';
@@ -12,9 +11,7 @@ import {
   AccessPolicy, ContentTypes, continuesPolicy, policyAuthority, protect, reveal, verifyContent,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, PolicyParties } from './custody.js';
-import { earlierUsers, isEarlier, revealEarlier, verifyEarlier } from './custody-legacy.js';
-import type { EarlierSealed } from './custody-legacy.js';
-import { BoundRecipient, KeySharingItem, Reprotection, StoredRead, TransferRecipients } from './protocol.js';
+import { BoundRecipient, KeySharingItem, ProtectedRead, Reprotection, TransferRecipients } from './protocol.js';
 import type { ProtectedWrite } from './protocol.js';
 import { isProtected } from './protected.js';
 import { KeyringState, keyringClaim, openKeyring, signKeyring } from './keyring.js';
@@ -35,7 +32,7 @@ export interface TrustStore {
   // new format starts fresh instead of reading records written in another one.
   checkpoint(content: { policy: { format: number; id: string } }):
     Promise<{ policy: PolicyParties; materialRevision: number; digest: string } | null>;
-  rememberContent(content: CustodyContent | EarlierSealed): Promise<void>;
+  rememberContent(content: CustodyContent): Promise<void>;
 }
 export class ClientFailure extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -255,17 +252,7 @@ export class CustodyClient {
   // The item as sealed now, to seal its next value: what this identity opens, or, sealed only for keys this identity has
   // since replaced, the item to seal anew with its current keys. Nothing opens its earlier value any more.
   async latest(id: string): Promise<{ content: CustodyContent; version: number; replaced: boolean }> {
-    const item = await this.api.json('/api/custody/' + Id.parse(id), {}, StoredRead);
-    if (isEarlier(item.content)) {
-      // Sealed under the earlier policy: one of its authorities seals it again under the current one first.
-      await this.reformat(id, { content: item.content, version: item.version });
-      const current = await this.api.json('/api/custody/' + Id.parse(id), {}, StoredRead);
-      if (isEarlier(current.content)) throw new ClientFailure('content_conflict', 'The item was not sealed again.');
-      return this.checked(id, { content: current.content, version: current.version });
-    }
-    return this.checked(id, { content: item.content, version: item.version });
-  }
-  private async checked(id: string, item: { content: CustodyContent; version: number }) {
+    const item = await this.api.json('/api/custody/' + Id.parse(id), {}, ProtectedRead);
     if (this.replaces(item.content.policy)) return { ...item, replaced: true };
     await this.observe(item.content, id);
     return { ...item, replaced: false };
@@ -331,7 +318,7 @@ export class CustodyClient {
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
     options: { metadata?: Record<string, JsonValue>; labels?: z.infer<typeof import('./connections.js').ConnectionLabels>;
-      previous?: { content: CustodyContent | EarlierSealed; version: number };
+      previous?: { content: CustodyContent; version: number };
       commit?: (write: z.infer<typeof ProtectedWrite>) => Promise<ResourceView> } = {}) {
     const previous = options.previous;
     if (previous && canonical(policy) === canonical({ ...previous.content.policy, revision: policy.revision }))
@@ -372,10 +359,8 @@ export class CustodyClient {
     return (await this.api.json('/api/principals/' + this.binding.principalId + '/reprotection', {}, listOf(Reprotection))).items;
   }
   // Seals the item again without the principals that may no longer open it, for whoever now uses what its owner holds
-  // and whose keys this device has verified, and for the current keys of those it is sealed for. An item still sealed
-  // under the earlier policy is sealed again under the current one when it is read.
-  async reprotect(id: string, reason: z.infer<typeof Reprotection>['reason'] = 'recipients', remove: string[] = []) {
-    if (reason === 'format') return (await this.latest(id)).content.policy.id;
+  // and whose keys this device has verified, and for the current keys of those it is sealed for.
+  async reprotect(id: string, remove: string[] = []) {
     const previous = await this.read(id), { policy } = previous.content;
     const next = { ...policy, ...await this.resealed(id, policy, new Set(remove)) };
     if (canonical({ ...next, revision: policy.revision }) === canonical(policy)) return null;
@@ -409,48 +394,6 @@ export class CustodyClient {
       authorities: [...authorities, ...added.filter(binding => !authorities.some(authority => authority.id === binding.id))],
       ...(policy.observers ? { observers: policy.observers.filter(principal => !removed.has(principal)) } : {}) };
   }
-  // An item sealed under the earlier policy, sealed again under the current one by one of its authorities, for the same
-  // parties and, as readers, for the principals it still let use it for themselves. A connection signs what its method
-  // is now when the method changed only by losing its HTTP settings, and one sealed with its method inside is sealed
-  // without it.
-  private async reformat(id: string, stored: { content: EarlierSealed; version: number }) {
-    const { content } = stored, { policy } = content;
-    if (!policy.authorities.some(authority => canonical(authority) === canonical(this.binding)))
-      throw new ClientFailure('reseal_required', 'One of its authorities must seal this item again before it can be used.');
-    await verifyEarlier(content);
-    if (policy.id !== id || policy.origin !== this.origin) throw new Error('The encrypted content belongs to another item.');
-    await this.trusted(policyAuthority(content));
-    const observed = await this.trust.checkpoint(content);
-    if (await this.trust.checkpoint({ policy: { format: 3, id } }) || observed && (policy.revision < observed.policy.revision ||
-      content.materialRevision < observed.materialRevision ||
-      content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
-      throw new ClientFailure('content_conflict', 'The encrypted content is older than this device has already observed.');
-    const users: BoundKeys[] = [];
-    for (const user of earlierUsers(content)) {
-      if (policy.readers.some(reader => reader.principalId === user.principalId)) continue;
-      const found = await this.inspectIdentity(user.principalId).then(identity => identity.binding, () => null);
-      try { if (found) users.push(await this.trusted(found)); }
-      catch (error) {
-        if (!(error instanceof ClientFailure) || error.code !== 'identity_untrusted' && error.code !== 'identity_changed') throw error;
-      }
-    }
-    const next = AccessPolicy.parse({ format: 3, origin: policy.origin, id, ownerId: policy.ownerId, contentType: policy.contentType,
-      ...await this.resealed(id, { ...policy, readers: [...policy.readers, ...users] }, new Set()) });
-    let bytes = await revealEarlier(content, this.binding, this.keys.encryption), metadata = content.metadata;
-    let labels: z.infer<typeof import('./connections.js').ConnectionLabels> | undefined;
-    if (policy.contentType === ContentTypes.tokenSet && typeof metadata.methodDigest !== 'string') {
-      const state = earlierConnection(bytes);
-      bytes = sealedConnection(state); metadata = await connectionMetadata(state); labels = connectionLabels(state);
-    } else if (policy.contentType === ContentTypes.tokenSet) {
-      const { http, revocable: _revocable, ...rest } = metadata;
-      const method = catalogDefinition(await this.api.json('/api/connections/' + id + '/method', {}, CatalogMethod));
-      const digest = await methodDigest(method);
-      const approved = http === undefined ? digest : await hash({ ...methodRules(method), http });
-      metadata = { ...rest, methodDigest: approved === metadata.methodDigest ? digest : String(metadata.methodDigest) };
-    }
-    const resource = await this.api.json('/api/resources/' + id, {}, Resource);
-    await this.save(resource.name, bytes, next, { metadata, previous: stored, ...(labels ? { labels } : {}) });
-  }
   // Seals each listed item again on its own: one that cannot change now is left, with the reason, for another time.
   async reprotectPending(onProgress?: (progress: { completed: number; total: number }) => void) {
     const done: string[] = [], failed: Array<{ id: string; code: string; verification?: RecipientVerification[] }> = [];
@@ -459,7 +402,7 @@ export class CustodyClient {
     onProgress?.({ completed, total: items.length });
     for (const item of items) {
       try {
-        if (await this.reprotect(item.id, item.reason, item.remove)) done.push(item.id);
+        if (await this.reprotect(item.id, item.remove)) done.push(item.id);
         const verification = this.pendingExclusions.get(item.id);
         if (verification?.length) failed.push({ id: item.id, code: 'recipient_excluded', verification });
       } catch (error) {

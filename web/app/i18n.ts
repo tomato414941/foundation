@@ -740,9 +740,9 @@ const words: Record<string, [string, string]> = {
     'まだ作り直せません。申請から7日たつまでお待ちください。',
     'The new keys cannot be made yet. Wait until 7 days after the request.',
   ],
-  'errors.reseal_required': [
-    'この項目は、持ち主の端末で暗号化し直すまで使えません。持ち主がFoundationを開くと暗号化し直されます。',
-    "This item can't be used until its owner's device encrypts it again, which happens when the owner opens Foundation.",
+  'errors.content_outdated': [
+    'この項目は以前の形で暗号化されたままなので、どの端末でも開けません。削除してから、接続し直すか保存し直してください。',
+    'This item is still encrypted in an earlier form that no device can open. Delete it, then connect or save it again.',
   ],
   'errors.key_replaced': [
     '作り直す前の秘密鍵で暗号化されているため、開けません。値を入れ直すか、つなぎ直してください。',

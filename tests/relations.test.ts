@@ -107,7 +107,7 @@ test('委任先の線は封じ直しを待たずに引けて外せ、外した�
   await f.relations.draw(owner.actor, line);
   assert.equal(await f.authorization.holds(ai.actor.id, await f.resources.get(id), 'reveal'), true);
   await assert.rejects(f.custody.read(ai.actor, id), { code: 'forbidden' });
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, reason: 'recipients', remove: [] }]);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [] }]);
   const before = await f.custody.read(owner.actor, id);
   await f.custody.put(owner.actor, { name: 'Token', version: before.version, content: await sealed([owner.binding, ai.binding], 2, before) });
   const shared = await f.custody.read(ai.actor, id);
@@ -121,7 +121,7 @@ test('委任先の線は封じ直しを待たずに引けて外せ、外した�
     changed.content.materialRevision + 1, ai.binding, ai.keys, undefined, changed.content) }), { code: 'forbidden' });
   await f.relations.erase(owner.actor, line);
   await assert.rejects(f.custody.read(ai.actor, id), { code: 'forbidden' });
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, reason: 'recipients', remove: [ai.actor.id] }]);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [ai.actor.id] }]);
   const kept = await f.custody.read(owner.actor, id);
   assert.equal(decode(await reveal(kept.content, owner.binding, owner.keys.encryption)), 'agent value');
 });
@@ -232,7 +232,7 @@ test('共有を任されただけの人には、読めないものの所有者�
 // The application over a fixture, and a way to call it as one of its people.
 async function served(f: Awaited<ReturnType<typeof fixture>>) {
   const app = await buildApp(await createContext(f.config, { db: f.db, mailer: f.mailer }));
-  const call = (who: { token: string }, url: string, payload: object = {}, method: 'POST' | 'PUT' = 'POST') =>
+  const call = (who: { token: string }, url: string, payload: object = {}, method: 'GET' | 'POST' | 'PUT' = 'POST') =>
     app.inject({ method, url, headers: { authorization: 'Bearer ' + who.token }, payload });
   return { app, call };
 }
