@@ -22,8 +22,7 @@
           "SALESFORCE_TOKEN_EXPIRES_AT": "/expiresAt"
         },
         "keep": [
-          "instance_url",
-          "id"
+          "instance_url"
         ],
         "hint": "SALESFORCE_INSTANCE_URL is the org's API base URL (<SALESFORCE_INSTANCE_URL>/services/data/...).",
         "scopes": {

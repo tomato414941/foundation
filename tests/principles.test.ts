@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
 import { z } from 'zod';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { encode } from '../shared/encryption.js';
@@ -124,4 +125,23 @@ test('つなぎかけの接続の進み具合は、接続とつなぎ方の名�
     const sealed = JSON.stringify(await store.records.get(progress.flow.id, z.unknown()));
     assert.equal(sealed.includes(name) || sealed.includes(description), false);
   } finally { await f.close(); }
+});
+
+// Why: the user decided that a seal holds only what using a connection needs, and that Foundation copies nothing the
+// service keeps about itself. A Salesforce connection once kept the identity URL from its token response, which no
+// command receives.
+// Intent: for each built-in method that keeps values from a token response, find each of them among the values a
+// command receives.
+test('トークンの応答から封に残す値は、どれも手元のコマンドに渡す', async () => {
+  const directory = new URL('../server/catalog/', import.meta.url);
+  for (const file of (await readdir(directory)).filter(name => name.endsWith('.json'))) {
+    const service = JSON.parse(await readFile(new URL(file, directory), 'utf8')) as
+      { methods: Record<string, { config?: { keep?: string[]; outputs?: Record<string, string> } }> };
+    for (const [key, method] of Object.entries(service.methods)) {
+      const read = Object.values(method.config?.outputs ?? {});
+      for (const kept of method.config?.keep ?? [])
+        assert.ok(read.some(pointer => pointer === '/' + kept || pointer.startsWith('/' + kept + '/')),
+          `${file} ${key} keeps ${kept} without passing it to commands`);
+    }
+  }
 });
