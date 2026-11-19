@@ -3,8 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { configuration } from '../../dist/server/config.js';
 import { createContext } from '../../dist/server/context.js';
 import { Client } from '../../dist/cli/src/client.js';
@@ -24,7 +22,7 @@ const config = await configuration();
 const context = await createContext(config);
 const directory = await mkdtemp(join(tmpdir(), 'foundation-release-smoke-'));
 const identities = [], resources = [];
-let mcp, finished = false, storageVerified = false;
+let finished = false, storageVerified = false;
 const check = async path => {
   const response = await fetch(config.origin + path, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
   assert.equal(response.status, 200, 'Public request failed: ' + path);
@@ -107,35 +105,23 @@ try {
   assert.equal(await new Promise(resolve => command.once('close', resolve)), 0);
   assert.equal(printed, 'opened');
   await assert.rejects(caller.custody.read(input.id));
-  mcp = new McpClient({ name: 'Foundation release verification', version: '1.0.0' });
-  await mcp.connect(new StreamableHTTPClientTransport(new URL('/api/mcp', config.origin), {
-    requestInit: { headers: { authorization: 'Bearer ' + caller.client.identity.token } },
-  }));
-  const call = async (name, arguments__) => {
-    const response = await mcp.callTool({ name, arguments: arguments__ });
-    assert.notEqual(response.isError, true, 'The MCP operation failed.');
-    return response.structuredContent.data;
-  };
   if (context.objects.store.enabled) {
     const content = 'Foundation release storage verification';
     const file = await caller.client.json('/api/principals/' + caller.id + '/objects?name=release-check.txt&contentType=text/plain',
       { method: 'POST', raw: encode(content) });
     resources.push(file.id);
     assert.equal(file.kind, 'object');
-    const listed = await call('foundation_api', { method: 'GET', path: '/api/principals/' + caller.id + '/resources?kind=object' });
-    assert.ok(listed.body.items.some(item => item.id === file.id && item.kind === 'object'));
-    const linked = await call('foundation_api', { method: 'POST', path: '/api/operations', body: { name: 'object.link', input: { id: file.id } } });
-    assert.equal(linked.body.state, 'succeeded');
-    const downloaded = await fetch(linked.body.result.url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
+    const listed = await caller.client.json('/api/principals/' + caller.id + '/resources?kind=object');
+    assert.ok(listed.items.some(item => item.id === file.id && item.kind === 'object'));
+    const linked = await caller.client.json('/api/operations', { method: 'POST', body: { name: 'object.link', input: { id: file.id } } });
+    assert.equal(linked.state, 'succeeded');
+    const downloaded = await fetch(linked.result.url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     assert.equal(downloaded.status, 200); assert.equal(await downloaded.text(), content);
     storageVerified = true;
   }
-  const read = await call('foundation_read', { path: '/api/principals/' + caller.id + '/resources' });
-  assert.equal(read.status, 200);
   finished = true;
 } finally {
   const failures = [];
-  if (mcp) await mcp.close();
   for (const id of resources.reverse()) {
     try {
       const row = await context.resources.get(id), actor = { id: row.owner_id };
@@ -152,4 +138,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, mcp: true, exec: true, keyRotation: true, confirmation: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, exec: true, keyRotation: true, confirmation: true, cleanup: true }));

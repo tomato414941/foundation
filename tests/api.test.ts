@@ -247,48 +247,6 @@ test('デバイスの依頼をブラウザで承認すると、デバイスが�
   assert.equal((await app.inject({ url: `/api/auth/devices/${id}?poll=${poll}` })).statusCode, 404);
 });
 
-test('MCPで初期化し、認証したプリンシパルとして共通APIを呼び出す', async (t) => {
-  const f = await fixture(),
-    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
-    app = await buildApp(context);
-  t.after(async () => {
-    await app.close();
-    await f.close();
-  });
-  const owner = await f.person();
-  const headers = {
-    authorization: 'Bearer ' + owner.token,
-    accept: 'application/json, text/event-stream',
-    'mcp-protocol-version': '2025-11-25',
-  };
-  const initialize = await app.inject({
-    method: 'POST',
-    url: '/api/mcp',
-    headers,
-    payload: {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
-    },
-  });
-  assert.equal(initialize.statusCode, 200, initialize.body);
-  assert.equal(initialize.json().result.serverInfo.name, 'Foundation');
-  const result = await app.inject({
-    method: 'POST',
-    url: '/api/mcp',
-    headers,
-    payload: {
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: { name: 'foundation_api', arguments: { method: 'GET', path: '/api/session' } },
-    },
-  });
-  assert.equal(result.statusCode, 200, result.body);
-  assert.equal(JSON.parse(result.json().result.content[0].text).body.principal.id, owner.actor.id);
-});
-
 test('メールの確認後にアカウントを作成してセッションを開始し、同一オリジンの操作を受け入れる', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),

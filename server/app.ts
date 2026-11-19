@@ -30,8 +30,6 @@ import { routesAccounts } from './routes-accounts.js';
 import { routesKeyRotations } from './routes-key-rotations.js';
 import { routesConfirmations } from './routes-confirmations.js';
 import { confirmationHeader } from '../shared/confirmations.js';
-import { routesMcp } from './mcp.js';
-import { routesOAuthServer } from './oauth-server.js';
 import { web } from './web.js';
 
 for (const [id, schema] of Object.entries({ AccessPolicy, ProtectedContent })) z.globalRegistry.add(schema, { id });
@@ -134,11 +132,7 @@ export async function buildApp(context: Context) {
         fail(400, 'invalid_confirmation', 'Send the ID of one confirmation in the Foundation-Confirmation header.');
       if (request.actor) request.actor.confirmation = confirmation;
     }
-    if (bearer && !request.actor) {
-      if (request.url.split('?')[0] === '/api/mcp')
-        reply.header('www-authenticate', 'Bearer error="invalid_token", resource_metadata="' + config.origin + '/.well-known/oauth-protected-resource/api/mcp"');
-      fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
-    }
+    if (bearer && !request.actor) fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
       const ownRequest = '/api/requests/' + request.actor.requestId;
@@ -509,8 +503,6 @@ export async function buildApp(context: Context) {
   await routesAccounts(app, context);
   await routesKeyRotations(app, context);
   await routesConfirmations(app, context);
-  await routesOAuthServer(app, context);
-  await routesMcp(app, config.origin);
   await web(app);
   return app;
 }

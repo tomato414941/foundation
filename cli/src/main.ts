@@ -32,7 +32,6 @@ import { IdentityVerificationRequired, transferResource } from '../../shared/cli
 import { operationClient } from './operations.js';
 import { Invocation, OperationKind, OperationView, RequestApproval, RequestCreate, RequestView } from '../../shared/operations.js';
 import { OperationMaterial } from '../../shared/operation-client.js';
-import { startMcp } from './mcp.js';
 import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOutput, connectionOwner, existingConnection, flowOutput,
   requestConnection, saveApp, startConnection } from './connections.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
@@ -62,7 +61,6 @@ Usage: foundation <command> [options]
                                        waiting on its service
   operation cancel ID                  Stop an operation not made yet or waiting on its service
   schema [--output FILE]                Read the OpenAPI specification
-  mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   keys rotate                          Replace this identity's keys, keeping its items and sign-ins
   app NAME --method ID --client-id ID  Encrypt an application
@@ -586,7 +584,6 @@ async function main(argv: string[]) {
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);
-  if (command === 'mcp') return startMcp(client);
   if (command === 'status') {
     const { wrappedKey: _wrappedKey, ...status } = current;
     await output({ ...status, ...(client.identity.binding ? { fingerprint: await fingerprint(client.identity.binding),

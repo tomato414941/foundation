@@ -12,7 +12,6 @@ export default [
   route('requests/:id', 'routes/request.tsx'),
   route('operations/:id', 'routes/operation.tsx'),
   route('devices/:id', 'routes/device.tsx'),
-  route('oauth/authorize', 'routes/oauth-authorize.tsx'),
   route('services', 'routes/service-return.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
   route('connections/:id', 'routes/connection-flow.tsx'),

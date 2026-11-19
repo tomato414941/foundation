@@ -34,7 +34,6 @@ const levels: Record<string, Level | ((operation: ConfirmationOperation, connect
   },
   'credential.addPasskey': 'factor',
   'credential.addEmail': 'factor',
-  'oauth.authorize': 'proof',
   'account.merge': 'factor',
   'relation.draw': 'factor',
   'principal.transfer': 'factor',
