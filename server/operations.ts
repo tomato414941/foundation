@@ -5,7 +5,6 @@ import type { Actor, Authorization } from './authorization.js';
 import { principal } from './authorization.js';
 import type { Principals } from './principals.js';
 import type { Vault } from './vault.js';
-import type { Confirmations } from './confirmations.js';
 import type { DefinitionRegistry } from './definitions.js';
 import { OperationFailed } from './definitions.js';
 import { AgreementNeeded } from './relations.js';
@@ -42,31 +41,21 @@ interface OperationRow {
 export class Operations {
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
     readonly definitions: DefinitionRegistry, readonly principals: Principals, readonly origin: string,
-    readonly confirmations: Confirmations, readonly requests: () => Requests) {}
+    readonly requests: () => Requests) {}
 
   private read(row: OperationRow) { return this.vault.decrypt<Snapshot>(row.record, 'operation:' + row.id); }
   private async row(id: string, connection: Queryable = this.db.pool) {
     return required(await this.db.one<OperationRow>('SELECT * FROM operations WHERE id=$1', [Id.parse(id)], connection));
   }
-  // A sign-in authenticates a call; the operation keeps the identity, credential, consent and approval it is made with,
-  // and the session a confirmation was made in, which the confirmation holds only with.
+  // A sign-in authenticates a call; the operation keeps the identity, credential, consent and approval it is made with.
   authority(actor: Actor) {
-    const authority = { ...actor };
-    if (!authority.confirmation) delete authority.sessionId;
-    delete authority.requestId;
+    const { sessionId: _sessionId, requestId: _requestId, ...authority } = actor;
     return authority;
   }
   // The operation's actor as it is signed in now, keeping the approval and agreement the operation is made under.
   private signedIn(saved: Actor, current: Actor): Actor {
-    const { credentialId: _credentialId, sessionId: _sessionId, confirmation: _confirmation, ...kept } = saved;
-    return this.authority({ ...kept, ...(current.credentialId ? { credentialId: current.credentialId } : {}),
-      ...(current.sessionId ? { sessionId: current.sessionId } : {}), ...(current.confirmation ? { confirmation: current.confirmation } : {}) });
-  }
-  // An operation that takes a confirmation is checked before it is made, so that one sent without its confirmation is
-  // refused instead of being left failed.
-  private async confirm(actor: Actor, call: OperationCall) {
-    const needed = await this.definitions.get(call.name).confirmation?.(call.input);
-    if (needed) await this.confirmations.check(actor, needed);
+    const { credentialId: _credentialId, ...kept } = saved;
+    return this.authority({ ...kept, ...(current.credentialId ? { credentialId: current.credentialId } : {}) });
   }
   private owner(input: Record<string, JsonValue>) {
     const value = input.ownerId;
@@ -175,7 +164,6 @@ export class Operations {
       if (call.continuation && definition.continuation !== call.continuation.kind)
         fail(400, 'invalid_continuation', 'This operation does not wait on a service.');
     } else if (call.proof !== undefined || call.continuation) fail(400, 'invalid_input', 'This operation is made by the server.');
-    await this.confirm(actor, invocation);
     const snapshot: Snapshot = { actor: this.authority(actor), input: invocation.input, result: null, proof: null,
       continuation: call.continuation ?? null, inFlight: false, submission };
     await this.db.pool.query(`INSERT INTO operations(id,owner_id,actor_id,name,state,record,expires_at)
@@ -204,7 +192,6 @@ export class Operations {
     if (definition.keyholder && proof === undefined)
       fail(400, 'proof_required', 'Seal what this operation saves on your device and send it with the operation.');
     if (!definition.keyholder && proof !== undefined) fail(400, 'invalid_input', 'This operation is made by the server.');
-    if (row.state !== 'in_progress') await this.confirm(this.signedIn(snapshot.actor, actor), { name: row.name, input: snapshot.input });
     return this.locked(id, async () => {
       const current = await this.row(id), saved = await this.read(current);
       if (current.state !== row.state) fail(409, 'operation_changed', 'Reload this operation before continuing.');
@@ -279,8 +266,7 @@ export class Operations {
       snapshot.inFlight = false;
       if (error instanceof AgreementNeeded && !snapshot.actor.approvalId && !row.request_id) {
         // The other side is asked: the change waits for its agreement as a request, and is made once it agrees.
-        const confirmation = await definition.confirmation?.(snapshot.input);
-        const request = await this.requests().propose(snapshot.actor, error.to, error.proposed, invocation, confirmation ?? null);
+        const request = await this.requests().propose(snapshot.actor, error.to, error.proposed, invocation);
         await this.db.pool.query('DELETE FROM operations WHERE id=$1', [row.id]);
         return request;
       }

@@ -28,8 +28,6 @@ import { routesOperations } from './routes-operations.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesKeyRotations } from './routes-key-rotations.js';
-import { routesConfirmations } from './routes-confirmations.js';
-import { confirmationHeader } from '../shared/confirmations.js';
 import { web } from './web.js';
 
 for (const [id, schema] of Object.entries({ AccessPolicy, ProtectedContent })) z.globalRegistry.add(schema, { id });
@@ -126,12 +124,6 @@ export async function buildApp(context: Context) {
     request.actor =
       (!bearer ? await authentication.authenticate(request.cookies.foundation_request) : null) ??
       (await authentication.authenticate(bearer?.slice(7) ?? request.cookies.foundation_session));
-    const confirmation = request.headers[confirmationHeader];
-    if (confirmation !== undefined) {
-      if (typeof confirmation !== 'string' || !C.Id.safeParse(confirmation).success)
-        fail(400, 'invalid_confirmation', 'Send the ID of one confirmation in the Foundation-Confirmation header.');
-      if (request.actor) request.actor.confirmation = confirmation;
-    }
     if (bearer && !request.actor) fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
     if (request.actor?.requestId) {
       const path = request.url.split('?')[0]!;
@@ -502,7 +494,6 @@ export async function buildApp(context: Context) {
   await routesDevices(app, context);
   await routesAccounts(app, context);
   await routesKeyRotations(app, context);
-  await routesConfirmations(app, context);
   await web(app);
   return app;
 }

@@ -25,7 +25,6 @@ import { digest, token } from './vault.js';
 import { fail, required } from './errors.js';
 import { samePublicKey } from './encryption-validation.js';
 import { bindFirst } from './bindings.js';
-import type { Confirmations } from './confirmations.js';
 import { SignedBinding, verifyBinding } from '../shared/authority.js';
 
 interface PasskeyData {
@@ -69,7 +68,6 @@ export class Authentication {
     readonly audit: Audit,
     readonly mailer: Mailer,
     readonly config: Configuration,
-    readonly confirmations: Confirmations,
   ) {
     this.rpId = new URL(config.origin).hostname;
   }
@@ -204,7 +202,7 @@ export class Authentication {
       canOpen: row.private_wrap !== null,
     });
   }
-  // Issues an API key, wrapping the private keys for it when given, once the actor confirms it.
+  // Issues an API key, wrapping the private keys for it when given.
   async issue(actor: Actor, principalId: string, input: {
     name: string; expiresAt: string | null; wrap?: { wrappedKey: WrappedEncryptionKey; publicKey: PublicEncryptionKey };
   }) {
@@ -215,8 +213,6 @@ export class Authentication {
     return this.db.transaction(async (connection) => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials', connection);
-      await this.confirmations.consume(connection, actor, { action: 'credential.issue', principalId, name: input.name,
-        expiresAt: input.expiresAt, ...(input.wrap ? { wrap: input.wrap } : {}) });
       if (input.wrap && !samePublicKey((await this.principals.get(principalId, connection)).public_key, input.wrap.publicKey))
         fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
       const issued = await this.issueKey(principalId, input.name, input.expiresAt, connection);
@@ -234,24 +230,19 @@ export class Authentication {
     await this.audit.record(principalId, actor.id, 'credential.rename', id);
     return this.credentialView(row);
   }
-  // Removes a sign-in method, with a confirmation made by a way in other than the identity's keys where the principal
-  // has one when it removes such a way in.
+  // Removes a sign-in method.
   async removeCredential(actor: Actor, principalId: string, id: string) {
     await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials', connection);
       const target = required(
-        await this.db.one<{ kind: string; expires_at: Date | null }>(
-          'SELECT kind,expires_at FROM credentials WHERE id=$1 AND principal_id=$2',
+        await this.db.one<{ expires_at: Date | null }>(
+          'SELECT expires_at FROM credentials WHERE id=$1 AND principal_id=$2',
           [id, principalId],
           connection,
         ),
       );
-      // Only the API key making the call gives itself up without a confirmation. A passkey or email address is a way
-      // back in, which a session signed in with it must not remove on its own.
-      if (target.kind !== 'key' || id !== actor.credentialId)
-        await this.confirmations.consume(connection, actor, { action: 'credential.remove', principalId, credentialId: id });
       const count = await this.db.one<{ count: string }>(
         'SELECT count(*) FROM credentials WHERE principal_id=$1 AND (expires_at IS NULL OR expires_at>now())',
         [principalId],
@@ -295,13 +286,11 @@ export class Authentication {
       path = this.returnTo(returnTo);
     const link = new URL('/signin/email', this.config.origin);
     link.hash = new URLSearchParams({ challenge: id, token: secret }).toString();
-    // Adding an address takes a confirmation, used only once the link is on its way; the link then adds it while
-    // the sign-in that confirmed it remains.
+    // The link adds the address while the sign-in that asked for it remains.
     await this.db.transaction(async (connection) => {
       if (principalId) {
         await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
         await this.authorization.requirePrincipal(actor!, principalId, 'manage_credentials', connection);
-        await this.confirmations.consume(connection, actor!, { action: 'credential.addEmail', principalId, email });
       }
       await connection.query(
         "INSERT INTO challenges(id,kind,browser_hash,principal_id,data,expires_at) VALUES($1,'email',$2,$3,$4,$5)",
@@ -599,11 +588,6 @@ export class Authentication {
         if (row.principal_id) {
           await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
           await this.authorization.requirePrincipal(actor!, principalId, 'manage_credentials', connection);
-          // The confirmation names the passkey being added, as verified, so that another response cannot take its place.
-          await this.confirmations.consume(connection, actor!, { action: 'credential.addPasskey', principalId,
-            challengeId: row.id, passkey: { id: info.credential.id, publicKey: digest(Buffer.from(info.credential.publicKey).toString('base64url')) },
-            ...(input.binding ? { binding: input.binding } : {}), ...(wrappedKey ? { wrappedKey } : {}),
-            ...(input.existingPublicKey ? { existingPublicKey: input.existingPublicKey } : {}) });
           if (!await this.db.one('DELETE FROM challenges WHERE id=$1 RETURNING id', [row.id], connection))
             fail(400, 'invalid_challenge', 'Start the passkey operation again.');
           const current = await this.principals.get(principalId, connection);
@@ -701,8 +685,6 @@ export class Authentication {
         fail(400, 'invalid_envelope', 'Wrap the key for this account.');
       if (!await this.db.one('SELECT 1 FROM credentials WHERE id=$1 AND principal_id=$2', [credentialId, principalId], connection))
         fail(404, 'not_found', 'The credential was not found.');
-      await this.confirmations.consume(connection, actor, { action: 'credential.wrap', principalId, credentialId,
-        wrappedKey: WrappedKey.parse(value), publicKey });
       const changed = await connection.query(
         'UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2',
         [credentialId, principalId, WrappedKey.parse(value)],

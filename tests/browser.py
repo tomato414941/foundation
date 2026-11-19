@@ -839,14 +839,13 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
         expect(page.get_by_role("listitem").filter(has_text="Issued key")).to_have_count(0)
 
-    def test_メールとパスキーを持つと削除の確認方法を選びメールに届いたコードで削除する(self):
-        page, principal = self.passkey_account("Confirming owner")
-        address = "confirming-owner@example.com"
+    def test_サインイン用のメールアドレスを追加し_届いたリンクで確かめてから削除する(self):
+        page, principal = self.passkey_account("Email owner")
+        address = "email-owner@example.com"
         credentials = f"{ORIGIN}/p/{principal['id']}/settings/credentials"
         page.goto(credentials + "/new?kind=email")
         page.get_by_role("textbox", name="メールアドレス", exact=True).fill(address)
-        with page.expect_response(lambda response: "/api/confirmations/" in response.url and response.url.endswith("/proof")):
-            page.get_by_role("button", name="サインインリンクを送信", exact=True).click()
+        page.get_by_role("button", name="サインインリンクを送信", exact=True).click()
         expect(page.get_by_text("にリンクを送りました", exact=False)).to_be_visible()
         page.goto(page.request.get(ORIGIN + "/__test/mail/" + address).json()["link"])
         page.get_by_role("button", name="メールを確認して続ける", exact=True).click()
@@ -855,19 +854,6 @@ class BrowserTests(unittest.TestCase):
         row = page.get_by_role("listitem").filter(has_text=address)
         row.get_by_role("button", name="削除", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
-        prompt = page.get_by_role("dialog").filter(has_text="変更の確認")
-        expect(prompt.get_by_text("「サインイン方法の削除」を行うには", exact=False)).to_be_visible()
-        expect(prompt.get_by_role("button", name="パスキーで確認", exact=True)).to_be_visible()
-        prompt.get_by_role("button", name="メールで確認", exact=True).click()
-        expect(prompt.get_by_text(address, exact=False)).to_be_visible()
-        expect(prompt.get_by_role("button", name="パスキーで確認", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "confirmation-code-desktop-ja.png"), full_page=True)
-        prompt.get_by_role("textbox", name="確認コード", exact=True).fill("WRONGCODE")
-        prompt.get_by_role("button", name="確認する", exact=True).click()
-        expect(prompt.get_by_text("コードが一致しません", exact=False)).to_be_visible()
-        code = page.request.get(ORIGIN + "/__test/mail/" + address).json()["code"]
-        prompt.get_by_role("textbox", name="確認コード", exact=True).fill(code)
-        prompt.get_by_role("button", name="確認する", exact=True).click()
         expect(page.get_by_role("listitem").filter(has_text=address)).to_have_count(0)
 
     def test_以前の形のまま残った接続は一覧と画面に出て解除でき_つなぎ直そうとすると理由を示す(self):

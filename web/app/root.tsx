@@ -36,7 +36,6 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/root';
 import i18n from './i18n';
-import { ConfirmationPrompt } from './confirm';
 import { api, errorCode, session } from './api';
 import { clearKeys } from './keys';
 import { Busy, ErrorNotice, Notice, Page, useTask } from './components';
@@ -316,7 +315,6 @@ export default function App() {
             </Notice>
           </div>}
           <Outlet />
-          <ConfirmationPrompt />
         </main>
       </div>
     </div>

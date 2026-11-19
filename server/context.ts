@@ -6,7 +6,6 @@ import { Audit } from './audit.js';
 import { Principals } from './principals.js';
 import { Relations } from './relations.js';
 import { Authentication } from './authentication.js';
-import { Confirmations } from './confirmations.js';
 import { ResendMailer } from './mail.js';
 import type { Mailer } from './mail.js';
 import { Resources } from './resources.js';
@@ -50,13 +49,12 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     resources = new Resources(db, authorization, audit, principals),
     billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
     mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
-    confirmations = new Confirmations(db, mailer, config),
-    relations = new Relations(db, authorization, audit, principals, resources, billing, confirmations);
-  const authentication = new Authentication(db, principals, authorization, audit, mailer, config, confirmations),
+    relations = new Relations(db, authorization, audit, principals, resources, billing);
+  const authentication = new Authentication(db, principals, authorization, audit, mailer, config),
     keyResets = new KeyResets(db, authorization, audit, config);
   const catalog = await Catalog.load(resources, config),
     transport = deps.transport ?? new PublicTransport(config.origin);
-  const bindings = new Bindings(db, authorization, audit, confirmations),
+  const bindings = new Bindings(db, authorization, audit),
     keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
     custody = new Custody(resources, bindings, relations, config.origin),
     connectionOperations = new ConnectionOperations(custody),
@@ -72,8 +70,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an
   // approved request makes its operations.
   let requests: Requests;
-  const operations = new Operations(db, vault, authorization, definitions, principals, config.origin, confirmations, () => requests);
-  requests = new Requests(db, vault, authorization, authentication, definitions, principals, audit, confirmations, config.origin, operations);
+  const operations = new Operations(db, vault, authorization, definitions, principals, config.origin, () => requests);
+  requests = new Requests(db, vault, authorization, authentication, definitions, principals, audit, config.origin, operations);
   const context = {
     config,
     db,
@@ -83,7 +81,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     principals,
     relations,
     mailer,
-    confirmations,
     authentication,
     keyResets,
     keyRotations,

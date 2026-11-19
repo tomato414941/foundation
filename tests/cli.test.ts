@@ -8,7 +8,6 @@ import { cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { enroll, fixture } from './support.js';
-import { confirmedCall } from './confirmation-support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
@@ -281,7 +280,7 @@ test('発行されたキーでログインした CLI は本人として入り、
   t.after(c.close);
   const person = await c.person('Person');
   const headers = { authorization: 'Bearer ' + person.token };
-  const issued = await confirmedCall(c.app, person.keys, {
+  const issued = await c.app.inject({
     method: 'POST',
     url: `/api/principals/${person.actor.id}/credentials`,
     headers,
@@ -294,7 +293,7 @@ test('発行されたキーでログインした CLI は本人として入り、
   assert.match(refused.stderr, /separate encryption unlock code/);
   const unlock = randomBytes(32);
   const wrappedKey = await wrap(person.keys, unlock, person.actor.id);
-  const placed = await confirmedCall(c.app, person.keys, {
+  const placed = await c.app.inject({
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
     headers,
@@ -336,9 +335,9 @@ test('ブラウザで承認すると、ログインを待つ CLI が本人のキ
   assert.equal(device.name, 'Laptop');
   const approved = await c.app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code, principalId: person.actor.id } });
   assert.equal(approved.statusCode, 200, approved.body);
-  const issued = (await confirmedCall(c.app, person.keys, { method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } })).json();
+  const issued = (await c.app.inject({ method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } })).json();
   const unlock = randomBytes(32);
-  await confirmedCall(c.app, person.keys, {
+  await c.app.inject({
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${issued.credential.id}/wrap`,
     headers,
@@ -752,34 +751,4 @@ test('CLIで鍵を交換すると手元の記録を新しい鍵へ移し、旧�
   assert.equal(JSON.parse(copied.stdout).fingerprint, after);
   const saved = JSON.parse(await readFile(join(other, 'foundation', 'identity.json'), 'utf8'));
   assert.equal(await fingerprint(saved.identities[0].binding), after);
-});
-
-test('CLIは署名で確認できない変更に確認IDを示し、APIで確認した後に同じ操作へその確認を添えて完了する', async (t) => {
-  const c = await cliFixture();
-  t.after(c.close);
-  const person = await c.person('Person');
-  const headers = { authorization: 'Bearer ' + person.token }, unlock = randomBytes(32);
-  const issued = await confirmedCall(c.app, person.keys, { method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers,
-    payload: { name: 'Laptop', wrap: { wrappedKey: await wrap(person.keys, unlock, person.actor.id), publicKey: publicPart(person.keys.encryption) } } });
-  const { token } = issued.json();
-  const keyFile = join(c.directory, 'key.txt');
-  await writeFile(keyFile, token + '.' + unlock.toString('base64url') + '\n', { mode: 0o600 });
-  assert.equal((await c.run(['login', '--key', '@' + keyFile, '--origin', c.origin])).code, 0);
-  const email = randomUUID();
-  await c.f.db.pool.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'email',$3,$3)",
-    [email, person.actor.id, 'cli-person@example.com']);
-  const path = `/api/principals/${person.actor.id}/credentials/${email}`;
-  const refused = await c.run(['api', 'DELETE', path]);
-  assert.equal(refused.code, 1);
-  const details = JSON.parse(refused.stderr.split('\n')[1]!);
-  assert.deepEqual(details.methods, ['email']);
-  assert.deepEqual(details.operation, { action: 'credential.remove', principalId: person.actor.id, credentialId: email });
-  const confirmation = details.confirmationId, cli = { authorization: 'Bearer ' + token };
-  assert.equal((await c.app.inject({ method: 'POST', url: `/api/confirmations/${confirmation}/email`, headers: cli, payload: {} })).statusCode, 200);
-  const proved = await c.app.inject({ method: 'POST', url: `/api/confirmations/${confirmation}/proof`, headers: cli,
-    payload: { method: 'email', code: c.f.mailer.codes.at(-1)!.code } });
-  assert.equal(proved.statusCode, 200, proved.body);
-  const removed = await c.run(['api', 'DELETE', path, '--confirmation', confirmation]);
-  assert.equal(removed.code, 0, removed.stderr);
-  assert.equal(await c.f.db.one('SELECT 1 FROM credentials WHERE id=$1', [email]), undefined);
 });

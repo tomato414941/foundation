@@ -256,8 +256,7 @@ test('旧鍵を開けるサインインキーは、交換後に旧鍵あての�
   const issued = await f.authentication.issueKey(f.owner.actor.id, 'Laptop');
   const unlock = crypto.getRandomValues(new Uint8Array(32));
   const wrappedKey = await wrap(f.owner.keys, unlock, f.owner.actor.id);
-  await f.authentication.setWrap(await f.confirmed(f.owner, { action: 'credential.wrap', principalId: f.owner.actor.id,
-    credentialId: issued.credential.id, wrappedKey, publicKey: f.owner.binding.encryption }), f.owner.actor.id, issued.credential.id,
+  await f.authentication.setWrap(f.owner.actor, f.owner.actor.id, issued.credential.id,
     wrappedKey, f.owner.binding.encryption);
   const rotation = await f.start();
   for (const item of (await f.ok('GET', rotation.path)).items) await f.prepare(rotation, item);

@@ -18,7 +18,7 @@ export class MemoryJournal implements Journal {
 
 export async function delegatedFixture() {
   const f = await fixture();
-  const bindings = new Bindings(f.db, f.authorization, f.audit, f.confirmations);
+  const bindings = new Bindings(f.db, f.authorization, f.audit);
   const custody = new Custody(f.resources, bindings, f.relations, f.config.origin);
   async function person(name: string) {
     const keys = await newIdentityKeys();

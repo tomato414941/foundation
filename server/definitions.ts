@@ -5,7 +5,6 @@ import type { JsonValue, OperationTitle } from '../shared/contracts.js';
 import { JsonObject } from '../shared/contracts.js';
 import { Invocation } from '../shared/operations.js';
 import type { OperationCall } from '../shared/operations.js';
-import type { ConfirmationOperation } from '../shared/confirmations.js';
 
 type Title = readonly [string, string] | ((input: Record<string, JsonValue>) => readonly [string, string]);
 export class OperationFailed extends DomainError {
@@ -29,8 +28,6 @@ export interface ProcessingDefinition {
   review?: (actor: Actor, input: Record<string, JsonValue>) => Promise<Record<string, JsonValue>>;
   resultView?: (result: JsonValue) => JsonValue;
   continuation?: 'connection';
-  // The change the actor confirms before this operation is made, when it takes a confirmation.
-  confirmation?: (input: unknown) => Promise<ConfirmationOperation | null>;
 }
 export interface OperationEndpoint {
   name: string;
@@ -53,8 +50,7 @@ export class DefinitionRegistry {
       complete?: (actor: Actor, input: z.output<T>, proof: JsonValue) => Promise<unknown>;
       resolve?: (actor: Actor, input: z.output<T>) => Promise<unknown>;
       review?: ProcessingDefinition['review']; resultView?: ProcessingDefinition['resultView'];
-      continuation?: ProcessingDefinition['continuation'];
-      confirmation?: (input: z.output<T>) => Promise<ConfirmationOperation | null> } = {}) {
+      continuation?: ProcessingDefinition['continuation'] } = {}) {
     Invocation.shape.name.parse(name);
     if (this.definitions.has(name)) throw new Error('Duplicate operation: ' + name);
     this.definitions.set(name, { name, schema, title, keyholder: options.keyholder ?? false,
@@ -62,7 +58,6 @@ export class DefinitionRegistry {
       ...(options.review ? { review: options.review } : {}),
       ...(options.resultView ? { resultView: options.resultView } : {}),
       ...(options.continuation ? { continuation: options.continuation } : {}),
-      ...(options.confirmation ? { confirmation: (input: unknown) => options.confirmation!(schema.parse(input)) } : {}),
       execute: async (actor, input) => await execute(actor, schema.parse(input)) as JsonValue,
       ...(options.complete ? { complete: async (actor: Actor, input: unknown, proof: JsonValue) =>
         await options.complete!(actor, schema.parse(input), proof) as JsonValue } : {}),

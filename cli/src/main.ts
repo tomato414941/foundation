@@ -110,7 +110,6 @@ Options:
   --output FILE          Write the result to a private file
   --force                Replace an existing output file
   --upload FILE          Send a binary body with the api command
-  --confirmation ID      Send the api command with a confirmation proved through the confirmation API
   --store                Keep the new SSH private key encrypted in Foundation
   --public-key KEY       SSH public key text (@FILE accepted)
   --private-key FILE     SSH private key file to keep encrypted in Foundation
@@ -151,7 +150,6 @@ const options = {
   to: textOption,
   message: textOption,
   body: textOption,
-  confirmation: textOption,
   file: textOption,
   stdin: booleanOption,
   fingerprint: textOption,
@@ -694,7 +692,6 @@ async function main(argv: string[]) {
     if (args.values.body && args.values.upload) throw new Error('Choose --body or --upload.');
     const response = await client.response(path, {
       method,
-      ...(args.values.confirmation ? { confirmation: Id.parse(args.values.confirmation) } : {}),
       ...(args.values.body ? { body: await json(args.values.body) } : {}),
       ...(args.values.upload ? { raw: await readFile(args.values.upload) } : {}),
     });

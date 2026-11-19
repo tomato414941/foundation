@@ -68,7 +68,7 @@ test('秘密鍵をなくしたプリンシパルは、申請から7日たつと�
   assert.equal(await f.keyResets.get(person.actor.id), null);
 });
 
-test('準備できた作り直しでも、申請していない別のサインインは新しいパスキーを登録できず、通常のパスキー追加は確認を求める', async t => {
+test('準備できた作り直しでも、申請していない別のサインインは新しいパスキーを登録できない', async t => {
   const f = await fixture(); t.after(f.close);
   const person = await signedIn(f);
   await f.keyResets.request(person.actor, person.actor.id);
@@ -77,11 +77,6 @@ test('準備できた作り直しでも、申請していない別のサイン�
   await assert.rejects(register(f, other, person.actor.id), { code: 'forbidden' });
   await register(f, person.actor, person.actor.id);
   await assert.rejects(f.keyResets.complete(other, person.actor.id, await completion(person, await newIdentityKeys())), { code: 'forbidden' });
-  const passkey = softwarePasskey(f.config.origin);
-  const started = await f.authentication.passkeyOptions('browser', { intent: 'register', name: 'Extra', principalId: person.actor.id }, other);
-  await assert.rejects(f.authentication.verifyPasskey('browser', { challengeId: started.challengeId,
-    credential: passkey.register(started.options) }, other), { code: 'confirmation_required' });
-  assert.equal((await passkeys(f, person.actor.id)).length, 1);
 });
 
 test('作り直しの申請を取り消すと、登録しておいた新しいパスキーも使えるようにならず、7日たっても作り直さない', async t => {

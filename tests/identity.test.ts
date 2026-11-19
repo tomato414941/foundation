@@ -18,8 +18,7 @@ test('メンバー追加と所有者変更で配下の変数を再暗号化し�
     1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Project variable', content: initial });
   const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
-  await f.relations.draw(await f.confirmed(owner, { action: 'relation.draw', principalId: project.id, subjectId: member.actor.id,
-    relation: 'member' }), joining);
+  await f.relations.draw(owner.actor, joining);
   assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [] }]);
   const before = await f.custody.read(owner.actor, id);
   const readers = [owner.binding, member.binding];
@@ -33,8 +32,7 @@ test('メンバー追加と所有者変更で配下の変数を再暗号化し�
       owner.binding, owner.keys, item.content.metadata, item.content),
   }])));
   await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed variable');
-  const agreed = { ...await f.confirmed(owner, { action: 'principal.transfer', principalId: project.id, to: next.actor.id }),
-    agreedBy: next.actor.id };
+  const agreed = { ...owner.actor, agreedBy: next.actor.id };
   await assert.rejects(f.relations.transfer(agreed, project.id, next.actor.id, transferred), { code: 'changed' });
   transferred[id]!.version = (await f.resources.get(id)).version;
   await f.relations.transfer(agreed, project.id, next.actor.id, transferred);
@@ -86,8 +84,7 @@ test('メンバーを外すとまだ封じてある変数も渡さなくなり�
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
   const membership = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
-  await f.relations.draw(await f.confirmed(owner, { action: 'relation.draw', principalId: project.id, subjectId: member.actor.id,
-    relation: 'member' }), membership);
+  await f.relations.draw(owner.actor, membership);
   const policy = AccessPolicy.parse({ format: 3, id: randomUUID(), origin: f.config.origin,
     ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding] });
   const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);

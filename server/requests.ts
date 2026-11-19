@@ -9,7 +9,6 @@ import type { Principals } from './principals.js';
 import type { Proposed } from './relations.js';
 import type { Vault } from './vault.js';
 import { digest, token } from './vault.js';
-import type { Confirmations } from './confirmations.js';
 import type { Audit } from './audit.js';
 import type { DefinitionRegistry } from './definitions.js';
 import type { Operations } from './operations.js';
@@ -17,7 +16,6 @@ import { fail, required } from './errors.js';
 import { atPointer, setPointer } from '../shared/values.js';
 import { Id, Operation } from '../shared/contracts.js';
 import type { JsonValue, RequestedOperation, Settings } from '../shared/contracts.js';
-import type { ConfirmationOperation } from '../shared/confirmations.js';
 import { hash } from '../shared/authority.js';
 import { RequestCreate, RequestView } from '../shared/operations.js';
 import type { OperationCall, OperationRecordView, RequestRecordView } from '../shared/operations.js';
@@ -40,7 +38,7 @@ interface RequestRow {
 export class Requests {
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
     readonly authentication: Authentication, readonly definitions: DefinitionRegistry, readonly principals: Principals,
-    readonly audit: Audit, readonly confirmations: Confirmations, readonly origin: string, readonly operations: Operations) {}
+    readonly audit: Audit, readonly origin: string, readonly operations: Operations) {}
 
   private read(row: RequestRow) { return this.vault.decrypt<Snapshot>(row.record, 'request:' + row.id); }
   private async row(id: string, connection: Queryable = this.db.pool) {
@@ -125,9 +123,6 @@ export class Requests {
       (body?.subjectId === actorId || body?.subjectId === '$requester') && body.relation === 'delegate' &&
       body.objectId === '$approver' && Object.keys(body).length === 3 && operation.inputs.length === 0;
   }
-  private invitation(principalId: string, submission: string | null) {
-    return { action: 'principal.invite', principalId, submission } as const;
-  }
   async create(actor: Actor, body: z.input<typeof RequestCreate>) {
     if (actor.requestId) fail(403, 'forbidden', 'Sign in to send a request.');
     await this.authorization.active(actor);
@@ -160,16 +155,13 @@ export class Requests {
     const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
     const code = invitation ? Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join('') : undefined;
     const id = input.id ?? randomUUID(), expiresAt = new Date(Date.now() + input.expiresInMinutes * 60_000);
-    // An invitation lets whoever answers it take this principal on as its owner, which its sign-in confirms.
-    if (invitation) await this.confirmations.hold(actor, this.invitation(actor.id, submission), expiresAt);
     await this.insert({ id, from: actor, to: to ?? null, message: input.message, operations, proposal: null,
       code: code ?? null, expiresAt, submission });
     return this.view(await this.row(id), actor, code);
   }
   // A change the actor made its own side of, sent to the principal whose agreement it needs.
-  async propose(creatorActor: Actor, to: string, proposed: Proposed, operation: OperationCall, confirmation: ConfirmationOperation | null) {
+  async propose(creatorActor: Actor, to: string, proposed: Proposed, operation: OperationCall) {
     const id = randomUUID(), expiresAt = new Date(Date.now() + 86_400_000);
-    if (confirmation) await this.confirmations.hold(creatorActor, confirmation, expiresAt);
     await this.insert({ id, from: creatorActor, to, message: '', operations: [Operation.parse({ ...operation, inputs: [] })],
       proposal: proposed, code: null, expiresAt, submission: null });
     return this.view(await this.row(id), creatorActor);
@@ -204,8 +196,7 @@ export class Requests {
     const approverId = actor.requestId ? required(row.to_id) : actor.id;
     // A change the requester made its side of is made as the requester, with the approver's agreement.
     const approver: Actor = row.proposal ? { ...snapshot.creatorActor, agreedBy: approverId, approvalId: id }
-      : { id: approverId, ...(actor.credentialId ? { credentialId: actor.credentialId } : {}), approvalId: id,
-        ...(actor.confirmation ? { confirmation: actor.confirmation, ...(actor.sessionId ? { sessionId: actor.sessionId } : {}) } : {}) };
+      : { id: approverId, ...(actor.credentialId ? { credentialId: actor.credentialId } : {}), approvalId: id };
     const filled = await Promise.all(snapshot.operations.map(async (operation, position) => {
       const current = structuredClone(operation), supplied = values[position] ?? {};
       if (Object.keys(supplied).some(pointer => !operation.inputs.some(field => field.pointer === pointer && !field.secret)))
@@ -221,11 +212,6 @@ export class Requests {
       const configured = Object.keys(configuration[position] ?? {}).length ? this.definitions.configure(current, configuration[position]!) : current;
       return (await this.definitions.prepareFor(row.proposal ? snapshot.creatorActor : actor, configured)).invocation;
     }));
-    // A change that takes a confirmation is approved on its own, with the confirmation sent with the approval.
-    const needed = (await Promise.all(filled.map(operation => this.definitions.get(operation.name).confirmation?.(operation.input) ?? null)))
-      .filter(operation => operation !== null);
-    if (needed.length > 1) fail(400, 'confirm_separately', 'Make each change that needs a confirmation on its own.');
-    if (needed[0]) await this.confirmations.check(approver, needed[0]);
     await this.db.transaction(async connection => {
       await this.authorization.active(actor, connection);
       // A change made as its requester needs the requester's sign-in still to hold.
@@ -235,7 +221,6 @@ export class Requests {
         fail(409, 'request_answered', 'This request has already been answered.');
       if (row.code_hash) {
         await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-        await this.confirmations.consume(connection, snapshot.creatorActor, this.invitation(row.from_id, snapshot.submission));
         const device = await this.principals.get(row.from_id, connection);
         if (device.owner_id || await this.authorization.holds(row.from_id, principal(approverId), 'stands', connection))
           fail(409, 'already_owned', 'This device has already been taken on.');

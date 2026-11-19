@@ -14,7 +14,6 @@ import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
 import { encode, decode } from '../../dist/shared/encryption.js';
 import { followKeys, rotateKeys } from '../../dist/shared/key-rotations.js';
-import { confirmationHeader, signConfirmation } from '../../dist/shared/confirmations.js';
 import { cleanupIdentities } from './cleanup.mjs';
 
 // Only disposable identities and test material are used, including against production.
@@ -67,28 +66,6 @@ try {
     assert.equal(followed.binding.id, rotated.binding.id);
     assert.equal(decode(await open(other, followed, 'rotation-followed').reveal(saved.id)), value);
   }
-  {
-    // A disposable identity cannot issue a sign-in key with its token alone. Signing the change through the
-    // confirmation API lets the same request through once, and the confirmation is not accepted again.
-    const keys = await newIdentityKeys(), binding = bindKeys(crypto.randomUUID(), keys);
-    const enrollment = await context.authentication.enroll('Release confirmation ' + crypto.randomUUID(), await signBinding(binding, keys));
-    identities.push(enrollment.principal.id);
-    const client = new Client({ origin: config.origin, principalId: binding.principalId, token: enrollment.token, keys, binding });
-    const issue = confirmation => fetch(new URL('/api/principals/' + binding.principalId + '/credentials', config.origin), {
-      method: 'POST', redirect: 'error', body: JSON.stringify({ name: 'Release confirmed key' }),
-      headers: { authorization: 'Bearer ' + enrollment.token, 'content-type': 'application/json',
-        ...(confirmation ? { [confirmationHeader]: confirmation } : {}) },
-    });
-    const refused = await issue();
-    const needed = (await refused.json()).error;
-    assert.equal(refused.status, 403); assert.equal(needed.code, 'confirmation_required');
-    const view = await client.json('/api/confirmations', { method: 'POST', body: { operation: needed.details.operation } });
-    await client.json('/api/confirmations/' + view.id + '/proof', { method: 'POST',
-      body: { method: 'signature', signature: await signConfirmation(view, keys.signing) } });
-    assert.equal((await issue(view.id)).status, 201);
-    const reused = await issue(view.id);
-    assert.equal(reused.status, 403); assert.equal((await reused.json()).error.code, 'confirmation_invalid');
-  }
   // The CLI of this release opens a value on this machine and hands it to a local command, which sees it masked
   // nowhere but in its own environment.
   const secret = 'release-input-' + crypto.randomUUID();
@@ -138,4 +115,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, exec: true, keyRotation: true, confirmation: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, exec: true, keyRotation: true, cleanup: true }));

@@ -224,8 +224,7 @@ test('譲渡を依頼したキーが承認前に取り消されたら現在の�
     new JournalTrust(new MemoryJournal()));
   await client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
   const asked = RequestView.parse(await transfer(client, f.resource.id, f.stranger.actor.id));
-  await f.authentication.removeCredential(await f.confirmed(f.owner, { action: 'credential.remove', principalId: f.owner.actor.id,
-    credentialId: credential.credential.id }), f.owner.actor.id, credential.credential.id);
+  await f.authentication.removeCredential(f.owner.actor, f.owner.actor.id, credential.credential.id);
   const approval = await f.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
     headers: { authorization: 'Bearer ' + f.stranger.token }, payload: {} });
   assert.equal(approval.statusCode, 401, approval.body);

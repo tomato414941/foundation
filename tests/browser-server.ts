@@ -49,7 +49,6 @@ app.post<{ Params: { id: string } }>('/__test/key-reset/:id/ready', async reques
 });
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,
-  code: fixtureData.mailer.codes.findLast((item) => item.address === request.params.address)?.code ?? null,
 }));
 app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) => {
   await context.db.pool.query(

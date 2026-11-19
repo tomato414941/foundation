@@ -7,8 +7,6 @@ import { ClientFailure } from '../../shared/client';
 import { RequestView } from '../../shared/operations';
 import type { PrincipalView } from '../../shared/contracts';
 import { heldKeys } from './keys';
-import { confirmChange } from './confirm';
-import { ConfirmationNeeded, confirmationCodes, confirmationHeader } from '../../shared/confirmations';
 
 export class ApiFailure extends Error {
   constructor(
@@ -18,10 +16,9 @@ export class ApiFailure extends Error {
     super(code);
   }
 }
-// A change that takes a confirmation is confirmed with what this browser can use and sent again with it.
 export async function api<T = unknown>(
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal; confirmation?: string } = {},
+  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
   schema?: z.ZodType<T>,
 ): Promise<T> {
   let response: Response;
@@ -30,10 +27,7 @@ export async function api<T = unknown>(
       method: options.method ?? 'GET',
       credentials: 'same-origin',
       signal: options.signal,
-      headers: {
-        ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(options.confirmation ? { [confirmationHeader]: options.confirmation } : {}),
-      },
+      headers: options.body !== undefined ? { 'content-type': 'application/json' } : {},
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     });
   } catch (error) {
@@ -41,11 +35,6 @@ export async function api<T = unknown>(
     throw new ApiFailure('network', 0);
   }
   const value: unknown = response.status === 204 ? null : await response.json();
-  const failed = (value as { error?: { code?: string; details?: unknown } } | null)?.error;
-  if (!response.ok && !options.confirmation && confirmationCodes.includes(failed?.code ?? '')) {
-    const needed = ConfirmationNeeded.safeParse(failed?.details);
-    if (needed.success) return api(path, { ...options, confirmation: await confirmChange(needed.data) }, schema);
-  }
   if (!response.ok)
     throw new ApiFailure(
       response.status === 429

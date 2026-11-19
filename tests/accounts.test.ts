@@ -5,7 +5,6 @@ import { createContext } from '../server/context.js';
 import { Accounts } from '../server/accounts.js';
 import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
 import { encode, decode } from '../shared/encryption.js';
-import { confirmedActor } from './confirmation-support.js';
 
 test('他方のメールアドレスを確認してアカウントを統合し、保管した内容を引き継ぐ', async (t) => {
   const f = await fixture(),
@@ -19,8 +18,7 @@ test('他方のメールアドレスを確認してアカウントを統合し�
     'browser',
     '/account',
     'en',
-    await confirmedActor(c.confirmations, source.actor, source.keys,
-      { action: 'credential.addEmail', principalId: source.actor.id, email: 'merge@example.com' }),
+    source.actor,
     source.actor.id,
   );
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
@@ -46,11 +44,7 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   assert.equal(plan.from.id, source.actor.id);
   const moved = await protect(encode('merge-value'), { ...initial.policy, revision: 2, ownerId: target.actor.id,
     authorities: [target.binding], readers: [target.binding] }, 2, source.binding, source.keys, undefined, initial);
-  const merging = { action: 'account.merge', principalId: target.actor.id, mergeId: verified.mergeProof };
-  await assert.rejects(() => accounts.merge(target.actor, verified.mergeProof, {
-    [variable.id]: { version: variable.version, content: moved } }), { code: 'confirmation_required' });
-  await accounts.merge(await confirmedActor(c.confirmations, target.actor, target.keys, merging), verified.mergeProof,
-    { [variable.id]: { version: variable.version, content: moved } });
+  await accounts.merge(target.actor, verified.mergeProof, { [variable.id]: { version: variable.version, content: moved } });
   const row = await c.resources.get(variable.id);
   assert.equal(row.owner_id, target.actor.id);
   assert.equal(

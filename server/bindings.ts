@@ -6,12 +6,10 @@ import { SignedBinding, canonical, verifyBinding } from '../shared/authority.js'
 import type { BoundKeys } from '../shared/authority.js';
 import type { PublicEncryptionKey } from '../shared/contracts.js';
 import { samePublicKey } from './encryption-validation.js';
-import type { Confirmations } from './confirmations.js';
 import { fail, required } from './errors.js';
 
 export class Bindings {
-  constructor(readonly db: Database, readonly authorization: Authorization, readonly audit: Audit,
-    readonly confirmations: Confirmations) {}
+  constructor(readonly db: Database, readonly authorization: Authorization, readonly audit: Audit) {}
 
   async current(principalId: string, connection: Queryable = this.db.pool) {
     const row = await this.db.one<{ binding: BoundKeys; signature: string }>(
@@ -44,9 +42,7 @@ export class Bindings {
       ? { previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature } : null };
   }
 
-  // Publishes the first keys of an identity, or confirms the same ones again. Making them takes a confirmation, since
-  // whoever binds them signs for the identity afterwards: an identity with an encryption key and nothing else confirms
-  // by opening a secret sealed for that key, so that its token alone does not bind someone else's signing key.
+  // Publishes the first keys of an identity, or confirms the same ones again.
   async publish(actor: Actor, input: z.infer<typeof SignedBinding>) {
     const signed = SignedBinding.parse(input);
     const binding = await verifyBinding(signed);
@@ -62,7 +58,6 @@ export class Bindings {
         if (canonical(previous.binding) === canonical(binding)) return SignedBinding.parse(previous);
         fail(409, 'key_binding_changed', 'Replace the keys of this identity with a key rotation.');
       }
-      await this.confirmations.consume(connection, actor, { action: 'keys.bind', principalId: binding.principalId, binding: signed });
       await bindFirst(connection, this.db, this.audit, actor.id, signed);
       return signed;
     });
