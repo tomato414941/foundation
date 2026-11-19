@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AuthorizedKeysFile, SSHAddress, SSHFingerprint, SSHPublicKey } from './ssh.js';
+import { SSHAddress, SSHFingerprint, SSHPublicKey } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
 
@@ -416,14 +416,11 @@ export const KeyringResource = z.object({
 // An SSH public key, and the private key kept as a variable of the same owner when it is kept here at all.
 export const SSHKeyData = z.object({
   publicKey: SSHPublicKey, algorithm: z.string(), fingerprint: SSHFingerprint, purpose: z.string().max(500),
-  privateKeyId: Id.nullable(), revokedAt: Time.nullable(),
+  privateKeyId: Id.nullable(),
 });
 export const SSHKeyResource = z.object({ ...resourceBase, kind: z.literal('ssh_key'), data: SSHKeyData });
-// A server whose accounts let SSH keys in, known by the host keys it proves itself with.
-export const SSHHostData = z.object({
-  address: SSHAddress, port: z.number().int().min(1).max(65535), hostKeys: z.array(SSHPublicKey).min(1).max(16),
-  authorizedKeysFile: AuthorizedKeysFile,
-});
+// A server whose accounts SSH keys sign in to, and where it is reached.
+export const SSHHostData = z.object({ address: SSHAddress, port: z.number().int().min(1).max(65535) });
 export const SSHHostResource = z.object({ ...resourceBase, kind: z.literal('ssh_host'), data: SSHHostData });
 export const Resource = z.discriminatedUnion('kind', [
   VariableResource,

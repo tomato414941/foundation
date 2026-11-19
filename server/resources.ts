@@ -18,7 +18,6 @@ import type {
 } from '../shared/contracts.js';
 import { connectionSettings } from '../shared/connections.js';
 import { fail, required } from './errors.js';
-import { stillLetIn } from './ssh-access.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -214,9 +213,6 @@ export class Resources {
       "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
       [row.id], connection);
     if (pending) fail(409, 'connection_busy', 'Resolve the current token update or reconnect before deleting this connection.');
-    const letIn = await this.db.one('SELECT 1 FROM ssh_authorizations WHERE (host_id=$1 OR key_id=$1) AND ' + stillLetIn + ' LIMIT 1',
-      [row.id], connection);
-    if (letIn) fail(409, 'ssh_access_remaining', 'Remove its SSH authorizations and check the servers before deleting it.');
     // What still uses it is named where the actor can read it, so that it can be deleted or changed first.
     const users = await this.db.all<ResourceRow>(
       'SELECT r.* FROM resource_references ref JOIN resources r ON r.id=ref.resource_id WHERE ref.referenced_id=$1 ORDER BY r.name,r.id',

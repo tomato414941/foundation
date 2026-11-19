@@ -36,7 +36,7 @@ export interface ReviewRow { field: string; value: ReviewValue; literal?: boolea
 // connect operations made before Foundation stopped pinning methods still hold in the history.
 const hidden = new Set(['version', 'revision', 'methodDigest']);
 const times = new Set(['expiresAt']);
-const keys = new Set(['hostKeys', 'publicKey']);
+const keys = new Set(['publicKey']);
 // Fields naming an item or principal by its ID, and fields holding what the requester passes on as it is.
 const reference = (field: string) => /Ids?$/.test(field) || ['id', 'to', 'users'].includes(field);
 const data = new Set(['headers', 'default', 'data', 'settings', 'labels', 'fields', 'content', 'outputs']);
@@ -163,39 +163,25 @@ export function ReviewRows({ rows }: { rows: ReviewRow[] }) {
 }
 
 // Settings left as they usually are stay folded until someone looks for them; any other value is shown.
-const usual: Record<string, JsonValue> = { authorizedKeysFile: '.ssh/authorized_keys', timeoutSeconds: 60 };
+const usual: Record<string, JsonValue> = { timeoutSeconds: 60 };
 const folded = (row: ReviewRow) => row.field in usual && row.value.kind === 'text' && row.value.text === String(usual[row.field]);
 
-// What holds whatever an operation does, said once for all the operations of a request: before approval what approving
-// alone does not do, and once done what is left to do. Registering a host leaves allowing a key and applying it, unless
-// the same request also allowed one, which leaves only applying it.
-const notes: Record<string, [string, string]> = { 'ssh.host.create': ['noteSSHHost', 'nextSSHHost'],
-  'ssh.access.grant': ['noteSSHApply', 'noteSSHApply'], 'ssh.access.revoke': ['noteSSHApply', 'noteSSHApply'],
-  'ssh.key.revoke': ['noteSSHApply', 'noteSSHApply'] };
-export function OperationNotes({ operations, done = false }: { operations: Array<{ name: string }>; done?: boolean }) {
-  const { t } = useTranslation();
-  let keys = [...new Set(operations.flatMap(operation => notes[operation.name] ? [notes[operation.name]![done ? 1 : 0]] : []))];
-  if (done && keys.includes('noteSSHApply')) keys = keys.filter(key => key !== 'nextSSHHost');
-  return keys.length ? <>{keys.map(key => <p key={key} className={done ? 'leading-relaxed' : 'text-sm leading-relaxed text-muted-foreground'}>{t(key)}</p>)}</> : null;
-}
-
-const SSHAuthorization = z.object({ account: z.string(), status: z.enum(['applied', 'pending', 'removed', 'remains_unmanaged']),
+const SSHAuthorization = z.object({ account: z.string(),
   key: z.object({ name: z.string(), fingerprint: z.string() }).nullable(),
   host: z.object({ name: z.string(), address: z.string(), port: z.number() }).nullable() });
-// Only the operations that return an SSH authorization have their results read as one.
-const authorizations = new Set(['ssh.access.grant', 'ssh.access.revoke']);
+// Only the operation that returns an SSH authorization has its result read as one.
+const authorizations = new Set(['ssh.access.grant']);
 export const knownResult = (name: string, value: JsonValue) => authorizations.has(name) && SSHAuthorization.safeParse(value).success;
 // A result read as what it is, for the results knownResult recognizes.
 export function KnownResult({ value }: { value: JsonValue }) {
   const { t } = useTranslation();
   const authorization = SSHAuthorization.safeParse(value);
   if (!authorization.success) return null;
-  const { host, key, account, status } = authorization.data;
+  const { host, key, account } = authorization.data;
   return <div className="flex min-w-0 flex-col gap-3">
     {host && <Detail label={t('reviewField.hostId')}><span className="flex min-w-0 flex-col">{host.name}<code className="text-xs wrap-anywhere">{host.address + ':' + host.port}</code></span></Detail>}
     {key && <Detail label={t('reviewField.keyId')}><span className="flex min-w-0 flex-col">{key.name}<code className="text-xs wrap-anywhere">{key.fingerprint}</code></span></Detail>}
     <Detail label={t('reviewField.account')}>{account}</Detail>
-    <Detail label={t('sshApplied')}>{t('sshStatus.' + status)}</Detail>
   </div>;
 }
 

@@ -18,7 +18,7 @@ import { ConnectionUsers } from './connection-users';
 import { ConnectionRequestReview, connectionRequestAction } from './connection-request-review';
 import { loadRequestConnection, requestConnectionMethod } from './request-connection';
 import { DelegationReview, loadDelegationReviews } from './delegation-review';
-import { loadOperationReviews, OperationNotes, OperationReview } from './operation-review';
+import { loadOperationReviews, OperationReview } from './operation-review';
 import { OperationResult, operationTitle } from './operation-details';
 import { Button } from './components/ui/button';
 import { InputField, TextareaField } from './form-fields';
@@ -273,7 +273,6 @@ export default function RequestPage() {
           </div>
         </Container>;
       })}
-      {recipientRequest && waiting && <OperationNotes operations={item.operations} />}
       {focusedConnection && waiting && requestConnection?.usersConfigured && <ConnectionUsers users={requestConnection.users} review />}
       {focusedConnection && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" review
         authorization={{ label: t('requestContinueAtService', { name: service }), newWindow: requestConnection?.method?.kind === 'approval' }} />}
@@ -363,8 +362,7 @@ export default function RequestPage() {
     <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={item.id} />}
     {stoppedNotice}
-    {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={item.id} />{form}{output}
-      {status === 'succeeded' && <OperationNotes operations={item.operations} done />}</Panel> : <>
+    {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={item.id} />{form}{output}</Panel> : <>
       <Panel>
         <Detail label={t('status')}><State value={item.state} /></Detail>
         <Detail label={t('requestedBy')}>{item.from.name}<Copy value={item.from.id} /></Detail>

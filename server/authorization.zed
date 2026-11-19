@@ -181,8 +181,8 @@ definition ssh_key {
   permission rename = update
 }
 
-// A server whose accounts let SSH keys in. Its editors decide which keys each account lets in and apply that to the
-// server; its readers see what is let in and what the server last showed. It stays with its owner.
+// A server whose accounts SSH keys sign in to. Its editors record which key signs in to which account, and its readers
+// see those records. It stays with its owner.
 definition ssh_host {
   relation owner: principal
   relation reader: principal

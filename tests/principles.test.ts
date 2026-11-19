@@ -8,7 +8,7 @@ import { encode } from '../shared/encryption.js';
 import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
-import { newSSHKey } from '../cli/src/ssh-access.js';
+import { newSSHKey } from '../cli/src/ssh-keys.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';

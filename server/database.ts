@@ -4,10 +4,11 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, '002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names'];
+const RequiredMigrations = [SchemaMigration, '002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names',
+  '012-ssh-records'];
 // The migrations written in SQL alone, applied in order.
 const SqlMigrations = ['002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access',
-  '010-output-names', '011-run-output-names'];
+  '010-output-names', '011-run-output-names', '012-ssh-records'];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {

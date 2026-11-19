@@ -66,7 +66,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config));
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
-  const sshAccess = new SSHAccess(db, resources, audit, confirmations);
+  const sshAccess = new SSHAccess(db, resources, audit);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
     objects, billing, integrations, custody, sshAccess });
   // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an

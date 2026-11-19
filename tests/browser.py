@@ -1666,77 +1666,69 @@ class BrowserTests(unittest.TestCase):
         expect(sender.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         sender.screenshot(path=str(ARTIFACTS / "request-sent-approved-ja.png"), full_page=True)
 
-    def test_SSH接続先の登録の依頼で接続先と鍵の指紋を確認して承認する(self):
+    def test_SSH公開鍵の登録の依頼で鍵の形式と指紋を確認して承認する(self):
         sender, _ = self.passkey_account("SSH requester")
         receiver, principal = self.passkey_account("SSH approver")
         name = b"ssh-ed25519"
         key = os.urandom(32)
         blob = len(name).to_bytes(4, "big") + name + len(key).to_bytes(4, "big") + key
-        host_key = "ssh-ed25519 " + base64.b64encode(blob).decode()
+        public_key = "ssh-ed25519 " + base64.b64encode(blob).decode() + " laptop"
         fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "検証用サーバーを登録してください。", "operations": [{"name": "ssh.host.create", "input": {
-                "ownerId": "$approver", "name": "Staging server", "address": "staging.example.test", "port": 22,
-                "hostKeys": [host_key], "authorizedKeysFile": ".ssh/authorized_keys"}}]}, headers={"origin": ORIGIN})
+            "message": "作業用の鍵を登録してください。", "operations": [{"name": "ssh.key.create", "input": {
+                "ownerId": "$approver", "name": "Laptop", "publicKey": public_key, "purpose": "Deploys"}}]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         receiver.goto(response.json()["url"])
-        expect(receiver.get_by_role("heading", name="SSH接続先を登録する", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="SSH公開鍵を登録する", exact=True)).to_be_visible()
         main = receiver.locator("main")
-        expect(main).to_contain_text("SSH接続先を登録するだけでは、まだSSHで接続できません。")
-        receiver.get_by_text("詳細な設定", exact=True).click()
-        for label, value in [("所有者", "あなた（SSH approver）"), ("名前", "Staging server"), ("接続先", "staging.example.test"),
-                             ("ポート", "22"), ("鍵を書き込むファイル", ".ssh/authorized_keys")]:
+        for label, value in [("所有者", "あなた（SSH approver）"), ("名前", "Laptop"), ("用途", "Deploys")]:
             expect(main.locator("dl", has=receiver.get_by_text(label, exact=True)).locator("dd")).to_have_text(value)
-        keys = main.locator("dl", has=receiver.get_by_text("サーバーの本人確認に使う鍵", exact=True)).locator("dd")
-        expect(keys).to_contain_text("ED25519")
-        expect(keys).to_contain_text(fingerprint)
-        print("Rendered SSH host request: " + main.inner_text(), flush=True)
-        for internal in ["ownerId", "$approver", "hostKeys", "{", host_key.split(" ")[1][:24]]:
+        shown = main.locator("dl", has=receiver.get_by_text("公開鍵", exact=True)).locator("dd")
+        expect(shown).to_contain_text("ED25519")
+        expect(shown).to_contain_text(fingerprint)
+        print("Rendered SSH key request: " + main.inner_text(), flush=True)
+        for internal in ["ownerId", "$approver", "publicKey", "{", public_key.split(" ")[1][:24]]:
             self.assertNotIn(internal, main.inner_text())
-        receiver.screenshot(path=str(ARTIFACTS / "ssh-host-request-ja.png"), full_page=True)
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-key-request-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("heading", name="SSH接続先を登録しました", exact=True)).to_be_visible()
-        expect(main.get_by_text("Staging server", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("status")).to_have_text("SSH接続先を登録しました")
-        expect(main).to_contain_text("接続するには、SSH鍵での接続を許可し、サーバーへ反映してください。")
-        print("Rendered SSH host result: " + main.inner_text(), flush=True)
-        receiver.screenshot(path=str(ARTIFACTS / "ssh-host-result-ja.png"), full_page=True)
+        expect(receiver.get_by_role("heading", name="SSH公開鍵を登録しました", exact=True)).to_be_visible()
+        expect(main.get_by_text("Laptop", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("status")).to_have_text("SSH公開鍵を登録しました")
+        print("Rendered SSH key result: " + main.inner_text(), flush=True)
+        receiver.screenshot(path=str(ARTIFACTS / "ssh-key-result-ja.png"), full_page=True)
         approved = sender.request.get(ORIGIN + "/api/requests/" + receiver.url.rsplit("/", 1)[1]).json()
         self.assertEqual(approved["state"], "approved")
 
-    def test_SSH鍵での接続許可の依頼で接続先と鍵を見分けて承認し反映前であることを確認する(self):
+    def test_SSH鍵でログインするアカウントの記録の依頼で接続先と鍵を見分けて承認する(self):
         sender, _ = self.passkey_account("Access requester")
         receiver, principal = self.passkey_account("Access approver")
         def public_key():
             name, key = b"ssh-ed25519", os.urandom(32)
             blob = len(name).to_bytes(4, "big") + name + len(key).to_bytes(4, "big") + key
             return "ssh-ed25519 " + base64.b64encode(blob).decode(), "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
-        host_key, _ = public_key()
         laptop, fingerprint = public_key()
         owned = ORIGIN + "/api/principals/" + principal["id"]
         host = receiver.request.post(owned + "/ssh-hosts", data={"name": "Staging server", "address": "staging.example.test",
-            "port": 2222, "hostKeys": [host_key]}, headers={"origin": ORIGIN})
+            "port": 2222}, headers={"origin": ORIGIN})
         key = receiver.request.post(owned + "/ssh-keys", data={"name": "Laptop", "publicKey": laptop}, headers={"origin": ORIGIN})
         self.assertTrue(host.ok and key.ok, host.text() + key.text())
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "ssh.access.grant",
             "input": {"hostId": host.json()["id"], "keyId": key.json()["id"], "account": "deploy"}}]}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         receiver.goto(response.json()["url"])
-        expect(receiver.get_by_role("heading", name="SSH鍵での接続を許可する", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="SSH鍵でログインするアカウントを記録する", exact=True)).to_be_visible()
         main = receiver.locator("main")
         row = lambda label: main.locator("dl", has=receiver.get_by_text(label, exact=True)).locator("dd")
         expect(row("SSH接続先")).to_have_text("Staging serverstaging.example.test:2222")
         expect(row("SSH鍵")).to_have_text("Laptop" + fingerprint)
         expect(row("ログインするアカウント")).to_have_text("deploy")
-        expect(main).to_contain_text("SSHでの接続の許可や取消しは、サーバーへ反映したときに適用されます。")
         print("Rendered SSH access request: " + main.inner_text(), flush=True)
         receiver.screenshot(path=str(ARTIFACTS / "ssh-access-request-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("heading", name="SSH鍵での接続を許可しました", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("heading", name="SSH鍵でログインするアカウントを記録しました", exact=True)).to_be_visible()
         expect(row("SSH接続先")).to_have_text("Staging serverstaging.example.test:2222")
         expect(row("SSH鍵")).to_have_text("Laptop" + fingerprint)
         expect(row("ログインするアカウント")).to_have_text("deploy")
-        expect(row("サーバーへの反映")).to_have_text("未反映")
         self.assertNotIn("{", main.inner_text())
         print("Rendered SSH access result: " + main.inner_text(), flush=True)
         receiver.screenshot(path=str(ARTIFACTS / "ssh-access-result-ja.png"), full_page=True)
