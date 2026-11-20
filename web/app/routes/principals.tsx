@@ -33,7 +33,7 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
     api('/principals', { signal: request.signal }, listOf(Principal)),
     // Items someone may open that are not sealed for them yet, which the signed-in principal can seal.
     signedIn?.id === params.owner
-      ? api('/principals/' + signedIn.id + '/reprotection', { signal: request.signal }, listOf(Reprotection)) : null,
+      ? api('/principals/' + signedIn.id + '/reprotection', { signal: request.signal }, listOf(Reprotection)).catch(() => null) : null,
   ]);
   return {
     onto: { ...onto, items: onto.items.filter((line) => relationships.includes(line.relation)) },
