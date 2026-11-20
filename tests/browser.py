@@ -1328,7 +1328,7 @@ class BrowserTests(unittest.TestCase):
             self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-ja.png"), full_page=True)
             self.select(owner, "言語", "English")
-            expect(owner.get_by_text("Allow using and renewing this connection. These recipients can read the credentials until the owner removes them.", exact=True)).to_be_visible()
+            expect(owner.get_by_text("Allow reading the credentials and using and renewing this connection until the owner removes them.", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "hf-use-permissions-mobile-en.png"), full_page=True)
             owner.get_by_role("button", name="Decline", exact=True).click()
             expect(owner.get_by_role("status")).to_have_text("You declined the request")
