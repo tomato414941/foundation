@@ -21,8 +21,8 @@ export async function method(client: Client, id: string) {
   const { id: _id, builtin: _builtin, availability: _availability, registration: _registration, defaultName: _defaultName, ...definition } = selected;
   return definition;
 }
-export function connectionClient(client: Client) {
-  return operationClient(client).connections;
+export async function connectionClient(client: Client) {
+  return (await operationClient(client)).connections;
 }
 export async function saveApp(client: Client, input: {
   ownerId: string; name: string; id?: string; methodId: string; clientId: string;
@@ -30,7 +30,7 @@ export async function saveApp(client: Client, input: {
 }) {
   const selected = await catalogMethod(client, input.methodId);
   if (connectionMethod(selected).application === 'none') throw new Error('Choose a connection method that uses an application.');
-  const operations = operationClient(client);
+  const operations = await operationClient(client);
   const previous = input.id ? await operations.custody.read(Id.parse(input.id)) : undefined;
   const result = await operations.perform({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),
     methodId: input.methodId, clientId: input.clientId,
@@ -45,7 +45,7 @@ export async function startConnection(client: Client, input: {
 }) {
   const selected = await catalogMethod(client, input.methodId);
   const existing = input.connectionId ? await client.json('/api/resources/' + Id.parse(input.connectionId), {}, Resource) : null;
-  const result = await operationClient(client).perform({ name: 'connection.connect', input: {
+  const result = await (await operationClient(client)).perform({ name: 'connection.connect', input: {
     ownerId: input.ownerId, methodId: input.methodId,
     name: Name.parse(input.name ?? existing?.name ?? selected.defaultName),
     ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),

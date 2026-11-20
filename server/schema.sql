@@ -54,7 +54,7 @@ CREATE TABLE resources (
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   -- When it came to its owner, kept by stamp_owned_at.
   owned_at timestamptz NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','keyring','ssh_key','ssh_host')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','ssh_key','ssh_host')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,
@@ -149,7 +149,6 @@ CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NO
 CREATE TABLE operation_continuations (
   id uuid PRIMARY KEY,
   actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  binding_id uuid NOT NULL,
   revision integer NOT NULL,
   envelope jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -199,15 +198,6 @@ CREATE TABLE audit_log (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX audit_owner ON audit_log(owner_id,id DESC);
-CREATE TABLE principal_key_bindings (
-  id uuid PRIMARY KEY,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  binding jsonb NOT NULL,
-  signature text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  retired_at timestamptz
-);
-CREATE UNIQUE INDEX principal_current_binding ON principal_key_bindings(principal_id) WHERE retired_at IS NULL;
 CREATE TABLE resource_custody (
   resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
   content jsonb NOT NULL
@@ -228,7 +218,6 @@ CREATE TABLE oauth_relays (
   id uuid PRIMARY KEY,
   operation_id uuid NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
   actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  binding_id uuid NOT NULL,
   state_digest text NOT NULL UNIQUE,
   callback_digest text,
   sealed jsonb,

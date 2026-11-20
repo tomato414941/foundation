@@ -1,7 +1,6 @@
 import type { CustodyClient } from '../shared/client.js';
 import type { InjectionInput, SourceReference } from '../shared/contracts.js';
 import { validInputName } from '../shared/contracts.js';
-import { ContentTypes, reveal } from '../shared/custody.js';
 import { atPointer, textValue } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
 import type { Connections } from './connections.js';
@@ -36,15 +35,14 @@ export async function processInputs(
   return { environment, files, sensitive };
 }
 
-// Opens each input on this machine with the user's own keys; a connection renews its tokens here when they expire.
+// Opens each input on this machine with the user's own key; a connection renews its tokens here when they expire.
 export async function openInputs(custody: CustodyClient, connections: Connections, inputs: InjectionInput[]) {
   const sources = await custody.sourceContents(inputs.map(input => input.source.id));
   const outputs = new Map<string, Promise<ConnectionOutputs>>();
   return processInputs(inputs, async source => {
-    const content = sources.find(content => content.policy.id === source.id)!;
-    if (content.policy.contentType === ContentTypes.value)
-      return { value: await reveal(content, connections.binding, connections.keys.encryption) };
-    if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(content, sources, new AbortController().signal));
+    const found = sources.get(source.id)!;
+    if (found.kind === 'variable') return { value: await custody.open(found.content) };
+    if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(source.id, sources, new AbortController().signal));
     const { values, files } = await outputs.get(source.id)!;
     if (!source.output || !Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
     return { value: encode(values[source.output]!), file: files.includes(source.output) };

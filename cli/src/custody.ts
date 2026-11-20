@@ -3,38 +3,27 @@ import type { Client } from './client.js';
 import { configPath } from './config.js';
 import { CustodyClient } from '../../shared/client.js';
 import type { InjectionInput } from '../../shared/contracts.js';
+import { publicPart, thumbprint } from '../../shared/encryption.js';
 import { FileJournal } from '../../runtime/journal.js';
-import { JournalTrust } from '../../runtime/trust.js';
 import { HttpBroker } from '../../runtime/broker.js';
 import { Connections } from '../../runtime/connections.js';
 import { PublicTransport } from '../../server/transport.js';
 import { openInputs } from '../../runtime/inputs.js';
 
-export function privateClient(client: Client) {
-  const { keys, binding, origin } = client.identity;
-  if (!keys || !binding) throw new Error('Use a sign-in key with encryption and signing keys for this operation.');
-  const directory = join(dirname(configPath()), 'custody', binding.id);
-  const journal = new FileJournal(join(directory, 'client'), origin, binding, keys);
-  const notified = new Set<string>();
-  const custody = new CustodyClient(client, origin, binding, keys, new JournalTrust(journal), access => {
-    for (const recipient of access.excluded) {
-      if (notified.has(recipient.id)) continue;
-      notified.add(recipient.id);
-      process.stderr.write('foundation: ' + recipient.name + ' (' + recipient.id + ') cannot open ' +
-        (access.operation === 'transfer' ? 'the item after the transfer: ' : 'the saved item: ') +
-        (recipient.code === 'identity_changed' ? 'the previously verified public keys changed.' : 'its public keys are not verified by this identity.') +
-        (access.operation === 'transfer' ? '\nAfter acceptance, the recipient can verify this delegate\'s fingerprint and run foundation trust '
-          : '\nVerify the fingerprint with this principal, then run foundation trust ') + recipient.id +
-        ' --fingerprint <verified-fingerprint> to encrypt existing items for it.\n');
-    }
-  });
+// What this machine opens and seals with the identity's private key, and the token updates it records meanwhile.
+export async function privateClient(client: Client) {
+  const { keys, origin, principalId } = client.identity;
+  if (!keys) throw new Error('Use a sign-in key that carries the encryption key for this operation.');
+  const device = { publicKey: publicPart(keys.encryption), privateKey: keys.encryption };
+  const custody = new CustodyClient(client, origin, principalId, device);
+  const directory = join(dirname(configPath()), 'custody', await thumbprint(device.publicKey));
   const broker = new HttpBroker(client), transport = new PublicTransport(origin);
-  const connections = new Connections(binding, keys, broker.connections(),
-    new FileJournal(join(directory, 'connections'), origin, binding, keys), transport);
-  return { custody, journal, directory, keys, binding, broker, transport, connections };
+  const connections = new Connections(custody, broker.connections(),
+    new FileJournal(join(directory, 'connections'), origin, device), transport);
+  return { custody, directory, broker, transport, connections };
 }
 
 export async function localInputs(client: Client, inputs: InjectionInput[]) {
-  const { custody, connections } = privateClient(client);
+  const { custody, connections } = await privateClient(client);
   return openInputs(custody, connections, inputs);
 }

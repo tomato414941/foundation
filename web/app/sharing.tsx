@@ -6,9 +6,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Action, Principal, Relation, Resource, RoleOf, listOf } from '../../shared/contracts';
 import type { ActionName } from '../../shared/contracts';
-import { actionResult, api, ApiFailure, formText } from './api';
-import { custodyClient } from './custody';
-import { requireKeys } from './keys';
+import { actionResult, api, ApiFailure, formText, session } from './api';
+import { requireKeys, resealNow } from './keys';
 import { isProtected } from '../../shared/protected';
 import { ErrorNotice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
@@ -46,28 +45,10 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
     const remove = formText(form, 'intent') === 'remove';
     const actions = form.getAll('actions').map((value) => Action.parse(value));
     if (!remove && !actions.length) throw new ApiFailure('invalid_input');
-    if (params.id) {
-      const resource = await api('/resources/' + params.id, {}, Resource);
-      if (isProtected(resource.kind)) {
-        await requireKeys();
-        const client = await custodyClient(), previous = await client.read(resource.id);
-        const policy = { ...previous.content.policy, revision: previous.content.policy.revision + 1,
-          readers: previous.content.policy.readers.filter(reader => reader.principalId !== id),
-          authorities: previous.content.policy.authorities.filter(authority => authority.principalId !== id),
-          observers: (previous.content.policy.observers ?? []).filter(observer => observer !== id) };
-        if (!remove) {
-          if (actions.includes('read')) policy.observers.push(id);
-          if (actions.some(action => ['reveal', 'update', 'use'].includes(action))) {
-            const { binding } = await client.inspectIdentity(id); await client.trusted(binding);
-            // Using what a key protects means opening it on the user's own machine, so a user reads it as well.
-            policy.readers.push(binding);
-            if (actions.includes('update')) policy.authorities.push(binding);
-          }
-        }
-        await client.save(resource.name, await client.reveal(resource.id), policy, { previous, metadata: previous.content.metadata });
-        return { ok: true };
-      }
-    }
+    // Opening what a key protects means it is sealed for the one let in, which this browser does right after.
+    const sealed = !!params.id && isProtected((await api('/resources/' + params.id, {}, Resource)).kind);
+    const signedIn = (await session()).principal?.id;
+    if (sealed && signedIn) await requireKeys(signedIn);
     // Each action is its own line: draw the ones now chosen, erase the ones no longer.
     const before = (await given(objectId)).find((entry) => entry.principalId === id)?.actions ?? [];
     const line = (action: ActionName) => ({ subjectId: id, relation: RoleOf[action], objectId });
@@ -75,6 +56,7 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
       await api('/relations', { method: 'POST', body: line(action) });
     for (const action of before.filter((action) => remove || !actions.includes(action)))
       await api('/relations', { method: 'DELETE', body: line(action) });
+    if (sealed && signedIn) await resealNow(signedIn);
     return { ok: true };
   });
 }
@@ -136,7 +118,7 @@ export default function Sharing() {
           <Panel title={t('permissions')}>
             <div className="grid gap-3">
               {data.target.permissions
-                .filter((action) => data.protectedItem ? ['read', 'reveal', 'update', 'use'].includes(action) : 'kind' in data.target || !['delete', 'transfer', 'use'].includes(action))
+                .filter((action) => data.protectedItem ? ['read', 'reveal', 'update'].includes(action) : 'kind' in data.target || !['delete', 'transfer', 'use'].includes(action))
                 .map((action) => (
                   <CheckboxField
                     name="actions"

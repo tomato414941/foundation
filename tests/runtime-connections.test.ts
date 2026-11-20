@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { delegatedFixture, MemoryJournal } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
 import { Connections } from '../runtime/connections.js';
-import type { ConnectionBroker } from '../runtime/connections.js';
+import type { ConnectionBroker, Sources } from '../runtime/connections.js';
 import type { AwsConnectionProvider } from '../runtime/aws.js';
 import { MethodDefinition } from '../shared/contracts.js';
 import { AppMaterial, ConnectionMaterial, connectionMetadata, openConnection, sealedConnection } from '../shared/connections.js';
-import { canonical } from '../shared/authority.js';
-import { ContentTypes, protect, reveal } from '../shared/custody.js';
-import type { CustodyPolicy } from '../shared/custody.js';
-import { encode } from '../shared/encryption.js';
+import { canonical } from '../shared/digest.js';
+import { openItem, sealItem } from '../shared/custody.js';
+import { CustodyClient } from '../shared/client.js';
+import type { JsonApi } from '../shared/client.js';
+import { decode, encode } from '../shared/encryption.js';
 import type { OutboundRequest, OutboundResponse, Transport } from '../server/transport.js';
 
 const response = (body: unknown): OutboundResponse => ({ status: 200, headers: { 'content-type': 'application/json' },
@@ -22,15 +23,11 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     scopes: { default: ['read'] },
   } });
   // The owner's items are sealed for its delegate as well, which uses and renews them on its own machine.
-  const policy = (contentType: CustodyPolicy['contentType'], readers = f.policy.readers): CustodyPolicy => ({
-    ...f.policy, id: crypto.randomUUID(), contentType, readers,
-  });
   const appMaterial = AppMaterial.parse({ format: 1, methodId: 'provider:oauth', generation: crypto.randomUUID(),
     clientId: 'runtime-client', clientSecret: 'runtime-client-secret', fields: {} });
-  const appPolicy = policy(ContentTypes.clientCredential);
-  const appContent = await protect(encode(canonical(appMaterial)), appPolicy, 1, f.owner.binding, f.owner.keys,
-    { methodId: 'provider:oauth', clientId: appMaterial.clientId, generation: appMaterial.generation });
-  await f.custody.put(f.owner.actor, { name: 'Application', content: appContent });
+  const appMetadata = { methodId: 'provider:oauth', clientId: appMaterial.clientId, generation: appMaterial.generation };
+  const app = await f.keep(f.owner.actor, f.owner.actor.id, 'Application', canonical(appMaterial), 'app', appMetadata);
+  const appContent = (await f.custody.read(f.owner.actor, app.id)).content;
   const operations = new ConnectionOperations(f.custody), journal = new MemoryJournal();
   const broker: ConnectionBroker = {
     method: async () => method,
@@ -41,22 +38,31 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     abort: (id, fence) => operations.abort(f.delegate.actor, id, fence),
     state: resourceId => operations.state(f.delegate.actor, resourceId),
   };
+  // The delegate's device learns from Foundation whom a renewed token set is sealed for.
+  const api: JsonApi = { async json(path, _options, schema) {
+    const id = /^\/api\/resources\/([^/]+)\/recipients$/.exec(path)?.[1];
+    if (!id) throw new Error('Unexpected request: ' + path);
+    const value = { items: await f.custody.recipients(await f.resources.get(id)), next: null };
+    return (schema ? schema.parse(value) : value) as never;
+  } };
+  const device = new CustodyClient(api, f.config.origin, f.delegate.actor.id, f.delegate.keys);
   const requests: OutboundRequest[] = [];
   const transport: Transport = { async send(request) { requests.push(request); return respond(request); } };
-  const connections = new Connections(f.delegate.binding, f.delegate.keys, broker, journal, transport, aws);
-  async function storedConnection(name = 'Connection', state?: 'reconnect', app = { policy: appPolicy, content: appContent }) {
+  const connections = new Connections(device, broker, journal, transport, aws);
+  async function storedConnection(name = 'Connection', state?: 'reconnect', application = { id: app.id, content: appContent }) {
     const material = ConnectionMaterial.parse({ format: 3, methodId: 'provider:oauth', method,
-      generation: crypto.randomUUID(), appId: app.policy.id, appGeneration: appMaterial.generation,
+      generation: crypto.randomUUID(), appId: application.id, appGeneration: appMaterial.generation,
       ...(state ? { state } : {}),
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
         scopes: ['read'], scopesStatus: 'reported', account: 'account-1',
         accountVerified: true, extra: {}, facts: {} } });
-    const content = await protect(sealedConnection(material), policy(ContentTypes.tokenSet),
-      1, f.owner.binding, f.owner.keys, await connectionMetadata(material));
-    await f.custody.put(f.owner.actor, { name, content });
-    return { material, content, sources: [content, app.content] };
+    const row = await f.keep(f.owner.actor, f.owner.actor.id, name, decode(sealedConnection(material)), 'connection',
+      await connectionMetadata(material));
+    const content = (await f.custody.read(f.owner.actor, row.id)).content;
+    const sources: Sources = new Map([[row.id, { kind: 'connection', content }], [application.id, { kind: 'app', content: application.content }]]);
+    return { id: row.id, material, content, sources };
   }
-  return { ...f, method, policy, appMaterial, appContent, appPolicy, operations, journal, broker, connections,
+  return { ...f, method, app, appMaterial, appMetadata, appContent, operations, journal, broker, device, connections,
     requests, transport, storedConnection };
 }
 
@@ -64,10 +70,9 @@ test('再認証が必要な接続は利用とトークン更新を再接続ま�
   const f = await setup(() => response({ access_token: 'unexpected-access' }));
   try {
     const c = await f.storedConnection('Needs reconnection', 'reconnect');
-    await assert.rejects(f.connections.outputs(c.content, c.sources,
-      new AbortController().signal), { code: 'reconnect_required' });
+    await assert.rejects(f.connections.outputs(c.id, c.sources, new AbortController().signal), { code: 'reconnect_required' });
     assert.equal(f.requests.length, 0);
-    assert.equal((await f.custody.read(f.owner.actor, c.content.policy.id)).content.metadata.state, 'reconnect');
+    assert.equal((await f.custody.read(f.owner.actor, c.id)).content.metadata.state, 'reconnect');
   } finally { await f.close(); }
 });
 
@@ -77,39 +82,34 @@ test('更新したトークンを手元に記録し、管理サーバーへの�
     : response({ id: 'account-1', name: 'Account' }));
   try {
     const c = await f.storedConnection();
-    const disconnected = new Connections(f.delegate.binding, f.delegate.keys, { ...f.broker,
-      async commit() { throw new Error('offline'); } }, f.journal, f.transport);
-    await assert.rejects(disconnected.outputs(c.content, c.sources, new AbortController().signal),
-      { code: 'connection_uncertain' });
-    assert.equal((await f.operations.state(f.delegate.actor, c.content.policy.id))!.state, 'uncertain');
+    const disconnected = new Connections(f.device, { ...f.broker, async commit() { throw new Error('offline'); } }, f.journal, f.transport);
+    await assert.rejects(disconnected.outputs(c.id, c.sources, new AbortController().signal), { code: 'connection_uncertain' });
+    assert.equal((await f.operations.state(f.delegate.actor, c.id))!.state, 'uncertain');
     await f.connections.reconcile();
     await f.connections.reconcile();
-    const updated = (await f.custody.read(f.owner.actor, c.content.policy.id)).content;
-    assert.equal(updated.materialRevision, 2);
-    assert.equal(openConnection(await reveal(updated, f.owner.binding, f.owner.keys.encryption), updated.metadata,
+    const updated = (await f.custody.read(f.owner.actor, c.id)).content;
+    assert.equal(updated.revision, 2);
+    assert.equal(openConnection(await openItem(updated, f.owner.keys.privateKey, f.owner.keys.publicKey), updated.metadata,
       f.method).oauth!.refreshToken, 'new-refresh');
     assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
   } finally { await f.close(); }
 });
 
-test('アプリを開けない読み手は接続を更新せず、アプリも開ける読み手が更新する', async () => {
+test('アプリがまだ包まれていない読み手は接続を更新せず、アプリも開ける読み手が更新する', async () => {
   const f = await setup(request => request.url.endsWith('/token')
     ? response({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
     : response({ id: 'account-1', name: 'Account' }));
   try {
-    const ownersApp = { ...f.appPolicy, id: crypto.randomUUID(), readers: [f.owner.binding], authorities: [f.owner.binding] };
-    const ownersContent = await protect(encode(canonical(f.appMaterial)), ownersApp, 1, f.owner.binding, f.owner.keys,
-      { methodId: 'provider:oauth', clientId: f.appMaterial.clientId, generation: f.appMaterial.generation });
-    await f.custody.put(f.owner.actor, { name: 'Owner application', content: ownersContent });
-    const kept = await f.storedConnection('Owner renews', undefined, { policy: ownersApp, content: ownersContent });
-    await assert.rejects(f.connections.outputs(kept.content, kept.sources, new AbortController().signal), { code: 'refresh_required' });
-    assert.equal(await f.operations.state(f.delegate.actor, kept.content.policy.id), null);
+    // An application sealed only for its owner, as before it is sealed again for a delegate let in since.
+    const ownersOnly = await sealItem(encode(canonical(f.appMaterial)), [f.owner.keys], 1, f.appMetadata);
+    const kept = await f.storedConnection('Owner renews');
+    kept.sources.set(f.app.id, { kind: 'app', content: ownersOnly });
+    await assert.rejects(f.connections.outputs(kept.id, kept.sources, new AbortController().signal), { code: 'refresh_required' });
+    assert.equal(await f.operations.state(f.delegate.actor, kept.id), null);
     assert.equal(f.requests.length, 0);
     const c = await f.storedConnection('Delegate renews');
-    await f.connections.outputs(c.content, c.sources, new AbortController().signal);
-    const updated = await f.custody.get(c.content.policy.id);
-    assert.equal(updated.materialRevision, 2);
-    assert.equal(updated.signerId, f.delegate.binding.id);
+    await f.connections.outputs(c.id, c.sources, new AbortController().signal);
+    assert.equal((await f.custody.get(c.id)).revision, 2);
     assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
   } finally { await f.close(); }
 });
@@ -120,11 +120,33 @@ test('更新で権限が変わった接続も、そのまま更新して使う',
     : response({ id: 'account-1', name: 'Account' }));
   try {
     const c = await f.storedConnection();
-    const used = await f.connections.outputs(c.content, c.sources, new AbortController().signal);
+    const used = await f.connections.outputs(c.id, c.sources, new AbortController().signal);
     assert.ok(Object.values(used.values).includes('broad-access'));
-    const updated = await f.custody.get(c.content.policy.id);
-    assert.equal(updated.materialRevision, 2);
+    const updated = await f.custody.get(c.id);
+    assert.equal(updated.revision, 2);
     assert.deepEqual(updated.metadata.scopes, ['read', 'write']);
+  } finally { await f.close(); }
+});
+
+test('更新したトークンを包む間に開ける相手が変わると、今の相手に包み直して確定する', async () => {
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const c = await f.storedConnection();
+    let drawn = false;
+    // Someone is let in after the device sealed the renewed tokens, before Foundation has them.
+    const racing = new Connections(f.device, { ...f.broker, async commit(id, fence, content) {
+      if (!drawn) {
+        drawn = true;
+        await f.relations.draw(f.owner.actor, { subjectId: f.stranger.actor.id, relation: 'revealer', objectId: c.id });
+      }
+      return f.broker.commit(id, fence, content);
+    } }, f.journal, f.transport);
+    await racing.outputs(c.id, c.sources, new AbortController().signal);
+    const shared = (await f.custody.read(f.stranger.actor, c.id)).content;
+    assert.equal(openConnection(await openItem(shared, f.stranger.keys.privateKey, f.stranger.keys.publicKey), shared.metadata,
+      f.method).oauth!.refreshToken, 'new-refresh');
   } finally { await f.close(); }
 });
 
@@ -132,11 +154,9 @@ test('更新要求の結果が不明な場合は接続を保留し、別の端�
   const f = await setup(() => { throw new Error('token response lost'); });
   try {
     const c = await f.storedConnection();
-    await assert.rejects(f.connections.outputs(c.content, c.sources, new AbortController().signal),
-      { code: 'connection_uncertain' });
+    await assert.rejects(f.connections.outputs(c.id, c.sources, new AbortController().signal), { code: 'connection_uncertain' });
     await f.connections.reconcile();
-    await assert.rejects(f.operations.prepare(f.delegate.actor, crypto.randomUUID(), c.content.policy.id, 1),
-      { code: 'connection_uncertain' });
+    await assert.rejects(f.operations.prepare(f.delegate.actor, crypto.randomUUID(), c.id, 1), { code: 'connection_uncertain' });
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
 });
@@ -145,12 +165,11 @@ test('トークン更新の送信前に通信が途切れた場合、予約を�
   const f = await setup(() => response({}));
   try {
     const c = await f.storedConnection();
-    const disconnected = new Connections(f.delegate.binding, f.delegate.keys,
+    const disconnected = new Connections(f.device,
       { ...f.broker, async dispatch() { throw new Error('offline before dispatch'); } }, f.journal, f.transport);
-    await assert.rejects(disconnected.outputs(c.content, c.sources, new AbortController().signal),
-      { code: 'connection_uncertain' });
+    await assert.rejects(disconnected.outputs(c.id, c.sources, new AbortController().signal), { code: 'connection_uncertain' });
     assert.deepEqual(await f.connections.reconcile(), []);
-    const next = await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), c.content.policy.id, 1);
+    const next = await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), c.id, 1);
     assert.equal(next.state, 'prepared');
     assert.equal(f.requests.length, 0);
   } finally { await f.close(); }
@@ -164,12 +183,11 @@ test('確定できなかった更新を、あとで端末がまとめて確定�
     : response({ id: 'account-1', name: 'Account' }));
   try {
     const first = await f.storedConnection('Changed permissions'), second = await f.storedConnection('Unchanged permissions');
-    const offline = new Connections(f.delegate.binding, f.delegate.keys,
-      { ...f.broker, async commit() { throw new Error('offline'); } }, f.journal, f.transport);
-    await assert.rejects(offline.outputs(first.content, first.sources, new AbortController().signal), { code: 'connection_uncertain' });
-    await assert.rejects(offline.outputs(second.content, second.sources, new AbortController().signal), { code: 'connection_uncertain' });
+    const offline = new Connections(f.device, { ...f.broker, async commit() { throw new Error('offline'); } }, f.journal, f.transport);
+    await assert.rejects(offline.outputs(first.id, first.sources, new AbortController().signal), { code: 'connection_uncertain' });
+    await assert.rejects(offline.outputs(second.id, second.sources, new AbortController().signal), { code: 'connection_uncertain' });
     assert.deepEqual(await f.connections.reconcile(), []);
-    assert.equal((await f.custody.get(first.content.policy.id)).materialRevision, 2);
-    assert.equal((await f.custody.get(second.content.policy.id)).materialRevision, 2);
+    assert.equal((await f.custody.get(first.id)).revision, 2);
+    assert.equal((await f.custody.get(second.id)).revision, 2);
   } finally { await f.close(); }
 });

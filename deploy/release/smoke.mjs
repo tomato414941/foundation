@@ -7,12 +7,8 @@ import { configuration } from '../../dist/server/config.js';
 import { createContext } from '../../dist/server/context.js';
 import { Client } from '../../dist/cli/src/client.js';
 import { saveIdentity } from '../../dist/cli/src/config.js';
-import { newIdentityKeys, bindKeys, signBinding } from '../../dist/shared/authority.js';
 import { CustodyClient } from '../../dist/shared/client.js';
-import { FileJournal } from '../../dist/runtime/journal.js';
-import { JournalTrust } from '../../dist/runtime/trust.js';
-import { ContentTypes } from '../../dist/shared/custody.js';
-import { encode } from '../../dist/shared/encryption.js';
+import { encode, newIdentityKeys, publicPart } from '../../dist/shared/encryption.js';
 import { cleanupIdentities } from './cleanup.mjs';
 
 // Only disposable identities and test material are used, including against production.
@@ -33,20 +29,18 @@ try {
   const asset = html.match(/(?:src|href)="(\/assets\/[^"<>]+\.(?:js|css))"/);
   assert.ok(asset); await check(asset[1]);
   for (let index = 0; index < 2; index++) {
-    const keys = await newIdentityKeys();
-    const binding = bindKeys(crypto.randomUUID(), keys);
-    const enrollment = await context.authentication.enroll('Release verification ' + crypto.randomUUID(), await signBinding(binding, keys));
+    const keys = await newIdentityKeys(), publicKey = publicPart(keys.encryption);
+    const enrollment = await context.authentication.enroll('Release verification ' + crypto.randomUUID(), publicKey);
     identities.push(enrollment.principal.id);
-    const client = new Client({ origin: config.origin, principalId: enrollment.principal.id, token: enrollment.token, keys, binding });
-    const trust = new JournalTrust(new FileJournal(join(directory, String(index)), config.origin, binding, keys));
-    const custody = new CustodyClient(client, config.origin, binding, keys, trust);
-    identities[index] = { id: binding.principalId, client, custody, binding, trust };
+    const client = new Client({ origin: config.origin, principalId: enrollment.principal.id, token: enrollment.token, keys });
+    const custody = new CustodyClient(client, config.origin, enrollment.principal.id, { publicKey, privateKey: keys.encryption });
+    identities[index] = { id: enrollment.principal.id, client, custody };
   }
   const [owner, caller] = identities;
   // The CLI of this release opens a value on this machine and hands it to a local command, which sees it masked
   // nowhere but in its own environment.
   const secret = 'release-input-' + crypto.randomUUID();
-  const input = await owner.custody.save('Release input', encode(secret), await owner.custody.policy(owner.id, ContentTypes.value));
+  const input = await owner.custody.save({ id: crypto.randomUUID(), ownerId: owner.id, kind: 'variable' }, 'Release input', encode(secret));
   resources.push(input.id);
   const home = join(directory, 'cli');
   process.env.XDG_CONFIG_HOME = home;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
 import { CatalogMethod } from '../shared/contracts.js';
 import { catalogDefinition } from '../shared/connection-methods.js';
-import { ProtectedContent, RenewalOperation } from '../shared/protocol.js';
+import { RenewalOperation, SealedItem } from '../shared/protocol.js';
 import type { ConnectionBroker } from './connections.js';
 import { DomainError } from '../server/errors.js';
 
@@ -31,7 +31,7 @@ export class HttpBroker {
       }, RenewalOperation),
       commit: (id, fence, content) => api.json('/api/connection-operations/' + id + '/commit', {
         method: 'POST', body: { fence, content },
-      }, ProtectedContent),
+      }, SealedItem),
       uncertain: (id, fence) => api.json('/api/connection-operations/' + id + '/uncertain', { method: 'POST', body: { fence } }),
       abort: (id, fence) => api.json('/api/connection-operations/' + id + '/abort', { method: 'POST', body: { fence } }, RenewalOperation),
       state: id => api.json('/api/connections/' + id + '/operation', {}, RenewalOperation.nullable()),

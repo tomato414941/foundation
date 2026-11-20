@@ -6,7 +6,6 @@ import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
 import { Continuation, Invocation, OperationInput, OperationKind, OperationPerform, OperationView, RequestView } from '../shared/operations.js';
 import { ContinuationEnvelope, continuationContext } from '../shared/operation-continuations.js';
-import { verify } from '../shared/authority.js';
 import { base64url, encode } from '../shared/encryption.js';
 
 export async function routesOperations(app: ApiApp, context: Context) {
@@ -72,18 +71,16 @@ export async function routesOperations(app: ApiApp, context: Context) {
   });
   app.put('/api/operation-continuations/:id', { schema: { params: C.IdParams, body: ContinuationEnvelope,
     response: { 200: ContinuationEnvelope } } }, async request => {
-    const who = actor(request), { signature, ...value } = request.body;
-    const { binding } = await context.bindings.current(who.id);
-    if (who.requestId || value.actorId !== who.id || value.bindingId !== binding.id || value.origin !== context.config.origin ||
+    const who = actor(request), value = request.body;
+    if (who.requestId || value.actorId !== who.id || value.origin !== context.config.origin ||
       value.id !== request.params.id || value.sealed.aad !== base64url(encode(continuationContext(value.origin, value.id))))
-      fail(403, 'forbidden', 'Save progress signed and sealed for this identity.');
-    await verify(value, signature, binding.signing, 'operation-continuation');
+      fail(403, 'forbidden', 'Save progress sealed for this identity.');
     const saved = await context.db.one<{ envelope: unknown }>(
-      `INSERT INTO operation_continuations(id,actor_id,binding_id,revision,envelope) SELECT $1,$2,$3,$4,$5
-       WHERE $4=1 OR EXISTS(SELECT 1 FROM operation_continuations WHERE id=$1)
-       ON CONFLICT(id) DO UPDATE SET revision=$4,envelope=$5,updated_at=now()
-       WHERE operation_continuations.actor_id=$2 AND operation_continuations.binding_id=$3 AND operation_continuations.revision=$4-1
-       RETURNING envelope`, [value.id, who.id, binding.id, value.revision, JSON.stringify(request.body)]);
+      `INSERT INTO operation_continuations(id,actor_id,revision,envelope) SELECT $1,$2,$3,$4
+       WHERE $3=1 OR EXISTS(SELECT 1 FROM operation_continuations WHERE id=$1)
+       ON CONFLICT(id) DO UPDATE SET revision=$3,envelope=$4,updated_at=now()
+       WHERE operation_continuations.actor_id=$2 AND operation_continuations.revision=$3-1
+       RETURNING envelope`, [value.id, who.id, value.revision, JSON.stringify(value)]);
     if (!saved) fail(409, 'operation_changed', 'This operation changed. Reload its progress.');
     return ContinuationEnvelope.parse(saved.envelope);
   });

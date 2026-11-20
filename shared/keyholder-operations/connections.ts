@@ -1,13 +1,11 @@
-import { AppSave, AuthorizeConnection, ConnectService } from '../operations.js';
+import { AppSave, ConnectService } from '../operations.js';
 import { CatalogMethod, Id, Resource, listOf } from '../contracts.js';
 import type { JsonValue } from '../contracts.js';
-import { canonical } from '../authority.js';
-import { ContentTypes } from '../custody.js';
+import { canonical } from '../digest.js';
 import { AppMaterial, connectionLabels, connectionMetadata, requiresApp, sealedConnection } from '../connections.js';
 import { suppliedConnectionFields, visibleConnectionFields } from '../connection-fields.js';
 import { decode, encode } from '../encryption.js';
 import { catalogDefinition, connectionMethod, selectScopes } from '../connection-methods.js';
-import { connectionPolicy, withUsers } from '../connection-policy.js';
 import { registrationMaterial, registrationApplication } from '../connection-registration.js';
 import type { KeyholderPlan, OperationResultView, PrivateOperationInput } from '../operation-client.js';
 import type { KeyholderClient, KeyholderOperation } from './types.js';
@@ -37,34 +35,16 @@ class ConnectionOperations {
       return this.client.proceed(await this.client.configure(plan, { fields: completed }), material);
     return null;
   }
-  async authorize(plan: KeyholderPlan): Promise<OperationResultView> {
-    const id = plan.id, { input } = plan;
-    const permission = AuthorizeConnection.parse(input), previous = await this.client.custody.read(permission.connectionId);
-    if (previous.version !== permission.version || previous.content.policy.ownerId !== permission.ownerId ||
-      previous.content.policy.contentType !== ContentTypes.tokenSet) throw new Error('Review the current connection before changing its permissions.');
-    const policy = await withUsers(this.client.custody, { ...previous.content.policy, revision: previous.content.policy.revision + 1 },
-      permission.users);
-    const current = await this.client.custody.api.json('/api/resources/' + permission.connectionId, {}, Resource);
-    const resource = await this.client.custody.save(current.name, await this.client.custody.reveal(permission.connectionId), policy,
-      { previous, metadata: previous.content.metadata,
-        commit: async write => Resource.parse((await this.client.commit(plan, write as unknown as JsonValue)).result) });
-    return { kind: 'saved', resource, operationId: id };
-  }
   async saveApplication(plan: KeyholderPlan, material: PrivateOperationInput): Promise<OperationResultView> {
     const prepared = await this.prepareFields(plan, material); if (prepared) return prepared;
     const id = plan.id, { input } = plan;
     const destination = AppSave.parse(input);
     const previous = destination.resourceId ? await this.client.custody.latest(destination.resourceId) : undefined;
     if (previous && previous.version !== destination.version) throw new Error('This item changed. Reload it before saving.');
-    const type = ContentTypes.clientCredential;
-    if (previous && (previous.content.policy.contentType !== type || previous.content.policy.ownerId !== destination.ownerId))
-      throw new Error('Choose the item prepared by this operation.');
-    const policy = previous && !previous.replaced ? await this.client.custody.refreshRecipients(previous.content.policy)
-      : await this.client.custody.policy(destination.ownerId, type, previous ? { replacing: previous.content.policy } : {});
     let bytes: Uint8Array, metadata: Record<string, JsonValue> | undefined;
     const application = AppSave.parse(input);
-    const old = previous && !previous.replaced
-      ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(previous.content.policy.id)))) : null;
+    // What this device cannot open of the application is entered again.
+    const old = previous?.opens ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.open(previous.content)))) : null;
     const method = await this.method(application.methodId);
     const fields = suppliedConnectionFields(method.kind === 'aws' ? [] : method.config.fields, application.fields ?? {}, material.fields ?? {});
     const same = old && old.methodId === application.methodId && old.clientId === application.clientId && canonical(old.fields) === canonical(fields);
@@ -73,7 +53,8 @@ class ConnectionOperations {
       ...(material.clientSecret || old?.clientSecret ? { clientSecret: material.clientSecret || old?.clientSecret } : {}) });
     bytes = encode(canonical(app)); metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation,
       fields: visibleConnectionFields(method.kind === 'aws' ? [] : method.config.fields, fields) };
-    const resource = await this.client.custody.save(destination.name, bytes, policy, { previous, metadata,
+    const resource = await this.client.custody.save({ id: destination.resourceId ?? crypto.randomUUID(), ownerId: destination.ownerId,
+      kind: 'app' }, destination.name, bytes, { previous, metadata,
       commit: async write => Resource.parse((await this.client.commit(plan, write as unknown as JsonValue)).result) });
     return { kind: 'saved' as const, resource, operationId: id };
   }
@@ -102,21 +83,21 @@ class ConnectionOperations {
     const appId = connection.appId;
     if (!connectionMethod(method).browserAuthorization) {
       const previous = connection.connectionId ? await this.client.custody.latest(connection.connectionId) : undefined;
-      if (previous && (previous.content.policy.ownerId !== connection.ownerId || previous.content.policy.contentType !== ContentTypes.tokenSet))
-        throw new Error('Choose a connection belonging to this owner.');
-      const old = previous && !previous.replaced ? await this.client.custody.connection(connection.connectionId!) : undefined;
+      const old = previous?.opens ? await this.client.custody.connection(connection.connectionId!) : undefined;
       const app = registrationApplication({ methodId: connection.methodId, method, appId,
         app: appId ? AppMaterial.parse(JSON.parse(decode(await this.client.custody.reveal(appId)))) : null });
       const state = registrationMaterial({ methodId: connection.methodId, method, appId: appId ?? null, app,
         fields: suppliedConnectionFields(connectionMethod(method).fields, connection.fields ?? {}, material.fields ?? {}),
         scopes: method.kind === 'oauth' ? selectScopes(method.config.scopes, connection.scopes) : [], aws: material.aws }, old);
-      const policy = await connectionPolicy(this.client.custody, connection.ownerId, previous, connection.users);
-      const resource = await this.client.custody.save(connection.name ?? method.name, sealedConnection(state), policy,
+      const resource = await this.client.custody.save({ id: connection.connectionId ?? crypto.randomUUID(), ownerId: connection.ownerId,
+        kind: 'connection' }, connection.name ?? method.name, sealedConnection(state),
         { previous, metadata: await connectionMetadata(state), labels: connectionLabels(state),
           commit: async write => {
             const made = await this.client.commit(plan, write as unknown as JsonValue);
             return this.client.custody.api.json('/api/resources/' + Id.parse((made.result as { id?: unknown } | null)?.id), {}, Resource);
           } });
+      // The users approved with it were let in as it was saved: this device seals it for them now.
+      if (connection.users?.length) await this.client.custody.reprotectPending();
       return { kind: 'saved', resource, operationId: id };
     }
     return this.client.connections.start(plan, method,
@@ -126,7 +107,6 @@ class ConnectionOperations {
 export function connectionOperations(client: KeyholderClient) {
   const connections = new ConnectionOperations(client);
   return new Map<string, KeyholderOperation>([
-    ['connection.authorize', { continue: plan => connections.authorize(plan) }],
     ['app.save', { continue: (plan, material) => connections.saveApplication(plan, material) }],
     ['connection.connect', { continue: (plan, material) => connections.connect(plan, material) }],
   ]);

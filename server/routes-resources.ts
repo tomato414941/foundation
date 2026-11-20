@@ -4,7 +4,7 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
-import { TransferRecipients } from '../shared/protocol.js';
+import { isProtected } from '../shared/protected.js';
 
 export async function routesResources(app: ApiApp, context: Context) {
   const { resources, authorization, catalog, objects, billing } = context;
@@ -92,9 +92,11 @@ export async function routesResources(app: ApiApp, context: Context) {
     '/api/resources/:id/recipients',
     { schema: { params: C.IdParams, response: { 200: C.listOf(C.Recipient) } } },
     async (request) => {
+      // Whoever may open an item may know whom it is sealed for, to seal its next value or renew it.
       const row = await resources.get(request.params.id);
-      await authorization.requireResource(actor(request), row, 'update');
-      return { items: await resources.recipients(row.owner_id), next: null };
+      if (!isProtected(row.kind)) fail(400, 'wrong_kind', 'Only sealed items have recipients.');
+      await authorization.requireResource(actor(request), row, 'reveal');
+      return { items: await context.custody.recipients(row), next: null };
     },
   );
   app.get(
@@ -103,13 +105,13 @@ export async function routesResources(app: ApiApp, context: Context) {
       schema: {
         params: C.IdParams,
         querystring: z.object({ to: C.Id }),
-        response: { 200: TransferRecipients },
+        response: { 200: C.listOf(C.Recipient) },
       },
     },
     async (request) => {
       await authorization.requireResource(actor(request), await resources.get(request.params.id), 'transfer');
       await context.principals.get(request.query.to);
-      return { required: await context.custody.required(request.query.to), delegates: await context.custody.delegates(request.query.to) };
+      return { items: await context.custody.ownerRecipients(request.query.to), next: null };
     },
   );
   app.get(

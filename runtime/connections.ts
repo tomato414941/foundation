@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, connectionMetadata, openConnection, requiresApp, sealedConnection } from '../shared/connections.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { connectionMethod } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
-import { ContentTypes, renewContent, reveal } from '../shared/custody.js';
-import type { CustodyContent } from '../shared/custody.js';
+import { sealedFor } from '../shared/custody.js';
+import type { SealedItemValue } from '../shared/custody.js';
+import type { CustodyClient } from '../shared/client.js';
 import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
@@ -21,25 +21,27 @@ export interface ConnectionBroker {
   method(connectionId: string): Promise<MethodDescription>;
   prepare(id: string, resourceId: string, expectedRevision: number): Promise<ConnectionOperation>;
   dispatch(id: string, fence: string): Promise<unknown>;
-  commit(id: string, fence: string, content: CustodyContent): Promise<CustodyContent>;
+  commit(id: string, fence: string, content: SealedItemValue): Promise<SealedItemValue>;
   uncertain(id: string, fence: string): Promise<unknown>;
   abort(id: string, fence: string): Promise<unknown>;
   state(resourceId: string): Promise<ConnectionOperation | null>;
 }
+// The items a command opens, by id.
+export type Sources = Map<string, { kind: string; content: SealedItemValue }>;
+// A token update as this machine records it, until Foundation has the renewed tokens.
 interface Renewal {
   operation: ConnectionOperation;
-  previous: CustodyContent;
+  previous: SealedItemValue;
   material: ConnectionState;
   app: AppState | null;
   phase: 'prepared' | 'dispatched' | 'received' | 'settled';
   checkpoint?: ConnectionCheckpoint;
-  content?: CustodyContent;
   delivered: boolean;
 }
 export class Connections {
   private readonly providers: ReturnType<typeof connectionProviders>;
   constructor(
-    readonly binding: BoundKeys, readonly keys: IdentityKeys, readonly broker: ConnectionBroker,
+    readonly custody: CustodyClient, readonly broker: ConnectionBroker,
     readonly journal: Journal, transport: Transport,
     aws: AwsConnectionProvider = new AwsConnections(),
   ) { this.providers = connectionProviders(transport, aws); }
@@ -50,28 +52,28 @@ export class Connections {
   private metadata(material: ConnectionState) {
     return connectionMetadata(material, this.provider(material.method).facts(material));
   }
-  private source(id: string, type: typeof ContentTypes.clientCredential | typeof ContentTypes.tokenSet, sources: CustodyContent[]) {
-    const content = sources.find(source => source.policy.id === id && source.policy.contentType === type);
-    if (!content) fail(409, 'input_required', 'Include the connection and its application in the inputs.');
-    return content;
+  private source(id: string, kind: 'app' | 'connection', sources: Sources) {
+    const source = sources.get(id);
+    if (!source || source.kind !== kind) fail(409, 'input_required', 'Include the connection and its application in the inputs.');
+    return source.content;
   }
   // A connection is used with the method the server keeps for it now.
-  private async material(content: CustodyContent) {
-    const method = await this.broker.method(content.policy.id);
-    const result = openConnection(await reveal(content, this.binding, this.keys.encryption), content.metadata, method);
+  private async material(id: string, content: SealedItemValue) {
+    const method = await this.broker.method(id);
+    const result = openConnection(await this.custody.open(content), content.metadata, method);
     if (result.state === 'reconnect')
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
   }
-  private async app(id: string, methodId: string, sources: CustodyContent[]) {
-    const content = this.source(id, ContentTypes.clientCredential, sources);
-    if (!content.policy.readers.some(reader => reader.id === this.binding.id))
-      fail(403, 'refresh_required', 'Only a reader of its application can renew this connection.');
-    const value = AppMaterial.parse(JSON.parse(utf8(await reveal(content, this.binding, this.keys.encryption))));
+  private async app(id: string, methodId: string, sources: Sources) {
+    const content = this.source(id, 'app', sources);
+    if (!await sealedFor(content, this.custody.keys.publicKey))
+      fail(403, 'refresh_required', 'Only one its application is sealed for can renew this connection.');
+    const value = AppMaterial.parse(JSON.parse(utf8(await this.custody.open(content))));
     if (value.methodId !== methodId) fail(400, 'wrong_app', 'Choose an application for this connection method.');
     return value;
   }
-  private async connectionApp(state: ConnectionState, sources: CustodyContent[]) {
+  private async connectionApp(state: ConnectionState, sources: Sources) {
     if (connectionMethod(state.method).application === 'none') return null;
     if (!requiresApp(state.method)) return 'implicitApp' in state && state.implicitApp ? state.implicitApp : AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
@@ -83,32 +85,45 @@ export class Connections {
       fail(409, 'app_changed', 'Reconnect this service with the current application settings.');
     return app;
   }
-  async outputs(content: CustodyContent, sources: CustodyContent[], signal: AbortSignal): Promise<ConnectionOutputs> {
-    let state = await this.material(content);
-    if (this.provider(state.method).renew && await this.broker.state(content.policy.id))
+  async outputs(id: string, sources: Sources, signal: AbortSignal): Promise<ConnectionOutputs> {
+    const content = this.source(id, 'connection', sources);
+    let state = await this.material(id, content);
+    if (this.provider(state.method).renew && await this.broker.state(id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
-    state = await this.refresh(content, state, sources, signal);
+    state = await this.refresh(id, content, state, sources, signal);
     const values = await this.provider(state.method).outputs(state, await this.connectionApp(state, sources), signal);
     return { values, files: state.method.kind === 'token' ? state.method.config.files ?? [] : [] };
   }
 
+  // Gives Foundation the renewed tokens, sealed for everyone who may open the connection now.
+  private async deliver(record: Renewal) {
+    const { operation, material } = record, metadata = await this.metadata(material);
+    for (let attempt = 1; ; attempt++) {
+      const content = await this.custody.seal(operation.resource_id, sealedConnection(material), record.previous.revision + 1, metadata);
+      try {
+        await this.broker.commit(operation.id, operation.fence, content);
+        break;
+      } catch (error) {
+        if (attempt < 3 && error instanceof DomainError && error.code === 'recipients_changed') continue;
+        throw error;
+      }
+    }
+    record.delivered = true;
+    await this.journal.write('refresh_' + operation.id, record);
+  }
   private async refreshed(record: Renewal, material: ConnectionState) {
-    const metadata = await this.metadata(material);
     record.material = material;
-    record.content = await renewContent(record.previous, sealedConnection(material), this.binding, this.keys, metadata);
     record.phase = 'settled';
     await this.journal.write('refresh_' + record.operation.id, record);
-    await this.broker.commit(record.operation.id, record.operation.fence, record.content);
-    record.delivered = true;
-    await this.journal.write('refresh_' + record.operation.id, record);
+    await this.deliver(record);
     return material;
   }
-  private async refresh(content: CustodyContent, material: ConnectionState, sources: CustodyContent[], signal: AbortSignal) {
+  private async refresh(resourceId: string, content: SealedItemValue, material: ConnectionState, sources: Sources, signal: AbortSignal) {
     const provider = this.provider(material.method);
     if (!provider.needsRenewal(material)) return material;
     if (!provider.renew) fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
     const app = await this.connectionApp(material, sources), id = randomUUID();
-    const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);
+    const operation = await this.broker.prepare(id, resourceId, content.revision);
     const record: Renewal = { operation, previous: content, material, app, phase: 'prepared', delivered: false };
     await this.journal.write('refresh_' + id, record);
     try {
@@ -136,10 +151,8 @@ export class Connections {
       try {
       const record = (await this.journal.read<Renewal>(id))!;
       if (record.delivered) continue;
-      if (record.content) {
-        await this.broker.commit(record.operation.id, record.operation.fence, record.content);
-        record.delivered = true;
-        await this.journal.write(id, record);
+      if (record.phase === 'settled') {
+        await this.deliver(record);
         continue;
       }
       const active = await this.broker.state(record.operation.resource_id);

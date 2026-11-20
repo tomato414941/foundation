@@ -2,9 +2,9 @@ import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CompactEncrypt, compactDecrypt, importJWK } from 'jose';
-import { canonical, sign, verify } from '../shared/authority.js';
-import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
-import { decode, encode } from '../shared/encryption.js';
+import { canonical } from '../shared/digest.js';
+import { decode, encode, thumbprint } from '../shared/encryption.js';
+import type { DeviceKeys } from '../shared/client.js';
 import { secureWrite } from '../cli/src/config.js';
 
 export interface Journal {
@@ -14,18 +14,18 @@ export interface Journal {
   pending(prefix: string): Promise<string[]>;
 }
 
-const JournalId = z.string().regex(/^(refresh|checkpoint|identity)_[A-Za-z0-9_-]{1,100}$/);
+const JournalId = z.string().regex(/^(refresh|checkpoint)_[A-Za-z0-9_-]{1,100}$/);
 // Records of kinds this machine no longer keeps are left out, and go with their directory when it is moved.
 const kept = (name: string) => JournalId.safeParse(name).success;
+// What this machine keeps of the work it does with the identity's key, sealed for that key, in private files.
 export class FileJournal implements Journal {
   private indexing?: Promise<void>;
-  constructor(readonly directory: string, readonly origin: string,
-    readonly binding: BoundKeys, readonly privateKeys: IdentityKeys) {}
+  constructor(readonly directory: string, readonly origin: string, readonly device: DeviceKeys) {}
 
   private context(id: string) {
-    return canonical({ purpose: 'executor-journal', origin: this.origin, bindingId: this.binding.id,
-      id: JournalId.parse(id) });
+    return canonical({ purpose: 'executor-journal', origin: this.origin, id: JournalId.parse(id) });
   }
+  private keyId() { return thumbprint(this.device.publicKey); }
   async read<T>(id: string): Promise<T | null> {
     const context = this.context(id), path = join(this.directory, id + '.json');
     try {
@@ -33,30 +33,27 @@ export class FileJournal implements Journal {
       if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o077)))
         throw new Error('The journal must use private regular files.');
       const envelope = z.string().max(32_000_000).parse(JSON.parse(await readFile(path, 'utf8')));
-      const decrypted = await compactDecrypt(envelope, await importJWK(this.privateKeys.encryption, 'ECDH-ES+A256KW'), {
+      const privateKey = this.device.privateKey instanceof CryptoKey ? this.device.privateKey
+        : await importJWK(this.device.privateKey, 'ECDH-ES+A256KW');
+      const decrypted = await compactDecrypt(envelope, privateKey, {
         keyManagementAlgorithms: ['ECDH-ES+A256KW'], contentEncryptionAlgorithms: ['A256GCM'],
       });
-      if (decrypted.protectedHeader.kid !== this.binding.id || decrypted.protectedHeader.ctx !== context)
+      if (decrypted.protectedHeader.kid !== await this.keyId() || decrypted.protectedHeader.ctx !== context)
         throw new Error('The journal entry belongs to another operation.');
-      const signed = JSON.parse(decode(decrypted.plaintext)) as {
-        context: string; value: T; signature: string;
-      };
-      if (signed.context !== context) throw new Error('The journal entry belongs to another operation.');
-      await verify({ context, value: signed.value }, signed.signature, this.binding.signing, 'journal');
-      return signed.value;
+      const record = JSON.parse(decode(decrypted.plaintext)) as { context: string; value: T };
+      if (record.context !== context) throw new Error('The journal entry belongs to another operation.');
+      return record.value;
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
       throw error;
     }
   }
   private async writeEntry(id: string, value: unknown) {
-    const context = this.context(id), record = { context, value };
-    const signature = await sign(record, this.privateKeys.signing, 'journal');
-    const bytes = encode(canonical({ ...record, signature }));
+    const context = this.context(id), bytes = encode(canonical({ context, value }));
     if (bytes.byteLength > 20_000_000) throw new Error('The journal entry is too large.');
     const envelope = await new CompactEncrypt(bytes).setProtectedHeader({
-      alg: 'ECDH-ES+A256KW', enc: 'A256GCM', kid: this.binding.id, ctx: context,
-    }).encrypt(await importJWK(this.binding.encryption, 'ECDH-ES+A256KW'));
+      alg: 'ECDH-ES+A256KW', enc: 'A256GCM', kid: await this.keyId(), ctx: context,
+    }).encrypt(await importJWK(this.device.publicKey, 'ECDH-ES+A256KW'));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await secureWrite(join(this.directory, id + '.json'), canonical(envelope), true);
   }

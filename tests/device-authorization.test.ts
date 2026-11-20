@@ -5,13 +5,11 @@ import { CustodyClient } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
-import { JournalTrust } from '../runtime/trust.js';
-import { MemoryJournal } from './delegation-support.js';
 import { flowOutput } from '../cli/src/connections.js';
 import { AppMaterial } from '../shared/connections.js';
 import { Resource } from '../shared/contracts.js';
 import { OperationView } from '../shared/operations.js';
-import { canonical } from '../shared/authority.js';
+import { canonical } from '../shared/digest.js';
 import { decode, encode } from '../shared/encryption.js';
 import { DomainError } from '../shared/errors.js';
 
@@ -23,10 +21,8 @@ const authorization = { device_code: 'private-cli-device-code', user_code: 'WXYZ
 const token = { access_token: 'private-device-access-token', token_type: 'bearer', scope: 'repo,gist' };
 
 async function cli(f: Fixture, delegate = false) {
-  const identity = delegate ? f.delegate : f.owner, trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.owner.binding);
-  await trust.rememberBinding(f.delegate.binding);
-  const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
+  const identity = delegate ? f.delegate : f.owner;
+  const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.actor.id, identity.keys);
   const store = new RemoteFlowStore(custody), connections = new ConnectionClient(custody, store, f.transport, 'cli');
   return { custody, store, connections, operations: new OperationClient(custody, connections) };
 }
@@ -136,7 +132,7 @@ test('デバイス認証中にアプリが変更されたら、現在のアプ�
   const previous = await f.client.read(app.id);
   const material = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(app.id))));
   const changed = { ...material, generation: crypto.randomUUID(), clientId: 'another-client' };
-  await f.client.save(app.name, encode(canonical(changed)), { ...previous.content.policy, revision: previous.content.policy.revision + 1 },
+  await f.client.save({ id: app.id, ownerId: app.ownerId, kind: 'app' }, app.name, encode(canonical(changed)),
     { previous, metadata: { ...previous.content.metadata, generation: changed.generation, clientId: changed.clientId } });
   t.mock.timers.tick(5_000);
   await assert.rejects(client.connections.progress(progress.flow.id), /current application/);

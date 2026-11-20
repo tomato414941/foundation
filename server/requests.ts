@@ -16,7 +16,7 @@ import { fail, required } from './errors.js';
 import { atPointer, setPointer } from '../shared/values.js';
 import { Id, Operation } from '../shared/contracts.js';
 import type { JsonValue, RequestedOperation, Settings } from '../shared/contracts.js';
-import { hash } from '../shared/authority.js';
+import { hash } from '../shared/digest.js';
 import { RequestCreate, RequestView } from '../shared/operations.js';
 import type { OperationCall, OperationRecordView, RequestRecordView } from '../shared/operations.js';
 

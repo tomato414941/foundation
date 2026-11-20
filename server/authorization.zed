@@ -4,7 +4,7 @@
 // A relation reads "subject is the relation of object": a principal is the delegate of another, a friend a reader of a
 // variable. Relations name roles (nouns); permissions name actions (verbs). Whom a principal or a thing belongs to
 // is kept with it and read as its owner, and a principal is its own self; every other relation is a line someone
-// drew. On what a key protects (variables, connections, apps), the lines come from the signed policy kept with it.
+// drew.
 
 definition principal {
   relation owner: principal
@@ -50,61 +50,63 @@ definition principal {
   permission create_object = create + use
   permission create_ssh_key = create + use
   permission create_ssh_host = create + use
-  // Only those who act as it keep the list of public keys it verified, so that a delegate cannot vouch for a key.
-  permission create_keyring = stands
 }
 
-// What a key protects: a value, a connection to a service, or an application used to connect. It is sealed for the
-// owner's delegates, who see, use, change and remove it as the owner does. Whom it is shared with is decided by those who act
-// as the owner: the policy sealed with it lists every reader and signer, so changing them is sharing it.
+// What a key protects: a value, a connection to a service, or an application used to connect. It is sealed for everyone
+// who may open it: whoever uses what its owner holds, who sees, changes and removes it as the owner does, and those it is
+// shared with. Using it means opening it on one's own machine. Whom it is shared with is decided by those who act as the
+// owner.
 definition variable {
   relation owner: principal
+  // Sees that it is there.
   relation reader: principal
-  relation editor: principal
+  // Opens it, and so uses it.
   relation revealer: principal
-  relation user: principal
+  // Changes it, and opens it.
+  relation editor: principal
 
-  permission read = owner->use + reader->stands
+  permission reveal = owner->use + revealer->stands + editor->stands
+  permission read = reveal + reader->stands
   permission update = owner->use + editor->stands
   permission delete = owner->use
   permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->use + revealer->stands
-  permission use = owner->use + user->stands
   permission rename = update
 }
 
 definition connection {
   relation owner: principal
+  // Sees that it is there.
   relation reader: principal
-  relation editor: principal
+  // Opens it, and so uses it.
   relation revealer: principal
-  relation user: principal
+  // Changes it, and opens it.
+  relation editor: principal
 
-  permission read = owner->use + reader->stands
+  permission reveal = owner->use + revealer->stands + editor->stands
+  permission read = reveal + reader->stands
   permission update = owner->use + editor->stands
   permission delete = owner->use
   permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->use + revealer->stands
-  permission use = owner->use + user->stands
   permission rename = update
 }
 
 definition app {
   relation owner: principal
+  // Sees that it is there.
   relation reader: principal
-  relation editor: principal
+  // Opens it, and so uses it.
   relation revealer: principal
-  relation user: principal
+  // Changes it, and opens it.
+  relation editor: principal
 
-  permission read = owner->use + reader->stands
+  permission reveal = owner->use + revealer->stands + editor->stands
+  permission read = reveal + reader->stands
   permission update = owner->use + editor->stands
   permission delete = owner->use
   permission share = owner->stands
   permission transfer = owner->stands
-  permission reveal = owner->use + revealer->stands
-  permission use = owner->use + user->stands
   permission rename = update
 }
 
@@ -195,12 +197,3 @@ definition ssh_host {
   permission rename = update
 }
 
-// The public keys a principal verified with their holders, as one list signed by whoever acts as it. Nothing in it is
-// secret: its delegates may read it, and only those who act as the principal change it.
-definition keyring {
-  relation owner: principal
-
-  permission read = owner->use
-  permission update = owner->stands
-  permission delete = owner->stands
-}

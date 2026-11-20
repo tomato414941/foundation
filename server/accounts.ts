@@ -3,9 +3,10 @@ import type { Actor } from './authorization.js';
 import { principal } from './authorization.js';
 import type { Context } from './context.js';
 import type { ResourceRow } from './resources.js';
-import type { CustodyContent } from '../shared/custody.js';
+import type { SealedItemValue } from '../shared/custody.js';
 import { fail } from './errors.js';
 import { isProtected } from '../shared/protected.js';
+import type { ProtectedKindName } from '../shared/protected.js';
 
 export class Accounts {
   constructor(readonly context: Context) {}
@@ -147,11 +148,13 @@ export class Accounts {
       from: { id: from.id, name: from.name, publicKey: from.public_key },
       resources: await Promise.all(resources.map((row) => this.context.resources.view({ id: from.id }, row))),
       protectedItems: [...await Promise.all(resources.filter(row => isProtected(row.kind))
-        .map(async row => ({ id: row.id, version: row.version, content: await this.context.custody.get(row.id) })))],
-      recipients: await this.context.custody.recipients(actor.id),
+        .map(async row => ({ id: row.id, kind: row.kind as ProtectedKindName, version: row.version,
+          content: await this.context.custody.get(row.id) })))],
+      // What the other account holds passes to this one, sealed for whoever uses what this one holds.
+      recipients: await this.context.custody.ownerRecipients(actor.id),
     };
   }
-  async merge(actor: Actor, id: string, contents: Record<string, { version: number; content: CustodyContent }>) {
+  async merge(actor: Actor, id: string, contents: Record<string, { version: number; content: SealedItemValue }>) {
     const c = this.context,
       proof = await this.proof(actor, id),
       from = await c.principals.get(proof.from),
@@ -178,17 +181,12 @@ export class Accounts {
     if (accounts.length > 1)
       fail(409, 'payment_accounts', 'Keep the payment account on one principal before merging.');
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [from.id]);
-    const externalKeys = await c.db.one(
-      `SELECT 1 FROM resource_custody c JOIN resources r ON r.id=c.resource_id
-       WHERE r.owner_id<>$1 AND jsonb_path_exists(c.content,
-         '$.policy.**.principalId ? (@ == $principal)',jsonb_build_object('principal',$1::text)) LIMIT 1`, [from.id]);
-    if (externalKeys) fail(409, 'rekey_required', 'Ask other resource owners to replace the previous account keys before merging.');
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [from.id]);
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
     for (const row of rows.filter(row => isProtected(row.kind))) {
       const update = contents[row.id];
-      if (!update || update.version !== row.version || update.content.policy.ownerId !== to.id)
-        fail(409, 'rekey_required', 'Unlock both accounts and re-encrypt protected items for the new owner.');
+      if (!update || update.version !== row.version)
+        fail(409, 'rekey_required', 'Unlock both accounts and seal protected items for the new owner.');
     }
     await c.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
@@ -201,11 +199,6 @@ export class Accounts {
         [from.id, to.id],
       ]);
       for (const row of rows) {
-        // Trust decisions signed by the source account do not become the target account's decisions.
-        if (row.kind === 'keyring') {
-          await connection.query('DELETE FROM resources WHERE id=$1', [row.id]);
-          continue;
-        }
         let name = row.name;
         if (
           await c.db.one(
@@ -217,8 +210,8 @@ export class Accounts {
           name = name.slice(0, 150) + ' · ' + row.id;
         if (isProtected(row.kind)) {
           // Both accounts are this person's: the one merged into agrees to receive what the other passes on.
-          await c.custody.transfer({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id }, row.id, to.id,
-            { ...contents[row.id]!, name }, connection);
+          await c.custody.transfer({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id }, to.id,
+            { ...contents[row.id]!, id: row.id, name, kind: row.kind, ownerId: to.id }, connection);
         } else {
           await c.resources.changeOwner(row, to.id, connection, name);
         }

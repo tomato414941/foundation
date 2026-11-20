@@ -7,7 +7,7 @@ import { responseJson } from '../shared/http.js';
 import type { Transport } from '../shared/http.js';
 import { credentialOutput } from '../shared/values.js';
 import { fail } from '../shared/errors.js';
-import { hash } from '../shared/authority.js';
+import { hash } from '../shared/digest.js';
 import type { ConnectionProvider } from './connection-provider.js';
 
 const Session = z.object({ accessToken: z.string().min(1).max(16384).regex(/^\S+$/),

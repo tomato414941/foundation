@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { Accounts } from '../server/accounts.js';
-import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
-import { encode, decode } from '../shared/encryption.js';
+import { openItem, sealItem } from '../shared/custody.js';
+import { decode } from '../shared/encryption.js';
 
 test('他方のメールアドレスを確認してアカウントを統合し、保管した内容を引き継ぐ', async (t) => {
   const f = await fixture(),
@@ -23,10 +23,7 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   );
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   await c.authentication.verifyEmail(params.get('challenge')!, params.get('token')!);
-  const initial = await protect(encode('merge-value'), AccessPolicy.parse({ format: 3, id: crypto.randomUUID(),
-    origin: f.config.origin, ownerId: source.actor.id, contentType: ContentTypes.value, revision: 1,
-    authorities: [source.binding], readers: [source.binding] }), 1, source.binding, source.keys);
-  const variable = await c.custody.put(source.actor, { name: 'Saved value', content: initial });
+  const variable = await f.keep(source.actor, source.actor.id, 'Saved value', 'merge-value');
   await c.authentication.beginEmail(
     'merge@example.com',
     'browser',
@@ -42,13 +39,16 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   if (!('mergeProof' in verified)) return;
   const plan = await accounts.plan(target.actor, verified.mergeProof);
   assert.equal(plan.from.id, source.actor.id);
-  const moved = await protect(encode('merge-value'), { ...initial.policy, revision: 2, ownerId: target.actor.id,
-    authorities: [target.binding], readers: [target.binding] }, 2, source.binding, source.keys, undefined, initial);
+  assert.deepEqual(plan.recipients.map(recipient => recipient.id), [target.actor.id]);
+  // The other account's key opens what it held, and the value is sealed for whoever uses what this account holds.
+  const [item] = plan.protectedItems;
+  const moved = await sealItem(await openItem(item!.content, source.keys.privateKey, source.keys.publicKey), plan.recipients,
+    item!.content.revision + 1, item!.content.metadata);
   await accounts.merge(target.actor, verified.mergeProof, { [variable.id]: { version: variable.version, content: moved } });
   const row = await c.resources.get(variable.id);
   assert.equal(row.owner_id, target.actor.id);
   assert.equal(
-    decode(await reveal((await c.custody.read(target.actor, row.id)).content, target.binding, target.keys.encryption)),
+    decode(await openItem((await c.custody.read(target.actor, row.id)).content, target.keys.privateKey, target.keys.publicKey)),
     'merge-value',
   );
   assert.equal((await c.authentication.authenticate(source.token))?.id, target.actor.id);

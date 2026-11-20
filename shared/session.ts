@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { Principal, Id, Name, Locale, PublicKey, Time, WrappedKey } from './contracts.js';
-import { SignedBinding } from './authority.js';
 
 // A request to make new keys after every copy of the private key was lost, and when it can be completed.
 export const KeyReset = z.object({ requestedAt: Time, readyAt: Time }).strict();
@@ -41,12 +40,10 @@ export const PasskeyVerify = z
   .object({
     challengeId: Id,
     credential: z.json(),
-    // The keys a new passkey brings to a principal that has none yet.
-    binding: SignedBinding.optional(),
-    existingPublicKey: PublicKey.optional(),
+    // The public key of the private key the new passkey holds: the principal's own, or its first.
+    publicKey: PublicKey.optional(),
     wrappedKey: WrappedKey.optional(),
   })
   .strict();
-// The new keys, and the private key wrapped for the passkey this session signed in with.
-// The new keys, wrapped for the passkey registered with the reset.
-export const KeyResetCompletion = z.object({ binding: SignedBinding, wrappedKey: WrappedKey }).strict();
+// The new key, and its private key wrapped for the passkey registered with the reset.
+export const KeyResetCompletion = z.object({ publicKey: PublicKey, wrappedKey: WrappedKey }).strict();

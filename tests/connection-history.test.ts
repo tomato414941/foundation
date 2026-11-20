@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { MemoryJournal } from './delegation-support.js';
-import { JournalTrust } from '../runtime/trust.js';
 import { CustodyClient } from '../shared/client.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
@@ -16,8 +15,7 @@ import { decode } from '../shared/encryption.js';
 
 test('持ち主がHFトークンを手元で暗号化して接続し、履歴の一件の操作から結果を確かめる', async t => {
   const f = await flowFixture(); t.after(f.close);
-  const custody = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys,
-    new JournalTrust(new MemoryJournal()));
+  const custody = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.actor.id, f.stranger.keys);
   const client = new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody)));
   const token = 'hf_locally_encrypted_registration';
   const saved = await client.perform({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
@@ -37,25 +35,20 @@ test('持ち主がHFトークンを手元で暗号化して接続し、履歴の
 test('接続の所有者がAIに使用を許可し、AIが自分の鍵で開いたHFのトークンを手元のコマンドへ渡す', async t => {
   const token = 'hf_authorized_agent_token';
   const f = await flowFixture(() => jsonResponse({ name: 'model-owner' })); t.after(f.close);
-  const trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.delegate.binding);
-  const human = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.binding, f.stranger.keys, trust);
+  const human = new CustodyClient(f.api(f.stranger.token), f.config.origin, f.stranger.actor.id, f.stranger.keys);
   const client = new OperationClient(human, new ConnectionClient(human, new RemoteFlowStore(human)));
   const saved = await client.perform({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
     methodId: 'huggingface:token', name: 'Hugging Face' } }, { fields: { token } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
-  const agentTrust = new JournalTrust(new MemoryJournal());
-  await agentTrust.rememberBinding(f.stranger.binding);
-  const agent = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.binding, f.delegate.keys, agentTrust);
+  const agent = new CustodyClient(f.api(f.delegate.token), f.config.origin, f.delegate.actor.id, f.delegate.keys);
   await assert.rejects(agent.read(saved.resource.id), { code: 'forbidden' });
   const permission = await client.perform({ name: 'connection.authorize', input: { ownerId: f.stranger.actor.id,
     connectionId: saved.resource.id, version: saved.resource.version, users: [f.delegate.actor.id] } });
-  assert.equal('kind' in permission && permission.kind, 'saved');
-  const visible = await agent.read(saved.resource.id);
-  assert.equal(visible.content.policy.ownerId, f.stranger.actor.id);
-  assert.ok(visible.content.policy.readers.some(reader => reader.principalId === f.delegate.actor.id));
-  const own = new Connections(f.delegate.binding, f.delegate.keys, new HttpBroker(f.api(f.delegate.token)).connections(),
-    new MemoryJournal(), f.transport);
+  assert.equal('state' in permission && permission.state, 'succeeded');
+  // The AI may open it now; the owner's device seals it for the AI right after.
+  await assert.rejects(agent.read(saved.resource.id), { code: 'not_sealed_for_key' });
+  assert.deepEqual(await human.reprotectPending(), { done: [saved.resource.id], failed: [] });
+  const own = new Connections(agent, new HttpBroker(f.api(f.delegate.token)).connections(), new MemoryJournal(), f.transport);
   const used = await openInputs(agent, own, [{ name: 'HF_TOKEN', source: { id: saved.resource.id, output: 'HF_TOKEN' } }]);
   assert.equal(used.environment.HF_TOKEN, token);
   assert.equal((await human.api.json('/api/resources/' + saved.resource.id, {}, Resource)).ownerId, f.stranger.actor.id);

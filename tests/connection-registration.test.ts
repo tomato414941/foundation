@@ -8,11 +8,9 @@ import { CustodyClient } from '../shared/client.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
-import { JournalTrust } from '../runtime/trust.js';
-import { MemoryJournal } from './delegation-support.js';
-import { decode, encode } from '../shared/encryption.js';
+import { decode, encode, thumbprint } from '../shared/encryption.js';
 import { OperationView } from '../shared/operations.js';
-import { canonical } from '../shared/authority.js';
+import { canonical } from '../shared/digest.js';
 import { DomainError } from '../server/errors.js';
 
 function browser(f: Awaited<ReturnType<typeof flowFixture>>, custody = f.client) {
@@ -28,7 +26,7 @@ test('サービスへアクセスできない端末でも入力式の認証情�
   let device = 0;
   for (const method of catalog.items.filter(method => method.registration.kind === 'input')) await t.test(method.id, async () => {
     const custody = new CustodyClient(f.api(f.stranger.token, '198.18.0.' + ++device), f.config.origin,
-      f.stranger.binding, f.stranger.keys, new JournalTrust(new MemoryJournal()));
+      f.stranger.actor.id, f.stranger.keys);
     const client = browser(f, custody);
     const definitions = method.kind === 'aws' ? [] : method.config.fields;
     const entered = Object.fromEntries(definitions.map(field => [field.name, field.choices?.[0]?.value ?? field.defaultValue ??
@@ -141,9 +139,8 @@ test('代理のCLIでGitHubの認可応答を受け取り、指定した所有�
     return jsonResponse({ access_token: 'delegate-token', token_type: 'bearer', scope: 'repo' });
   }); t.after(f.close);
   const app = await f.saveApp('github:oauth');
-  const identity = f.delegate, trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.owner.binding);
-  const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.binding, identity.keys, trust);
+  const identity = f.delegate;
+  const custody = new CustodyClient(f.api(identity.token), f.config.origin, identity.actor.id, identity.keys);
   const cli = new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody), f.transport, 'cli'));
   const started = await cli.perform({ name: 'connection.connect', input: {
     ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id,
@@ -211,8 +208,8 @@ test('間違ったアプリ認証は利用時に失敗し、修正して保存�
   const rejected = await f.http(saved.id, 'OVH_ACCESS_TOKEN', 'https://ca.api.ovh.com/1.0/vps');
   assert.equal(rejected?.error?.code, 'authorization_failed');
   const previous = await f.client.read(app.id), material = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(app.id))));
-  await f.client.save(app.name, encode(canonical({ ...material, clientSecret: 'correct-secret' })), previous.content.policy,
-    { previous, metadata: previous.content.metadata });
+  await f.client.save({ id: app.id, ownerId: app.ownerId, kind: 'app' }, app.name,
+    encode(canonical({ ...material, clientSecret: 'correct-secret' })), { previous, metadata: previous.content.metadata });
   await f.saveConnection({ methodId: 'ovh:client_credentials', appId: app.id, connectionId: saved.id });
   assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', 'https://ca.api.ovh.com/1.0/vps'))?.ok, true);
 });
@@ -227,7 +224,6 @@ test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接�
   const original = await f.saveConnection({ methodId: custom.id, name: 'OVHcloud', fields: {
     apiRegion: 'ca', applicationKey: 'saved-key', applicationSecret: 'saved-secret', consumerKey: 'saved-consumer',
   } });
-  const previous = await f.client.read(original.id);
   const saved = await f.saveConnection({ methodId: 'ovh:api_key', connectionId: original.id, name: 'OVHcloud', fields: {
     apiRegion: 'ca', applicationKey: '', applicationSecret: '', consumerKey: '',
   } });
@@ -235,7 +231,8 @@ test('保存済みのキーを標準のOVH方式へ保存し直し、同じ接�
   const material = await f.client.connection(saved.id);
   assert.equal(material.method.kind, 'ovh'); assert.equal(material.fields!.applicationSecret, 'saved-secret');
   const current = await f.client.read(saved.id);
-  assert.deepEqual(current.content.policy.readers, previous.content.policy.readers);
+  assert.deepEqual(current.content.sealed.recipients.map(recipient => recipient.header.kid).sort(),
+    (await Promise.all([f.owner, f.delegate].map(person => thumbprint(person.keys.publicKey)))).sort());
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(custom.id));
 });
 

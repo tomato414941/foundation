@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApprovalMethod, AuthKind, AwsMethod, Id, JsonObject, MethodDefinition, OAuthMethod, OvhMethod, TokenMethod } from './contracts.js';
 import type { MethodDescription } from './contracts.js';
-import { Fingerprint, canonical } from './authority.js';
+import { canonical } from './digest.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
 import { decode, encode } from './encryption.js';
 import { fail } from './errors.js';
@@ -75,9 +75,6 @@ export const ConnectionMetadata = z.object({
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
   fields: Fields.optional(),
   aws: AwsConnectionInfo.optional(),
-  // Connections signed while Foundation approved method rules, accounts and permissions still carry these, and keep
-  // them when their readers change. Nothing reads them.
-  methodDigest: Fingerprint.optional(), authorizationDigest: Fingerprint.optional(),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState, facts: ConnectionFactValues = connectionFacts(state)) {

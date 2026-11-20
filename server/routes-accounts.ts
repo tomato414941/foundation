@@ -77,7 +77,7 @@ export async function routesAccounts(app: ApiApp, context: Context) {
             from: z.object({ id: C.Id, name: C.Name, publicKey: C.PublicKey.nullable() }),
             resources: z.array(C.Resource),
             protectedItems: z.array(P.ProtectedRead.extend({ id: C.Id })),
-            recipients: z.array(P.BoundRecipient),
+            recipients: z.array(C.Recipient),
           }),
         },
       },

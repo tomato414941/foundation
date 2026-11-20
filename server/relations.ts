@@ -4,13 +4,13 @@ import type { Actor, Authorization, Target } from './authorization.js';
 import { SCHEMA, createPermission, objectOf, principal, reaches } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
-import type { Resources } from './resources.js';
+import type { Resources, ResourceRow } from './resources.js';
 import type { Billing } from './billing.js';
 import type { KeyUpdates } from './key-sharing.js';
 import { Relation, RelationInput } from '../shared/contracts.js';
 import type { RelationQuery, ResourceKindName } from '../shared/contracts.js';
 import type { z } from 'zod';
-import { ProtectedKinds, isProtected } from '../shared/protected.js';
+import { isProtected } from '../shared/protected.js';
 import { fail } from './errors.js';
 
 export type Line = z.infer<typeof RelationInput>;
@@ -52,10 +52,9 @@ const cursor = (row: LineRow) =>
 // The lines drawn between principals and onto what they hold, and whom each principal and thing belongs to. Each side
 // that gives something by a change agrees to it: what a line passes on is given by one who holds all of it, since
 // nothing gives more than it has, and what a payer or a new owner takes on is taken on by its side. A change made on
-// one side waits on the other as a request. A subject may always erase a line to itself. On what a key protects, the
-// lines are the signed policy's and change only with it. A line to a member or a delegate takes effect at once: the
-// owner's devices seal its items again one by one afterwards, so an item that cannot change now holds nothing back,
-// and meanwhile the server gives an item only to those who may still open it.
+// one side waits on the other as a request. A subject may always erase a line to itself. A line that lets someone
+// open what a key protects takes effect at once: whoever drew it seals those items for them right after, and the
+// server gives an item only to those who may open it.
 export class Relations {
   constructor(
     readonly db: Database,
@@ -82,8 +81,6 @@ export class Relations {
     const type = objectOf(target).type;
     if (!SCHEMA.definitions.get(type)?.relations.has(relation) || RECORDED.has(relation))
       fail(400, 'invalid_relation', 'Choose a relation this object can be given.');
-    if ('kind' in target && isProtected(target.kind))
-      fail(409, 'rekey_required', 'Sign and encrypt the new access policy to change who may use this item.');
   }
   // Where the audit of a line is kept: the principal it is drawn onto, or the owner of the thing.
   private ledger(target: Target & { ownerId: string | null }) {
@@ -181,22 +178,10 @@ export class Relations {
       await this.authorization.require(actor, object, 'share');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      const owners = !('kind' in object) && (line.relation === 'member' || line.relation === 'delegate')
-        ? await this.authorization.find(line.objectId, 'principal', 'stands', connection) : [];
-      const users = async (id: string) => new Set(await this.authorization.holders(principal(id), 'use', connection));
-      const before = await Promise.all(owners.map(users));
       await connection.query(
         `DELETE FROM relations WHERE subject_id=$1 AND relation=$2 AND ${'kind' in object ? 'resource_id' : 'principal_id'}=$3`,
         [line.subjectId, line.relation, line.objectId],
       );
-      // Whoever no longer uses what a principal holds no longer opens it, even where an item is still sealed for it: the
-      // roles its items record for it go with the line, until the owner's devices seal them again without it.
-      for (const [index, id] of owners.entries()) {
-        const after = await users(id), lost = [...before[index]!].filter(subject => !after.has(subject));
-        if (lost.length) await connection.query(
-          'DELETE FROM relations WHERE subject_id=ANY($1::uuid[]) AND resource_id IN (SELECT id FROM resources WHERE owner_id=$2 AND kind=ANY($3::text[]))',
-          [lost, id, [...ProtectedKinds]]);
-      }
       await this.audit.record(this.ledger(object), actor.id, 'relation.remove', line.objectId,
         { subjectId: line.subjectId, relation: line.relation }, connection);
     });
@@ -211,8 +196,7 @@ export class Relations {
       if (row.version !== version) fail(409, 'changed', 'This item changed. Reload it before transferring it.');
       await this.principals.get(to, connection);
       if (isProtected(row.kind))
-        fail(409, 'rekey_required', 'Verify the new owner\'s public keys and re-encrypt this item on your device, then submit to, version, and content to this endpoint. ' +
-          'Use foundation transfer ' + id + ' --to ' + to + ' to do this automatically.', {
+        fail(409, 'rekey_required', 'Seal this item on your device for whoever uses what the new owner holds, then submit to, version, and content to this endpoint.', {
           content: { method: 'GET', path: '/api/resources/' + id + '/custody' },
           recipients: { method: 'GET', path: '/api/resources/' + id + '/transfer-recipients?to=' + to },
           submit: { method: 'POST', path: '/api/resources/' + id + '/transfer', fields: ['to', 'version', 'content'] },
@@ -299,6 +283,25 @@ export class Relations {
       next: rows.length > query.limit ? cursor(selected.at(-1)!) : null,
     };
   }
+  // The principals a thing is shared with to open it, beyond whoever uses what its owner holds: they replace the earlier
+  // ones. One who acts as the owner shares it, and whoever opens it seals it for the new ones right after.
+  async openers(actor: Actor, item: ResourceRow, subjects: string[], connection: Queryable) {
+    await this.authorization.requireResource(actor, item, 'share', connection);
+    await this.authorization.requireResource(actor, item, 'reveal', connection);
+    const users = new Set(await this.authorization.holders(principal(item.owner_id), 'use', connection));
+    const wanted = new Set(subjects.filter(id => !users.has(id)));
+    for (const id of wanted) await this.principals.get(id, connection);
+    const current = new Set((await this.db.all<{ subject_id: string }>(
+      "SELECT subject_id FROM relations WHERE resource_id=$1 AND relation='revealer'", [item.id], connection)).map(row => row.subject_id));
+    for (const id of wanted) if (!current.has(id)) {
+      await connection.query("INSERT INTO relations(subject_id,relation,resource_id) VALUES($1,'revealer',$2) ON CONFLICT DO NOTHING", [id, item.id]);
+      await this.audit.record(item.owner_id, actor.id, 'relation.add', item.id, { subjectId: id, relation: 'revealer', ...agreed(actor) }, connection);
+    }
+    for (const id of current) if (!wanted.has(id)) {
+      await connection.query("DELETE FROM relations WHERE subject_id=$1 AND relation='revealer' AND resource_id=$2", [id, item.id]);
+      await this.audit.record(item.owner_id, actor.id, 'relation.remove', item.id, { subjectId: id, relation: 'revealer' }, connection);
+    }
+  }
   // Takes back everything a principal was given by another and on what the other holds, and the other's open requests.
   async revoke(actor: Actor, principalId: string, subjectId: string) {
     await this.authorization.requirePrincipal(actor, principalId, 'share');
@@ -317,12 +320,3 @@ export class Relations {
   }
 }
 
-// The lines on a thing as its signed policy says: what was there is replaced.
-export async function project(connection: Queryable, resourceId: string, lines: Array<{ subjectId: string; relation: string }>) {
-  await connection.query('DELETE FROM relations WHERE resource_id=$1', [resourceId]);
-  for (const line of lines)
-    await connection.query(
-      'INSERT INTO relations(subject_id,relation,resource_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-      [line.subjectId, line.relation, resourceId],
-    );
-}

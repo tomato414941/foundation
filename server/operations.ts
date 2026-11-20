@@ -12,7 +12,7 @@ import type { Requests } from './requests.js';
 import { fail, failure, required } from './errors.js';
 import { Id } from '../shared/contracts.js';
 import type { JsonValue } from '../shared/contracts.js';
-import { hash } from '../shared/authority.js';
+import { hash } from '../shared/digest.js';
 import { OperationInput, OperationView, serviceStep } from '../shared/operations.js';
 import type { OperationCall, OperationContinuation, OperationRecordView, RequestRecordView } from '../shared/operations.js';
 import type { z } from 'zod';

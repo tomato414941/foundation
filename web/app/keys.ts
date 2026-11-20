@@ -5,23 +5,25 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
-import { importJWK } from 'jose';
 import type { JWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
-import { base64url, decode, encode, hold, newEncryptionKey, open, unbase64url, unwrap, wrap } from '../../shared/encryption';
+import {
+  IdentityKeys, base64url, decode, encode, hold, newEncryptionKey, newIdentityKeys, open, publicPart, unbase64url, unwrap, wrap,
+} from '../../shared/encryption';
+import type { IdentityKeysValue } from '../../shared/encryption';
+import { canonical } from '../../shared/digest';
 import { Session } from '../../shared/session';
-import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
-import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure, errorCode, session } from './api';
 import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
-import type { RecipientAccess, RecipientVerification } from '../../shared/client';
 
-const unlocked = new Map<string, IdentityKeys>();
-type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
+const unlocked = new Map<string, IdentityKeysValue>();
+// The private key this browser keeps for a principal, which it cannot read back, with its public key.
+type HeldIdentity = { publicKey: PublicEncryptionKey; privateKey: CryptoKey };
 const held = new Map<string, HeldIdentity>();
+const keyName = (id: string) => 'keys:' + id;
 const seed = encode('Foundation passkey identity keys v2');
 type Verified = {
   principalId: string;
@@ -31,55 +33,41 @@ type Verified = {
   returnTo: string;
 };
 export async function getIdentity(id: string): Promise<HeldIdentity | null> {
-  const identity = held.get(id) ?? await stored('keys', 'readonly', store => store.get('v2:' + id));
-  if (!identity?.keys || identity.binding?.principalId !== id ||
-    !(identity.keys.encryption instanceof CryptoKey) || !(identity.keys.signing instanceof CryptoKey)) return null;
+  const identity = held.get(id) ?? await stored('keys', 'readonly', store => store.get(keyName(id)));
+  if (!identity?.publicKey || !(identity.privateKey instanceof CryptoKey)) return null;
   held.set(id, identity);
   return identity;
 }
 export async function getKey(id: string, publicKey?: PublicEncryptionKey | null): Promise<CryptoKey | null> {
   const identity = await getIdentity(id);
-  if (!identity || (publicKey && canonical(identity.binding.encryption) !== canonical(publicKey))) return null;
-  return identity.keys.encryption;
+  if (!identity || (publicKey && canonical(identity.publicKey) !== canonical(publicKey))) return null;
+  return identity.privateKey;
 }
 // The private key this browser holds for the principal while it is still the principal's. Keys made again by a key
 // reset are forgotten here.
 export async function heldKeys(principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
   const identity = await getIdentity(principal.id);
   if (!identity) return null;
-  if (principal.publicKey && canonical(identity.binding.encryption) === canonical(principal.publicKey)) return identity;
+  if (principal.publicKey && canonical(identity.publicKey) === canonical(principal.publicKey)) return identity;
   await forget(principal.id);
   return null;
 }
 async function forget(id: string) {
   held.delete(id);
   unlocked.delete(id);
-  await stored('keys', 'readwrite', store => store.delete('v2:' + id));
+  await stored('keys', 'readwrite', store => store.delete(keyName(id)));
 }
-function matchesPublicKey(keys: IdentityKeys, publicKey: PublicEncryptionKey | null) {
+function matchesPublicKey(keys: IdentityKeysValue, publicKey: PublicEncryptionKey | null) {
   return publicKey && canonical(publicPart(keys.encryption)) === canonical(publicKey);
 }
 // The private keys this page opened for the principal, while they are still its keys.
 export const unlockedKeys = (id: string) => unlocked.get(id) ?? null;
-async function keep(id: string, keys: IdentityKeys) {
-  // Keys about to be bound for the first time confirm that by opening what is sealed for them.
-  unlocked.set(id, keys);
-  let binding: BoundKeys;
-  try {
-    const existing = await api('/identities/' + id + '/binding', {}, SignedBinding);
-    await signBinding(existing.binding, keys);
-    binding = existing.binding;
-  } catch (error) {
-    if (!(error instanceof ApiFailure) || error.code !== 'key_binding_required') throw error;
-    binding = bindKeys(id, keys);
-    await api('/principals/' + id + '/binding', { method: 'PUT', body: await signBinding(binding, keys) }, SignedBinding);
-  }
-  const previous = await getIdentity(id);
-  if (previous && canonical(previous.binding) !== canonical(binding)) throw new ApiFailure('encryption_key_changed');
-  const signing = await importJWK(keys.signing, 'ES256', { extractable: false });
-  if (!(signing instanceof CryptoKey)) throw new ApiFailure('key_unavailable');
-  const identity = { binding, keys: { encryption: await hold(keys.encryption), signing } };
-  await stored('keys', 'readwrite', store => store.put(identity, 'v2:' + id));
+// Keeps the private key in this browser, where it cannot be read back, and in this page, to wrap it for another way in.
+async function keep(id: string, keys: IdentityKeysValue) {
+  const publicKey = publicPart(keys.encryption), previous = await getIdentity(id);
+  if (previous && canonical(previous.publicKey) !== canonical(publicKey)) throw new ApiFailure('encryption_key_changed');
+  const identity = { publicKey, privateKey: await hold(keys.encryption) };
+  await stored('keys', 'readwrite', store => store.put(identity, keyName(id)));
   held.set(id, identity);
   unlocked.set(id, keys);
 }
@@ -89,19 +77,10 @@ export type Resealing = {
   completed: number;
   total: number | null;
   done: number;
-  failed: Array<{ id: string; name: string | null; code: string; verification?: RecipientVerification[] }>;
+  failed: Array<{ id: string; name: string | null; code: string }>;
   error: string | null;
 };
 const resealing = new Map<string, Resealing>(), watching = new Set<() => void>();
-const recipientAccess = new Map<string, RecipientAccess>();
-export function rememberRecipientAccess(principalId: string, access: RecipientAccess) {
-  recipientAccess.set(principalId + ':' + access.id, access);
-  for (const notify of watching) notify();
-}
-export function useRecipientAccess(principalId: string | undefined, resourceId: string) {
-  return useSyncExternalStore(notify => { watching.add(notify); return () => watching.delete(notify); },
-    () => principalId ? recipientAccess.get(principalId + ':' + resourceId) ?? null : null, () => null);
-}
 // One pass at a time for each principal: a pass asked for while another runs starts after it, so that the two never
 // seal the same item at once.
 const passes = new Map<string, Promise<Resealing | null>>();
@@ -127,9 +106,8 @@ function reseal(id: string, requestId?: string) {
       const client = await custodyClient(id);
       const { done, failed } = await client.reprotectPending(publish);
       publish({ done: done.length });
-      // A pass may leave an item unchanged, for example while its token is being renewed or a reader's keys await
-      // verification.
-      // Check what still needs updating before reporting that everyone can open their items.
+      // A pass may leave an item unchanged, for example while its token is being renewed. Check what still needs
+      // sealing before reporting that everyone can open their items.
       const pending = await client.pendingProtection();
       const pendingIds = new Set(pending.map(item => item.id));
       const remaining = await Promise.all(pending.map(async item => ({
@@ -144,7 +122,7 @@ function reseal(id: string, requestId?: string) {
   passes.set(id, pass);
   return pass;
 }
-// Seals the items again at once, as after a line changes who may open them.
+// Seals the items at once for whoever may open them and they are not sealed for yet, as after a line lets someone in.
 export async function resealNow(id: string, requestId?: string) {
   return reseal(id, requestId);
 }
@@ -155,7 +133,6 @@ export function useResealing(id: string | undefined) {
 export async function clearKeys() {
   unlocked.clear();
   held.clear();
-  recipientAccess.clear();
   for (const notify of watching) notify();
   await stored('keys', 'readwrite', (store) => store.clear());
 }
@@ -183,7 +160,7 @@ async function assertion(principalId?: string, credentialId?: string) {
 }
 // Signs in with a passkey and keeps the private key it opens. The reason says why it opened none: this passkey or
 // browser cannot give the secret that opens it, or the private key is not wrapped for this passkey.
-export async function authenticate(principalId?: string, credentialId?: string, wrapping?: IdentityKeys) {
+export async function authenticate(principalId?: string, credentialId?: string, wrapping?: IdentityKeysValue) {
   const proof = await assertion(principalId, credentialId);
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
@@ -195,20 +172,20 @@ export async function authenticate(principalId?: string, credentialId?: string, 
     const unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
       throw new ApiFailure('key_unavailable');
     });
-    const keys = PrivateKeys.safeParse(unwrapped);
+    const keys = IdentityKeys.safeParse(unwrapped);
     if (!keys.success) throw new ApiFailure('key_unavailable');
     if (!matchesPublicKey(keys.data, result.publicKey)) throw new ApiFailure('encryption_key_changed');
     await keep(result.principalId, keys.data);
   } else if (!result.publicKey || wrapping) {
     if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
       throw new ApiFailure('encryption_key_changed');
+    // A principal without a key gets its first one, held by this passkey.
     const keys = wrapping ?? await newIdentityKeys();
-    // A principal without keys binds its first ones before this passkey holds them.
-    await keep(result.principalId, keys);
     await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
       method: 'PUT',
       body: { wrappedKey: await wrap(keys, proof.secret, result.principalId), publicKey: publicPart(keys.encryption) },
     });
+    await keep(result.principalId, keys);
   } else reason = 'wrapped_key_required';
   return { ...result, encrypted: !!(await getKey(result.principalId)), reason };
 }
@@ -260,8 +237,7 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     body: {
       challengeId: data.challengeId,
       credential: verificationCredential(credential),
-      ...(keys ? { wrappedKey, ...(principal?.publicKey ? { existingPublicKey: publicKey }
-        : { binding: await signBinding(bindKeys(data.principalId, keys), keys) }) } : {}),
+      ...(keys ? { wrappedKey, publicKey } : {}),
     },
   });
   if (keys) await keep(result.principalId, keys);
@@ -269,10 +245,8 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     return authenticate(result.principalId, result.credentialId, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
-// Makes new keys once the request to make them is ready. A new passkey is registered first and the session signs in with
-// it; the private key it then keeps replaces the principal's, and the new keys are published as for one that had none.
-// Makes new keys once the request to make them is ready: the passkey that will hold them is registered with the
-// request, and becomes a way in together with the new keys when the request completes.
+// Makes a new key once the request to make it is ready: the passkey that will hold it is registered with the request,
+// and becomes a way in together with the new key when the request completes.
 export async function resetKeys(name: string, principalId: string) {
   const path = `/principals/${principalId}/key-reset`;
   const { options } = await api<{ options: PublicKeyCredentialCreationOptionsJSON }>(path + '/passkey/options', {
@@ -294,7 +268,7 @@ export async function resetKeys(name: string, principalId: string) {
   if (!secret) throw new ApiFailure('key_unsupported');
   const keys = await newIdentityKeys();
   await api(path + '/complete', {
-    method: 'POST', body: { binding: await signBinding(bindKeys(principalId, keys), keys), wrappedKey: await wrap(keys, secret, principalId) },
+    method: 'POST', body: { publicKey: publicPart(keys.encryption), wrappedKey: await wrap(keys, secret, principalId) },
   });
   await forget(principalId);
   await keep(principalId, keys);
@@ -305,15 +279,15 @@ export async function issueKey(
   expiresAt: string | null,
 ) {
   const existing = principal.publicKey ? await privateKeys(principal) : undefined;
+  // A principal without a key gets its first one, which the new API key carries, wrapped for its unlock code.
   const keys = existing ?? await newIdentityKeys();
-  // A principal without keys binds its first ones; the new API key then carries them, wrapped for its unlock code.
-  await keep(principal.id, keys);
   const unlock = crypto.getRandomValues(new Uint8Array(32));
   const issued = await api<{ credential: { id: string }; token: string }>(
     `/principals/${principal.id}/credentials`,
     { method: 'POST', body: { name, expiresAt,
       wrap: { wrappedKey: await wrap(keys, unlock, principal.id), publicKey: publicPart(keys.encryption) } } },
   );
+  await keep(principal.id, keys);
   return { token: issued.token + '.' + base64url(unlock) };
 }
 // Another device that holds the private key lets this browser in, the way it lets in the CLI: it issues an API key
@@ -345,7 +319,7 @@ export async function receiveKeys(receiving: Receiving, principalId: string) {
   const current = Session.parse(await asKey('/session'));
   if (!current.wrappedKey || !current.credentialId || current.principal?.id !== principalId)
     throw new ApiFailure('key_unavailable');
-  const keys = PrivateKeys.safeParse(await unwrap(current.wrappedKey, unbase64url(unlock), principalId).catch(() => null));
+  const keys = IdentityKeys.safeParse(await unwrap(current.wrappedKey, unbase64url(unlock), principalId).catch(() => null));
   if (!keys.success) throw new ApiFailure('key_unavailable');
   if (!matchesPublicKey(keys.data, current.principal.publicKey)) throw new ApiFailure('encryption_key_changed');
   await asKey(`/principals/${principalId}/credentials/${current.credentialId}`, 'DELETE');
@@ -367,7 +341,7 @@ export async function mergeWithPasskey() {
     },
   );
   if (result.wrappedKey && proof.secret)
-    await keep(result.fromId, PrivateKeys.parse(await unwrap(result.wrappedKey, proof.secret, result.fromId)));
+    await keep(result.fromId, IdentityKeys.parse(await unwrap(result.wrappedKey, proof.secret, result.fromId)));
   return result;
 }
 

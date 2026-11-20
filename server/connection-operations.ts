@@ -1,9 +1,9 @@
 import type { Actor } from './authorization.js';
 import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
-import { canonical, hash } from '../shared/authority.js';
-import { ContentTypes, verifyContent } from '../shared/custody.js';
-import type { CustodyContent } from '../shared/custody.js';
+import { canonical } from '../shared/digest.js';
+import { SealedItem, sealedFor } from '../shared/custody.js';
+import type { SealedItemValue } from '../shared/custody.js';
 import { fail, required } from './errors.js';
 
 export interface ConnectionOperation {
@@ -13,36 +13,36 @@ export interface ConnectionOperation {
   expected_revision: number;
   state: 'prepared' | 'in_flight' | 'committed' | 'uncertain' | 'aborted';
   fence: string;
-  result: CustodyContent | null;
+  result: SealedItemValue | null;
 }
 
 export class ConnectionOperations {
   constructor(readonly custody: Custody) {}
   get db() { return this.custody.resources.db; }
 
-  // A connection is renewed by its readers, each on its own device, while they may still open it.
+  // A connection is renewed by whoever it is sealed for, each on its own device, while they may open it.
   private async allowed(actor: Actor, resourceId: string, connection: Queryable = this.db.pool) {
     await this.custody.resources.authorization.active(actor, connection);
-    const content = await this.custody.get(resourceId, connection);
-    const { binding } = await this.custody.bindings.current(actor.id, connection);
-    if (content.policy.contentType !== ContentTypes.tokenSet ||
-      !content.policy.readers.some(reader => canonical(reader) === canonical(binding)) ||
-      !await this.custody.resources.authorization.can(actor, await this.custody.resources.get(resourceId, connection), 'reveal', connection))
-      fail(403, 'forbidden', 'Only a reader of this connection can renew it.');
-    return content;
+    const row = await this.custody.resources.get(resourceId, connection);
+    if (row.kind !== 'connection' || !await this.custody.resources.authorization.can(actor, row, 'reveal', connection))
+      fail(403, 'forbidden', 'Only one who may open this connection can renew it.');
+    const content = await this.custody.get(resourceId, connection), own = (await this.custody.keyed([actor.id], connection))[0];
+    if (!own || !await sealedFor(content, own.publicKey))
+      fail(403, 'forbidden', 'Only one this connection is sealed for can renew it.');
+    return { row, content };
   }
 
   async prepare(actor: Actor, id: string, resourceId: string, expectedRevision: number) {
     return this.db.transaction(async connection => {
       await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [resourceId]);
-      const content = await this.allowed(actor, resourceId, connection);
+      const { content } = await this.allowed(actor, resourceId, connection);
       const existing = await this.db.one<ConnectionOperation>('SELECT * FROM connection_operations WHERE id=$1', [id], connection);
       if (existing) {
         if (existing.resource_id !== resourceId || existing.renewer_id !== actor.id || existing.expected_revision !== expectedRevision)
           fail(409, 'operation_conflict', 'Use a new operation ID for another token update.');
         return existing;
       }
-      if (content.materialRevision !== expectedRevision)
+      if (content.revision !== expectedRevision)
         fail(409, 'changed', 'Read the current connection before refreshing it.');
       const active = await this.db.one<ConnectionOperation>(
         "SELECT * FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')", [resourceId], connection,
@@ -76,9 +76,9 @@ export class ConnectionOperations {
     return updated;
   }
 
-  async commit(actor: Actor, id: string, fence: string, input: CustodyContent) {
-    const content = await verifyContent(input);
-    this.custody.metadata(content);
+  async commit(actor: Actor, id: string, fence: string, input: SealedItemValue) {
+    const content = SealedItem.parse(input);
+    this.custody.metadata('connection', content);
     return this.db.transaction(async connection => {
       const operation = await this.operation(actor, id, fence, connection);
       await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [operation.resource_id]);
@@ -90,13 +90,10 @@ export class ConnectionOperations {
       }
       if (!['in_flight', 'uncertain'].includes(locked.state))
         fail(409, 'invalid_operation', 'Start the token update before committing its result.');
-      const previous = await this.allowed(actor, operation.resource_id, connection);
-      const { binding } = await this.custody.bindings.current(actor.id, connection);
-      if (content.signerId !== binding.id || content.policy.id !== operation.resource_id ||
-        previous.materialRevision !== operation.expected_revision || content.materialRevision !== operation.expected_revision + 1 ||
-        await hash(content.policy) !== await hash(previous.policy))
-        fail(409, 'changed', 'A token update must replace this revision of the connection for the same recipients.');
-      const resource = await this.custody.resources.get(operation.resource_id, connection);
+      const { row: resource, content: previous } = await this.allowed(actor, operation.resource_id, connection);
+      if (previous.revision !== operation.expected_revision || content.revision !== operation.expected_revision + 1)
+        fail(409, 'changed', 'A token update must replace this revision of the connection.');
+      await this.custody.requireSealedFor(content, await this.custody.recipients(resource, connection));
       await connection.query('UPDATE resource_custody SET content=$2 WHERE resource_id=$1',
         [operation.resource_id, JSON.stringify(content)]);
       await this.custody.resources.update(resource, {
@@ -107,7 +104,7 @@ export class ConnectionOperations {
         [id, fence, JSON.stringify(content)],
       );
       await this.custody.resources.audit.record(resource.owner_id, actor.id, 'connection.renew', resource.id,
-        { operationId: id, materialRevision: content.materialRevision }, connection);
+        { operationId: id, revision: content.revision }, connection);
       return content;
     });
   }

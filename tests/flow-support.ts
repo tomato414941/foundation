@@ -11,15 +11,13 @@ import { ConnectionClient } from '../shared/connection-client.js';
 import { OperationClient } from '../shared/operation-client.js';
 import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
-import { canonical } from '../shared/authority.js';
+import { canonical } from '../shared/digest.js';
 import { AppMaterial } from '../shared/connections.js';
 import { connectionMethod } from '../shared/connection-methods.js';
 import { visibleConnectionFields } from '../shared/connection-fields.js';
-import { ContentTypes } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
 import { Connections } from '../runtime/connections.js';
 import { HttpBroker } from '../runtime/broker.js';
-import { JournalTrust } from '../runtime/trust.js';
 import { openInputs } from '../runtime/inputs.js';
 import type { InjectionInput } from '../shared/contracts.js';
 import type { AwsConnectionProvider } from '../runtime/aws.js';
@@ -44,17 +42,14 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     if (result.statusCode >= 400) throw new DomainError(result.statusCode, value.error.code, value.error.message);
     return schema ? schema.parse(value) : value as T;
   } });
-  const trust = new JournalTrust(new MemoryJournal());
-  await trust.rememberBinding(f.delegate.binding);
-  const client = new CustodyClient(api(f.owner.token), f.config.origin, f.owner.binding, f.owner.keys, trust);
+  const client = new CustodyClient(api(f.owner.token), f.config.origin, f.owner.actor.id, f.owner.keys);
   const flows = new Map<string, ConnectionFlow>();
   const connections = new ConnectionClient(client, { async get(id) { return structuredClone(flows.get(id) ?? null); },
     async put(flow) { flows.set(flow.id, structuredClone(flow)); } }, transport, 'cli');
   const operations = new OperationClient(client, connections);
   // The owner's own machine opens connections and renews their tokens, as the CLI does.
   const journal = new MemoryJournal();
-  const runtimeConnections = new Connections(f.owner.binding, f.owner.keys, new HttpBroker(api(f.owner.token)).connections(),
-    journal, transport, aws);
+  const runtimeConnections = new Connections(client, new HttpBroker(api(f.owner.token)).connections(), journal, transport, aws);
   const method = async (id: string) => {
     const catalog = await client.api.json('/api/connection-methods', {}, listOf(CatalogMethod));
     const selected = catalog.items.find(item => item.id === id)!;
@@ -65,8 +60,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const saveApp = async (methodId: string, name = 'Application', fields = {}) => {
     const material = AppMaterial.parse({ format: 1, methodId, clientId: 'application-id',
       clientSecret: 'application-secret', generation: crypto.randomUUID(), fields });
-    const policy = await client.policy(f.owner.actor.id, ContentTypes.clientCredential);
-    return client.save(name, encode(canonical(material)), policy, { metadata: {
+    return client.save({ id: crypto.randomUUID(), ownerId: f.owner.actor.id, kind: 'app' }, name, encode(canonical(material)), { metadata: {
       methodId, clientId: material.clientId, generation: material.generation,
       fields: visibleConnectionFields(connectionMethod(await method(methodId)).fields, fields),
     } });

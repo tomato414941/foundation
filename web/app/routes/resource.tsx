@@ -11,7 +11,6 @@ import { connectionConsole } from '../../../shared/connection-fields';
 import { decode } from '../../../shared/encryption';
 import { api, actionResult } from '../api';
 import { decryptVariable, requireKeys } from '../keys';
-import { RecipientAccessNotice } from '../recipient-verification';
 import {
   Bytes,
   Confirm,
@@ -101,7 +100,6 @@ export default function ResourceDetail() {
       }
     >
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
-      <RecipientAccessNotice principalId={session.principal?.id} id={item.id} />
       {connection && connection.data.state !== 'ready' && (
         <Notice tone={'warning'}>{t('state.' + connection.data.state)}</Notice>
       )}

@@ -1,6 +1,7 @@
 import {
   CompactEncrypt,
   GeneralEncrypt,
+  calculateJwkThumbprint,
   compactDecrypt,
   generalDecrypt,
   generateKeyPair,
@@ -8,6 +9,7 @@ import {
   exportJWK,
 } from 'jose';
 import type { JWK } from 'jose';
+import { z } from 'zod';
 import { PublicKey, Sealed, WrappedKey } from './contracts.js';
 import type { PublicEncryptionKey, SealedContent, WrappedEncryptionKey } from './contracts.js';
 
@@ -35,16 +37,31 @@ export async function newEncryptionKey(): Promise<{ publicKey: PublicEncryptionK
     privateKey: await exportJWK(pair.privateKey),
   };
 }
+export const PrivateKey = PublicKey.extend({ d: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
+// The private key a principal opens what is sealed for it with, as its devices keep and wrap it.
+export const IdentityKeys = z.object({ encryption: PrivateKey });
+export type IdentityKeysValue = z.infer<typeof IdentityKeys>;
+export async function newIdentityKeys(): Promise<IdentityKeysValue> {
+  return IdentityKeys.parse({ encryption: (await newEncryptionKey()).privateKey });
+}
+export function publicPart(key: JWK | PublicEncryptionKey): PublicEncryptionKey {
+  return PublicKey.parse({ kty: key.kty, crv: key.crv, x: key.x, y: key.y });
+}
+// What a sealed value names a public key by: its JWK thumbprint (RFC 7638).
+export function thumbprint(key: JWK | PublicEncryptionKey): Promise<string> {
+  return calculateJwkThumbprint(publicPart(key), 'sha256');
+}
+// Seals the bytes for each recipient's public key, under the id it is found by. A context, when given, binds the value
+// to what it was sealed for: opening it names the same context.
 export async function seal(
   bytes: Uint8Array,
   recipients: Array<{ id: string; publicKey: PublicEncryptionKey }>,
-  context: string,
+  context?: string,
 ): Promise<SealedContent> {
   if (!recipients.length || new Set(recipients.map((value) => value.id)).size !== recipients.length)
     throw new Error('Recipients must be distinct and nonempty.');
-  const envelope = new GeneralEncrypt(bytes)
-    .setProtectedHeader({ enc: encryption })
-    .setAdditionalAuthenticatedData(encode(context));
+  const envelope = new GeneralEncrypt(bytes).setProtectedHeader({ enc: encryption });
+  if (context !== undefined) envelope.setAdditionalAuthenticatedData(encode(context));
   for (const recipient of recipients)
     envelope
       .addRecipient(await importJWK(recipient.publicKey, agreement))
@@ -55,9 +72,9 @@ export async function open(
   sealed: SealedContent,
   privateKey: JWK | CryptoKey,
   id: string,
-  context: string,
+  context?: string,
 ): Promise<Uint8Array> {
-  if (sealed.aad !== base64url(encode(context)))
+  if (context !== undefined && sealed.aad !== base64url(encode(context)))
     throw new Error('The encrypted content belongs to a different item.');
   const recipient = sealed.recipients.find((value) => value.header.kid === id);
   if (!recipient) throw new Error('This principal cannot decrypt the content.');

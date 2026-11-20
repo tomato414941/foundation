@@ -24,8 +24,6 @@ import type { PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contra
 import { digest, token } from './vault.js';
 import { fail, required } from './errors.js';
 import { samePublicKey } from './encryption-validation.js';
-import { bindFirst } from './bindings.js';
-import { SignedBinding, verifyBinding } from '../shared/authority.js';
 
 interface PasskeyData {
   publicKey: string;
@@ -171,12 +169,10 @@ export class Authentication {
     );
     return { credential: this.credentialView(required(result)), token: raw };
   }
-  // Registers an identity with the keys it signed for itself, and the API key it signs in with.
-  async enroll(name: string, input: z.infer<typeof SignedBinding>) {
-    const binding = await verifyBinding(input);
+  // Registers an identity with its public key, and the API key it signs in with.
+  async enroll(name: string, publicKey: PublicEncryptionKey) {
     return this.db.transaction(async (connection) => {
-      const principal = await this.principals.create(name, binding.encryption, undefined, connection, binding.principalId);
-      await bindFirst(connection, this.db, this.audit, principal.id, input);
+      const principal = await this.principals.create(name, publicKey, undefined, connection);
       const result = await this.issueKey(principal.id, name, null, connection);
       await this.audit.record(principal.id, principal.id, 'principal.enroll', principal.id, {}, connection);
       return { principal: { id: principal.id, name: principal.name }, ...result };
@@ -213,8 +209,7 @@ export class Authentication {
     return this.db.transaction(async (connection) => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials', connection);
-      if (input.wrap && !samePublicKey((await this.principals.get(principalId, connection)).public_key, input.wrap.publicKey))
-        fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
+      if (input.wrap) await this.holding(principalId, input.wrap.publicKey, actor.id, connection);
       const issued = await this.issueKey(principalId, input.name, input.expiresAt, connection);
       if (input.wrap)
         await connection.query('UPDATE credentials SET private_wrap=$2 WHERE id=$1',
@@ -532,8 +527,7 @@ export class Authentication {
   }
   async verifyPasskey(
     browser: string,
-    input: { challengeId: string; credential: unknown; binding?: z.infer<typeof SignedBinding>; existingPublicKey?: PublicEncryptionKey;
-      wrappedKey?: WrappedEncryptionKey },
+    input: { challengeId: string; credential: unknown; publicKey?: PublicEncryptionKey; wrappedKey?: WrappedEncryptionKey },
     actor?: Actor,
   ): Promise<
     SigninResult & {
@@ -582,22 +576,16 @@ export class Authentication {
       principalId = String(row.data.principalId);
       credentialId = randomUUID();
       wrappedKey = input.wrappedKey ? WrappedKey.parse(input.wrappedKey) : null;
-      const binding = input.binding ? await verifyBinding(input.binding) : null;
-      if (binding && binding.principalId !== principalId) fail(400, 'invalid_key_binding', 'Bind the keys to this principal.');
+      if (wrappedKey && !input.publicKey) fail(400, 'invalid_input', 'Give the public key of the wrapped private key.');
       await this.db.transaction(async (connection) => {
         if (row.principal_id) {
           await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
           await this.authorization.requirePrincipal(actor!, principalId, 'manage_credentials', connection);
           if (!await this.db.one('DELETE FROM challenges WHERE id=$1 RETURNING id', [row.id], connection))
             fail(400, 'invalid_challenge', 'Start the passkey operation again.');
-          const current = await this.principals.get(principalId, connection);
-          if (wrappedKey && !binding && !samePublicKey(current.public_key, (row.data.publicKey ?? null) as PublicEncryptionKey | null))
-            fail(409, 'encryption_key_changed', 'The encryption key changed. Add the passkey again.');
-          if (wrappedKey && current.public_key && !samePublicKey(current.public_key, input.existingPublicKey ?? null))
-            fail(409, 'encryption_key_changed', 'The encryption key changed. Add the passkey again.');
+          if (wrappedKey) await this.holding(principalId, input.publicKey!, actor!.id, connection);
         } else
-          await this.principals.create(String(row.data.name), binding?.encryption ?? null, undefined, connection, principalId);
-        if (input.binding) await bindFirst(connection, this.db, this.audit, actor?.id ?? principalId, input.binding);
+          await this.principals.create(String(row.data.name), wrappedKey ? input.publicKey! : null, undefined, connection, principalId);
         await connection.query(
           "INSERT INTO credentials(id,principal_id,kind,name,identifier,data,private_wrap) VALUES($1,$2,'passkey',$3,$4,$5,$6)",
           [
@@ -678,9 +666,7 @@ export class Authentication {
     if (actor.id !== principalId) fail(403, 'forbidden', 'Sign in as this principal to wrap its key.');
     await this.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
-      const principal = await this.principals.get(principalId, connection);
-      if (!samePublicKey(principal.public_key, publicKey))
-        fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
+      await this.holding(principalId, publicKey, actor.id, connection);
       if (decodeProtectedHeader(value).sub !== principalId)
         fail(400, 'invalid_envelope', 'Wrap the key for this account.');
       if (!await this.db.one('SELECT 1 FROM credentials WHERE id=$1 AND principal_id=$2', [credentialId, principalId], connection))
@@ -691,6 +677,15 @@ export class Authentication {
       );
       if (!changed.rowCount) fail(404, 'not_found', 'The credential was not found.');
     });
+  }
+  // A private key wrapped for a way in is the principal's own, or brings its first one.
+  private async holding(principalId: string, publicKey: PublicEncryptionKey, actorId: string, connection: Queryable) {
+    const current = (await this.principals.get(principalId, connection)).public_key;
+    if (current && !samePublicKey(current, publicKey))
+      fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
+    if (current) return;
+    await connection.query('UPDATE principals SET public_key=$2 WHERE id=$1', [principalId, JSON.stringify(PublicKey.parse(publicKey))]);
+    await this.audit.record(principalId, actorId, 'principal.key', principalId, {}, connection);
   }
   async wrapOf(actor: Actor | null): Promise<WrappedEncryptionKey | null> {
     if (!actor?.credentialId) return null;

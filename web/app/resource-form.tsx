@@ -72,11 +72,11 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
   let connection: ReturnType<typeof connectionInitialValues> | undefined;
-  // Sealed only for keys since replaced, an item's value cannot be shown and is entered again; where it is used stays.
+  // Not sealed for this identity's key, an item's value cannot be shown and is entered again; where it is used stays.
   let replaced = false;
   if (resource && isProtected(resource.kind)) {
     const client = await custodyClient(), item = await client.latest(resource.id);
-    replaced = item.replaced;
+    replaced = !item.opens;
     if (resource.kind === 'app' && !replaced) appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
     if (resource.kind === 'connection' && replaced) {
       const methodId = resource.data.methodId;
@@ -144,7 +144,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const methodId = selected.id;
       const connectionId = formText(form, 'connectionId');
       let previous: ConnectionState | undefined;
-      if (connectionId && connectionNeedsMaterial(selected, form) && !(await client.custody.latest(connectionId)).replaced)
+      if (connectionId && connectionNeedsMaterial(selected, form) && (await client.custody.latest(connectionId)).opens)
         previous = await client.custody.connection(connectionId);
       const prepared = connectionSubmission({ ownerId: owner, methodId,
         name: name || existing?.name || selected.defaultName,
@@ -281,7 +281,7 @@ export default function ResourceForm() {
       narrow
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
-      {data.replaced && <Notice tone="warning">{t(data.kind === 'connection' ? 'errors.key_replaced' : 'valueReplaced')}</Notice>}
+      {data.replaced && <Notice tone="warning">{t(data.kind === 'connection' ? 'errors.not_sealed_for_key' : 'valueReplaced')}</Notice>}
       {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
       {data.payment?.required && !data.payment.active && (
         <Notice

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { flowFixture, jsonResponse } from './flow-support.js';
 import { MethodDefinition, Resource, ServiceInputDefinition } from '../shared/contracts.js';
 import { AppMaterial } from '../shared/connections.js';
-import { canonical } from '../shared/authority.js';
+import { canonical } from '../shared/digest.js';
 import { decode, encode } from '../shared/encryption.js';
 
 const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
@@ -51,7 +51,7 @@ test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実�
     const saved = await f.saveConnection({ methodId, appId: application.id });
     assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', apiBaseUrl + '/vps'))?.ok, true);
     const renewed = await f.client.read(saved.id);
-    assert.ok(renewed.content.materialRevision > 1);
+    assert.ok(renewed.content.revision > 1);
     const current = await f.client.api.json('/api/resources/' + saved.id, {}, Resource);
     if (current.kind === 'connection') {
       assert.deepEqual(current.data.fields, { apiRegion });
@@ -71,7 +71,7 @@ test('接続のAPI区分を維持し、アプリの設定が変わった場合�
   const connection = await f.saveConnection({ methodId: 'ovh:client_credentials', appId: application.id }), previous = await f.client.read(application.id);
   const material = AppMaterial.parse(JSON.parse(decode(await f.client.reveal(application.id))));
   const changed = { ...material, fields: { apiRegion: 'eu' } };
-  await f.client.save(application.name, encode(canonical(changed)), { ...previous.content.policy, revision: previous.content.policy.revision + 1 },
+  await f.client.save({ id: application.id, ownerId: application.ownerId, kind: 'app' }, application.name, encode(canonical(changed)),
     { previous, metadata: { ...previous.content.metadata, fields: { apiRegion: 'eu' } } });
   const result = await f.http(connection.id, 'OVH_ACCESS_TOKEN');
   assert.equal(result?.ok, false);
@@ -103,7 +103,7 @@ test('Shopifyのアプリ認証を保存し、利用時にトークンを取得�
   assert.equal((await f.http(saved.id, 'SHOPIFY_ACCESS_TOKEN'))?.ok, true);
   assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer shopify-access-1');
   const renewed = await f.client.read(saved.id);
-  assert.ok(renewed.content.materialRevision > 1);
+  assert.ok(renewed.content.revision > 1);
   assert.equal(grants, 1);
 });
 
@@ -169,7 +169,7 @@ test('初期スコープを選び直し、必須スコープと選択内容を�
     assert.equal(tokenRequests.length, 1);
     assert.deepEqual(tokenRequests.map(request => new URLSearchParams(String(request.body)).get('scope')), [expected.join(' ')]);
     const renewed = await f.client.read(saved.id);
-    assert.ok(renewed.content.materialRevision > 1);
+    assert.ok(renewed.content.revision > 1);
   });
 });
 

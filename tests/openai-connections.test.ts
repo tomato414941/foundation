@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture } from './flow-support.js';
 import { Resource, ServiceInputDefinition } from '../shared/contracts.js';
+import { thumbprint } from '../shared/encryption.js';
 
 test('同じ所有者が同名のOpenAI接続を複数保存し、選んだキーだけを更新して使用する', async t => {
   for (const [method, field, output, path] of [
@@ -49,7 +50,6 @@ test('OpenAIの保存済みキーを組込み方式に移し、同じ接続と�
   const original = await f.saveConnection({ methodId: custom.id, name: 'OpenAI / project',
     fields: { token: 'saved-openai-key', projectId: 'proj_saved', organizationId: '' } });
   assert.equal((await f.http(original.id, 'OPENAI_API_KEY'))?.ok, true);
-  const previous = await f.client.read(original.id);
   await f.client.api.json('/api/resources/' + service.id, { method: 'PATCH', body: { version: service.version, definition: {
     name: 'OpenAI API', methods: { api_key: custom.id, builtin: 'openai:api_key' },
   } } }, Resource);
@@ -57,7 +57,8 @@ test('OpenAIの保存済みキーを組込み方式に移し、同じ接続と�
     name: original.name, fields: { token: '', projectId: 'proj_saved', organizationId: '' } });
   assert.equal(migrated.id, original.id);
   const current = await f.client.read(migrated.id);
-  assert.deepEqual(current.content.policy.readers, previous.content.policy.readers);
+  assert.deepEqual(current.content.sealed.recipients.map(recipient => recipient.header.kid).sort(),
+    (await Promise.all([f.owner, f.delegate].map(person => thumbprint(person.keys.publicKey)))).sort());
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(service.id));
   await f.context.resources.delete(f.owner.actor, await f.context.resources.get(custom.id));
   const saved = await f.client.api.json('/api/resources/' + original.id, {}, Resource);

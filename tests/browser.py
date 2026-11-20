@@ -181,26 +181,6 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
         return page.url
 
-    def trust_fingerprint(self, page, principal_id, fingerprint):
-        previous = page.url
-        page.goto(ORIGIN + "/account/trust")
-        page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(principal_id)
-        page.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
-        page.get_by_role("button", name="公開鍵の検証", exact=True).click()
-        expect(page.get_by_text(re.compile(r"の公開鍵を検証しました。$"))).to_be_visible()
-        expect(page.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True)).to_be_hidden()
-        page.screenshot(path=str(ARTIFACTS / "identity-verified-ja.png"), full_page=True)
-        page.goto(ORIGIN + "/account")
-        expect(page.get_by_text(principal_id, exact=True)).to_be_visible()
-        page.goto(previous)
-
-    def trust(self, page, other, principal):
-        previous = other.url
-        other.goto(ORIGIN + "/account/trust")
-        fingerprint = other.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
-        other.goto(previous)
-        self.trust_fingerprint(page, principal["id"], fingerprint)
-
     def saved_connection(self, page, name):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
@@ -229,7 +209,7 @@ class BrowserTests(unittest.TestCase):
         page.goto(ORIGIN + "/oauth/callback?" + urlencode({"state": state, "code": "initial-google-code"}))
         return self.saved_connection(page, "Mail account"), exchanges
 
-    def test_AIが出した指紋付きのリンクで承認するとAIの公開鍵を検証して委任先にし持ち主の変数を開かせる(self):
+    def test_AIが出した依頼のリンクで承認するとAIを委任先にして持ち主の変数を開かせる(self):
         owner, principal = self.passkey_account("Linked owner")
         variable_id = self.variable(owner, principal, "Linked variable", "linked-variable-value").rstrip("/").rsplit("/", 1)[1]
         with tempfile.TemporaryDirectory() as directory:
@@ -239,10 +219,9 @@ class BrowserTests(unittest.TestCase):
                 result = subprocess.run(["node", "cli/dist/cli.mjs", *arguments], capture_output=True, text=True, env=environment, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout) if result.stdout.startswith("{") else result.stdout
-            agent = cli("init", "--name", "Linked AI", "--origin", ORIGIN)
+            cli("init", "--name", "Linked AI", "--origin", ORIGIN)
             url = cli("request-access", "--to", principal["id"], "--message", "Use the shared resources")["url"]
-            self.assertTrue(url.endswith("#fingerprint=" + agent["fingerprint"]), url)
-            owner.goto(url.split("#")[0])
+            owner.goto(url)
             expect(owner.get_by_text("Linked AIに、Linked ownerが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="リソースの作成・閲覧・変更・削除・使用")).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="接続情報や変数などの機密情報の閲覧")).to_be_visible()
@@ -251,37 +230,19 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_text("Allow Linked AI to operate resources owned by Linked owner.", exact=True)).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="Read private content, including connection credentials and variables")).to_be_visible()
             self.select(owner, "Language", "日本語")
-            expect(owner.get_by_text("Linked AIの公開鍵をまだ検証していません。Linked AIが表示したリンクから、この依頼を開き直してください。", exact=True)).to_be_visible()
-            expect(owner.get_by_role("button", name="承認", exact=True)).to_be_disabled()
-            owner.screenshot(path=str(ARTIFACTS / "agent-approval-unverified-ja.png"), full_page=True)
             owner.set_viewport_size({"width": 390, "height": 844})
             self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 390)
             owner.screenshot(path=str(ARTIFACTS / "delegate-approval-mobile-ja.png"), full_page=True)
             owner.set_viewport_size({"width": 1440, "height": 1050})
-            owner.goto(ORIGIN + "/account")
-            owner.goto(url.replace(agent["fingerprint"], "sha256:" + "0" * 64))
-            owner.get_by_role("button", name="承認", exact=True).click()
-            expect(owner.get_by_text("公開鍵のフィンガープリントが一致しません。相手に現在のフィンガープリントを確認してください。", exact=True)).to_be_visible()
-            self.forget_keys(owner)
-            owner.goto(ORIGIN + "/account/trust?principal=" + agent["principal"]["id"] + "#fingerprint=" + agent["fingerprint"])
-            self.open_at_gate(owner)
-            expect(owner.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True)).to_have_value(agent["fingerprint"])
-            owner.goto(url)
             owner.get_by_role("button", name="承認", exact=True).click()
             expect(owner.get_by_role("status")).to_have_text("完了")
             expect(owner.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
             owner.screenshot(path=str(ARTIFACTS / "agent-approval-sealed-ja.png"), full_page=True)
-            owner.goto(ORIGIN + "/account")
-            expect(owner.get_by_text(agent["principal"]["id"], exact=True)).to_be_visible()
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
-            cli("trust", principal["id"], "--fingerprint", owner_fingerprint)
             self.assertEqual(cli("read", variable_id), "linked-variable-value")
 
     def test_委任の承認後に項目の暗号化の進捗を確認して完了する(self):
         owner, principal = self.passkey_account("Progress owner")
         delegate, recipient = self.passkey_account("Progress delegate")
-        self.trust(owner, delegate, recipient)
-        self.trust(delegate, owner, principal)
         paths = [self.variable(owner, principal, "Progress variable " + str(index), "progress value " + str(index)) for index in range(3)]
         ids = sorted(path.rsplit("/", 1)[1] for path in paths)
         response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
@@ -327,8 +288,6 @@ class BrowserTests(unittest.TestCase):
     def test_委任の承認後に暗号化できなかった項目の理由を確認して残りを再試行する(self):
         owner, principal = self.passkey_account("Retry owner")
         delegate, recipient = self.passkey_account("Retry delegate")
-        self.trust(owner, delegate, recipient)
-        self.trust(delegate, owner, principal)
         paths = [self.variable(owner, principal, "Retry variable " + str(index), "retry value " + str(index)) for index in range(2)]
         blocked = paths[0].rsplit("/", 1)[1]
         response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
@@ -354,8 +313,8 @@ class BrowserTests(unittest.TestCase):
         delegate.goto(paths[1])
         delegate.get_by_role("button", name="内容を表示", exact=True).click()
         expect(delegate.get_by_role("textbox", name="値", exact=True)).to_have_value("retry value 1")
-        response = delegate.request.get(ORIGIN + "/api/resources/" + blocked + "/custody")
-        self.assertEqual(response.status, 403)
+        pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
+        self.assertEqual(pending, [{"id": blocked}])
         owner.unroute(pattern, busy)
         notice.get_by_role("button", name="残りを再試行", exact=True).click()
         expect(notice.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
@@ -367,7 +326,6 @@ class BrowserTests(unittest.TestCase):
     def test_委任を承認した後に項目の確認が失敗しても承認を保ったまま再試行する(self):
         owner, principal = self.passkey_account("Check owner")
         delegate, recipient = self.passkey_account("Check delegate")
-        self.trust(owner, delegate, recipient)
         self.variable(owner, principal, "Check variable", "check value")
         response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
             {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
@@ -390,36 +348,7 @@ class BrowserTests(unittest.TestCase):
         pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
         self.assertEqual(pending, [])
 
-    def test_未検証の委任先が残る項目を更新待ちとして表示し公開鍵を検証して更新する(self):
-        owner, principal = self.passkey_account("Pending owner")
-        delegate, recipient = self.passkey_account("Verified delegate")
-        other, unverified = self.passkey_account("Unverified delegate")
-        self.trust(owner, delegate, recipient)
-        self.variable(owner, principal, "Pending variable", "pending value")
-        response = owner.request.post(ORIGIN + "/api/relations", data={
-            "subjectId": unverified["id"], "relation": "delegate", "objectId": principal["id"]
-        }, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
-            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
-        ]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        owner.goto(response.json()["url"])
-        owner.get_by_role("button", name="承認", exact=True).click()
-        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
-        expect(notice.get_by_text("1件は、開ける相手の変更をまだ反映できていません。下の理由に沿って対処し、残りを再試行してください。", exact=True)).to_be_visible()
-        expect(notice.get_by_role("listitem").filter(has_text="Pending variable")).to_have_text("Pending variable：公開鍵の検証が必要です。")
-        expect(notice.get_by_role("link", name="Unverified delegateの公開鍵を検証", exact=True)).to_have_attribute("href", "/account/trust?principal=" + unverified["id"])
-        expect(notice.get_by_text("承認し直す必要はありません。", exact=True)).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "delegate-resealing-deferred-ja.png"), full_page=True)
-        verifier = owner.context.new_page()
-        self.trust(verifier, other, unverified)
-        notice.get_by_role("button", name="残りを再試行", exact=True).click()
-        expect(notice.get_by_text("更新が必要な項目はありません。追加の操作は不要です。", exact=True)).to_be_visible()
-        pending = owner.request.get(ORIGIN + "/api/principals/" + principal["id"] + "/reprotection").json()["items"]
-        self.assertEqual(pending, [])
-
-    def test_未検証の代理を知らせて変数を保存し公開鍵の検証後に既存の値を開けるようにする(self):
+    def test_代理が画面で保存した持ち主の変数を持ち主の別の代理が開く(self):
         owner, principal = self.passkey_account("Variable owner")
         writer, saving = self.passkey_account("Saving delegate")
         peer, reading = self.passkey_account("Reading delegate")
@@ -428,38 +357,13 @@ class BrowserTests(unittest.TestCase):
                 "subjectId": recipient["id"], "relation": "delegate", "objectId": principal["id"]
             }, headers={"origin": ORIGIN})
             self.assertTrue(response.ok, response.text())
-        self.trust(writer, owner, principal)
-        peer.goto(ORIGIN + "/account/trust")
-        fingerprint = peer.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
         writer.goto(f"{ORIGIN}/p/{principal['id']}/variables/new")
         writer.get_by_role("textbox", name="名前", exact=True).fill("Peer variable")
         writer.get_by_role("textbox", name="値", exact=True).fill("peer value")
         writer.get_by_role("button", name="作成", exact=True).click()
         expect(writer.get_by_role("heading", name="Peer variable", exact=True)).to_be_visible()
-        saved_url = writer.url
-        expect(writer.get_by_text("保存しました。次の代理は暗号化の対象に含めていません。公開鍵を検証してから利用できます。", exact=True)).to_be_visible()
-        link = writer.get_by_role("link", name="Reading delegateの公開鍵を検証", exact=True)
-        expect(link).to_have_attribute("href", "/account/trust?principal=" + reading["id"])
-        expect(writer.get_by_text("公開鍵をまだ検証していません。", exact=True)).to_be_visible()
-        pending = peer.request.get(ORIGIN + "/api/resources/" + saved_url.rsplit("/", 1)[1] + "/custody")
-        self.assertEqual(pending.status, 403)
-        writer.screenshot(path=str(ARTIFACTS / "delegate-variable-verification-ja.png"), full_page=True)
-        self.select(writer, "言語", "English")
-        expect(writer.get_by_text("Saved. These delegates were excluded from encryption. Verify their public keys to let them open this item.", exact=True)).to_be_visible()
-        expect(writer.get_by_role("link", name="Verify the public key of Reading delegate", exact=True)).to_be_visible()
-        self.select(writer, "Language", "日本語")
-        with writer.expect_popup() as popup:
-            link.click()
-        verification = popup.value
-        expect(verification.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True)).to_have_value(reading["id"])
-        verification.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
-        verification.get_by_role("button", name="公開鍵の検証", exact=True).click()
-        expect(verification.get_by_text("Reading delegateの公開鍵を検証しました。", exact=True)).to_be_visible()
-        verification.close()
-        writer.reload()
-        expect(writer.get_by_role("heading", name="Peer variable", exact=True)).to_be_visible()
-        self.trust(peer, writer, saving)
-        peer.goto(saved_url)
+        writer.screenshot(path=str(ARTIFACTS / "delegate-variable-saved-ja.png"), full_page=True)
+        peer.goto(writer.url)
         peer.get_by_role("button", name="内容を表示", exact=True).click()
         expect(peer.get_by_role("textbox", name="値", exact=True)).to_have_value("peer value")
 
@@ -482,7 +386,6 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Delegation owner")
         sender, _ = self.passkey_account("Request coordinator")
         delegate, recipient = self.passkey_account("Delegate worker")
-        self.trust(owner, delegate, recipient)
         response = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={
             "name": "Delegation workspace"
         }, headers={"origin": ORIGIN})
@@ -599,18 +502,24 @@ class BrowserTests(unittest.TestCase):
         expect(notice).to_be_hidden()
         self.assertIsNone(page.request.get(ORIGIN + "/api/session").json()["keyReset"])
 
-    def test_検証した相手が公開鍵を作り直すと検証し直しを求める(self):
-        owner, principal = self.passkey_account("Verifying owner")
-        friend, recipient = self.passkey_account("Resetting friend")
-        self.trust(owner, friend, recipient)
-        self.reset_keys(friend, recipient)
-        owner.goto(ORIGIN + "/account")
-        expect(owner.get_by_text("公開鍵が変わりました。もう一度検証してください。", exact=True)).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "verified-changed-desktop-ja.png"), full_page=True)
-        self.trust(owner, friend, recipient)
-        owner.goto(ORIGIN + "/account")
-        expect(owner.get_by_text(recipient["id"], exact=True)).to_be_visible()
-        expect(owner.get_by_text("公開鍵が変わりました。もう一度検証してください。", exact=True)).to_be_hidden()
+    def test_委任先を画面の外で加えたときは関係の画面に残りを示し暗号化すると委任先が開ける(self):
+        owner, principal = self.passkey_account("Sealing owner")
+        friend, recipient = self.passkey_account("Later delegate")
+        path = self.variable(owner, principal, "Later variable", "later value")
+        response = owner.request.post(ORIGIN + "/api/relations", data={
+            "subjectId": recipient["id"], "relation": "delegate", "objectId": principal["id"]
+        }, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/principals")
+        expect(owner.get_by_text("1件の項目が、開ける相手のためにまだ暗号化されていません。", exact=True)).to_be_visible()
+        owner.screenshot(path=str(ARTIFACTS / "principals-unsealed-ja.png"), full_page=True)
+        owner.get_by_role("button", name="暗号化する", exact=True).click()
+        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
+        expect(notice.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
+        expect(owner.get_by_text("1件の項目が、開ける相手のためにまだ暗号化されていません。", exact=True)).to_be_hidden()
+        friend.goto(path)
+        friend.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(friend.get_by_role("textbox", name="値", exact=True)).to_have_value("later value")
 
     def test_メールで入った端末に別の端末から秘密鍵を渡して変数を表示する(self):
         owner, principal = self.passkey_account("Receiving account")
@@ -642,8 +551,6 @@ class BrowserTests(unittest.TestCase):
     def test_相手の鍵で共有した変数を開き共有解除を反映する(self):
         owner, principal = self.passkey_account("Variable owner")
         reader, recipient = self.passkey_account("Variable reader")
-        self.trust(owner, reader, recipient)
-        self.trust(reader, owner, principal)
         path = self.variable(owner, principal, "Shared variable")
         owner.get_by_role("link", name="共有", exact=True).click()
         owner.get_by_role("textbox", name="共有相手のプリンシパルID").fill(recipient["id"])
@@ -676,7 +583,6 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="保存", exact=True).click()
         expect(page.get_by_role("heading", name="Existing variable", exact=True)).to_be_visible()
         page.goto(ORIGIN + "/account")
-        expect(page.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$"))).to_be_visible()
         expect(page.get_by_role("listitem").filter(has_text="パスキー")).to_contain_text("秘密鍵を取り出せる")
         page.screenshot(path=str(ARTIFACTS / "account-desktop-ja.png"), full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
@@ -744,8 +650,6 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(created.status, 201, created.text())
         child = created.json()
         self.assertIsNone(child["publicKey"])
-        page.goto(ORIGIN + "/account/trust")
-        owner_fingerprint = page.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
         page.goto(f"{ORIGIN}/p/{child['id']}/settings/credentials/new")
         self.select(page, "種類", "APIキー")
         page.get_by_role("textbox", name="名前", exact=True).fill("Child key")
@@ -760,11 +664,6 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, env=environment, input=child_token,
             )
             self.assertEqual(initialized.returncode, 0, initialized.stderr)
-            trusted = subprocess.run(
-                ["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
-                capture_output=True, text=True, env=environment,
-            )
-            self.assertEqual(trusted.returncode, 0, trusted.stderr)
             kept = subprocess.run(
                 ["node", "cli/dist/cli.mjs", "keep", "Child variable", "--stdin"],
                 capture_output=True, text=True, env=environment, input="kept by the child",
@@ -880,33 +779,13 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url(f"**/p/{principal['id']}/services")
         self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + connection["id"]).status, 404)
 
-    def test_項目を渡す相手の公開鍵を検証し受け取り承認で所有者を変更する(self):
+    def test_項目を相手に渡し受け取り承認で所有者を変更する(self):
         sender, owner = self.passkey_account("Transfer sender")
         receiver, recipient = self.passkey_account("Transfer recipient")
-        _, delegate = self.passkey_account("Unverified transfer delegate")
-        response = receiver.request.post(ORIGIN + "/api/relations", data={
-            "subjectId": delegate["id"], "relation": "delegate", "objectId": recipient["id"]
-        }, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        receiver.goto(ORIGIN + "/account/trust")
-        fingerprint = receiver.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
         path = self.variable(sender, owner, "Transferred variable", "transferred-browser-value")
         resource_id = path.rsplit("/", 1)[1]
         sender.get_by_role("link", name="所有者を変更", exact=True).click()
         sender.get_by_role("textbox", name="新しい所有者のプリンシパルID", exact=True).fill(recipient["id"])
-        sender.get_by_role("button", name="所有者を変更", exact=True).click()
-        link = sender.get_by_role("link", name="Transfer recipientの公開鍵を検証", exact=True)
-        expect(link).to_have_attribute("href", "/account/trust?principal=" + recipient["id"])
-        self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
-        sender.screenshot(path=str(ARTIFACTS / "resource-transfer-verification-ja.png"), full_page=True)
-        with sender.expect_popup() as popup:
-            link.click()
-        verification = popup.value
-        expect(verification.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True)).to_have_value(recipient["id"])
-        verification.get_by_role("textbox", name="公開鍵のフィンガープリント", exact=True).fill(fingerprint)
-        verification.get_by_role("button", name="公開鍵の検証", exact=True).click()
-        expect(verification.get_by_text("Transfer recipientの公開鍵を検証しました。", exact=True)).to_be_visible()
-        verification.close()
         sender.get_by_role("button", name="所有者を変更", exact=True).click()
         sender.wait_for_url("**/requests/*")
         execution_link = sender.url
@@ -914,13 +793,10 @@ class BrowserTests(unittest.TestCase):
         expect(sender.get_by_role("heading", name="所有者の変更", exact=True)).to_be_visible()
         expect(sender.get_by_role("status")).to_have_text("Transfer recipientの承認待ち")
         expect(sender.get_by_text(change, exact=True)).to_be_visible()
-        expect(sender.get_by_text("Unverified transfer delegate", exact=True)).to_be_visible()
-        expect(sender.get_by_text("次の代理は暗号化の対象に含めていません。受け取り後、新しい所有者が公開鍵を検証すると、この項目を開けるようにできます。", exact=True)).to_be_visible()
         self.assertEqual(sender.request.get(ORIGIN + "/api/resources/" + resource_id).json()["ownerId"], owner["id"])
         sender.screenshot(path=str(ARTIFACTS / "resource-transfer-pending-ja.png"), full_page=True)
         transfer_link = sender.locator('main a[href^="/requests/"]').get_attribute("href")
         self.assertTrue(transfer_link.startswith("/requests/"))
-        self.assertIn("#fingerprint=", transfer_link)
         self.select(sender, "言語", "English")
         expect(sender.get_by_role("heading", name="Ownership transfer", exact=True)).to_be_visible()
         expect(sender.get_by_role("status")).to_have_text("Waiting for Transfer recipient to approve")
@@ -997,7 +873,6 @@ class BrowserTests(unittest.TestCase):
     def test_譲渡の依頼を拒否または取り下げると所有者を保ち結果を表示する(self):
         sender, owner = self.passkey_account("Declining transfer sender")
         receiver, recipient = self.passkey_account("Declining transfer recipient")
-        self.trust(sender, receiver, recipient)
         for action in ["decline", "withdraw"]:
             with self.subTest(action=action):
                 path = self.variable(sender, owner, "Declined variable " + action, "kept by sender")
@@ -1023,11 +898,6 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")
         successor, new_owner = self.passkey_account("Project successor")
-        self.trust(owner, member, recipient)
-        self.trust(owner, successor, new_owner)
-        self.trust(member, owner, principal)
-        self.trust(successor, owner, principal)
-        self.trust(successor, member, recipient)
         owner.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
         owner.get_by_role("textbox", name="名前", exact=True).fill("Shared project")
         owner.get_by_role("button", name="作成", exact=True).click()
@@ -1062,8 +932,6 @@ class BrowserTests(unittest.TestCase):
     def test_委任先と委任元を表示し委任先が変数を開き解除後は開けなくなる(self):
         owner, principal = self.passkey_account("Key owner")
         agent, delegate = self.passkey_account("Key delegate")
-        self.trust(owner, agent, delegate)
-        self.trust(agent, owner, principal)
         variable_path = self.variable(owner, principal, "Delegate variable", "delegate-variable-value")
         owner.goto(f"{ORIGIN}/p/{principal['id']}/principals")
         owner.get_by_role("textbox", name="相手のプリンシパルID").fill(delegate["id"])
@@ -1443,20 +1311,6 @@ class BrowserTests(unittest.TestCase):
             login = subprocess.run(["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
                 capture_output=True, text=True, input=token, env=environment)
             self.assertEqual(login.returncode, 0, login.stderr)
-            fingerprint = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", """
-                import { readFile } from 'node:fs/promises';
-                import { join } from 'node:path';
-                import { fingerprint } from './shared/authority.ts';
-                const identity = JSON.parse(await readFile(join(process.env.XDG_CONFIG_HOME, 'foundation/identity.json'), 'utf8'));
-                console.log(await fingerprint(identity.identities.find(item => item.principalId === identity.current).binding));
-            """], capture_output=True, text=True, env=environment)
-            self.assertEqual(fingerprint.returncode, 0, fingerprint.stderr)
-            self.trust_fingerprint(owner, agent["id"], fingerprint.stdout.strip())
-            owner.goto(ORIGIN + "/account/trust")
-            owner_fingerprint = owner.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).first.inner_text()
-            trusted = subprocess.run(["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
-                capture_output=True, text=True, env=environment)
-            self.assertEqual(trusted.returncode, 0, trusted.stderr)
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
             permission = subprocess.run(["node", "cli/dist/cli.mjs", "request", "send", "--body", json.dumps({
                 "to": principal["id"], "message": "モデルの保存・取得に接続を使います。",

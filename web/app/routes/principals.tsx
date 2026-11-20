@@ -6,6 +6,7 @@ import type { clientLoader as rootLoader } from '../root';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principals';
 import { Principal, Relation, listOf } from '../../../shared/contracts';
+import { Reprotection } from '../../../shared/protocol';
 import { Changed, actionResult, api, errorCode, formText, session } from '../api';
 import { Copy, ErrorNotice, Notice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
@@ -15,7 +16,7 @@ import { ResealingNotice } from '../resealing-notice';
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
 const relationships = ['delegate', 'member', 'payer'];
-// Lines that change who opens what the principal holds: once a line changes, this browser seals its items again.
+// Lines that let someone open what the principal holds: once one is drawn, this browser seals its items for them.
 const sealing = ['delegate', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
@@ -25,20 +26,32 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
       { signal: request.signal },
       listOf(Relation),
     );
-  const [onto, from, principals] = await Promise.all([
+  const signedIn = (await session(request)).principal;
+  const [onto, from, principals, unsealed] = await Promise.all([
     page('object', search.get('after')),
     page('subject', search.get('fromAfter')),
     api('/principals', { signal: request.signal }, listOf(Principal)),
+    // Items someone may open that are not sealed for them yet, which the signed-in principal can seal.
+    signedIn?.id === params.owner
+      ? api('/principals/' + signedIn.id + '/reprotection', { signal: request.signal }, listOf(Reprotection)) : null,
   ]);
   return {
     onto: { ...onto, items: onto.items.filter((line) => relationships.includes(line.relation)) },
     from: { ...from, items: from.items.filter((line) => relationships.includes(line.relation)) },
     owned: principals.items.filter((item) => item.owner?.id === params.owner),
+    unsealed: unsealed?.items.length ?? 0,
   };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
+    if (formText(form, 'intent') === 'seal') {
+      const signedIn = (await session()).principal;
+      if (!signedIn) return { ok: true };
+      await requireKeys(signedIn.id);
+      await resealNow(signedIn.id);
+      return { ok: true };
+    }
     const subjectId = formText(form, 'subjectId'),
       relation = formText(form, 'relation'),
       objectId = formText(form, 'objectId') || params.owner;
@@ -47,8 +60,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     if ('id' in changed) return redirect('/requests/' + changed.id);
     const signedIn = (await session()).principal;
     if (!sealing.includes(relation) || !signedIn) return { ok: true };
-    // The line is changed. Sealing its items again needs the private key, which a passkey may first have to open.
-    // Items left unsealed are sealed the next time Foundation opens where the private key is held.
+    // The line is drawn. Sealing its items for the one let in needs the private key, which a passkey may first have to
+    // open. Items it cannot seal now stay listed here, to seal from a device that holds the key.
     try { await requireKeys(signedIn.id); }
     catch (error) { return { ok: true, unsealed: errorCode(error) }; }
     await resealNow(signedIn.id);
@@ -102,6 +115,9 @@ export default function Principals() {
         <p>{t('errors.' + result.unsealed, { defaultValue: t('failure') })}</p>
       </Notice>}
       <ResealingNotice principalId={signedIn?.id} />
+      {data.unsealed > 0 && <Notice tone="warning" action={<Form method="post">
+        <Button type="submit" name="intent" value="seal" variant="outline">{t('resealingStart')}</Button>
+      </Form>}>{t('resealingWaiting', { count: data.unsealed })}</Notice>}
       <Panel title={t('connectedPrincipals')}>
         <ul className="divide-y divide-border">
           {principal.owner &&

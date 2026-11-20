@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { addPasskey, softwarePasskey } from './passkey-support.js';
 import type { Actor } from '../server/authorization.js';
-import { bindKeys, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
-import type { IdentityKeys } from '../shared/authority.js';
-import { decode, encode, wrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
+import { decode, encode, newIdentityKeys, publicPart, wrap } from '../shared/encryption.js';
+import type { IdentityKeysValue } from '../shared/encryption.js';
+import { openItem, sealItem, sealedFor } from '../shared/custody.js';
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
@@ -17,9 +15,9 @@ async function signedIn(f: Fixture, name = 'Owner') {
   const { actor } = await f.authentication.session(person.actor.id, passkey.id);
   return { ...person, actor, passkey };
 }
-// The new keys, wrapped for the passkey registered with the reset.
-async function completion(person: Awaited<ReturnType<typeof signedIn>>, keys: IdentityKeys) {
-  return { binding: await signBinding(bindKeys(person.actor.id, keys), keys),
+// The new key, wrapped for the passkey registered with the reset.
+async function completion(person: Awaited<ReturnType<typeof signedIn>>, keys: IdentityKeysValue) {
+  return { publicKey: publicPart(keys.encryption),
     wrappedKey: await wrap(keys, crypto.getRandomValues(new Uint8Array(32)), person.actor.id) };
 }
 // Seven days have passed since the request.
@@ -39,7 +37,7 @@ async function reset(f: Fixture, person: Awaited<ReturnType<typeof signedIn>>) {
   const keys = await newIdentityKeys(), input = await completion(person, keys);
   await register(f, person.actor, person.actor.id);
   await f.keyResets.complete(person.actor, person.actor.id, input);
-  return { binding: input.binding.binding, keys };
+  return { publicKey: input.publicKey, privateKey: keys.encryption };
 }
 const passkeys = async (f: Fixture, principalId: string) => (await f.db.all<{ identifier: string; wrapped: boolean }>(
   "SELECT identifier,private_wrap IS NOT NULL AS wrapped FROM credentials WHERE principal_id=$1 AND kind='passkey' ORDER BY created_at",
@@ -60,7 +58,6 @@ test('秘密鍵をなくしたプリンシパルは、申請から7日たつと�
   assert.equal((await passkeys(f, person.actor.id)).length, 1);
   await f.keyResets.complete(person.actor, person.actor.id, input);
   assert.deepEqual((await f.principals.get(person.actor.id)).public_key, publicPart(keys.encryption));
-  assert.deepEqual((await f.bindings.current(person.actor.id)).binding, input.binding.binding);
   assert.deepEqual((await passkeys(f, person.actor.id)).map(row => row.wrapped), [false, true]);
   assert.equal((await passkeys(f, person.actor.id))[1]!.identifier, passkey.identifier);
   assert.equal((await f.db.one<{ count: string }>('SELECT count(*) FROM credentials WHERE principal_id=$1 AND private_wrap IS NOT NULL',
@@ -95,36 +92,35 @@ test('作り直しの申請を取り消すと、登録しておいた新しい�
   assert.deepEqual((await f.principals.get(person.actor.id)).public_key, person.keys.publicKey);
 });
 
-test('作り直す前の秘密鍵で暗号化した変数に、新しい公開鍵で値を入れ直す', async t => {
+test('作り直す前の鍵向けに包んだ変数は開けず、新しい鍵向けに値を入れ直す', async t => {
   const f = await fixture(); t.after(f.close);
-  const person = await signedIn(f), other = await f.person('Other'), id = randomUUID();
-  const before = AccessPolicy.parse({ format: 3, id, origin: f.config.origin, ownerId: person.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [person.binding], readers: [person.binding] });
-  const row = await f.custody.put(person.actor, { name: 'Token', content: await protect(encode('lost value'), before, 1, person.binding, person.keys) });
+  const person = await signedIn(f), other = await f.person('Other');
+  const row = await f.keep(person.actor, person.actor.id, 'Token', 'lost value');
   await f.keyResets.request(person.actor, person.actor.id);
   await wait(f, person.actor.id);
   const next = await reset(f, person);
-  const sealed = await f.custody.read(person.actor, id);
-  assert.deepEqual(sealed.content.policy.readers.map(reader => reader.id), [person.binding.id]);
-  const policy = { ...before, revision: 2, authorities: [next.binding], readers: [next.binding] };
-  const content = await protect(encode('entered again'), policy, 2, next.binding, next.keys);
-  const stranger = AccessPolicy.parse({ ...policy, authorities: [other.binding], readers: [other.binding] });
-  await assert.rejects(f.custody.put(other.actor, { name: 'Token', version: row.version,
-    content: await protect(encode('taken'), stranger, 2, other.binding, other.keys) }), { code: 'forbidden' });
-  await f.custody.put(person.actor, { name: 'Token', version: row.version, content });
-  const current = (await f.custody.read(person.actor, id)).content;
-  assert.equal(decode(await reveal(current, next.binding, next.keys.encryption)), 'entered again');
+  const sealed = await f.custody.read(person.actor, row.id);
+  assert.equal(await sealedFor(sealed.content, next.publicKey), false);
+  assert.deepEqual(await f.custody.ownerRecipients(person.actor.id), [{ id: person.actor.id, name: 'Owner', publicKey: next.publicKey }]);
+  await assert.rejects(f.custody.put(other.actor, { id: row.id, name: 'Token', kind: 'variable', ownerId: person.actor.id,
+    version: row.version, content: await sealItem(encode('taken'), [other.keys], 2, { bytes: 5 }) }), { code: 'forbidden' });
+  await f.custody.put(person.actor, { id: row.id, name: 'Token', kind: 'variable', ownerId: person.actor.id, version: row.version,
+    content: await sealItem(encode('entered again'), [next], 2, { bytes: 13 }) });
+  const current = (await f.custody.read(person.actor, row.id)).content;
+  assert.equal(decode(await openItem(current, next.privateKey, next.publicKey)), 'entered again');
 });
 
-test('共有した相手が公開鍵を作り直すと、所有者が暗号化し直す項目に挙げる', async t => {
+test('共有した相手が鍵を作り直すと、所有者が包み直す項目に挙げる', async t => {
   const f = await fixture(); t.after(f.close);
-  const owner = await f.person('Owner'), friend = await signedIn(f, 'Friend'), id = randomUUID();
-  await f.custody.put(owner.actor, { name: 'Shared', content: await protect(encode('shared value'), AccessPolicy.parse({
-    format: 3, id, origin: f.config.origin, ownerId: owner.actor.id, contentType: ContentTypes.value, revision: 1,
-    authorities: [owner.binding], readers: [owner.binding, friend.binding] }), 1, owner.binding, owner.keys) });
+  const owner = await f.person('Owner'), friend = await signedIn(f, 'Friend');
+  const row = await f.keep(owner.actor, owner.actor.id, 'Shared', 'shared value');
+  await f.relations.draw(owner.actor, { subjectId: friend.actor.id, relation: 'revealer', objectId: row.id });
+  const current = await f.custody.read(owner.actor, row.id);
+  await f.custody.put(owner.actor, { id: row.id, name: 'Shared', kind: 'variable', ownerId: owner.actor.id, version: current.version,
+    content: await sealItem(encode('shared value'), [owner.keys, friend.keys], 2, { bytes: 12 }) });
   assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), []);
   await f.keyResets.request(friend.actor, friend.actor.id);
   await wait(f, friend.actor.id);
   await reset(f, friend);
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [] }]);
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id: row.id }]);
 });

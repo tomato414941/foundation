@@ -7,9 +7,7 @@ import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Actor, Authorization } from './authorization.js';
 import type { Audit } from './audit.js';
-import { WrappedKey } from '../shared/contracts.js';
-import { verifyBinding } from '../shared/authority.js';
-import { bindFirst } from './bindings.js';
+import { PublicKey, WrappedKey } from '../shared/contracts.js';
 import type { Configuration } from './config.js';
 import type { PublicEncryptionKey } from '../shared/contracts.js';
 import type { KeyResetCompletion } from '../shared/session.js';
@@ -114,13 +112,12 @@ export class KeyResets {
       return { identifier: passkey.identifier };
     });
   }
-  // Replaces the keys with new ones held by the passkey kept with the reset, which becomes a way in at the same time.
-  // The keys that passkeys and API keys held before no longer belong to the principal, and what only they opened is
-  // entered again with the new keys, which are bound as an identity's first keys.
+  // Replaces the key with a new one held by the passkey kept with the reset, which becomes a way in at the same time.
+  // The key that passkeys and API keys held before no longer belongs to the principal. What was sealed only for it is
+  // entered again; what someone else opens too, they seal again for the new key.
   async complete(actor: Actor, principalId: string, input: z.infer<typeof KeyResetCompletion>) {
-    const binding = await verifyBinding(input.binding);
-    if (binding.principalId !== principalId || decodeProtectedHeader(input.wrappedKey).sub !== principalId)
-      fail(400, 'invalid_key_binding', 'Bind and wrap the new keys for this principal.');
+    if (decodeProtectedHeader(input.wrappedKey).sub !== principalId)
+      fail(400, 'invalid_key', 'Wrap the new key for this principal.');
     await this.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       const reset = await this.ready(actor, principalId, connection, true);
@@ -132,9 +129,7 @@ export class KeyResets {
         "INSERT INTO credentials(id,principal_id,kind,name,identifier,data) VALUES($1,$2,'passkey',$3,$4,$5)",
         [credentialId, principalId, passkey.name, passkey.identifier, JSON.stringify({ publicKey: passkey.publicKey,
           counter: passkey.counter, transports: passkey.transports, backedUp: passkey.backedUp })]);
-      await connection.query('UPDATE principal_key_bindings SET retired_at=now() WHERE principal_id=$1 AND retired_at IS NULL', [principalId]);
-      await connection.query('UPDATE principals SET public_key=NULL WHERE id=$1', [principalId]);
-      await bindFirst(connection, this.db, this.audit, actor.id, input.binding);
+      await connection.query('UPDATE principals SET public_key=$2 WHERE id=$1', [principalId, JSON.stringify(PublicKey.parse(input.publicKey))]);
       await connection.query('UPDATE credentials SET private_wrap=CASE WHEN id=$2 THEN $3 END WHERE principal_id=$1',
         [principalId, credentialId, WrappedKey.parse(input.wrappedKey)]);
       await this.audit.record(principalId, actor.id, 'credential.passkey', credentialId, {}, connection);

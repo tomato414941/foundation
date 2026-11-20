@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useLocation, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
+import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowUpRight } from 'lucide-react';
 import type { clientLoader as rootLoader } from './root';
@@ -8,10 +8,9 @@ import { OperationView, RequestView } from '../../shared/operations';
 import type { OperationCall, OperationRecordView, RequestRecordView } from '../../shared/operations';
 import { atPointer } from '../../shared/values';
 import { actionResult, api, ApiFailure, errorCode, formText, holdingKeys, session } from './api';
-import { connectionClient, custodyClient, operationClient } from './custody';
-import { getIdentity, requireKeys, resealNow, useResealing } from './keys';
+import { connectionClient, operationClient } from './custody';
+import { requireKeys, resealNow, useResealing } from './keys';
 import { ResealingNotice } from './resealing-notice';
-import { RecipientAccessNotice } from './recipient-verification';
 import { loadOperationForm, OperationInputFields, operationSubmission } from './operation-form';
 import { ConnectionProgress } from './connection-progress';
 import { ConnectionUsers } from './connection-users';
@@ -61,28 +60,11 @@ function configuration(invocation: OperationCall, input: OperationCall['input'],
       typeof input[key] === 'object' && !Array.isArray(input[key]) && JSON.stringify(invocation.input[key]) !== JSON.stringify(input[key])))
     .map(key => [key, input[key]!])) as Record<string, JsonValue>;
 }
-// Lines that change who opens what a principal holds: once approved, this browser seals those items again.
+// Approvals that let someone open what the approver holds: once approved, this browser seals those items for them.
 const resealing = (item: RequestRecordView) => !item.proposal && item.operations.some(operation =>
-  ['relation.draw', 'relation.erase'].includes(operation.name) && ['delegate', 'member'].includes(String(operation.input.relation)));
-// The principal a line awaiting approval lets open what the approver holds, as its delegate or member.
-function lineSubject(item: RequestRecordView, approverId: string) {
-  const operation = item.proposal ? undefined : item.operations.find(operation => operation.name === 'relation.draw' &&
-    ['delegate', 'member'].includes(String(operation.input.relation)));
-  const subject = operation ? substitute(operation.input.subjectId ?? null, approverId, item.from.id) : null;
-  return typeof subject === 'string' && subject !== approverId ? subject : null;
-}
-// Approving such a line has this browser seal for the subject at once, so the subject's public key is verified before,
-// or by the fingerprint in the link the subject gave. While it is not, this names the subject. It reads what the
-// approver verified, which needs the approver's private key in this browser.
-async function unverifiedSubject(item: RequestRecordView, approverId: string, id: string) {
-  const subject = lineSubject(item, approverId);
-  if (!subject) return null;
-  if (subject === item.from.id && sessionStorage.getItem('foundation.fingerprint.request.' + id)) return null;
-  try { if (await (await custodyClient()).verifiedIdentity(subject)) return null; }
-  catch (error) { if (error instanceof ApiFailure && error.code === 'key_binding_required') return null; throw error; }
-  return subject === item.from.id ? item.from.name
-    : await api<{ name: string }>('/identities/' + subject).then(identity => identity.name, () => subject);
-}
+  operation.name === 'connection.authorize' ||
+  operation.name === 'connection.connect' && Array.isArray(operation.input.users) && operation.input.users.length > 0 ||
+  operation.name === 'relation.draw' && ['delegate', 'member', 'revealer', 'editor'].includes(String(operation.input.relation)));
 type PageArgs = { params: { id?: string }; request: Request };
 // The request with the operations its approval made, which those who may see the request may also see.
 async function readItem(id: string, signal?: AbortSignal) {
@@ -92,10 +74,6 @@ async function readItem(id: string, signal?: AbortSignal) {
 }
 export async function clientLoader({ params, request }: PageArgs) {
   const fragment = new URLSearchParams(window.location.hash.slice(1)), token = fragment.get('token');
-  // The requester's public key fingerprint comes in the link's fragment, which never reaches the server. It is kept for
-  // this tab until the request is approved, so that signing in on the way keeps it.
-  const linked = fragment.get('fingerprint');
-  if (linked) sessionStorage.setItem('foundation.fingerprint.request.' + params.id, linked);
   if (token) {
     await api(`/requests/${params.id}/redeem`, { method: 'POST', body: { token } });
     history.replaceState(null, '', window.location.pathname);
@@ -135,10 +113,8 @@ export async function clientLoader({ params, request }: PageArgs) {
   const code = item.state === 'pending' && item.from.id === account.principal?.id
     ? sessionStorage.getItem('foundation.request.' + item.id) ?? undefined : undefined;
   if (!code) sessionStorage.removeItem('foundation.request.' + item.id);
-  const unverified = account.principal && !account.requestId && item.canAnswer && await getIdentity(account.principal.id)
-    ? await unverifiedSubject(item, account.principal.id, params.id!) : null;
   return { item, made, next, code, account, current, inputForm, progress, operationError, requestConnection, delegationReviews,
-    operationReviews, unverified };
+    operationReviews };
 }
 export async function clientAction({ params, request }: PageArgs) {
   return actionResult(async () => {
@@ -155,20 +131,14 @@ export async function clientAction({ params, request }: PageArgs) {
       return readItem(params.id!);
     }
     const account = await session(), approverId = account.principal!.id, current = inputOperation(item, next, approverId);
-    // Approving with the fingerprint the requester linked first verifies its public key, for each of the approver's devices.
-    const linked = intent === 'approve' ? new URLSearchParams(window.location.hash.slice(1)).get('fingerprint')
-      ?? sessionStorage.getItem('foundation.fingerprint.request.' + params.id) : null;
-    // Entering input, verifying a public key, and sealing items again for a changed line all use the private key, so a
-    // passkey opens it first when this browser does not hold it, before anything is answered.
-    if (current || linked || intent === 'approve' && resealing(item)) await requireKeys(approverId);
+    // Entering input and sealing items for someone let in both use the private key, so a passkey opens it first when this
+    // browser does not hold it, before anything is answered.
+    if (current || intent === 'approve' && resealing(item)) await requireKeys(approverId);
     const data = current ? await loadOperationForm(current.invocation) : null;
     const prepared = data ? operationSubmission(data, form) : null;
     const choices = current && prepared
       ? configuration(current.invocation, prepared.input, item.operations[current.index]!.configure) : {};
     if (intent === 'approve') {
-      if (!linked && !account.requestId && await unverifiedSubject(item, approverId, params.id!))
-        throw new ApiFailure('identity_untrusted');
-      if (linked) await (await custodyClient()).trustIdentity(item.from.id, linked);
       const values = item.operations.map((operation, index) => Object.fromEntries(operation.inputs.filter(input => !input.secret).map((input, inputIndex) => {
         const key = `input.${index}.${inputIndex}`;
         return [input.pointer, String(form.has(key) ? form.get(key) : index === current?.index && prepared
@@ -177,7 +147,6 @@ export async function clientAction({ params, request }: PageArgs) {
       await api(path + '/approve', { method: 'POST', body: { values,
         configuration: item.operations.map((_operation, index) => index === current?.index ? choices : {}),
         code: formText(form, 'code') || undefined } }, RequestView);
-      sessionStorage.removeItem('foundation.fingerprint.request.' + params.id);
       if (resealing(item)) await resealNow(approverId, params.id!);
       ({ item, next } = await readItem(params.id!));
     } else if (current && next && Object.keys(choices).length)
@@ -197,17 +166,14 @@ export async function clientAction({ params, request }: PageArgs) {
 }
 export default function RequestPage() {
   const { t, i18n } = useTranslation(), { item, made, next, code, account, current, inputForm, progress, operationError, requestConnection,
-    delegationReviews, operationReviews, unverified } = useLoaderData<typeof clientLoader>();
+    delegationReviews, operationReviews } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const waiting = item.state === 'pending', status = outcome(item);
   // Still moving: waiting for its answer, or approved with operations still being made.
   const active = waiting || status === 'in_progress' || status === 'stopped';
   const requester = item.from.id === account.principal?.id;
   const transferring = resourceTransfer(item);
-  const location = useLocation();
-  const fingerprint = new URLSearchParams(location.hash.slice(1)).get('fingerprint')
-    ?? sessionStorage.getItem('foundation.fingerprint.request.' + item.id);
-  const shareUrl = item.url + (fingerprint ? '#fingerprint=' + encodeURIComponent(fingerprint) : '');
+  const shareUrl = item.url;
   const sealing = useResealing(account.principal?.id);
   const approvalAccepted = waiting && navigation.state !== 'idle' && sealing?.requestId === item.id;
   const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
@@ -280,11 +246,10 @@ export default function RequestPage() {
       {needsKeys && <Notice tone="info" action={<Button asChild><Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + item.id)}>{t('signin')}</Link></Button>}>
         {t(recipientRequest ? 'requestSignInHelp' : 'signinForPrivateInput')}
       </Notice>}
-      {unverified && <Notice tone="warning">{t('approvalUnverified', { name: unverified })}</Notice>}
       {(waiting && item.canAnswer || current && !waiting && !next?.continuation) && !needsKeys && <div className="flex flex-wrap items-center gap-4">
         <Button className={focusedConnection ? connectionRequestAction : transferring ? 'min-h-11 px-4' : undefined} type="submit" name="intent" value={waiting ? 'approve' : 'continue'}
           loading={navigation.state !== 'idle' && (focusedConnection || !['decline', 'withdraw', 'cancel'].includes(String(navigation.formData?.get('intent'))))}
-          disabled={navigation.state !== 'idle' || (waiting && !!unverified)}>
+          disabled={navigation.state !== 'idle'}>
           {focusedConnection ? requestConnection?.method?.registration.kind === 'authorization'
             ? t(requestConnection.reconnecting ? 'requestReconnectAtService' : 'requestConnectAtService', { name: service })
             : t(connectionAction)
@@ -355,11 +320,9 @@ export default function RequestPage() {
       <p className="text-sm text-muted-foreground">{t('expires')} <DateText value={item.expiresAt} /></p>
       {form}
     </Panel>
-    <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
   </Page>;
   return <Page title={title} narrow>
     <ErrorNotice error={result && 'error' in result && typeof result.error === 'string' ? result.error : operationError} />
-    <RecipientAccessNotice principalId={account.principal?.id} id={item.id} />
     {!recipientRequest && <ResealingNotice principalId={account.principal?.id} requestId={item.id} />}
     {stoppedNotice}
     {recipientRequest ? <Panel>{requestSummary}<ResealingNotice principalId={account.principal?.id} requestId={item.id} />{form}{output}</Panel> : <>

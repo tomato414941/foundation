@@ -21,13 +21,13 @@ import {
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
-import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
-import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, signBinding, SignedBinding } from '../../shared/authority.js';
+import { IdentityKeys, newEncryptionKey, newIdentityKeys, open as openSealed, publicPart, unbase64url, unwrap } from '../../shared/encryption.js';
+import { canonical } from '../../shared/digest.js';
 import { Client, ApiError, UnreadableResponse } from './client.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
-import { IdentityVerificationRequired, transferResource } from '../../shared/client.js';
+import { transferResource } from '../../shared/client.js';
 import { operationClient } from './operations.js';
 import { Invocation, OperationKind, OperationView, RequestApproval, RequestCreate, RequestView } from '../../shared/operations.js';
 import { OperationMaterial } from '../../shared/operation-client.js';
@@ -60,7 +60,6 @@ Usage: foundation <command> [options]
                                        waiting on its service
   operation cancel ID                  Stop an operation not made yet or waiting on its service
   schema [--output FILE]                Read the OpenAPI specification
-  trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   app NAME --method ID --client-id ID  Encrypt an application
   connect SERVICE [--owner ID] [--needs NAME] [--why TEXT]
                                        Find a connection you can use, or ask its owner to connect the service
@@ -124,9 +123,8 @@ Options:
 JSON and the key may be supplied as @FILE, or @- to read standard input.
 Signing in makes this machine act as you, with your encryption key. Registering
 with --name creates a separate principal instead.
-The unlock portion of a sign-in key stays on this machine. Verify fingerprints
-with each identity holder before trusting their keys. Content is readable only by
-its approved readers, and updates preserve its permissions. exec decrypts on this
+The unlock portion of a sign-in key stays on this machine. Content is sealed for
+everyone Foundation lets open it, and readable only by them. exec decrypts on this
 machine and masks input values in stdout and stderr. read deliberately reveals
 content. Ctrl+C while waiting stops the wait; use the API to cancel the request.
 
@@ -134,8 +132,8 @@ Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
 It can hold several identities. A command acts as --principal, then
 FOUNDATION_PRINCIPAL_ID, then the default chosen with identity use.
 Environment identity: FOUNDATION_ORIGIN, FOUNDATION_TOKEN,
-FOUNDATION_PRINCIPAL_ID, FOUNDATION_PRIVATE_KEYS, FOUNDATION_KEY_BINDING.
-The last two values are base64url-encoded JSON; omit both for metadata-only access.
+FOUNDATION_PRINCIPAL_ID, FOUNDATION_PRIVATE_KEYS. The last is base64url-encoded
+JSON; omit it for metadata-only access.
 `;
 const textOption = { type: 'string' as const },
   booleanOption = { type: 'boolean' as const };
@@ -150,7 +148,6 @@ const options = {
   body: textOption,
   file: textOption,
   stdin: booleanOption,
-  fingerprint: textOption,
   id: textOption,
   method: textOption,
   needs: { type: 'string' as const, multiple: true as const },
@@ -229,11 +226,6 @@ function seconds(value: string | undefined, fallback: number, max = 86400) {
     throw new Error('Choose a time limit between 1 and ' + max + ' seconds.');
   return number;
 }
-// A link that also carries this identity's public key fingerprint after '#', which browsers never send to the server,
-// so whoever opens it can verify this identity's public key without typing anything.
-async function linked(url: string, identity: Client['identity']) {
-  return identity.binding ? url + (url.includes('#') ? '&' : '#') + 'fingerprint=' + await fingerprint(identity.binding) : url;
-}
 async function output(value: unknown, args: Arguments) {
   const body = JSON.stringify(value, null, 2) + '\n';
   if (args.values.output) await secureWrite(args.values.output, body, !!args.values.force);
@@ -277,16 +269,13 @@ async function signInWithKey(base: string, imported: string) {
   if (!current.principal) throw new Error('The key was not accepted.');
   if (!current.wrappedKey)
     throw new Error('This key does not carry an encryption key. Issue it from a browser that can open encrypted values.');
-  const keys = PrivateKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
+  const keys = IdentityKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
     throw new Error('The encryption key could not be unlocked with this key.');
   }));
-  const unsigned = new Client({ origin: base, principalId: current.principal.id, token, keys: null, binding: null });
-  const { binding } = await unsigned.json('/api/identities/' + current.principal.id + '/binding', {}, SignedBinding);
-  await signBinding(binding, keys);
-  const identity = { origin: base, principalId: current.principal.id, token, keys, binding };
-  await saveIdentity(identity);
-  print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
-    fingerprint: await fingerprint(binding) });
+  if (!current.principal.publicKey || canonical(publicPart(keys.encryption)) !== canonical(current.principal.publicKey))
+    throw new Error('This key carries an earlier encryption key of the principal. Issue a new key from a browser.');
+  await saveIdentity({ origin: base, principalId: current.principal.id, token, keys });
+  print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath() });
 }
 async function login(args: Arguments) {
   const base = origin(args.values.origin);
@@ -337,15 +326,13 @@ async function initialize(args: Arguments) {
   const base = origin(args.values.origin);
   if (args.values.key) throw new Error('Use foundation login --key to sign in with a key.');
   const name = Name.parse(args.values.name || hostname()),
-    keys = await newIdentityKeys(),
-    binding = bindKeys(randomUUID(), keys);
+    keys = await newIdentityKeys();
   let response: Response;
   try {
-    // The identity is registered with the keys it signed for itself, so that nothing else sets them first.
     response = await fetch(base + '/api/auth/enroll', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, binding: await signBinding(binding, keys) }),
+      body: JSON.stringify({ name, publicKey: publicPart(keys.encryption) }),
       redirect: 'error',
       signal: AbortSignal.timeout(30_000),
     });
@@ -356,9 +343,8 @@ async function initialize(args: Arguments) {
   const registered = z
     .object({ principal: z.object({ id: Id, name: Name }), credential: Credential, token: z.string() })
     .parse(await response.json());
-  if (registered.principal.id !== binding.principalId) throw new Error('Foundation registered a different identity.');
-  await saveIdentity({ origin: base, principalId: registered.principal.id, token: registered.token, keys, binding });
-  print({ principal: registered.principal, origin: base, identity: path, fingerprint: await fingerprint(binding) });
+  await saveIdentity({ origin: base, principalId: registered.principal.id, token: registered.token, keys });
+  print({ principal: registered.principal, origin: base, identity: path });
 }
 async function identity(args: Arguments) {
   const action = args.positionals[0];
@@ -407,7 +393,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const operations = operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
+  const operations = await operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
   const completed = await operations.perform({ name: 'variable.save', input: { ownerId: owner, name,
     ...(existing ? { resourceId: existing.id, version: previous!.version } : {}) } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
@@ -419,7 +405,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
 // key with it. When registering fails, the variable just made is removed again.
 async function withNewVariable(client: Client, owner: string, name: string, content: Uint8Array,
   register: (variableId: string) => Promise<ResourceView>) {
-  const completed = await operationClient(client).perform({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
+  const completed = await (await operationClient(client)).perform({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
   if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
   const variable = completed.resource;
   try { return await register(variable.id); } catch (error) {
@@ -542,28 +528,7 @@ async function main(argv: string[]) {
   const owner = Id.parse(args.values.owner ?? current.principal.id);
   if (command === 'status') {
     const { wrappedKey: _wrappedKey, ...status } = current;
-    await output({ ...status, ...(client.identity.binding ? { fingerprint: await fingerprint(client.identity.binding),
-      verificationUrl: await linked(new URL('/account/trust?principal=' + current.principal.id, client.identity.origin).href, client.identity) } : {}) }, args);
-    return 0;
-  }
-  if (command === 'trust') {
-    const { custody } = privateClient(client), id = Id.parse(requireArgument(args.positionals[0], 'Supply an identity ID.'));
-    if (!args.values.fingerprint) {
-      const identity = await custody.inspectIdentity(id);
-      await output({ identityId: id, fingerprint: identity.fingerprint,
-        next: 'Verify this fingerprint with the identity holder, then repeat with --fingerprint.' }, args);
-    } else {
-      const identity = await custody.trustIdentity(id, args.values.fingerprint);
-      try {
-        const { done, failed } = await custody.reprotectPending();
-        if (done.length) process.stderr.write('Encrypted ' + done.length + ' existing item(s) for their verified recipients.\n');
-        if (failed.length) process.stderr.write(failed.length + ' item(s) still need an access update; run trust again after verifying the remaining keys or resolving the item errors.\n');
-      } catch (error) {
-        process.stderr.write('The public keys are verified, but existing items could not be updated: ' +
-          (error instanceof Error ? error.message : String(error)) + '\nRun trust again to retry the update.\n');
-      }
-      await output({ identityId: id, fingerprint: identity.fingerprint, trusted: true }, args);
-    }
+    await output(status, args);
     return 0;
   }
   if (command === 'app') {
@@ -582,7 +547,7 @@ async function main(argv: string[]) {
     else if (action === 'cancel') await output(await client.json('/api/operations/' + id() + '/cancel', { method: 'POST', body: {} }, OperationView), args);
     else if (action === 'perform' || action === 'continue') {
       const material = OperationMaterial.parse(await json(args.values.fields, {}));
-      const operations = operationClient(client);
+      const operations = await operationClient(client);
       const result = action === 'continue' ? await operations.continue(id(), material)
         : await operations.perform(Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'),
           input: await json(args.values.body, {}) }), material);
@@ -592,7 +557,7 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'connect') {
-    const flowClient = connectionClient(client), actions = ['start', 'status', 'wait', 'complete', 'cancel', 'wait-request'];
+    const flowClient = await connectionClient(client), actions = ['start', 'status', 'wait', 'complete', 'cancel', 'wait-request'];
     const service = args.positionals[0] && !actions.includes(args.positionals[0]) ? args.positionals[0] : undefined;
     const action = service ? 'start' : args.positionals[0] ?? 'start';
     if (action === 'wait-request') {
@@ -624,7 +589,7 @@ async function main(argv: string[]) {
           userId: connectionOwnerView?.permissions.includes('use') ? undefined : current.principal.id,
           scopes: args.values.scopes === undefined ? undefined : z.array(z.string()).parse(await json(args.values.scopes, [])) });
         await output({ kind: 'requested', requestId: request.id, to: request.to,
-          method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: await linked(request.url, client.identity),
+          method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: request.url,
           expiresAt: request.expiresAt,
           next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait-request ' + request.id }, args);
         if (!args.values.wait) return 0;
@@ -698,7 +663,7 @@ async function main(argv: string[]) {
   }
   if (command === 'read') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
-    const bytes = await privateClient(client).custody.reveal(id);
+    const bytes = await (await privateClient(client)).custody.reveal(id);
     if (args.values.output) await secureWrite(args.values.output, bytes, !!args.values.force);
     else process.stdout.write(bytes);
     return 0;
@@ -706,7 +671,7 @@ async function main(argv: string[]) {
   if (command === 'transfer') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
     const to = Id.parse(requireArgument(args.values.to, 'Choose the receiving principal with --to ID.'));
-    const result = await transferResource(client, id, to, () => privateClient(client).custody);
+    const result = await transferResource(client, id, to, async () => (await privateClient(client)).custody);
     if ('url' in result) process.stderr.write('The current owner keeps the item until the recipient accepts. Send this link to the recipient: ' + result.url + '\n');
     await output(result, args);
     return 0;
@@ -773,7 +738,7 @@ async function main(argv: string[]) {
       { method: 'POST', body: RequestCreate.parse(input) },
       RequestView,
     );
-    await output({ ...request, url: await linked(request.url, client.identity) }, args);
+    await output(request, args);
     if (args.values.wait) {
       const result = await waitFor(
         () => client.json('/api/requests/' + request.id, {}, RequestView),
@@ -801,12 +766,7 @@ try {
   const answered = error instanceof ApiError || error instanceof UnreadableResponse ? error.origin : undefined;
   const note = answered ? await releaseNote(answered, packageInfo.version) : null;
   const message =
-    error instanceof IdentityVerificationRequired
-      ? error.recipient.name + ' (' + error.recipient.id + '): ' +
-        (error.code === 'identity_changed' ? 'the previously verified public keys changed.' : 'the public keys have not been verified.') +
-        '\nVerify the fingerprint with this principal, then run foundation trust ' + error.recipient.id +
-        ' --fingerprint <verified-fingerprint> and repeat this operation.'
-      : error instanceof ApiError
+    error instanceof ApiError
       ? error.code + ': ' + error.message + (error.details === undefined ? '' : '\n' + JSON.stringify(error.details))
       : error instanceof UnreadableResponse
         ? error.message + (note ? '' : '\n' + z.prettifyError(error.error))

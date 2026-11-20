@@ -1,65 +1,23 @@
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
-import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { SignedBinding } from '../shared/authority.js';
-import { KeyringState, KeyringWrite } from '../shared/keyring.js';
 
 export async function routesCustody(app: ApiApp, context: Context) {
-  const { bindings, keyrings, custody, connectionOperations: operations, authorization } = context;
+  const { custody, connectionOperations: operations } = context;
   app.post('/api/oauth/relays', {
     schema: { body: P.RegisterRelay, response: { 201: P.OAuthRelay } },
   }, async (request, reply) => reply.code(201).send(await context.oauthRelays.register(actor(request), request.body)));
   app.get('/api/oauth/relays/:id', {
     schema: { params: C.IdParams, response: { 200: P.OAuthRelay } },
   }, request => context.oauthRelays.get(actor(request), request.params.id));
-  app.get('/api/identities/:id/binding', {
-    schema: { params: C.IdParams, response: { 200: SignedBinding } },
-  }, request => { actor(request); return bindings.current(request.params.id); });
-  app.put('/api/principals/:id/binding', {
-    schema: { params: C.IdParams, body: SignedBinding, response: { 200: SignedBinding } },
-  }, request => {
-    if (request.body.binding.principalId !== request.params.id)
-      fail(400, 'wrong_principal', 'Publish keys for the selected identity.');
-    return bindings.publish(actor(request), request.body);
-  });
-  app.get('/api/principals/:id/keyring', {
-    schema: { params: C.IdParams, response: { 200: KeyringState } },
-  }, request => keyrings.get(actor(request), request.params.id));
-  app.put('/api/principals/:id/keyring', {
-    schema: { params: C.IdParams, body: KeyringWrite, response: { 200: KeyringState } },
-  }, request => keyrings.put(actor(request), request.params.id, request.body));
-  app.get('/api/principals/:id/bound-recipients', {
-    schema: { params: C.IdParams, response: { 200: C.listOf(P.BoundRecipient) } },
-  }, async request => {
-    await authorization.requirePrincipal(actor(request), request.params.id, 'read');
-    return { items: await custody.required(request.params.id), next: null };
-  });
-  app.get('/api/principals/:id/bound-delegates', {
-    schema: { params: C.IdParams, response: { 200: C.listOf(P.BoundRecipient) } },
-  }, async request => {
-    await authorization.requirePrincipal(actor(request), request.params.id, 'read');
-    return { items: await custody.delegates(request.params.id), next: null };
-  });
   app.get('/api/principals/:id/reprotection', {
     schema: { params: C.IdParams, response: { 200: C.listOf(P.Reprotection) } },
   }, async request => ({ items: await custody.pending(actor(request), request.params.id), next: null }));
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
-  app.get('/api/custody/:id', {
-    schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
-  }, request => custody.read(actor(request), request.params.id));
-  app.put('/api/custody/:id', {
-    schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: P.ProtectedRead } },
-  }, async request => {
-    if (request.body.content.policy.id !== request.params.id)
-      fail(400, 'wrong_content', 'Update the selected protected content.');
-    const row = await custody.put(actor(request), request.body);
-    return { content: request.body.content, version: row.version };
-  });
   app.post('/api/connection-operations', {
     schema: { body: P.PrepareRenewal, response: { 201: P.RenewalOperation } },
   }, async (request, reply) => reply.code(201).send(await operations.prepare(actor(request), request.body.id,
@@ -71,7 +29,7 @@ export async function routesCustody(app: ApiApp, context: Context) {
     schema: { params: C.IdParams, body: P.Fence, response: { 200: P.RenewalOperation } },
   }, request => operations.dispatch(actor(request), request.params.id, request.body.fence));
   app.post('/api/connection-operations/:id/commit', {
-    schema: { params: C.IdParams, body: P.RenewalResult, response: { 200: P.ProtectedContent } },
+    schema: { params: C.IdParams, body: P.RenewalResult, response: { 200: P.SealedItem } },
   }, request => operations.commit(actor(request), request.params.id, request.body.fence, request.body.content));
   app.post('/api/connection-operations/:id/uncertain', {
     schema: { params: C.IdParams, body: P.Fence, response: { 200: C.Ok } },

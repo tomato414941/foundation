@@ -53,7 +53,6 @@ export const ResourceKind = z.enum([
   'method',
   'app',
   'object',
-  'keyring',
   'ssh_key',
   'ssh_host',
 ]);
@@ -90,7 +89,7 @@ export const Sealed = z
       .array(
         z.object({
           encrypted_key: z.string().max(2048),
-          header: z.object({ kid: Id, epk: PublicKey.optional(), alg: z.string().optional() }).passthrough(),
+          header: z.object({ kid: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), epk: PublicKey.optional(), alg: z.string().optional() }).passthrough(),
         }),
       )
       .min(1)
@@ -354,20 +353,15 @@ const resourceBase = {
   version: z.number().int().positive(),
   permissions: z.array(Action),
 };
-const custodyMetadata = {
-  recipients: z.array(Id).default([]),
-  custodyRevision: z.number().int().positive().nullable().default(null),
-};
 export const VariableResource = z.object({
   ...resourceBase,
   kind: z.literal('variable'),
-  data: z.object({ ...custodyMetadata, bytes: z.number().int().nonnegative() }),
+  data: z.object({ bytes: z.number().int().nonnegative() }),
 });
 export const ConnectionResource = z.object({
   ...resourceBase,
   kind: z.literal('connection'),
   data: z.object({
-    ...custodyMetadata,
     methodId: z.string(),
     fields: z.record(z.string(), z.string()).default({}),
     settings: z.array(z.object({ name: z.string(), label: z.string(), value: z.string() })).default([]),
@@ -399,19 +393,13 @@ export const MethodResource = z.object({
 export const AppResource = z.object({
   ...resourceBase,
   kind: z.literal('app'),
-  data: z.object({ ...custodyMetadata, methodId: z.string(), clientId: z.string(),
+  data: z.object({ methodId: z.string(), clientId: z.string(),
     fields: z.record(z.string(), z.string()).default({}), generation: Id.optional() }),
 });
 export const ObjectResource = z.object({
   ...resourceBase,
   kind: z.literal('object'),
   data: z.object({ size: z.number().int().nonnegative(), contentType: z.string() }),
-});
-// The public keys a principal verified, as one list it signs. Its devices read the list from the signature.
-export const KeyringResource = z.object({
-  ...resourceBase,
-  kind: z.literal('keyring'),
-  data: z.object({ revision: z.number().int().positive(), signature: z.string() }),
 });
 // An SSH public key, and the private key kept as a variable of the same owner when it is kept here at all.
 export const SSHKeyData = z.object({
@@ -429,7 +417,6 @@ export const Resource = z.discriminatedUnion('kind', [
   MethodResource,
   AppResource,
   ObjectResource,
-  KeyringResource,
   SSHKeyResource,
   SSHHostResource,
 ]);

@@ -5,9 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
-import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, protect } from '../shared/custody.js';
-import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
+import { newEncryptionKey, newIdentityKeys, encode, decode, open, publicPart, seal, thumbprint, unwrap, wrap } from '../shared/encryption.js';
+import { sealItem } from '../shared/custody.js';
 
 test('OAuthの認可応答を開始したプリンシパルへ暗号化して中継し、同じ応答を受け付ける', async t => {
   const f = await flowFixture(); t.after(f.close);
@@ -19,7 +18,8 @@ test('OAuthの認可応答を開始したプリンシパルへ暗号化して中
   assert.equal(callback.headers.location, '/connections/complete?flow=' + started.flow.id);
   const relayed = await f.app.inject({ url: '/api/oauth/relays/' + started.flow.id, headers: { authorization: 'Bearer ' + f.owner.token } });
   const result = relayed.json();
-  assert.equal(decode(await open(result.sealed, f.owner.keys.encryption, f.owner.binding.id, result.context)), parameters.toString());
+  assert.equal(decode(await open(result.sealed, f.owner.keys.privateKey, await thumbprint(f.owner.keys.publicKey), result.context)),
+    parameters.toString());
   assert.equal((await f.app.inject('/oauth/callback?' + parameters)).headers.location, callback.headers.location);
   parameters.set('code', 'another-code');
   assert.equal((await f.app.inject('/oauth/callback?' + parameters)).headers.location, '/connections/complete?error=connection_expired');
@@ -35,20 +35,15 @@ test('HTTP APIで登録し、変数を保存して同じ権限で一覧を取得
     await f.close();
   });
   const keys = await newIdentityKeys();
-  const binding = bindKeys(randomUUID(), keys);
   const enrolled = await app.inject({ method: 'POST', url: '/api/auth/enroll',
-    payload: { name: 'API caller', binding: await signBinding(binding, keys) } });
+    payload: { name: 'API caller', publicKey: publicPart(keys.encryption) } });
   assert.equal(enrolled.statusCode, 201, enrolled.body);
   const identity = enrolled.json(), headers = { authorization: 'Bearer ' + identity.token }, id = randomUUID();
-  assert.equal(identity.principal.id, binding.principalId);
-  const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
-    headers, payload: await signBinding(binding, keys) });
-  assert.equal(bound.statusCode, 200, bound.body);
-  const content = await protect(encode('api-value'), AccessPolicy.parse({ format: 3, id, origin: f.config.origin,
-    ownerId: identity.principal.id, contentType: ContentTypes.value, revision: 1, authorities: [binding], readers: [binding] }),
-    1, binding, keys);
+  const recipients = await app.inject({ url: '/api/principals/' + identity.principal.id + '/recipients', headers });
+  assert.deepEqual(recipients.json().items.map((recipient: { id: string }) => recipient.id), [identity.principal.id]);
+  const content = await sealItem(encode('api-value'), recipients.json().items, 1, { bytes: 9 });
   const created = await app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
-    headers, payload: { name: 'API variable', content } });
+    headers, payload: { id, name: 'API variable', kind: 'variable', ownerId: identity.principal.id, content } });
   assert.equal(created.statusCode, 200, created.body);
   assert.equal(created.json().kind, 'variable');
   const list = await app.inject({ url: '/api/principals/' + identity.principal.id + '/resources?kind=variable', headers });

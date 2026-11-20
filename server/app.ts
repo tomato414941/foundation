@@ -18,8 +18,7 @@ import { verifiedRelease } from './release.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
-import { AccessPolicy, ProtectedContent } from '../shared/custody.js';
-import { SignedBinding } from '../shared/authority.js';
+import { SealedItem } from '../shared/custody.js';
 import { routesResources } from './routes-resources.js';
 import { routesCustody } from './routes-custody.js';
 import { routesSSH } from './routes-ssh.js';
@@ -29,7 +28,7 @@ import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { web } from './web.js';
 
-for (const [id, schema] of Object.entries({ AccessPolicy, ProtectedContent })) z.globalRegistry.add(schema, { id });
+for (const [id, schema] of Object.entries({ SealedItem })) z.globalRegistry.add(schema, { id });
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -192,7 +191,7 @@ export async function buildApp(context: Context) {
     {
       config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
       schema: {
-        body: z.object({ name: C.Name, binding: SignedBinding }).strict(),
+        body: z.object({ name: C.Name, publicKey: C.PublicKey }).strict(),
         response: {
           201: z.object({
             principal: z.object({ id: C.Id, name: C.Name }),
@@ -204,7 +203,7 @@ export async function buildApp(context: Context) {
       },
     },
     async (request, reply) =>
-      reply.code(201).send(await authentication.enroll(request.body.name, request.body.binding)),
+      reply.code(201).send(await authentication.enroll(request.body.name, request.body.publicKey)),
   );
   app.post(
     '/api/auth/signout',

@@ -1,69 +1,58 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { principal } from '../server/authorization.js';
 import { AgreementNeeded } from '../server/relations.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
-import { AccessPolicy, ContentTypes, continuesPolicy, protect, reveal } from '../shared/custody.js';
+import { openItem, sealItem } from '../shared/custody.js';
 
-test('メンバー追加と所有者変更で配下の変数を再暗号化し、新しい相手が開けるようにする', async t => {
+test('メンバーを加えると加えた人が配下の変数を包み、持ち主を変えると新しい持ち主に包み直して移す', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Owner'), member = await f.person('Member'), next = await f.person('New owner');
   const project = await f.principals.create('Project', null, owner.actor.id);
   const child = await f.principals.create('Nested project', null, project.id);
-  const bytes = encode('shared project value'), id = randomUUID();
-  const initial = await protect(bytes, AccessPolicy.parse({ format: 3, id, origin: f.config.origin,
-    ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding] }),
-    1, owner.binding, owner.keys);
-  await f.custody.put(owner.actor, { name: 'Project variable', content: initial });
-  const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
-  await f.relations.draw(owner.actor, joining);
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [] }]);
-  const before = await f.custody.read(owner.actor, id);
-  const readers = [owner.binding, member.binding];
-  await f.custody.put(owner.actor, { name: 'Project variable', version: before.version, content: await protect(bytes,
-    { ...before.content.policy, revision: 2, readers, authorities: readers }, 2, owner.binding, owner.keys, undefined, before.content) });
-  const shared = (await f.custody.read(member.actor, id)).content;
-  assert.equal(decode(await reveal(shared, member.binding, member.keys.encryption)), decode(bytes));
+  const row = await f.keep(owner.actor, child.id, 'Project variable', 'shared project value');
+  await f.relations.draw(owner.actor, { subjectId: member.actor.id, relation: 'member', objectId: project.id });
+  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id: row.id }]);
+  const before = await f.custody.read(owner.actor, row.id), bytes = await openItem(before.content, owner.keys.privateKey, owner.keys.publicKey);
+  await f.custody.put(owner.actor, { id: row.id, name: 'Project variable', kind: 'variable', ownerId: child.id, version: before.version,
+    content: await sealItem(bytes, await f.custody.recipients(await f.resources.get(row.id)), 2, before.content.metadata) });
+  assert.equal(decode(await openItem((await f.custody.read(member.actor, row.id)).content, member.keys.privateKey, member.keys.publicKey)),
+    'shared project value');
+  // Passing the project on seals what it holds, below it too, for whoever acts as it then: the new owner and the member.
   const plan = await f.principals.keySharing.plan(owner.actor, project.id, next.actor.id);
-  const transferred = Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, {
-    version: item.version, content: await protect(bytes, item.policy, item.content.materialRevision + 1,
-      owner.binding, owner.keys, item.content.metadata, item.content),
-  }])));
-  await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed variable');
+  assert.deepEqual(plan.items.map(item => item.id), [row.id]);
+  assert.deepEqual(plan.items[0]!.recipients.map(recipient => recipient.id).sort(), [member.actor.id, next.actor.id].sort());
+  const sealing = async () => Object.fromEntries(await Promise.all(plan.items.map(async item => {
+    const current = await f.custody.read(owner.actor, item.id);
+    return [item.id, { version: current.version, content: await sealItem(await openItem(current.content, owner.keys.privateKey,
+      owner.keys.publicKey), item.recipients, current.content.revision + 1, current.content.metadata) }];
+  })));
+  const transferred = await sealing();
+  await f.resources.rename(owner.actor, await f.resources.get(row.id), 'Renamed variable');
   const agreed = { ...owner.actor, agreedBy: next.actor.id };
   await assert.rejects(f.relations.transfer(agreed, project.id, next.actor.id, transferred), { code: 'changed' });
-  transferred[id]!.version = (await f.resources.get(id)).version;
-  await f.relations.transfer(agreed, project.id, next.actor.id, transferred);
-  const result = (await f.custody.read(next.actor, id)).content;
-  assert.equal(continuesPolicy(shared.policy, result), true);
-  assert.equal(decode(await reveal(result, next.binding, next.keys.encryption)), decode(bytes));
-  assert.equal(decode(await reveal(result, member.binding, member.keys.encryption)), decode(bytes));
-  await assert.rejects(f.custody.read(owner.actor, id), { code: 'forbidden' });
-  const updated = await protect(encode('new value'), result.policy, result.materialRevision + 1,
-    next.binding, next.keys, undefined, result);
-  await f.custody.put(next.actor, { name: 'Renamed variable', content: updated, version: (await f.resources.get(id)).version });
-  assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'new value');
+  await f.relations.transfer(agreed, project.id, next.actor.id, await sealing());
+  for (const person of [next, member])
+    assert.equal(decode(await openItem((await f.custody.read(person.actor, row.id)).content, person.keys.privateKey, person.keys.publicKey)),
+      'shared project value');
+  await assert.rejects(f.custody.read(owner.actor, row.id), { code: 'forbidden' });
 });
 
-test('変数は新しい所有者が受け取りに同意したときに移り、宛先の鍵と編集権限を引き継ぐ', async t => {
+test('変数は新しい所有者が受け取りに同意したときに、その所有者向けに包んで移す', async t => {
   const f = await fixture(); t.after(f.close);
-  const owner = await f.person('Before'), next = await f.person('After'), id = randomUUID();
-  const policy = AccessPolicy.parse({ format: 3, id, origin: f.config.origin, ownerId: owner.actor.id,
-    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding] });
-  const initial = await protect(encode('transfer-value'), policy, 1, owner.binding, owner.keys);
-  const row = await f.custody.put(owner.actor, { name: 'Transferred variable', content: initial });
-  const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
-    revision: 2, authorities: [next.binding], readers: [next.binding] }, 2, owner.binding, owner.keys, undefined, initial);
-  await assert.rejects(f.custody.transfer(owner.actor, row.id, next.actor.id, { name: row.name, version: row.version, content }),
+  const owner = await f.person('Before'), next = await f.person('After');
+  const row = await f.keep(owner.actor, owner.actor.id, 'Transferred variable', 'transfer-value');
+  const content = await sealItem(encode('transfer-value'), await f.custody.ownerRecipients(next.actor.id), 2, { bytes: 14 });
+  const write = { id: row.id, name: row.name, kind: 'variable' as const, ownerId: next.actor.id, version: row.version, content };
+  await assert.rejects(f.custody.transfer(owner.actor, next.actor.id, write),
     (error) => error instanceof AgreementNeeded && error.to === next.actor.id);
-  assert.equal((await f.resources.get(id)).owner_id, owner.actor.id);
-  await f.custody.transfer({ ...owner.actor, agreedBy: next.actor.id }, row.id, next.actor.id,
-    { name: row.name, version: row.version, content });
-  assert.equal((await f.resources.get(id)).owner_id, next.actor.id);
-  assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'transfer-value');
-  await assert.rejects(f.custody.read(owner.actor, id), { code: 'forbidden' });
+  assert.equal((await f.resources.get(row.id)).owner_id, owner.actor.id);
+  await f.custody.transfer({ ...owner.actor, agreedBy: next.actor.id }, next.actor.id, write);
+  assert.equal((await f.resources.get(row.id)).owner_id, next.actor.id);
+  assert.equal(decode(await openItem((await f.custody.read(next.actor, row.id)).content, next.keys.privateKey, next.keys.publicKey)),
+    'transfer-value');
+  await assert.rejects(f.custody.read(owner.actor, row.id), { code: 'forbidden' });
 });
 
 test('機械が自分の鍵で登録し、自分のプリンシパルとして認証する', async (t) => {
@@ -79,23 +68,21 @@ test('機械が自分の鍵で登録し、自分のプリンシパルとして�
   assert.equal(await f.authentication.authenticate(session.token), null);
 });
 
-test('メンバーを外すとまだ封じてある変数も渡さなくなり、所有者が封じ直して使い続ける', async t => {
+test('メンバーを外すとまだ包んである変数も渡さなくなり、所有者は次の値をメンバー抜きで包む', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
   const membership = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
   await f.relations.draw(owner.actor, membership);
-  const policy = AccessPolicy.parse({ format: 3, id: randomUUID(), origin: f.config.origin,
-    ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding] });
-  const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);
-  const row = await f.custody.put(owner.actor, { name: 'Credential', content });
+  const row = await f.keep(owner.actor, project.id, 'Credential', 'private value');
   await f.relations.erase(owner.actor, membership);
   await assert.rejects(f.custody.read(member.actor, row.id), { code: 'forbidden' });
-  await f.custody.put(owner.actor, { name: 'Credential', version: row.version, content: await protect(bytes,
-    { ...policy, revision: 2, readers: [owner.binding], authorities: [owner.binding] }, 2, owner.binding, owner.keys, content.metadata, content) });
-  const current = (await f.custody.read(owner.actor, row.id)).content;
-  assert.equal(decode(await reveal(current, owner.binding, owner.keys.encryption)), 'private value');
-  assert.deepEqual(current.policy.readers.map(reader => reader.principalId), [owner.actor.id]);
+  const recipients = await f.custody.recipients(await f.resources.get(row.id));
+  assert.deepEqual(recipients.map(recipient => recipient.id), [owner.actor.id]);
+  await f.custody.put(owner.actor, { id: row.id, name: 'Credential', kind: 'variable', ownerId: project.id, version: row.version,
+    content: await sealItem(encode('next value'), recipients, 2, { bytes: 10 }) });
+  assert.equal(decode(await openItem((await f.custody.read(owner.actor, row.id)).content, owner.keys.privateKey, owner.keys.publicKey)),
+    'next value');
   assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), []);
 });
 

@@ -108,7 +108,7 @@ export default function Keys() {
             {!reset && confirming && <div className="flex w-full min-w-0 flex-col gap-3">
               <p className="leading-relaxed">{t('resetIntro')}</p>
               <ul className="list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
-                {['resetValues', 'resetApiKeys', 'resetVerification', 'resetDelay'].map(key => <li key={key}>{t(key)}</li>)}
+                {['resetValues', 'resetApiKeys', 'resetDelay'].map(key => <li key={key}>{t(key)}</li>)}
               </ul>
               <div className="flex flex-wrap gap-2">
                 <Button variant="destructive" loading={task.busy} onClick={() => task.run(async () => {

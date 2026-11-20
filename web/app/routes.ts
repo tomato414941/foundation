@@ -5,7 +5,6 @@ export default [
   route('signin/email', 'routes/email.tsx'),
   route('keys', 'routes/keys.tsx'),
   route('account', 'routes/account.tsx'),
-  route('account/trust', 'routes/trust.tsx'),
   route('account/merge/:id', 'routes/merge.tsx'),
   route('requests', 'routes/requests.tsx'),
   route('requests/new', 'routes/request-new.tsx'),

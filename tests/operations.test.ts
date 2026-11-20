@@ -10,7 +10,6 @@ import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
 import { decode } from '../shared/encryption.js';
-import { ContentTypes } from '../shared/custody.js';
 import { ConnectionMaterial, connectionLabels, connectionMetadata, sealedConnection } from '../shared/connections.js';
 import { DomainError } from '../server/errors.js';
 import type { JsonApi } from '../shared/client.js';
@@ -117,8 +116,8 @@ test('依頼された接続の設定を保ったまま足りない設定を補�
   const altered = ConnectionMaterial.parse({ format: 3, methodId: 'zendesk:token', method: await f.method('zendesk:token'),
     generation: crypto.randomUUID(), appId: null, appGeneration: null,
     fields: { subdomain: 'other', email: 'owner@example.com', token: 'private-token' } });
-  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.tokenSet);
-  await assert.rejects(f.client.save('Support account', sealedConnection(altered), policy, {
+  await assert.rejects(f.client.save({ id: crypto.randomUUID(), ownerId: f.owner.actor.id, kind: 'connection' }, 'Support account',
+    sealedConnection(altered), {
     metadata: await connectionMetadata(altered), labels: connectionLabels(altered),
     commit: async write => {
       const committed = await f.operations.commit(configured, write as unknown as JsonValue);
@@ -234,7 +233,7 @@ test('前のサインインを終えても、同じ本人の新しいサイン�
       if (response.statusCode >= 400) throw new DomainError(response.statusCode, value.error.code, value.error.message);
       return schema ? schema.parse(value) : value;
     } };
-    const custody = new CustodyClient(api, f.config.origin, f.owner.binding, f.owner.keys, f.client.trust);
+    const custody = new CustodyClient(api, f.config.origin, f.owner.actor.id, f.owner.keys);
     return { session, api, operations: new OperationClient(custody, new ConnectionClient(custody, new RemoteFlowStore(custody))) };
   };
   const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [

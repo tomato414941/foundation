@@ -21,9 +21,7 @@ import { SSHAccess } from './ssh-access.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
 import { Devices } from './devices.js';
-import { Bindings } from './bindings.js';
 import { KeyResets } from './key-resets.js';
-import { Keyrings } from './keyrings.js';
 import { Custody } from './custody.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
@@ -53,11 +51,9 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     keyResets = new KeyResets(db, authorization, audit, config);
   const catalog = await Catalog.load(resources, config),
     transport = deps.transport ?? new PublicTransport(config.origin);
-  const bindings = new Bindings(db, authorization, audit),
-    keyrings = new Keyrings(db, authorization, audit, resources, bindings, config.origin),
-    custody = new Custody(resources, bindings, relations, config.origin),
+  const custody = new Custody(resources, relations),
     connectionOperations = new ConnectionOperations(custody),
-    oauthRelays = new OAuthRelays(resources, bindings, config.origin, () => operations);
+    oauthRelays = new OAuthRelays(resources, custody, config.origin, () => operations);
   principals.keySharing = new KeySharing(custody);
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config));
   const devices = new Devices(db, authorization, audit, config.origin);
@@ -92,8 +88,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     definitions,
     operations,
     devices,
-    bindings,
-    keyrings,
     custody,
     connectionOperations,
     oauthRelays,

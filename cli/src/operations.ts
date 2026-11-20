@@ -6,7 +6,8 @@ import { RemoteFlowStore } from '../../shared/operation-continuations.js';
 import { OperationClient } from '../../shared/operation-client.js';
 import type { CustodyClient } from '../../shared/client.js';
 
-export function operationClient(client: Client, custody: CustodyClient = privateClient(client).custody) {
+export async function operationClient(client: Client, given?: CustodyClient) {
+  const custody = given ?? (await privateClient(client)).custody;
   const connections = new ConnectionClient(custody, new RemoteFlowStore(custody), new PublicTransport(custody.origin), 'cli');
   return new OperationClient(custody, connections);
 }

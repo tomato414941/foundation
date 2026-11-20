@@ -70,10 +70,9 @@ export function defineResources(definitions: DefinitionRegistry, services: Pick<
     const row = await resources.get(input.id);
     await authorization.requireResource(who, row, 'transfer');
     if (input.content) {
-      if (!isProtected(row.kind) || input.content.policy.id !== row.id || input.content.policy.ownerId !== input.to)
-        fail(400, 'wrong_content', 'Encrypt the selected item for the new owner specified by to.');
-      return resources.view(who, await custody.transfer(who, row.id, input.to,
-        { name: row.name, version: input.version, content: input.content }));
+      if (!isProtected(row.kind)) fail(400, 'wrong_content', 'Only sealed items carry their content when passed on.');
+      return resources.view(who, await custody.transfer(who, input.to,
+        { id: row.id, name: row.name, kind: row.kind, ownerId: input.to, version: input.version, content: input.content }));
     }
     return resources.view(who, await relations.transferResource(who, row.id, input.to, input.version));
   });

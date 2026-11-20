@@ -1,20 +1,20 @@
 import type { Actor } from './authorization.js';
 import type { Resources } from './resources.js';
-import type { Bindings } from './bindings.js';
 import type { Operations } from './operations.js';
+import type { Custody } from './custody.js';
 import type { SealedContent } from '../shared/contracts.js';
-import { hash } from '../shared/authority.js';
-import { encode, seal } from '../shared/encryption.js';
+import { hash } from '../shared/digest.js';
+import { encode, seal, thumbprint } from '../shared/encryption.js';
 import { relayContext } from '../shared/protocol.js';
 import { fail, required } from './errors.js';
 import { iso } from './database.js';
 
 interface RelayRow {
-  id: string; operation_id: string; actor_id: string; binding_id: string; state_digest: string;
+  id: string; operation_id: string; actor_id: string; state_digest: string;
   callback_digest: string | null; sealed: SealedContent | null; expires_at: Date; received_at: Date | null;
 }
 export class OAuthRelays {
-  constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string, readonly operations: () => Operations) {}
+  constructor(readonly resources: Resources, readonly custody: Custody, readonly origin: string, readonly operations: () => Operations) {}
   get db() { return this.resources.db; }
   // The connection an operation waits on its service for, which the callback is relayed to.
   private async active(actor: Actor, row: Pick<RelayRow, 'operation_id' | 'id'>) {
@@ -29,15 +29,14 @@ export class OAuthRelays {
     if (Date.parse(input.expiresAt) <= Date.now() || Date.parse(input.expiresAt) > Date.now() + 600_000 ||
       operation.expires_at && Date.parse(input.expiresAt) > operation.expires_at.getTime())
       fail(403, 'forbidden', 'Create a callback for the connection that is awaiting authorization.');
-    const { binding } = await this.bindings.current(actor.id);
     const row = await this.db.one<RelayRow>(
-      `INSERT INTO oauth_relays(id,operation_id,actor_id,binding_id,state_digest,expires_at)
-       VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET state_digest=$5,expires_at=$6,
-       sealed=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.sealed ELSE NULL END,
-       callback_digest=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.callback_digest ELSE NULL END,
-       received_at=CASE WHEN oauth_relays.state_digest=$5 THEN oauth_relays.received_at ELSE NULL END
-       WHERE oauth_relays.operation_id=$2 AND oauth_relays.actor_id=$3 AND oauth_relays.binding_id=$4 RETURNING *`,
-      [input.id, input.operationId, actor.id, binding.id, input.stateDigest, input.expiresAt]);
+      `INSERT INTO oauth_relays(id,operation_id,actor_id,state_digest,expires_at)
+       VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET state_digest=$4,expires_at=$5,
+       sealed=CASE WHEN oauth_relays.state_digest=$4 THEN oauth_relays.sealed ELSE NULL END,
+       callback_digest=CASE WHEN oauth_relays.state_digest=$4 THEN oauth_relays.callback_digest ELSE NULL END,
+       received_at=CASE WHEN oauth_relays.state_digest=$4 THEN oauth_relays.received_at ELSE NULL END
+       WHERE oauth_relays.operation_id=$2 AND oauth_relays.actor_id=$3 RETURNING *`,
+      [input.id, input.operationId, actor.id, input.stateDigest, input.expiresAt]);
     if (!row) fail(409, 'flow_exists', 'Use a new connection.');
     return this.view(row);
   }
@@ -49,8 +48,6 @@ export class OAuthRelays {
     const row = required(await this.db.one<RelayRow>('SELECT * FROM oauth_relays WHERE id=$1 AND expires_at>now()', [id]));
     if (row.actor_id !== actor.id) fail(403, 'forbidden', 'Open a connection belonging to this identity.');
     await this.active(actor, row);
-    const { binding } = await this.bindings.current(actor.id);
-    if (binding.id !== row.binding_id) fail(409, 'connection_expired', 'Start the connection again.');
     return this.view(row);
   }
   async receive(parameters: URLSearchParams) {
@@ -60,9 +57,11 @@ export class OAuthRelays {
     const row = await this.db.one<RelayRow>('SELECT * FROM oauth_relays WHERE state_digest=$1 AND expires_at>now()', [digest]);
     if (!row) fail(400, 'invalid_state', 'Start the connection again.');
     await this.active({ id: row.actor_id }, row);
-    const { binding } = await this.bindings.current(row.actor_id);
-    if (binding.id !== row.binding_id) fail(409, 'connection_expired', 'Start the connection again.');
-    const sealed = await seal(encode(callback), [{ id: binding.id, publicKey: binding.encryption }], relayContext(this.origin, row.id));
+    // The callback is sealed for the key of the identity that started the connection, for its device to open.
+    const own = (await this.custody.keyed([row.actor_id]))[0];
+    if (!own) fail(409, 'connection_expired', 'Start the connection again.');
+    const sealed = await seal(encode(callback), [{ id: await thumbprint(own.publicKey), publicKey: own.publicKey }],
+      relayContext(this.origin, row.id));
     const callbackDigest = await hash(callback);
     const updated = await this.db.one<RelayRow>(
       'UPDATE oauth_relays SET sealed=$2,callback_digest=$3,received_at=now() WHERE id=$1 AND state_digest=$4 AND sealed IS NULL AND expires_at>now() RETURNING *',
