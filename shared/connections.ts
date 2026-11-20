@@ -24,8 +24,8 @@ export const TokenMaterial = z.object({
   account: z.string(), accountVerified: z.boolean().optional(),
   scopesStatus: z.enum(['unknown', 'requested', 'reported']).optional(), extra: Fields, facts: JsonObject,
 }).strict();
-// A connection as its holders use it. What is sealed of it leaves out its method: the signed metadata names the method by
-// id and by the digest of its rules, and the method itself is read from where it is kept.
+// A connection as its holders use it. What is sealed of it leaves out its method: the metadata names the method by id,
+// and the method itself is read from where it is kept.
 const materialMetadata = {
   format: z.literal(3), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
   appId: Id.nullable(), appGeneration: Id.nullable(),
@@ -66,7 +66,7 @@ export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
 export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
   clientId: z.string().max(1000), generation: Id, fields: Fields.optional() }).strict();
-// Signed with the encrypted content. It names the method by id; display names are not part of it: they travel as labels.
+// Kept beside the encrypted content. It names the method by id; display names are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
   methodId: z.string().min(1).max(200), methodKind: AuthKind,
   generation: Id, appId: Id.nullable(),
@@ -121,8 +121,7 @@ export function withMethod(kept: unknown, methodId: unknown, method: MethodDescr
   if (!state?.success) fail(409, 'reconnect_required', 'Reconnect this service with the current connection format.');
   return state.data;
 }
-// A connection opened with the method its signed metadata names. Whoever uses it first checks the method's rules against
-// the digest there; whoever changes it signs the method it then names.
+// A connection opened with the method its metadata names.
 export const openConnection = (bytes: Uint8Array, metadata: Record<string, unknown>, method: MethodDescription) =>
   withMethod(JSON.parse(decode(bytes)), metadata.methodId, method);
 
