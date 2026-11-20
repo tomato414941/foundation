@@ -16,6 +16,7 @@ import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
 import type { ConnectionCheckpoint, ConnectionOutputs, ConnectionProvider } from './connection-provider.js';
 import { utf8 } from './inputs.js';
+import { requireKnownHosts } from './service-hosts.js';
 
 export interface ConnectionBroker {
   method(connectionId: string): Promise<MethodDescription>;
@@ -24,6 +25,7 @@ export interface ConnectionBroker {
   commit(id: string, fence: string, content: SealedItemValue): Promise<SealedItemValue>;
   uncertain(id: string, fence: string): Promise<unknown>;
   abort(id: string, fence: string): Promise<unknown>;
+  refused(id: string, fence: string): Promise<unknown>;
   state(resourceId: string): Promise<ConnectionOperation | null>;
 }
 // The items a command opens, by id.
@@ -88,6 +90,9 @@ export class Connections {
   async outputs(id: string, sources: Sources, signal: AbortSignal): Promise<ConnectionOutputs> {
     const content = this.source(id, 'connection', sources);
     let state = await this.material(id, content);
+    // What the connection holds goes only to the hosts this CLI knows for its method.
+    const app = await this.connectionApp(state, sources);
+    requireKnownHosts(state.methodId, state.method, { ...(state.fields ?? {}), ...(app?.fields ?? {}) });
     if (this.provider(state.method).renew && await this.broker.state(id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(id, content, state, sources, signal);
@@ -138,8 +143,14 @@ export class Connections {
       } });
       return await this.refreshed(record, updated);
     } catch (error) {
+      // A service that refused the update outright leaves nothing to find out: the update is over.
+      const refused = record.phase === 'dispatched' && error instanceof DomainError && error.code === 'reconnect_required';
       if (record.phase === 'prepared') await this.broker.abort(id, operation.fence);
-      else await this.broker.uncertain(id, operation.fence).catch(() => {});
+      else if (refused) {
+        await this.broker.refused(id, operation.fence);
+        record.delivered = true;
+        await this.journal.write('refresh_' + id, record);
+      } else await this.broker.uncertain(id, operation.fence).catch(() => {});
       if (error instanceof DomainError && ['reconnect_required', 'account_changed', 'authorization_failed', 'service_rate_limit'].includes(error.code)) throw error;
       fail(409, 'connection_uncertain', 'Check the token update before using this connection again.');
     }

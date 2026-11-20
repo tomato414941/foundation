@@ -101,3 +101,20 @@ test('結果が不明な古い更新を新しく承認した接続に置き換�
     await assert.rejects(f.operations.commit(f.delegate.actor, pending.id, pending.fence, late), { code: 'invalid_operation' });
   } finally { await f.close(); }
 });
+
+test('結果の分からない更新は1時間たつと取り消し、接続を使える状態に戻して次の更新を受け付ける', async () => {
+  const f = await setup();
+  try {
+    const resourceId = f.connection.resource.id;
+    const operation = await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), resourceId, 1);
+    await f.operations.dispatch(f.delegate.actor, operation.id, operation.fence);
+    await f.operations.uncertain(f.delegate.actor, operation.id, operation.fence);
+    await f.operations.recover();
+    assert.equal((await f.resources.get(resourceId)).data.state, 'uncertain');
+    await f.db.pool.query("UPDATE connection_operations SET updated_at=now()-interval '61 minutes' WHERE id=$1", [operation.id]);
+    await f.operations.recover();
+    assert.equal(await f.operations.state(f.delegate.actor, resourceId), null);
+    assert.equal((await f.resources.get(resourceId)).data.state, 'ready');
+    assert.equal((await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), resourceId, 1)).state, 'prepared');
+  } finally { await f.close(); }
+});

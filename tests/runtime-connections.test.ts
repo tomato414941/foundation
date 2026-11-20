@@ -36,6 +36,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     commit: (id, fence, content) => operations.commit(f.delegate.actor, id, fence, content),
     uncertain: (id, fence) => operations.uncertain(f.delegate.actor, id, fence),
     abort: (id, fence) => operations.abort(f.delegate.actor, id, fence),
+    refused: (id, fence) => operations.refused(f.delegate.actor, id, fence),
     state: resourceId => operations.state(f.delegate.actor, resourceId),
   };
   // The delegate's device learns from Foundation whom a renewed token set is sealed for.
@@ -147,6 +148,19 @@ test('更新したトークンを包む間に開ける相手が変わると、�
     const shared = (await f.custody.read(f.stranger.actor, c.id)).content;
     assert.equal(openConnection(await openItem(shared, f.stranger.keys.privateKey, f.stranger.keys.publicKey), shared.metadata,
       f.method).oauth!.refreshToken, 'new-refresh');
+  } finally { await f.close(); }
+});
+
+test('サービスが更新を断ったら結果を待たずに更新を終え、接続をつなぎ直し待ちにする', async () => {
+  const f = await setup(request => request.url.endsWith('/token')
+    ? { status: 400, headers: { 'content-type': 'application/json' }, body: encode(JSON.stringify({ error: 'invalid_grant' })) }
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const c = await f.storedConnection();
+    await assert.rejects(f.connections.outputs(c.id, c.sources, new AbortController().signal), { code: 'reconnect_required' });
+    assert.equal(await f.operations.state(f.delegate.actor, c.id), null);
+    assert.equal((await f.resources.get(c.id)).data.state, 'reconnect');
+    assert.deepEqual(await f.connections.reconcile(), []);
   } finally { await f.close(); }
 });
 

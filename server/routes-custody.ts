@@ -34,6 +34,9 @@ export async function routesCustody(app: ApiApp, context: Context) {
   app.post('/api/connection-operations/:id/uncertain', {
     schema: { params: C.IdParams, body: P.Fence, response: { 200: C.Ok } },
   }, async request => { await operations.uncertain(actor(request), request.params.id, request.body.fence); return { ok: true as const }; });
+  app.post('/api/connection-operations/:id/refused', {
+    schema: { params: C.IdParams, body: P.Fence, response: { 200: P.RenewalOperation } },
+  }, request => operations.refused(actor(request), request.params.id, request.body.fence));
   app.post('/api/connection-operations/:id/abort', {
     schema: { params: C.IdParams, body: P.Fence, response: { 200: P.RenewalOperation } },
   }, request => operations.abort(actor(request), request.params.id, request.body.fence));

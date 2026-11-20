@@ -124,6 +124,22 @@ export class ConnectionOperations {
     });
   }
 
+  // The service refused the update outright, as for a refresh token it no longer accepts: the update is over, and the
+  // connection waits to be connected again.
+  async refused(actor: Actor, id: string, fence: string) {
+    const operation = await this.operation(actor, id, fence);
+    return this.db.transaction(async connection => {
+      await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [operation.resource_id]);
+      const updated = await this.db.one<ConnectionOperation>(
+        "UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1 AND fence=$2::bigint AND state IN ('in_flight','uncertain') RETURNING *",
+        [id, fence], connection);
+      if (!updated) fail(409, 'invalid_operation', 'Only an update sent to the service can be refused by it.');
+      await connection.query(
+        `UPDATE resources SET data=jsonb_set(data,'{state}','"reconnect"'),version=version+1 WHERE id=$1`, [operation.resource_id]);
+      return updated;
+    });
+  }
+
   async abort(actor: Actor, id: string, fence: string) {
     await this.operation(actor, id, fence);
     const updated = await this.db.one<ConnectionOperation>(
@@ -145,6 +161,23 @@ export class ConnectionOperations {
     await this.db.pool.query(
       "UPDATE connection_operations SET state='aborted',updated_at=now() WHERE state='prepared' AND updated_at<now()-interval '10 minutes'",
     );
+    // An update whose result no device has recorded within an hour is given up, and the next device that uses the
+    // connection renews it again. A service that replaced its refresh token in the lost answer refuses the old one
+    // then, and the connection waits to be connected again.
+    const lost = await this.db.all<{ id: string; resource_id: string }>(
+      "SELECT id,resource_id FROM connection_operations WHERE state='uncertain' AND updated_at<now()-interval '1 hour'",
+    );
+    for (const row of lost) await this.db.transaction(async connection => {
+      await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [row.resource_id]);
+      const changed = await connection.query(
+        "UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1 AND state='uncertain' AND updated_at<now()-interval '1 hour' RETURNING id",
+        [row.id],
+      );
+      if (changed.rowCount) await connection.query(
+        `UPDATE resources SET data=jsonb_set(data,'{state}','"ready"'),version=version+1 WHERE id=$1 AND data->>'state'='uncertain'`,
+        [row.resource_id],
+      );
+    });
     const rows = await this.db.all<{ id: string; resource_id: string }>(
       "SELECT id,resource_id FROM connection_operations WHERE state='in_flight' AND updated_at<now()-interval '2 minutes'",
     );

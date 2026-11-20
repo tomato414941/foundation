@@ -25,5 +25,7 @@ export async function privateClient(client: Client) {
 
 export async function localInputs(client: Client, inputs: InjectionInput[]) {
   const { custody, connections } = await privateClient(client);
+  // Token updates this machine recorded but could not give Foundation are given now, before anything is renewed again.
+  await connections.reconcile();
   return openInputs(custody, connections, inputs);
 }

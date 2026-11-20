@@ -34,6 +34,7 @@ export class HttpBroker {
       }, SealedItem),
       uncertain: (id, fence) => api.json('/api/connection-operations/' + id + '/uncertain', { method: 'POST', body: { fence } }),
       abort: (id, fence) => api.json('/api/connection-operations/' + id + '/abort', { method: 'POST', body: { fence } }, RenewalOperation),
+      refused: (id, fence) => api.json('/api/connection-operations/' + id + '/refused', { method: 'POST', body: { fence } }, RenewalOperation),
       state: id => api.json('/api/connections/' + id + '/operation', {}, RenewalOperation.nullable()),
     };
   }

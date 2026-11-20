@@ -871,8 +871,8 @@ errors.push([
   'This connection cannot change now, because its token update has not finished.',
 ], [
   ['connection_uncertain'],
-  'この接続はトークンの更新結果を確認できていません。サービスに再接続してください。',
-  'The result of this connection\'s token update is unknown. Reconnect the service.',
+  'この接続はトークンの更新結果を確認できていません。1時間たつと、次に使うときに取り直します。急ぐときはサービスに再接続してください。',
+  'The result of this connection\'s token update is unknown. After an hour it is renewed again the next time it is used. To use it sooner, reconnect the service.',
 ]);
 for (const [codes, ja, en] of errors) for (const code of codes) words['errors.' + code] = [ja, en];
 const resources = Object.fromEntries(
