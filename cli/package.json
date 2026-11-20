@@ -1,6 +1,6 @@
 {
   "name": "@tomato414941/foundation",
-  "version": "29.1.1",
+  "version": "30.0.0",
   "description": "Manage Foundation resources and use them in local commands.",
   "type": "module",
   "engines": {
