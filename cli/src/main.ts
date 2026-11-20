@@ -285,14 +285,6 @@ async function signInWithKey(base: string, imported: string) {
   await signBinding(binding, keys);
   const identity = { origin: base, principalId: current.principal.id, token, keys, binding };
   await saveIdentity(identity);
-  // This device can now open its items, so it seals again any that the server lists as needing it.
-  const { done, failed } = await privateClient(new Client(identity)).custody.reprotectPending().catch((error: unknown) => {
-    process.stderr.write('Could not check for items to seal again: ' +
-      (error instanceof Error ? error.message : String(error)) + '\n');
-    return { done: [], failed: [] };
-  });
-  if (done.length) process.stderr.write('Sealed ' + done.length + ' item(s) again for their current readers.\n');
-  if (failed.length) process.stderr.write(failed.length + ' item(s) could not be sealed again yet; signing in again retries them.\n');
   print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
     fingerprint: await fingerprint(binding) });
 }

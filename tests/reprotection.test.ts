@@ -60,7 +60,7 @@ test('持ち主の端末は未検証の代理を知らせ、検証済みの代�
     [f.owner.actor.id, f.delegate.binding.principalId, ai.actor.id, other.actor.id].sort());
 });
 
-test('委任先の線を外すと、まだ封じてある項目も委任先に渡さなくなり、持ち主の端末が委任先抜きで封じ直す', async (t) => {
+test('委任先の線を外すと、まだ封じてある項目も委任先に渡さなくなる', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
   const ai = await f.person('Agent');
@@ -73,13 +73,7 @@ test('委任先の線を外すと、まだ封じてある項目も委任先に�
 
   await f.client.api.json('/api/relations', { method: 'DELETE', body: line });
   await assert.rejects(f.custody.read(ai.actor, saved.id), { code: 'forbidden' });
-  assert.deepEqual((await f.client.pendingProtection()).find(item => item.id === saved.id), { id: saved.id, remove: [ai.actor.id] });
-  assert.deepEqual((await f.client.reprotectPending()).failed, []);
-  const { content } = await f.client.read(saved.id);
-  assert.equal(content.policy.readers.some(reader => reader.principalId === ai.actor.id), false);
-  assert.equal(content.policy.authorities.some(authority => authority.principalId === ai.actor.id), false);
-  assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'owner value');
-  assert.deepEqual(await f.client.pendingProtection(), []);
+  assert.equal(decode(await f.client.reveal(saved.id)), 'owner value');
 });
 
 test('トークン更新中の項目があっても委任先の線を引け、持ち主の端末はほかの項目を封じ直してその項目を理由とともに残す', async (t) => {

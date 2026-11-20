@@ -95,12 +95,12 @@ export class Custody {
     return ProtectedContent.parse(row.content);
   }
 
-  // Items this identity can seal again without anyone deciding anything, where it uses what the owner holds: those whose
-  // readers no longer match who may open them: not yet sealed for everyone who uses what the owner holds, as for a new
-  // delegate, still sealed for one that may no longer open them, as for a delegate whose line was erased, or sealed for
-  // keys that a key reset has since replaced. The server cannot do it, because only the item's readers can open it. The
-  // list only says where to look, and each item is sealed again on its own. An item sealed in an earlier form opens
-  // nowhere, so it is left out.
+  // Items this identity can seal again without anyone deciding anything, where it uses what the owner holds: those not
+  // yet sealed for everyone who uses what the owner holds, as for a new delegate, or sealed for keys that a key reset has
+  // since replaced. Sealing one again leaves out those that may no longer open it; an item is not sealed again only for
+  // that, since the server already stops giving it to them. The server cannot seal, because only the item's readers can
+  // open it. The list only says where to look, and each item is sealed again on its own. An item sealed in an earlier
+  // form opens nowhere, so it is left out.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
@@ -133,7 +133,7 @@ export class Custody {
         recipients.set(row.owner_id, (await this.recipients(row.owner_id)).map(recipient => recipient.binding.id));
       const remove = new Set<string>();
       for (const reader of row.readers) if (!(await opens(reader.principalId, row))) remove.add(reader.principalId);
-      if (remove.size || recipients.get(row.owner_id)!.some(id => !row.readers.some(reader => reader.id === id)) || replaced(row))
+      if (recipients.get(row.owner_id)!.some(id => !row.readers.some(reader => reader.id === id)) || replaced(row))
         items.push({ id: row.id, remove: [...remove] });
     }
     return items;

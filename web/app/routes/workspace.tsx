@@ -12,11 +12,9 @@ import type { Route } from './+types/workspace';
 import { Principal, Resource } from '../../../shared/contracts';
 import type { PrincipalView } from '../../../shared/contracts';
 import { api, ApiFailure, signedIn } from '../api';
-import { reprotectInBackground } from '../keys';
 export async function clientLoader({ request, params }: Route.ClientLoaderArgs) {
   // The transfer action opens keys only when the selected item has encrypted content.
   const session = await signedIn(request, { keys: !new URL(request.url).pathname.endsWith('/transfer') });
-  if (session.principal && !session.requestId) reprotectInBackground(session.principal.id);
   let principal: Pick<PrincipalView, 'id' | 'name' | 'owner' | 'permissions' | 'publicKey' | 'createKinds'>;
   try {
     principal = await api('/principals/' + params.owner, { signal: request.signal }, Principal);

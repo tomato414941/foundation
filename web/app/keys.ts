@@ -82,7 +82,6 @@ async function keep(id: string, keys: IdentityKeys) {
   await stored('keys', 'readwrite', store => store.put(identity, 'v2:' + id));
   held.set(id, identity);
   unlocked.set(id, keys);
-  reprotectInBackground(id);
 }
 export type Resealing = {
   requestId?: string;
@@ -104,7 +103,7 @@ export function useRecipientAccess(principalId: string | undefined, resourceId: 
     () => principalId ? recipientAccess.get(principalId + ':' + resourceId) ?? null : null, () => null);
 }
 // One pass at a time for each principal: a pass asked for while another runs starts after it, so that the two never
-// seal the same item at once. An operation that opens the private key starts one in the background and then its own.
+// seal the same item at once.
 const passes = new Map<string, Promise<Resealing | null>>();
 function reseal(id: string, requestId?: string) {
   let state: Resealing = { requestId, running: true, completed: 0, total: null, done: 0, failed: [], error: null };
@@ -145,20 +144,8 @@ function reseal(id: string, requestId?: string) {
   passes.set(id, pass);
   return pass;
 }
-// Whenever this browser holds a principal's keys, it seals again the items the server lists as
-// needing it. Each principal is handled once per page load, so an item left now is tried again next time.
-const reprotecting = new Set<string>();
-export function reprotectInBackground(id: string) {
-  if (reprotecting.has(id)) return;
-  reprotecting.add(id);
-  void reseal(id).then(outcome => { if (!outcome || outcome.error) reprotecting.delete(id); }, (error: unknown) => {
-    reprotecting.delete(id);
-    console.warn('The items to seal again could not be checked.', error);
-  });
-}
 // Seals the items again at once, as after a line changes who may open them.
 export async function resealNow(id: string, requestId?: string) {
-  reprotecting.add(id);
   return reseal(id, requestId);
 }
 export function useResealing(id: string | undefined) {

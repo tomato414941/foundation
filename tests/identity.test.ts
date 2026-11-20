@@ -91,7 +91,6 @@ test('メンバーを外すとまだ封じてある変数も渡さなくなり�
   const row = await f.custody.put(owner.actor, { name: 'Credential', content });
   await f.relations.erase(owner.actor, membership);
   await assert.rejects(f.custody.read(member.actor, row.id), { code: 'forbidden' });
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id: row.id, remove: [member.actor.id] }]);
   await f.custody.put(owner.actor, { name: 'Credential', version: row.version, content: await protect(bytes,
     { ...policy, revision: 2, readers: [owner.binding], authorities: [owner.binding] }, 2, owner.binding, owner.keys, content.metadata, content) });
   const current = (await f.custody.read(owner.actor, row.id)).content;

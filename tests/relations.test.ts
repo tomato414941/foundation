@@ -91,7 +91,7 @@ test('鍵で守られた項目の役割は署名した方針から書かれ、�
     { code: 'rekey_required' });
 });
 
-test('委任先の線は封じ直しを待たずに引けて外せ、外した委任先にはまだ封じてある項目も渡さず、封じ直す項目として示す', async (t) => {
+test('委任先の線は封じ直しを待たずに引けて外せ、外した委任先にはまだ封じてある項目も渡さない', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person('Owner'), ai = await f.person('Agent'), friend = await f.person('Friend');
@@ -119,7 +119,6 @@ test('委任先の線は封じ直しを待たずに引けて外せ、外した�
     changed.content.materialRevision + 1, ai.binding, ai.keys, undefined, changed.content) }), { code: 'forbidden' });
   await f.relations.erase(owner.actor, line);
   await assert.rejects(f.custody.read(ai.actor, id), { code: 'forbidden' });
-  assert.deepEqual(await f.custody.pending(owner.actor, owner.actor.id), [{ id, remove: [ai.actor.id] }]);
   const kept = await f.custody.read(owner.actor, id);
   assert.equal(decode(await reveal(kept.content, owner.binding, owner.keys.encryption)), 'agent value');
 });
