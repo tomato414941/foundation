@@ -53,7 +53,7 @@ test('代理のCLIで確認コードを表示し、確認間隔を守って続�
   assert.equal(shown.userCode, authorization.user_code);
   assert.equal(shown.authorizationUrl, authorization.verification_uri);
   assert.equal(shown.verificationUri, authorization.verification_uri);
-  assert.match(shown.next!, new RegExp('foundation connect wait ' + progress.flow.operationId));
+  assert.match(shown.next!, new RegExp('foundation connect continue ' + progress.flow.operationId));
   assert.equal(JSON.stringify(shown).includes(authorization.device_code), false);
   const sealed = await first.custody.api.json('/api/operation-continuations/' + progress.flow.id);
   assert.equal(JSON.stringify(sealed).includes(authorization.device_code), false);

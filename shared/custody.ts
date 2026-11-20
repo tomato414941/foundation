@@ -8,13 +8,16 @@ import type { ProtectedKindName } from './protected.js';
 export const contentLimit = 1_000_000;
 // An item a key protects, as Foundation keeps it: its value sealed for everyone who may open it, each by the public key
 // it has, and what anyone who sees the item reads of it. Each new value is the next revision.
-export const SealedItem = z.object({
+const sealedItemFields = {
   revision: z.number().int().positive(),
   updatedAt: Time,
   metadata: JsonObject,
   sealed: Sealed,
-}).strict();
+};
+export const SealedItem = z.object(sealedItemFields).strict();
 export type SealedItemValue = z.infer<typeof SealedItem>;
+// A sealed item as a device reads it: fields Foundation adds later are left out, so that adding one stops no device.
+export const SealedItemRead = z.object(sealedItemFields);
 // A token set is renewed by whoever may open it: renewing changes no one who can open it.
 export const renewable = (kind: ProtectedKindName) => kind === 'connection';
 

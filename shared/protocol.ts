@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Id, Name, Recipient, Sealed, Time } from './contracts.js';
 import { Digest } from './digest.js';
-import { SealedItem } from './custody.js';
+import { SealedItem, SealedItemRead } from './custody.js';
 import { ConnectionLabels } from './connections.js';
 import { ProtectedKinds } from './protected.js';
 
@@ -10,9 +10,10 @@ export const ResourceTransfer = z.object({ to: Id, version: Version, content: Se
 // Labels are what people read about an item. They are stored as given and carry no authority.
 export const ProtectedWrite = z.object({ id: Id, name: Name, kind: z.enum(ProtectedKinds), ownerId: Id, content: SealedItem,
   labels: ConnectionLabels.optional(), version: Version.optional() }).strict();
-export const ProtectedRead = z.object({ kind: z.enum(ProtectedKinds), content: SealedItem, version: Version }).strict();
+// What devices read: fields added later are left out, so that adding one stops no device.
+export const ProtectedRead = z.object({ kind: z.enum(ProtectedKinds), content: SealedItemRead, version: Version });
 // An item someone may open that is not sealed for them yet, which this principal can open and seal again.
-export const Reprotection = z.object({ id: Id }).strict();
+export const Reprotection = z.object({ id: Id });
 export const KeyUpdates = z.record(Id, z.object({ version: Version, content: SealedItem }).strict());
 // An item to seal again, before a change is made, for whoever may open it once it is made.
 export const KeySharingItem = z.object({ id: Id, name: Name, version: Version, recipients: z.array(Recipient) }).strict();

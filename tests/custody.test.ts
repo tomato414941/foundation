@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openItem, sealItem, sealedFor } from '../shared/custody.js';
 import { decode, encode, newIdentityKeys, publicPart, thumbprint } from '../shared/encryption.js';
+import { CustodyClient } from '../shared/client.js';
+import type { JsonApi } from '../shared/client.js';
 
 async function identity() {
   const keys = await newIdentityKeys();
@@ -33,4 +35,15 @@ test('上限サイズの内容を100人へ包み、最初と最後の相手の�
   assert.deepEqual(await openItem(item, recipients[0]!.privateKey, recipients[0]!.publicKey), bytes);
   assert.deepEqual(await openItem(item, recipients.at(-1)!.privateKey, recipients.at(-1)!.publicKey), bytes);
   await assert.rejects(sealItem(new Uint8Array(1_000_001), recipients.slice(0, 1), 1, {}));
+});
+
+test('本番が答えに項目を足しても、端末は使う項目だけを読んで項目を開く', async () => {
+  const owner = await identity();
+  const content = await sealItem(encode('value'), [owner], 1, { bytes: 5 });
+  const api: JsonApi = { async json(_path, _options, schema) {
+    const value = { kind: 'variable', version: 3, addedLater: true, content: { ...content, addedLater: { nested: 1 } } };
+    return (schema ? schema.parse(value) : value) as never;
+  } };
+  const client = new CustodyClient(api, 'https://foundation.test', crypto.randomUUID(), owner);
+  assert.equal(decode(await client.reveal(crypto.randomUUID())), 'value');
 });

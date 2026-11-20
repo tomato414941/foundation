@@ -114,7 +114,7 @@ test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻�
   const app = await f.saveApp('github:oauth'), client = browser(f);
   const started = await client.perform({ name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'github:oauth', appId: app.id } });
   if (!('kind' in started) || started.kind !== 'cli') throw new Error('Expected CLI continuation.');
-  assert.equal(started.command, 'foundation operation continue ' + started.flow.operationId);
+  assert.equal(started.command, 'foundation connect continue ' + started.flow.operationId);
   const cli = new OperationClient(f.client, new ConnectionClient(f.client, new RemoteFlowStore(f.client), f.transport, 'cli'));
   const authorization = await cli.continue(started.flow.operationId);
   if (!('kind' in authorization) || authorization.kind !== 'authorize') throw new Error('Expected authorization.');
@@ -123,7 +123,7 @@ test('CLIが必要な認可を同じプリンシパルのCLIで開始し、戻�
   assert.equal(callback.statusCode, 302);
   const returning = await client.connections.progress(started.flow.id);
   if (returning.kind !== 'cli') throw new Error('Expected CLI continuation.');
-  assert.equal(returning.command, 'foundation connect wait ' + started.flow.operationId);
+  assert.equal(returning.command, 'foundation connect continue ' + started.flow.operationId);
   const connected = await cli.connections.progress(started.flow.id);
   if (connected.kind !== 'connected') throw new Error('Expected a saved connection.');
   const saved = await f.client.api.json('/api/resources/' + connected.id, {}, Resource);

@@ -249,7 +249,7 @@ test('ブラウザでVultrのOAuth接続を準備し、CLIで認可を継続す�
     ownerId: f.owner.actor.id, methodId: 'vultr:oauth', appId: application.id, name: 'Vultr',
   } });
   if (!('flow' in started) || started.kind !== 'cli') throw new Error('Expected CLI continuation.');
-  assert.equal(started.command, 'foundation operation continue ' + started.flow.operationId);
+  assert.equal(started.command, 'foundation connect continue ' + started.flow.operationId);
   const continued = await f.connections.progress(started.flow.id);
   assert.equal(continued.kind, 'authorize');
   if (continued.kind !== 'authorize') return;

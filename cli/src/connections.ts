@@ -1,75 +1,25 @@
 import { z } from 'zod';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Client } from './client.js';
-import { operationClient } from './operations.js';
-import { CatalogEntry, CatalogMethod, Id, Name, Relation, Resource, listOf } from '../../shared/contracts.js';
+import { CatalogEntry, Id, Name, Relation, Resource, listOf } from '../../shared/contracts.js';
 import type { CatalogConnectionMethod, CatalogService } from '../../shared/contracts.js';
 import { OperationView, RequestView } from '../../shared/operations.js';
 import type { RequestRecordView } from '../../shared/operations.js';
-import type { FlowProgress } from '../../shared/connection-client.js';
-import { AwsConnectionInput } from '../../shared/aws.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
+import type { FlowProgress } from '../../shared/connection-client.js';
 
-async function catalogMethod(client: Client, id: string) {
-  const catalog = await client.json('/api/connection-methods', {}, listOf(CatalogMethod));
-  const selected = catalog.items.find(method => method.id === id);
-  if (!selected) throw new Error('Choose an available connection method.');
-  return selected;
-}
-export async function method(client: Client, id: string) {
-  const selected = await catalogMethod(client, id);
-  const { id: _id, builtin: _builtin, availability: _availability, registration: _registration, defaultName: _defaultName, ...definition } = selected;
-  return definition;
-}
-export async function connectionClient(client: Client) {
-  return (await operationClient(client)).connections;
-}
-export async function saveApp(client: Client, input: {
-  ownerId: string; name: string; id?: string; methodId: string; clientId: string;
-  clientSecret?: string; fields: unknown;
-}) {
-  const selected = await catalogMethod(client, input.methodId);
-  if (connectionMethod(selected).application === 'none') throw new Error('Choose a connection method that uses an application.');
-  const operations = await operationClient(client);
-  const previous = input.id ? await operations.custody.read(Id.parse(input.id)) : undefined;
-  const result = await operations.perform({ name: 'app.save', input: { ownerId: input.ownerId, name: Name.parse(input.name),
-    methodId: input.methodId, clientId: input.clientId,
-    ...(input.id ? { resourceId: input.id, version: previous!.version } : {}) } },
-    { clientSecret: input.clientSecret, fields: z.record(z.string(), z.string()).parse(input.fields) });
-  if (!('kind' in result) || result.kind !== 'saved') throw new Error('Finish saving the application.');
-  return result.resource;
-}
-export async function startConnection(client: Client, input: {
-  ownerId: string; methodId: string; name?: string; appId?: string;
-  connectionId?: string; fields: unknown; scopes: unknown; aws?: unknown; redirectUri?: string;
-}) {
-  const selected = await catalogMethod(client, input.methodId);
-  const existing = input.connectionId ? await client.json('/api/resources/' + Id.parse(input.connectionId), {}, Resource) : null;
-  const result = await (await operationClient(client)).perform({ name: 'connection.connect', input: {
-    ownerId: input.ownerId, methodId: input.methodId,
-    name: Name.parse(input.name ?? existing?.name ?? selected.defaultName),
-    ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-    ...(input.redirectUri ? { redirectUri: input.redirectUri } : {}),
-  } }, { fields: z.record(z.string(), z.string()).parse(input.fields), scopes: z.array(z.string()).optional().parse(input.scopes),
-    ...(input.aws !== undefined ? { aws: AwsConnectionInput.parse(input.aws) } : {}) });
-  if ('kind' in result && result.kind === 'saved') return result;
-  if (!('flow' in result)) throw new Error('Continue the pending connection.');
-  return result;
-}
-export function flowOutput(progress: FlowProgress | { kind: 'saved'; resource: z.infer<typeof Resource>; operationId: string }) {
-  if (progress.kind === 'saved') return { kind: 'connected', id: progress.operationId, connectionId: progress.resource.id, resource: progress.resource };
+// What a connection a browser handed over has come to, and what is left to do.
+export function flowOutput(progress: FlowProgress) {
   return { kind: progress.kind, id: progress.flow.operationId,
-    ...(progress.kind === 'pending' ? { state: 'running' } : {}),
     ...(progress.kind === 'authorize' ? { authorizationUrl: progress.url,
       ...(progress.device ? { userCode: progress.device.userCode, verificationUri: progress.device.verificationUri,
         expiresAt: new Date(progress.device.expiresAt).toISOString() } : {}),
-      next: (progress.device ? 'Open the URL and enter the user code, then run foundation connect wait ' : 'Open the URL, then run foundation connect wait ') + progress.flow.operationId } : {}),
+      next: 'Open the URL, then run foundation connect continue ' + progress.flow.operationId } : {}),
     ...(progress.kind === 'cli' ? { next: progress.command } : {}),
     ...(progress.kind === 'connected' ? { connectionId: progress.id } : {}),
     ...(progress.kind === 'failed' ? { error: progress.error } : {}),
   };
 }
-
 type Connection = Extract<z.infer<typeof Resource>, { kind: 'connection' }>;
 const outputsOf = (method: CatalogConnectionMethod) => connectionMethod(method).outputs;
 const describe = (method: CatalogConnectionMethod) => method.id + ' (' + outputsOf(method).join(', ') + ')';
@@ -135,15 +85,12 @@ export function connectionOutput(connection: Connection) {
 }
 // Asks the owner to make the connection in their browser, entering what it needs there.
 export async function requestConnection(client: Client, input: {
-  owner: string; method: CatalogConnectionMethod; why?: string; name?: string; appId?: string; connectionId?: string; scopes?: string[];
-  userId?: string;
+  owner: string; method: CatalogConnectionMethod; why?: string; connectionId?: string; userId?: string;
 }) {
   return client.json('/api/requests', { method: 'POST', body: { to: input.owner, message: input.why ?? '', operations: [{
-    name: 'connection.connect', input: { ownerId: input.owner, methodId: input.method.id,
-      name: Name.parse(input.name ?? input.method.defaultName),
-      ...(input.appId ? { appId: input.appId } : {}), ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-      ...(!input.connectionId && input.userId ? { users: [input.userId] } : {}),
-      ...(input.scopes ? { scopes: input.scopes } : {}) } }] } }, RequestView);
+    name: 'connection.connect', input: { ownerId: input.owner, methodId: input.method.id, name: Name.parse(input.method.defaultName),
+      ...(input.connectionId ? { connectionId: input.connectionId } : {}),
+      ...(!input.connectionId && input.userId ? { users: [input.userId] } : {}) } }] } }, RequestView);
 }
 // Waits for the owner to answer, then for the connection they made.
 export async function awaitRequestedConnection(client: Client, request: RequestRecordView, timeout: number) {
@@ -160,7 +107,7 @@ export async function awaitRequestedConnection(client: Client, request: RequestR
       return { kind: 'connected', requestId: request.id, operationId: operation.id, ...connectionOutput(connection) };
     }
     if (Date.now() >= deadline)
-      throw new Error('The owner has not finished yet. Run foundation connect wait-request ' + request.id + ' to keep waiting.');
+      throw new Error('The owner has not finished yet. Run foundation connect wait ' + request.id + ' to keep waiting.');
     await delay(1500);
   }
 }

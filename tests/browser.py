@@ -1975,7 +1975,7 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("確認コードで接続")
         expect(page.get_by_role("combobox", name="接続用アプリ", exact=True)).to_have_text("GitHub device application")
         page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.locator("code").filter(has_text="foundation operation continue")).to_be_visible()
+        expect(page.locator("code").filter(has_text="foundation connect continue")).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "github-device-cli-ja.png"), full_page=True)
 
     def test_デバイス認証の依頼でコードを表示しサービスでの許可と拒否と期限切れを反映する(self):
@@ -2059,7 +2059,7 @@ class BrowserTests(unittest.TestCase):
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-input-ja.png")), full_page=True)
                 print("Rendered " + service + " OAuth: " + page.locator("main").inner_text(), flush=True)
                 page.get_by_role("button", name="接続する", exact=True).click()
-                expect(page.locator("code").filter(has_text="foundation operation continue")).to_be_visible()
+                expect(page.locator("code").filter(has_text="foundation connect continue")).to_be_visible()
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-cli-registration-ja.png")), full_page=True)
 
     def test_OVHのサービスアカウントの接続を依頼すると受け手がクライアントIDとシークレットを入力して一度で接続する(self):

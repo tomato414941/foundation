@@ -10,15 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import packageInfo from '../package.json' with { type: 'json' };
-import {
-  Credential,
-  Id,
-  Input,
-  Name,
-  Resource,
-  Sealed,
-  listOf,
-} from '../../shared/contracts.js';
+import { Credential, Id, Input, Name, Resource, Sealed, listOf } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
 import { IdentityKeys, newEncryptionKey, newIdentityKeys, open as openSealed, publicPart, unbase64url, unwrap } from '../../shared/encryption.js';
@@ -27,16 +19,13 @@ import { Client, ApiError, UnreadableResponse } from './client.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
-import { transferResource } from '../../shared/client.js';
-import { operationClient } from './operations.js';
-import { Invocation, OperationKind, OperationView, RequestApproval, RequestCreate, RequestView } from '../../shared/operations.js';
-import { OperationMaterial } from '../../shared/operation-client.js';
-import { awaitRequestedConnection, chooseMethod, connectionClient, connectionOutput, connectionOwner, existingConnection, flowOutput,
-  requestConnection, saveApp, startConnection } from './connections.js';
+import { RequestCreate, RequestView } from '../../shared/operations.js';
+import { awaitRequestedConnection, chooseMethod, connectionOutput, connectionOwner, existingConnection, flowOutput,
+  requestConnection } from './connections.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
 import { newSSHKey, withStoredKey } from './ssh-keys.js';
-import { downloadRelease, releaseNote, releaseWorkflow } from './releases.js';
-import type { FlowProgress } from '../../shared/connection-client.js';
+import { operationClient } from './operations.js';
+import { releaseNote } from './releases.js';
 
 const help = `Foundation ${packageInfo.version}
 
@@ -45,78 +34,49 @@ Usage: foundation <command> [options]
   login [--origin URL]                  Sign in by approving this machine in a browser
   login --key TOKEN [--origin URL]      Sign in with a key issued in a browser
   init --name NAME [--origin URL]       Register this machine as a new principal
-  status                               Show this machine and its accessible principals
+  status                               Show this machine and the principals it may act for
   identity list                        List the identities saved on this machine
   identity use ID                      Make a saved identity the default
-  update [VERSION]                     Download the newest CLI release, or VERSION, check that the
-                                       Foundation release workflow built it, and name the file to install
-  request-access [--to ID] [--wait]     Ask another principal to delegate access to this machine
-  api METHOD /api/PATH [--body JSON]    Call the common Foundation API
-  operation kinds                      List the kinds of operation and their inputs
-  operation perform NAME --body JSON   Make an operation (private material via --fields)
-  operation list                       List the operations made by or for this principal
-  operation get ID                     Show an operation
-  operation continue ID [--fields JSON] Make an operation not made yet or that failed, or finish one
-                                       waiting on its service
-  operation cancel ID                  Stop an operation not made yet or waiting on its service
-  schema [--output FILE]                Read the OpenAPI specification
-  app NAME --method ID --client-id ID  Encrypt an application
-  connect SERVICE [--owner ID] [--needs NAME] [--why TEXT]
+  request-access [--to ID] [--wait]     Ask another principal to delegate to this machine
+  connect SERVICE [--owner ID] [--needs NAME] [--why TEXT] [--wait]
                                        Find a connection you can use, or ask its owner to connect the service
-  connect --method ID --fields JSON    Encrypt and save a connection on this device
-  connect wait ID                      Continue the operation after service authorization
-  connect wait-request ID              Wait for the owner to finish a requested connection
-  keep NAME (--file FILE | --stdin)    Encrypt and save a variable
-  transfer ID --to ID                  Transfer an item after the recipient accepts it
-  read ID [--output FILE]               Decrypt a variable you can reveal
-  exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
-  request send --body JSON             Ask another principal to make operations
-  request list                         List the requests sent or received
-  request get ID                       Show a request
-  request approve ID [--body JSON]     Approve a request, supplying what it asks for
-  request decline ID                   Decline a request
-  request withdraw ID                  Withdraw a request this principal sent
-  request wait ID [--timeout SECONDS]  Wait for a request to be answered
-  export --output FILE                 Download an encrypted account export
+  connect wait ID                      Wait for the owner to finish a requested connection
+  connect continue ID                  Finish a connection a browser handed to this machine
+  keep NAME (--file FILE | --stdin)    Seal and save a variable
+  read ID [--output FILE]               Open a variable you may open
+  exec --inputs JSON -- COMMAND ...    Give opened values to a local command
+  seal                                 Seal what this machine opens for those let in since
   ssh-key create NAME (--store | --private-key-output FILE) Make an SSH key and register its public key
   ssh-key add NAME (--public-key KEY | --private-key FILE) Register an existing SSH key
   ssh-key agent ID -- COMMAND ...      Run a command with a stored SSH key in a temporary agent
-  ssh-host add NAME --address HOST     Register a host that SSH keys sign in to
-  ssh-access grant --host ID --ssh-key ID --account NAME Record that a key signs in to a host account
-  ssh-access revoke ID                 Remove that record
-  ssh-access list [--host ID] [--ssh-key ID] Show which keys sign in to which host accounts
+  api METHOD /api/PATH [--body JSON]    Call the Foundation API; everything else is done this way
 
 Options:
-  --owner ID             Choose the principal that owns a new item (for connect without
-                         --fields: the principal asked, by default the one delegating to this machine)
+  --owner ID             The principal that owns a new item, or that connect asks (by default
+                         the one delegating to this machine)
   --needs NAME           Output a requested connection must give, such as RUNPOD_API_KEY (repeatable)
+  --method ID            Connection method a request asks for
+  --connection ID        Connection a request asks its owner to connect again
   --why TEXT             Why a connection is requested, shown to its owner
   --new                  Ask for another connection even if the owner has one
-  --to ID                Principal receiving a transfer or access request
+  --to ID                Principal asked for delegation
+  --message TEXT         Message shown with a delegation request
   --principal ID         Act as this saved identity for one command
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
   --name NAME            How this machine appears when it signs in (default: host name)
   --origin URL           Choose a server when signing in or registering
-  --app ID               Application to use for a connection
-  --fields JSON          Connection or application fields (@FILE or @- accepted)
-  --aws JSON             AWS authentication, region, and optional role (@FILE or @- recommended)
-  --client-secret VALUE  Application secret (@FILE or @- recommended)
   --inputs JSON          Inputs for exec (default: [])
-  --wait                 Wait after requesting approval
+  --wait                 Wait for the request to be answered
   --timeout SECONDS      Maximum waiting time
   --output FILE          Write the result to a private file
   --force                Replace an existing output file
-  --upload FILE          Send a binary body with the api command
-  --store                Keep the new SSH private key encrypted in Foundation
+  --body JSON            Request body for api
+  --upload FILE          Send a binary body with api
+  --store                Keep the new SSH private key sealed in Foundation
   --public-key KEY       SSH public key text (@FILE accepted)
-  --private-key FILE     SSH private key file to keep encrypted in Foundation
+  --private-key FILE     SSH private key file to keep sealed in Foundation
   --private-key-output FILE  Write a new SSH private key to this private file on this machine
   --purpose TEXT         What an SSH key is for
-  --address HOST         SSH host name or IP address
-  --port PORT            SSH port (default: 22)
-  --host ID              SSH host
-  --ssh-key ID           SSH key
-  --account NAME         Account on the SSH host
   --help                 Show this help
   --version              Show the version
 
@@ -124,9 +84,9 @@ JSON and the key may be supplied as @FILE, or @- to read standard input.
 Signing in makes this machine act as you, with your encryption key. Registering
 with --name creates a separate principal instead.
 The unlock portion of a sign-in key stays on this machine. Content is sealed for
-everyone Foundation lets open it, and readable only by them. exec decrypts on this
-machine and masks input values in stdout and stderr. read deliberately reveals
-content. Ctrl+C while waiting stops the wait; use the API to cancel the request.
+everyone Foundation lets open it, and readable only by them. exec opens values on
+this machine and masks them in stdout and stderr. read deliberately reveals
+content. Ctrl+C while waiting stops the wait; the request stays.
 
 Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
 It can hold several identities. A command acts as --principal, then
@@ -148,20 +108,11 @@ const options = {
   body: textOption,
   file: textOption,
   stdin: booleanOption,
-  id: textOption,
   method: textOption,
+  connection: textOption,
   needs: { type: 'string' as const, multiple: true as const },
   why: textOption,
   new: booleanOption,
-  'client-id': textOption,
-  'client-secret': textOption,
-  app: textOption,
-  connection: textOption,
-  fields: textOption,
-  scopes: textOption,
-  aws: textOption,
-  parameters: textOption,
-  'redirect-uri': textOption,
   inputs: textOption,
   timeout: textOption,
   wait: booleanOption,
@@ -173,11 +124,6 @@ const options = {
   'private-key': textOption,
   'private-key-output': textOption,
   purpose: textOption,
-  address: textOption,
-  port: textOption,
-  host: textOption,
-  'ssh-key': textOption,
-  account: textOption,
   help: booleanOption,
   version: booleanOption,
 };
@@ -393,21 +339,18 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const operations = await operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
-  const completed = await operations.perform({ name: 'variable.save', input: { ownerId: owner, name,
-    ...(existing ? { resourceId: existing.id, version: previous!.version } : {}) } }, { value: content });
-  if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
-  const result = completed.resource;
-  await output(result, args);
+  // The value is sealed on this machine for everyone Foundation lists as able to open it.
+  const { custody } = await privateClient(client), previous = existing ? await custody.latest(existing.id) : undefined;
+  await output(await custody.save({ id: existing?.id ?? randomUUID(), ownerId: owner, kind: 'variable' }, name, content,
+    { previous }), args);
 }
 
 // Saves a private key as a new variable of the owner, failing when one of that name exists, and registers the SSH
 // key with it. When registering fails, the variable just made is removed again.
 async function withNewVariable(client: Client, owner: string, name: string, content: Uint8Array,
   register: (variableId: string) => Promise<ResourceView>) {
-  const completed = await (await operationClient(client)).perform({ name: 'variable.save', input: { ownerId: owner, name } }, { value: content });
-  if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
-  const variable = completed.resource;
+  const { custody } = await privateClient(client);
+  const variable = await custody.save({ id: randomUUID(), ownerId: owner, kind: 'variable' }, name, content);
   try { return await register(variable.id); } catch (error) {
     await client.json('/api/resources/' + variable.id, { method: 'DELETE' }).catch(() => process.stderr.write(
       'foundation: the private key was saved as variable ' + variable.id + ', which could not be removed after the SSH key failed to register.\n'));
@@ -464,27 +407,6 @@ async function sshKeyCommand(client: Client, args: Arguments, owner: string, com
   }
   throw new Error('Choose create, add, or agent.');
 }
-async function sshHostCommand(client: Client, args: Arguments, owner: string) {
-  if (args.positionals[0] !== 'add') throw new Error('Use foundation ssh-host add.');
-  const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH host name.'));
-  return client.json('/api/principals/' + owner + '/ssh-hosts', { method: 'POST', body: {
-    name, address: requireArgument(args.values.address, 'Supply the host address with --address.'),
-    ...(args.values.port ? { port: Number(args.values.port) } : {}),
-  } }, Resource);
-}
-async function sshAccessCommand(client: Client, args: Arguments) {
-  const action = requireArgument(args.positionals[0], 'Choose grant, revoke, or list.');
-  if (action === 'grant') return client.json('/api/ssh-access', { method: 'POST', body: {
-    hostId: Id.parse(requireArgument(args.values.host, 'Choose the host with --host ID.')),
-    keyId: Id.parse(requireArgument(args.values['ssh-key'], 'Choose the key with --ssh-key ID.')),
-    account: requireArgument(args.values.account, 'Choose the account with --account NAME.'),
-  } });
-  if (action === 'list') return client.json('/api/ssh-access?' + new URLSearchParams({
-    ...(args.values.host ? { hostId: args.values.host } : {}), ...(args.values['ssh-key'] ? { keyId: args.values['ssh-key'] } : {}) }));
-  if (action !== 'revoke') throw new Error('Choose grant, revoke, or list.');
-  return client.json('/api/ssh-access/' + Id.parse(requireArgument(args.positionals[1], 'Supply the record ID.')), { method: 'DELETE' });
-}
-
 async function main(argv: string[]) {
   const boundary = argv.indexOf('--'),
     commandArguments = boundary < 0 ? [] : argv.slice(boundary + 1),
@@ -511,134 +433,64 @@ async function main(argv: string[]) {
     await identity(args);
     return 0;
   }
-  if (command === 'update') {
-    const release = await downloadRelease(packageInfo.version, args.positionals[0]);
-    if (!('file' in release)) {
-      await output(release, args);
-      return 0;
-    }
-    const file = /^[\w@%+=:,./-]+$/.test(release.file) ? release.file : "'" + release.file.replaceAll("'", "'\\''") + "'";
-    await output({ ...release, builtBy: releaseWorkflow,
-      next: 'Install it with: npm install --global --ignore-scripts ' + file }, args);
-    return 0;
-  }
   const client = new Client(await readIdentity(args.values.origin, args.values.principal));
-  const current = await client.session();
-  if (!current.principal) throw new Error('The machine identity is no longer valid.');
-  const owner = Id.parse(args.values.owner ?? current.principal.id);
+  const self = client.identity.principalId, owner = Id.parse(args.values.owner ?? self);
   if (command === 'status') {
-    const { wrappedKey: _wrappedKey, ...status } = current;
+    const { wrappedKey: _wrappedKey, ...status } = await client.session();
     await output(status, args);
     return 0;
   }
-  if (command === 'app') {
-    const resource = await saveApp(client, { ownerId: owner,
-      name: requireArgument(args.positionals[0], 'Supply an application name.'), id: args.values.id,
-      methodId: requireArgument(args.values.method, 'Choose --method ID.'), clientId: args.values['client-id'] ?? '',
-      clientSecret: args.values['client-secret'] === undefined ? undefined : await text(args.values['client-secret']),
-      fields: await json(args.values.fields, {}) });
-    await output(resource, args); return 0;
-  }
-  if (command === 'operation') {
-    const action = args.positionals[0] ?? 'list', id = () => Id.parse(requireArgument(args.positionals[1], 'Supply an operation ID.'));
-    if (action === 'kinds') await output(await client.json('/api/operation-kinds', {}, listOf(OperationKind)), args);
-    else if (action === 'list') await output(await client.json('/api/operations', {}, listOf(OperationView)), args);
-    else if (action === 'get') await output(await client.json('/api/operations/' + id(), {}, OperationView), args);
-    else if (action === 'cancel') await output(await client.json('/api/operations/' + id() + '/cancel', { method: 'POST', body: {} }, OperationView), args);
-    else if (action === 'perform' || action === 'continue') {
-      const material = OperationMaterial.parse(await json(args.values.fields, {}));
-      const operations = await operationClient(client);
-      const result = action === 'continue' ? await operations.continue(id(), material)
-        : await operations.perform(Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'),
-          input: await json(args.values.body, {}) }), material);
-      await output('flow' in result ? flowOutput(result) : result, args);
-      return 'state' in result && ['failed', 'uncertain', 'cancelled', 'declined', 'withdrawn', 'expired'].includes(result.state) ? 1 : 0;
-    } else throw new Error('Choose operation kinds, perform, list, get, continue, or cancel.');
-    return 0;
-  }
   if (command === 'connect') {
-    const flowClient = await connectionClient(client), actions = ['start', 'status', 'wait', 'complete', 'cancel', 'wait-request'];
-    const service = args.positionals[0] && !actions.includes(args.positionals[0]) ? args.positionals[0] : undefined;
-    const action = service ? 'start' : args.positionals[0] ?? 'start';
-    if (action === 'wait-request') {
+    if (args.positionals[0] === 'continue') {
+      // A service that gives its tokens only outside a browser: this machine, signed in as the one who started the
+      // connection there, exchanges and seals them.
+      const operations = await operationClient(client);
+      let progress = await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply the operation ID.')));
+      const deadline = Date.now() + seconds(args.values.timeout, 600) * 1000;
+      while ('flow' in progress && (progress.kind === 'pending' || progress.kind === 'authorize') && Date.now() < deadline) {
+        await delay(1000);
+        progress = await operations.connections.progress(progress.flow.id);
+      }
+      await output('flow' in progress ? flowOutput(progress) : progress, args);
+      return 'flow' in progress ? ['connected'].includes(progress.kind) ? 0 : 1
+        : 'kind' in progress && progress.kind === 'saved' ? 0 : 1;
+    }
+    if (args.positionals[0] === 'wait') {
       const request = await client.json('/api/requests/' + Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.')), {}, RequestView);
       const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
       await output(result, args);
       return result.kind === 'connected' ? 0 : 1;
     }
-    // Without the values themselves, the owner is asked to enter them in a browser instead.
-    if (action === 'start' && args.values.fields === undefined && args.values.aws === undefined) {
-      const needs = args.values.needs ?? [];
-      const chosen = service || needs.length || args.values.method
-        ? await chooseMethod(client, { service, methodId: args.values.method, needs }) : null;
-      if (!chosen) throw new Error('Name a service, such as foundation connect cloudrift, or choose --method ID.');
-      if (service || chosen.method.registration.kind === 'input') {
-        const connectionOwnerId = await connectionOwner(client, current.principal.id, args.values.owner);
-        const connectionOwnerView = current.principals.find(principal => principal.id === connectionOwnerId);
-        const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
-        const found = args.values.new || args.values.connection ? null
-          : await existingConnection(client, { owner: connectionOwnerId, canListOwner: !!connectionOwnerView,
-            service: chosen.service, outputs: wanted });
-        if (found) {
-          await output({ kind: 'existing', ...connectionOutput(found),
-            next: 'Use this connection, or add --new to ask for another.' }, args);
-          return 0;
-        }
-        const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
-          name: args.values.name, appId: args.values.app, connectionId: args.values.connection,
-          userId: connectionOwnerView?.permissions.includes('use') ? undefined : current.principal.id,
-          scopes: args.values.scopes === undefined ? undefined : z.array(z.string()).parse(await json(args.values.scopes, [])) });
-        await output({ kind: 'requested', requestId: request.id, to: request.to,
-          method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: request.url,
-          expiresAt: request.expiresAt,
-          next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait-request ' + request.id }, args);
-        if (!args.values.wait) return 0;
-        const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
-        await output(result, { ...args, values: { ...args.values, force: true } });
-        return result.kind === 'connected' ? 0 : 1;
-      }
+    // The owner connects the service in a browser, entering what it needs there; this machine only asks.
+    const service = args.positionals[0], needs = args.values.needs ?? [];
+    if (!service && !args.values.method) throw new Error('Name a service, such as foundation connect cloudrift.');
+    const chosen = await chooseMethod(client, { service, methodId: args.values.method, needs });
+    const current = await client.session();
+    const connectionOwnerId = await connectionOwner(client, self, args.values.owner);
+    const connectionOwnerView = current.principals.find(principal => principal.id === connectionOwnerId);
+    const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
+    const found = args.values.new || args.values.connection ? null
+      : await existingConnection(client, { owner: connectionOwnerId, canListOwner: !!connectionOwnerView,
+        service: chosen.service, outputs: wanted });
+    if (found) {
+      await output({ kind: 'existing', ...connectionOutput(found), next: 'Use this connection, or add --new to ask for another.' }, args);
+      return 0;
     }
-    let progress: FlowProgress | Awaited<ReturnType<typeof startConnection>>;
-    if (action === 'start') progress = await startConnection(client, { ownerId: owner,
-      methodId: requireArgument(args.values.method, 'Choose --method ID, or name a service.'), name: args.values.name,
-      appId: args.values.app, connectionId: args.values.connection,
-      fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
-      aws: args.values.aws ? await json(args.values.aws) : undefined,
-      redirectUri: args.values['redirect-uri'] });
-    else {
-      const operationId = Id.parse(requireArgument(args.positionals[1], 'Supply an operation ID.'));
-      const operation = await client.json('/api/operations/' + operationId, {}, OperationView);
-      if (!operation.continuation) { await output(operation, args); return operation.state === 'succeeded' ? 0 : 1; }
-      const id = operation.continuation.id;
-      if (action === 'cancel') progress = await flowClient.cancel(id);
-      else if (action === 'complete') {
-        const value = await text(requireArgument(args.values.parameters, 'Supply the authorization response with --parameters.'));
-        progress = await flowClient.complete(id, value.includes('://') ? new URL(value).search.slice(1) : value.replace(/^\?/, ''));
-      } else if (action === 'status' || action === 'wait') progress = await flowClient.progress(id);
-      else throw new Error('Choose connect start, status, wait, complete, or cancel.');
-    }
-    if (args.values.wait || action === 'wait') {
-      const deadline = Date.now() + seconds(args.values.timeout, 600) * 1000;
-      while (progress.kind === 'pending' || (action === 'wait' && progress.kind === 'authorize')) {
-        if (Date.now() >= deadline) break;
-        await delay(1000);
-        progress = await flowClient.progress(progress.flow.id);
-      }
-    }
-    await output(flowOutput(progress), args);
-    return ['failed', 'cancelled'].includes(progress.kind) ? 1 : 0;
+    const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
+      connectionId: args.values.connection, userId: connectionOwnerView?.permissions.includes('use') ? undefined : self });
+    await output({ kind: 'requested', requestId: request.id, to: request.to,
+      method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: request.url, expiresAt: request.expiresAt,
+      next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait ' + request.id }, args);
+    if (!args.values.wait) return 0;
+    const result = await awaitRequestedConnection(client, request, seconds(args.values.timeout, 1800));
+    await output(result, { ...args, values: { ...args.values, force: true } });
+    return result.kind === 'connected' ? 0 : 1;
   }
-  if (command === 'api' || command === 'schema') {
-    const method =
-      command === 'schema'
-        ? 'GET'
-        : requireArgument(args.positionals[0], 'Supply an HTTP method.').toUpperCase();
+  if (command === 'api') {
+    const method = requireArgument(args.positionals[0], 'Supply an HTTP method.').toUpperCase();
     if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method))
       throw new Error('Choose GET, HEAD, POST, PUT, PATCH, or DELETE.');
-    const path =
-      command === 'schema'
-        ? '/api/openapi.json'
-        : requireArgument(args.positionals[1], 'Supply an API path beginning with /api/.');
+    const path = requireArgument(args.positionals[1], 'Supply an API path beginning with /api/.');
     if (args.values.body && args.values.upload) throw new Error('Choose --body or --upload.');
     const response = await client.response(path, {
       method,
@@ -668,29 +520,16 @@ async function main(argv: string[]) {
     else process.stdout.write(bytes);
     return 0;
   }
-  if (command === 'transfer') {
-    const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
-    const to = Id.parse(requireArgument(args.values.to, 'Choose the receiving principal with --to ID.'));
-    const result = await transferResource(client, id, to, async () => (await privateClient(client)).custody);
-    if ('url' in result) process.stderr.write('The current owner keeps the item until the recipient accepts. Send this link to the recipient: ' + result.url + '\n');
+  if (command === 'seal') {
+    const result = await (await privateClient(client)).custody.reprotectPending();
     await output(result, args);
-    return 0;
+    return result.failed.length ? 1 : 0;
   }
   if (command === 'ssh-key') {
     const result = await sshKeyCommand(client, args, owner, commandArguments);
     if (typeof result === 'number') return result;
     await output(result, args);
     return 0;
-  }
-  if (command === 'ssh-host') {
-    await output(await sshHostCommand(client, args, owner), args);
-    return 0;
-  }
-  if (command === 'ssh-access') {
-    const result = await sshAccessCommand(client, args);
-    await output(result, args);
-    return 'accounts' in (result as object) && (result as { accounts: Array<{ outcome: string }> }).accounts
-      .some(account => account.outcome !== 'verified') ? 1 : 0;
   }
   if (command === 'exec') {
     const inputs = z
@@ -699,62 +538,17 @@ async function main(argv: string[]) {
       .parse(await json(args.values.inputs, []));
     return execute(await localInputs(client, inputs), commandArguments);
   }
-  if (command === 'request' && (args.positionals[0] ?? 'list') !== 'send') {
-    const action = args.positionals[0] ?? 'list', id = () => Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.'));
-    if (action === 'list') { await output(await client.json('/api/requests', {}, listOf(RequestView)), args); return 0; }
-    if (action === 'wait') {
-      const result = await waitFor(() => client.json('/api/requests/' + id(), {}, RequestView), value => value.state,
-        seconds(args.values.timeout, 1800));
-      await output(result, args);
-      return result.state === 'approved' ? 0 : 1;
-    }
-    const answer = ({ get: '', approve: '/approve', decline: '/decline', withdraw: '/withdraw' } as Record<string, string>)[action];
-    if (answer === undefined) throw new Error('Choose request send, list, get, approve, decline, withdraw, or wait.');
-    const result = answer ? await client.json('/api/requests/' + id() + answer, { method: 'POST',
-      body: action === 'approve' ? RequestApproval.parse(await json(args.values.body, {})) : {} }, RequestView)
-      : await client.json('/api/requests/' + id(), {}, RequestView);
-    // What the approval left for this device to make, such as what only its keys can seal, goes on from the operation.
-    const stopped = result.performed.find(made => made.state !== 'succeeded');
-    await output({ ...result, ...(action === 'approve' && stopped?.state === 'stopped'
-      ? { next: 'Run foundation operation continue ' + stopped.id } : {}) }, args);
-    return 0;
-  }
-  if (command === 'request-access' || command === 'request') {
-    const input =
-      command === 'request-access'
-        ? {
-            to: args.values.to,
-            message: args.values.message ?? hostname(),
-            operations: [
-              {
-                name: 'relation.draw',
-                input: { subjectId: current.principal.id, relation: 'delegate', objectId: '$approver' },
-              },
-            ],
-          }
-        : await json(requireArgument(args.values.body, 'Supply the request as --body JSON.'));
-    const request = await client.json(
-      '/api/requests',
-      { method: 'POST', body: RequestCreate.parse(input) },
-      RequestView,
-    );
+  if (command === 'request-access') {
+    const request = await client.json('/api/requests', { method: 'POST', body: RequestCreate.parse({
+      to: args.values.to, message: args.values.message ?? hostname(),
+      operations: [{ name: 'relation.draw', input: { subjectId: self, relation: 'delegate', objectId: '$approver' } }],
+    }) }, RequestView);
     await output(request, args);
-    if (args.values.wait) {
-      const result = await waitFor(
-        () => client.json('/api/requests/' + request.id, {}, RequestView),
-        (value) => value.state,
-        seconds(args.values.timeout, 1800),
-      );
-      await output(result, { ...args, values: { ...args.values, force: true } });
-      return result.state === 'approved' ? 0 : 1;
-    }
-    return 0;
-  }
-  if (command === 'export') {
-    const path = requireArgument(args.values.output, 'Choose an export file with --output FILE.');
-    await download(await client.response('/api/principals/' + owner + '/export'), path, !!args.values.force);
-    print({ path: resolve(path) });
-    return 0;
+    if (!args.values.wait) return 0;
+    const result = await waitFor(() => client.json('/api/requests/' + request.id, {}, RequestView), value => value.state,
+      seconds(args.values.timeout, 1800));
+    await output(result, { ...args, values: { ...args.values, force: true } });
+    return result.state === 'approved' ? 0 : 1;
   }
   throw new Error('Unknown command: ' + command + '. Run foundation --help.');
 }
@@ -771,7 +565,7 @@ try {
       : error instanceof UnreadableResponse
         ? error.message + (note ? '' : '\n' + z.prettifyError(error.error))
       : error instanceof z.ZodError
-        ? 'Check the command inputs against foundation schema.'
+        ? 'Check the command inputs.'
         : error instanceof Error
           ? error.message
           : 'The command failed.';

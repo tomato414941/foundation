@@ -209,7 +209,7 @@ export class ConnectionClient {
     return this.accept(flow.id);
   }
   private cli(flow: ConnectionFlow): FlowProgress {
-    return { kind: 'cli', flow: this.view(flow), command: (flow.step === 'authorize' ? 'foundation connect wait ' : 'foundation operation continue ') + flow.operationId };
+    return { kind: 'cli', flow: this.view(flow), command: 'foundation connect continue ' + flow.operationId };
   }
   private async authorize(flow: ConnectionFlow) {
     if (flow.expiresAt <= Date.now()) throw new Error('Start the connection again.');

@@ -12,7 +12,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, newIdentityKeys, publicPart, seal, wrap } from '../shared/encryption.js';
-import { openItem, sealItem } from '../shared/custody.js';
+import { sealItem } from '../shared/custody.js';
 import { CustodyClient } from '../shared/client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { OperationClient } from '../shared/operation-client.js';
@@ -128,8 +128,9 @@ test('CLIで登録して変数を保存し、コマンドへ渡して出力を�
   assert.equal(executed.stderr, '[redacted]');
   const temporary = await readFile(fileRecord, 'utf8');
   await assert.rejects(() => stat(temporary), { code: 'ENOENT' });
+  const principalId = JSON.parse(initialized.stdout).principal.id;
   const exported = join(c.directory, 'export.ndjson'),
-    exportResult = await c.run(['export', '--output', exported]);
+    exportResult = await c.run(['api', 'GET', '/api/principals/' + principalId + '/export', '--output', exported]);
   assert.equal(exportResult.code, 0, exportResult.stderr);
   assert.equal((await stat(exported)).mode & 0o777, 0o600);
   assert.ok((await readFile(exported, 'utf8')).includes('CLI variable'));
@@ -178,9 +179,9 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
     payload: { code: request.code },
   });
   assert.equal(approved.statusCode, 200, approved.body);
-  const waited = await c.run(['request', 'wait', request.id, '--timeout', '5']);
-  assert.equal(waited.code, 0, waited.stderr);
-  assert.equal(JSON.parse(waited.stdout).state, 'approved');
+  const answered = await c.run(['api', 'GET', '/api/requests/' + request.id]);
+  assert.equal(answered.code, 0, answered.stderr);
+  assert.equal(JSON.parse(answered.stdout).state, 'approved');
   const status = await c.run(['status']);
   assert.equal(status.code, 0, status.stderr);
   assert.ok(JSON.parse(status.stdout).principals.some((item: { id: string }) => item.id === owner.actor.id));
@@ -319,87 +320,6 @@ test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示�
   }
 });
 
-test('CLIでAPIキーを暗号化して接続し、その操作の結果と端末での使用を確かめる', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Connection owner', '--origin', c.origin])).code, 0);
-  const start = await c.run(['connect', '--method', 'render:token', '--name', 'Render REST', '--fields', '@-'],
-    '{"token":"render-connection-secret"}');
-  assert.equal(start.code, 0, start.stderr);
-  const saved = JSON.parse(start.stdout);
-  assert.equal(saved.kind, 'connected');
-  const completed = await c.run(['operation', 'get', saved.id]);
-  assert.equal(completed.code, 0, completed.stderr);
-  assert.equal(JSON.parse(completed.stdout).state, 'succeeded');
-  const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'TOKEN', source: { id: saved.connectionId, output: 'RENDER_API_KEY' } },
-  ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
-  assert.equal(used.code, 0, used.stderr);
-  assert.equal(used.stdout, '[redacted]');
-});
-
-test('FlyのトークンをCLIで保存・更新し、FLY_API_TOKENとしてコマンドへ渡す', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Fly connection owner', '--origin', c.origin])).code, 0);
-  const started = await c.run(['connect', '--method', 'fly:token', '--name', 'Fly deployment', '--fields', '@-'],
-    JSON.stringify({ token: 'FlyV1 fm2_initial_cli_token' }));
-  assert.equal(started.code, 0, started.stderr);
-  const saved = JSON.parse(started.stdout);
-  const token = 'FlyV1 fm2_updated_cli_token,fm2_discharge';
-  const changed = await c.run(['connect', '--method', 'fly:token', '--connection', saved.connectionId, '--fields', '@-'],
-    JSON.stringify({ token }));
-  assert.equal(changed.code, 0, changed.stderr);
-  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
-  const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'FLY_API_TOKEN', source: { id: saved.connectionId, output: 'FLY_API_TOKEN' } },
-  ]), '--', process.execPath, '-e',
-    'require("node:assert/strict").equal(process.env.FLY_API_TOKEN,' + JSON.stringify(token) +
-    ');console.log("Fly credentials delivered");process.stdout.write(process.env.FLY_API_TOKEN);']);
-  assert.equal(used.code, 0, used.stderr);
-  assert.equal(used.stdout, 'Fly credentials delivered\n[redacted]');
-});
-
-test('ResendのAPIキーをCLIで保存・更新し、RESEND_API_KEYとしてコマンドへ渡す', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Resend connection owner', '--origin', c.origin])).code, 0);
-  const started = await c.run(['connect', '--method', 'resend:api_key', '--name', 'Resend delivery', '--fields', '@-'],
-    JSON.stringify({ token: 're_initial_cli_test_key' }));
-  assert.equal(started.code, 0, started.stderr);
-  const saved = JSON.parse(started.stdout);
-  const token = 're_updated_cli_test_key';
-  const changed = await c.run(['connect', '--method', 'resend:api_key', '--connection', saved.connectionId, '--fields', '@-'],
-    JSON.stringify({ token }));
-  assert.equal(changed.code, 0, changed.stderr);
-  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
-  const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'RESEND_API_KEY', source: { id: saved.connectionId, output: 'RESEND_API_KEY' } },
-  ]), '--', process.execPath, '-e',
-    'require("node:assert/strict").equal(process.env.RESEND_API_KEY,' + JSON.stringify(token) +
-    ');console.log("Resend credentials delivered");process.stdout.write(process.env.RESEND_API_KEY);']);
-  assert.equal(used.code, 0, used.stderr);
-  assert.equal(used.stdout, 'Resend credentials delivered\n[redacted]');
-});
-
-test('CloudRiftのAPIキーをCLIで保存・更新し、CLOUDRIFT_API_KEYとしてコマンドへ渡す', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'CloudRift connection owner', '--origin', c.origin])).code, 0);
-  const started = await c.run(['connect', '--method', 'cloudrift:api_key', '--name', 'CloudRift compute', '--fields', '@-'],
-    JSON.stringify({ token: 'cloudrift_initial_cli_test_key' }));
-  assert.equal(started.code, 0, started.stderr);
-  const saved = JSON.parse(started.stdout);
-  const token = 'cloudrift_updated_cli_test_key';
-  const changed = await c.run(['connect', '--method', 'cloudrift:api_key', '--connection', saved.connectionId, '--fields', '@-'],
-    JSON.stringify({ token }));
-  assert.equal(changed.code, 0, changed.stderr);
-  assert.equal(JSON.parse(changed.stdout).connectionId, saved.connectionId);
-  const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'CLOUDRIFT_API_KEY', source: { id: saved.connectionId, output: 'CLOUDRIFT_API_KEY' } },
-  ]), '--', process.execPath, '-e',
-    'require("node:assert/strict").equal(process.env.CLOUDRIFT_API_KEY,' + JSON.stringify(token) +
-    ');console.log("CloudRift credentials delivered");']);
-  assert.equal(used.code, 0, used.stderr);
-  assert.equal(used.stdout, 'CloudRift credentials delivered\n');
-});
-
 async function connectionRequester(c: Awaited<ReturnType<typeof cliFixture>>, { delegate = false } = {}) {
   const owner = await c.person('Key owner');
   const initialized = await c.run(['init', '--name', 'Asking machine', '--origin', c.origin]);
@@ -417,8 +337,43 @@ async function connectionRequester(c: Awaited<ReturnType<typeof cliFixture>>, { 
   const flows = new Map();
   const operations = new OperationClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
     async put(flow) { flows.set(flow.id, flow); } }, { async send() { throw new Error('No service calls are expected.'); } }, 'cli'));
-  return { owner, machine, api, custody, operations };
+  // The owner saves a connection on its own device, as its browser does.
+  const save = async (methodId: string, name: string, material: { fields?: Record<string, string>; aws?: unknown }, connectionId?: string) => {
+    const saved = await operations.perform({ name: 'connection.connect', input: { ownerId: owner.actor.id, methodId, name,
+      ...(connectionId ? { connectionId } : {}) } }, material as Parameters<typeof operations.perform>[1]);
+    if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
+    return saved.resource;
+  };
+  return { owner, machine, api, custody, operations, save };
 }
+
+test('持ち主が保存したAPIキーの接続を、委任先のCLIがコマンドへ渡して出力を伏せる', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { save } = await connectionRequester(c, { delegate: true });
+  const saved = await save('render:token', 'Render REST', { fields: { token: 'render-connection-secret' } });
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'TOKEN', source: { id: saved.id, output: 'RENDER_API_KEY' } },
+  ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, '[redacted]');
+});
+
+for (const [methodId, output, first, next] of [
+  ['fly:token', 'FLY_API_TOKEN', 'FlyV1 fm2_initial_cli_token', 'FlyV1 fm2_updated_cli_token,fm2_discharge'],
+  ['resend:api_key', 'RESEND_API_KEY', 're_initial_cli_test_key', 're_updated_cli_test_key'],
+  ['cloudrift:api_key', 'CLOUDRIFT_API_KEY', 'cloudrift_initial_cli_test_key', 'cloudrift_updated_cli_test_key'],
+] as const)
+  test('持ち主が保存し直した' + methodId + 'の値を、CLIが' + output + 'としてコマンドへ渡す', async t => {
+    const c = await cliFixture(); t.after(c.close);
+    const { save } = await connectionRequester(c, { delegate: true });
+    const saved = await save(methodId, 'Service account', { fields: { token: first } });
+    assert.equal((await save(methodId, 'Service account', { fields: { token: next } }, saved.id)).id, saved.id);
+    const used = await c.run(['exec', '--inputs', JSON.stringify([{ name: output, source: { id: saved.id, output } }]), '--',
+      process.execPath, '-e', 'require("node:assert/strict").equal(process.env.' + output + ',' + JSON.stringify(next) +
+      ');console.log("credentials delivered");']);
+    assert.equal(used.code, 0, used.stderr);
+    assert.equal(used.stdout, 'credentials delivered\n');
+  });
 
 test('CLIは持ち主に一件の接続を頼み、許可された接続を使い、次から同じ接続を返す', async t => {
   const c = await cliFixture(); t.after(c.close);
@@ -433,7 +388,7 @@ test('CLIは持ち主に一件の接続を頼み、許可された接続を使�
   const token = 'hf_cli_scoped_connection';
   const saved = await operations.continue(approved.performed[0]!.id, { fields: { token } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
-  const waited = await c.run(['connect', 'wait-request', request.requestId, '--timeout', '5']);
+  const waited = await c.run(['connect', 'wait', request.requestId, '--timeout', '5']);
   assert.equal(waited.code, 0, waited.stderr);
   const connected = JSON.parse(waited.stdout);
   assert.deepEqual([connected.kind, connected.connectionId, connected.ownerId, connected.outputs],
@@ -463,7 +418,7 @@ test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入�
   assert.deepEqual(request.outputs, ['CLOUDRIFT_API_KEY']);
   const received = await api.json<{ message: string; state: string }>('/api/requests/' + request.requestId);
   assert.deepEqual([received.message, received.state], ['Rent a GPU for training', 'pending']);
-  const waiting = c.run(['connect', 'wait-request', request.requestId, '--timeout', '30']);
+  const waiting = c.run(['connect', 'wait', request.requestId, '--timeout', '30']);
   const approved = await api.json<{ performed: Array<{ id: string }> }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
   const saved = await operations.continue(approved.performed[0]!.id, { fields: { token: 'cloudrift_requested_key' } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
@@ -499,62 +454,11 @@ test('CLIの接続依頼は必要な出力名で接続方法を選び、決ま�
   assert.equal(JSON.parse(named.stdout).to.id, second.actor.id);
 });
 
-test('CLIの鍵で保存した接続を相手へ渡し、受け取りの承認後は相手と相手の委任先が開ける', async t => {
+test('持ち主が保存したサービスなしのHTTP接続のURLとトークンを、CLIが端末で使う', async t => {
   const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Machine sender', '--origin', c.origin])).code, 0);
-  const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
-  const recipient = await c.person('Connection recipient'), helper = await c.person('Recipient delegate');
-  await c.context.relations.draw(recipient.actor, { subjectId: helper.actor.id, relation: 'delegate', objectId: recipient.actor.id });
-  const saved = await c.run(['connect', '--method', 'tailscale:api-access-token', '--name', 'Network connection', '--fields', '@-'],
-    JSON.stringify({ token: 'tskey-api-cli-transfer-test' }));
-  assert.equal(saved.code, 0, saved.stderr);
-  const id = JSON.parse(saved.stdout).connectionId;
-  const transferred = await c.run(['transfer', id, '--to', recipient.actor.id]);
-  assert.equal(transferred.code, 0, transferred.stderr);
-  const asked = JSON.parse(transferred.stdout);
-  assert.equal(asked.state, 'pending');
-  assert.match(transferred.stderr, /until the recipient accepts/);
-  assert.equal((await c.context.resources.get(id)).owner_id, identity.principalId);
-  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
-    headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
-  assert.equal(response.json().state, 'approved', response.body);
-  assert.equal((await c.context.resources.get(id)).owner_id, recipient.actor.id);
-  for (const person of [recipient, helper]) {
-    const content = (await c.context.custody.read(person.actor, id)).content;
-    const material = JSON.parse(new TextDecoder().decode(await openItem(content, person.keys.privateKey, person.keys.publicKey)));
-    assert.equal(material.fields.token, 'tskey-api-cli-transfer-test');
-    assert.equal(content.metadata.methodId, 'tailscale:api-access-token');
-  }
-});
-
-test('秘密鍵のないCLIから暗号化していない項目を渡し相手の承認後に所有者を変更する', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  const sender = await c.person('Public item sender'), recipient = await c.person('Public item recipient');
-  const file = await c.context.resources.insert(sender.actor.id, 'object', 'report.txt', { size: 0, contentType: 'text/plain' });
-  const result = await c.run(['transfer', file.id, '--to', recipient.actor.id], undefined, {
-    FOUNDATION_ORIGIN: c.origin, FOUNDATION_TOKEN: sender.token, FOUNDATION_PRINCIPAL_ID: sender.actor.id,
-  });
-  assert.equal(result.code, 0, result.stderr);
-  const asked = JSON.parse(result.stdout);
-  assert.equal(asked.state, 'pending');
-  assert.equal((await c.context.resources.get(file.id)).owner_id, sender.actor.id);
-  const response = await c.app.inject({ method: 'POST', url: '/api/requests/' + asked.id + '/approve',
-    headers: { authorization: 'Bearer ' + recipient.token }, payload: {} });
-  assert.equal(response.statusCode, 200, response.body);
-  const made = await c.app.inject({ url: '/api/operations/' + response.json().performed[0].id,
-    headers: { authorization: 'Bearer ' + recipient.token } });
-  assert.equal(made.json().result.ownerId, recipient.actor.id);
-  assert.equal(made.json().result.version, file.version + 1);
-});
-
-test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLとトークンを端末で使用する', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'HTTP owner', '--origin', c.origin])).code, 0);
-  const result = await c.run(['connect', '--method', 'http:bearer', '--name', 'My webhook', '--fields', '@-'],
-    JSON.stringify({ url: 'https://receiver.example/private-hook', token: 'cli-private-bearer' }));
-  assert.equal(result.code, 0, result.stderr);
-  const connected = JSON.parse(result.stdout);
-  assert.equal(connected.kind, 'connected');
+  const { save } = await connectionRequester(c, { delegate: true });
+  const connected = { connectionId: (await save('http:bearer', 'My webhook',
+    { fields: { url: 'https://receiver.example/private-hook', token: 'cli-private-bearer' } })).id };
   const resource = await c.run(['api', 'GET', '/api/resources/' + connected.connectionId]);
   assert.equal(resource.code, 0, resource.stderr);
   assert.deepEqual(JSON.parse(resource.stdout).data.services, []);
@@ -566,7 +470,7 @@ test('CLIでサービスなしのHTTP接続を保存し、暗号化したURLと�
   assert.equal(used.stdout, '[redacted]\n[redacted]\n');
 });
 
-test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡してAWS APIを呼び出す', async t => {
+test('持ち主が保存したAWS一時認証情報と追加ロールを、CLIがSDKへ渡してAWS APIを呼び出す', async t => {
   const requests: Array<{ action: string; authorization: string; session?: string }> = [];
   const aws = createHttpServer((request, response) => {
     let body = '';
@@ -594,13 +498,10 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
     AWS_ACCESS_KEY_ID: 'ambient-cli-key', AWS_SECRET_ACCESS_KEY: 'ambient-cli-secret', AWS_SESSION_TOKEN: 'ambient-cli-session',
     AWS_ENDPOINT_URL_STS: 'http://127.0.0.1:' + (aws.address() as { port: number }).port });
   t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'AWS owner', '--origin', c.origin])).code, 0);
-  const connected = await c.run(['connect', '--method', 'aws:authentication', '--name', 'AWS session role', '--aws', '@-'],
-    JSON.stringify({ authentication: { kind: 'session', accessKeyId: 'explicit-cli-key', secretAccessKey: 'explicit-cli-secret',
-      sessionToken: 'explicit-cli-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
-      role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } }));
-  assert.equal(connected.code, 0, connected.stderr);
-  const id = JSON.parse(connected.stdout).connectionId;
+  const { save } = await connectionRequester(c, { delegate: true });
+  const id = (await save('aws:authentication', 'AWS session role', { aws: { authentication: { kind: 'session',
+    accessKeyId: 'explicit-cli-key', secretAccessKey: 'explicit-cli-secret', sessionToken: 'explicit-cli-session',
+    expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2', role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } } })).id;
   const inputs = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION']
     .map(name => ({ name, source: { id, output: name } }));
   const used = await c.run(['exec', '--inputs', JSON.stringify(inputs), '--', process.execPath, '--input-type=module', '-e',
@@ -618,27 +519,27 @@ test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡し�
   assert.match(requests.at(-1)!.authorization, /Credential=assumed-cli-key\//);
 });
 
-test('CLIで別のプリンシパルに操作を依頼し、承認されたあと行われた操作と履歴を確かめる', async t => {
+test('CLIのapiで別のプリンシパルに操作を依頼し、承認されたあと行われた操作と履歴を確かめる', async t => {
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Operation initiator', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const recipient = await c.person('Operation recipient');
-  const sent = await c.run(['request', 'send', '--body', '@-'], JSON.stringify({ to: recipient.actor.id,
+  const sent = await c.run(['api', 'POST', '/api/requests', '--body', '@-'], JSON.stringify({ to: recipient.actor.id,
     operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } }] }));
   assert.equal(sent.code, 0, sent.stderr);
   const request = JSON.parse(sent.stdout);
   assert.equal(new URL(request.url).pathname, '/requests/' + request.id);
   assert.equal(request.state, 'pending');
   await c.context.requests.approve(recipient.actor, request.id);
-  const read = await c.run(['request', 'get', request.id]);
+  const read = await c.run(['api', 'GET', '/api/requests/' + request.id]);
   assert.equal(read.code, 0, read.stderr);
   const answered = JSON.parse(read.stdout);
   assert.equal(answered.state, 'approved');
-  const made = await c.run(['operation', 'get', answered.performed[0].id]);
+  const made = await c.run(['api', 'GET', '/api/operations/' + answered.performed[0].id]);
   assert.equal(made.code, 0, made.stderr);
   assert.equal(JSON.parse(made.stdout).state, 'succeeded');
   assert.equal(JSON.parse(made.stdout).result.name, 'CLI handoff result');
-  const requests = await c.run(['request', 'list']);
+  const requests = await c.run(['api', 'GET', '/api/requests']);
   assert.equal(requests.code, 0, requests.stderr);
   assert.ok(JSON.parse(requests.stdout).items.some((item: { id: string }) => item.id === request.id));
 });
