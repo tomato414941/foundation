@@ -3,6 +3,6 @@ import { connectionForm } from './connections';
 import { variableForm } from './variables';
 
 export const operationForms = new Map<string, RegisteredForm>([
-  ['connection.connect', connectionForm], ['connection.authorize', connectionForm], ['app.save', connectionForm],
+  ['connection.connect', connectionForm], ['app.save', connectionForm],
   ['variable.save', variableForm],
 ]);

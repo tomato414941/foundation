@@ -224,10 +224,12 @@ export default function RequestPage() {
           <div className="flex min-w-0 flex-col gap-4">
             {recipientRequest && item.operations.length > 1 && <h2 className="text-sm font-semibold">{heading}</h2>}
             {current?.index === index && inputForm && <OperationInputFields data={inputForm}
-              requestPrincipalId={recipientRequest && (focusedConnection || operation.name === 'connection.authorize') ? account.principal?.id : undefined} />}
+              requestPrincipalId={recipientRequest && focusedConnection ? account.principal?.id : undefined} />}
             {next?.request?.position === index && progress && !focusedConnection && <ConnectionProgress progress={progress} cancelIntent="cancel" />}
             {!operation.keyholder && waiting && (delegationReviews[index]
               ? <DelegationReview review={delegationReviews[index]} /> : operationReviews[index] && <OperationReview rows={operationReviews[index]} />)}
+            {!operation.keyholder && waiting && operation.name === 'connection.authorize' &&
+              <p className="text-sm leading-relaxed text-muted-foreground">{t('requestConnectionAccess')}</p>}
             {(!recipientRequest || item.operations.length > 1) && state && <Detail label={t('status')}><State value={state} /></Detail>}
             {waiting && !operation.keyholder && operation.inputs.filter(input => !input.secret).map((input, inputIndex) => <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
               {input.multiline ? <TextareaField name={`input.${index}.${inputIndex}`} label={input.label} autoComplete="off"
@@ -239,7 +241,7 @@ export default function RequestPage() {
           </div>
         </Container>;
       })}
-      {focusedConnection && waiting && requestConnection?.usersConfigured && <ConnectionUsers users={requestConnection.users} review />}
+      {focusedConnection && waiting && requestConnection?.usersConfigured && <ConnectionUsers users={requestConnection.users} />}
       {focusedConnection && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" review
         authorization={{ label: t('requestContinueAtService', { name: service }), newWindow: requestConnection?.method?.kind === 'approval' }} />}
       {waiting && item.canAnswer && !item.to && <InputField name="code" label={t('code')} required autoComplete="off" hint={t('codeHelp')} />}
