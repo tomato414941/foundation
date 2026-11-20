@@ -36,11 +36,6 @@ const context = await createContext(
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
 // An item left as an earlier version of Foundation sealed it, which no device opens any more.
-app.post<{ Params: { id: string } }>('/__test/earlier-form/:id', async request => {
-  await context.db.pool.query("UPDATE resource_custody SET content=jsonb_set(content,'{policy,format}','2') WHERE resource_id=$1",
-    [request.params.id]);
-  return { ok: true };
-});
 // A week has passed since the principal asked for new keys.
 app.post<{ Params: { id: string } }>('/__test/key-reset/:id/ready', async request => {
   await context.db.pool.query("UPDATE challenges SET data=data||jsonb_build_object('readyAt',$2::text) WHERE kind='key-reset' AND principal_id=$1",

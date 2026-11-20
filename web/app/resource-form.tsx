@@ -113,7 +113,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connections: [
       ...new Map(
         [...(connections?.items ?? []), ...(shared?.items ?? [])]
-          .filter((item) => item.kind === 'connection' && item.permissions.includes('use'))
+          .filter((item) => item.kind === 'connection' && item.permissions.includes('reveal'))
           .map((item) => [item.id, item]),
       ).values(),
     ],
@@ -245,7 +245,7 @@ export default function ResourceForm() {
   const method = eligibleMethods.find((item) => item.id === methodId) ?? data.pinnedMethod ?? undefined;
   const [fileName, setFileName] = useState('');
   const matchingApps = data.apps.filter(
-    (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
+    (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('reveal'),
   );
   const existingConnections = data.connections.filter(
     (item) => item.kind === 'connection' && item.data.methodId === methodId,

@@ -31,7 +31,7 @@ async function load(invocation: OperationCall) {
   const method = methods.items.find(item => item.id === invocation.input.methodId);
   const preparedFields = invocation.input.fields as Record<string, string> | undefined;
   const apps = [...new Map([...owned.items, ...shared.items].filter(item => item.kind === 'app' &&
-    item.data.methodId === invocation.input.methodId && item.permissions.includes('use') &&
+    item.data.methodId === invocation.input.methodId && item.permissions.includes('reveal') &&
     Object.entries(preparedFields ?? {}).every(([name, value]) => !value || item.data.fields[name] === value))
     .map(item => [item.id, item])).values()];
   const initial = connecting && connection ? connectionInitialValues(await (await custodyClient()).connection(connection.id)) : undefined;

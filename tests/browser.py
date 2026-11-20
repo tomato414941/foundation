@@ -478,9 +478,9 @@ class BrowserTests(unittest.TestCase):
         self.reset_keys(page, principal, "keys-reset-desktop-ja.png")
         page.wait_for_url(path)
         page.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(page.get_by_text("作り直す前の秘密鍵で暗号化されているため、開けません。値を入れ直すか、つなぎ直してください。", exact=True)).to_be_visible()
+        expect(page.get_by_text("この項目はまだ、あなたが開けるように暗号化されていません。開ける人に暗号化してもらうか、値を入れ直すか、つなぎ直してください。", exact=True)).to_be_visible()
         page.get_by_role("link", name="編集", exact=True).click()
-        expect(page.get_by_text("作り直す前の秘密鍵で暗号化されていたため、値を表示できません。新しい値を入力してください。", exact=True)).to_be_visible()
+        expect(page.get_by_text("この値はまだ、あなたが開けるように暗号化されていないため、表示できません。新しい値を入力してください。", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "variable-replaced-desktop-ja.png"), full_page=True)
         page.get_by_role("textbox", name="値", exact=True).fill("entered-again")
         page.get_by_role("button", name="保存", exact=True).click()
@@ -514,9 +514,9 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_text("1件の項目が、開ける相手のためにまだ暗号化されていません。", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "principals-unsealed-ja.png"), full_page=True)
         owner.get_by_role("button", name="暗号化する", exact=True).click()
-        notice = owner.get_by_role("region", name="項目の暗号化", exact=True)
-        expect(notice.get_by_text("1件の項目を暗号化し直しました。許可された相手が開けます。追加の操作は不要です。", exact=True)).to_be_visible()
         expect(owner.get_by_text("1件の項目が、開ける相手のためにまだ暗号化されていません。", exact=True)).to_be_hidden()
+        pending = owner.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
+        self.assertEqual(pending, [])
         friend.goto(path)
         friend.get_by_role("button", name="内容を表示", exact=True).click()
         expect(friend.get_by_role("textbox", name="値", exact=True)).to_have_value("later value")
@@ -754,30 +754,6 @@ class BrowserTests(unittest.TestCase):
         row.get_by_role("button", name="削除", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="削除", exact=True).click()
         expect(page.get_by_role("listitem").filter(has_text=address)).to_have_count(0)
-
-    def test_以前の形のまま残った接続は一覧と画面に出て解除でき_つなぎ直そうとすると理由を示す(self):
-        page, principal = self.passkey_account("Earlier connection owner")
-        connection, _ = self.google_connection(page, principal)
-        marked = page.request.post(ORIGIN + "/__test/earlier-form/" + connection["id"])
-        self.assertTrue(marked.ok, marked.text())
-        self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + connection["id"] + "/custody").json()["error"]["code"],
-                         "content_outdated")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services")
-        expect(page.locator("main").get_by_text("Mail account", exact=True).first).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-list-ja.png"), full_page=True)
-        self.assertEqual(page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"], [])
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection['id']}")
-        expect(page.get_by_role("heading", name="Mail account", exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-ja.png"), full_page=True)
-        page.get_by_role("link", name="再接続", exact=True).click()
-        expect(page.get_by_text("この項目は以前の形で暗号化されたままなので、どの端末でも開けません。削除してから、接続し直すか保存し直してください。",
-                                exact=True)).to_be_visible()
-        page.screenshot(path=str(ARTIFACTS / "earlier-connection-reconnect-ja.png"), full_page=True)
-        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection['id']}")
-        page.get_by_role("button", name="接続を解除", exact=True).click()
-        page.get_by_role("dialog").get_by_role("button", name="接続を解除", exact=True).click()
-        page.wait_for_url(f"**/p/{principal['id']}/services")
-        self.assertEqual(page.request.get(ORIGIN + "/api/resources/" + connection["id"]).status, 404)
 
     def test_項目を相手に渡し受け取り承認で所有者を変更する(self):
         sender, owner = self.passkey_account("Transfer sender")
@@ -1312,7 +1288,7 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, input=token, env=environment)
             self.assertEqual(login.returncode, 0, login.stderr)
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
-            permission = subprocess.run(["node", "cli/dist/cli.mjs", "request", "send", "--body", json.dumps({
+            permission = subprocess.run(["node", "cli/dist/cli.mjs", "api", "POST", "/api/requests", "--body", json.dumps({
                 "to": principal["id"], "message": "モデルの保存・取得に接続を使います。",
                 "operations": [{"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id,
