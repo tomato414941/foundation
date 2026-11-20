@@ -17,6 +17,8 @@ UPDATE resource_custody c SET content = jsonb_build_object(
 UPDATE resources SET data = data - 'recipients' - 'custodyRevision' - 'methodDigest' - 'authorizationDigest'
   WHERE kind IN ('variable','connection','app');
 UPDATE connection_operations SET result = NULL WHERE result IS NOT NULL;
+-- What items held before sealed content was kept apart from them.
+ALTER TABLE resources DROP COLUMN sealed;
 -- Lines on what a key protects are drawn directly. A line of an owner to its own item gives nothing.
 DELETE FROM relations l USING resources r WHERE l.resource_id = r.id AND r.kind IN ('variable','connection','app')
   AND (l.subject_id = r.owner_id OR l.relation NOT IN ('reader','revealer','editor'));

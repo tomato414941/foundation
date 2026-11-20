@@ -57,7 +57,6 @@ CREATE TABLE resources (
   kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','ssh_key','ssh_host')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
-  sealed jsonb,
   private_data text,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),

@@ -4,11 +4,10 @@ import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
-const RequiredMigrations = [SchemaMigration, '002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access', '010-output-names', '011-run-output-names',
-  '012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing'];
-// The migrations written in SQL alone, applied in order.
-const SqlMigrations = ['002-ssh-environments', '005-ownership', '008-key-rotations', '009-ssh-access',
-  '010-output-names', '011-run-output-names', '012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing'];
+// The migrations a database in use applies on top of the schema it was made with, in order. Those every database in use
+// has applied are left out; a database made from the current schema is marked as having applied these.
+const SqlMigrations = ['012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing'];
+const RequiredMigrations = [SchemaMigration, ...SqlMigrations];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {

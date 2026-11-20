@@ -14,7 +14,6 @@ import type {
   JsonValue,
   MethodDescription,
   PublicEncryptionKey,
-  SealedContent,
 } from '../shared/contracts.js';
 import { connectionSettings } from '../shared/connections.js';
 import { fail, required } from './errors.js';
@@ -22,7 +21,6 @@ import { fail, required } from './errors.js';
 export interface ResourceRow extends ResourceIdentity {
   name: string;
   data: Record<string, JsonValue>;
-  sealed: SealedContent | null;
   private_data: string | null;
   version: number;
   created_at: Date;
@@ -53,20 +51,19 @@ export class Resources {
     kind: ResourceKindName,
     name: string,
     data: Record<string, JsonValue>,
-    options: { id?: string; sealed?: SealedContent; privateData?: string; references?: string[] } = {},
+    options: { id?: string; privateData?: string; references?: string[] } = {},
     connection: Queryable = this.db.pool,
   ) {
     const id = options.id ?? randomUUID();
     const row = required(
       await this.db.one<ResourceRow>(
-        'INSERT INTO resources(id,owner_id,kind,name,data,sealed,private_data) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        'INSERT INTO resources(id,owner_id,kind,name,data,private_data) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
         [
           id,
           ownerId,
           kind,
           Name.parse(name),
           JSON.stringify(data),
-          options.sealed ? JSON.stringify(options.sealed) : null,
           options.privateData ?? null,
         ],
         connection,
@@ -88,20 +85,18 @@ export class Resources {
     changes: {
       name?: string;
       data?: Record<string, JsonValue>;
-      sealed?: SealedContent;
       privateData?: string;
     },
     connection: Queryable = this.db.pool,
   ) {
     const result = await this.db.one<ResourceRow>(
-      `UPDATE resources SET name=$3,data=$4,sealed=$5,private_data=$6,version=version+1,updated_at=now()
+      `UPDATE resources SET name=$3,data=$4,private_data=$5,version=version+1,updated_at=now()
       WHERE id=$1 AND version=$2 RETURNING *`,
       [
         row.id,
         row.version,
         changes.name ?? row.name,
         JSON.stringify(changes.data ?? row.data),
-        JSON.stringify(changes.sealed ?? row.sealed),
         changes.privateData ?? row.private_data,
       ],
       connection,

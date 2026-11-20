@@ -34,7 +34,6 @@ export class Accounts {
         if (isProtected(row.kind)) {
           const content = await c.db.one<{ content: unknown }>('SELECT content FROM resource_custody WHERE resource_id=$1', [row.id]);
           if (content) entry.custody = content.content;
-          else entry.encryptedStorage = { sealed: row.sealed, privateData: row.private_data };
         }
         if (row.kind === 'object')
           entry.content = Buffer.from(await c.objects.store.get(row.private_data!)).toString('base64');
