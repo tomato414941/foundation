@@ -33,14 +33,6 @@ export class Bindings {
     return current;
   }
 
-  async replacement(principalId: string, bindingId: string) {
-    const row = await this.db.one<{
-      previous: z.infer<typeof SignedBinding>; replacement: z.infer<typeof SignedBinding>; previous_signature: string;
-    }>("SELECT previous,replacement,previous_signature FROM key_rotations WHERE principal_id=$1 AND state='committed' " +
-      "AND previous#>>'{binding,id}'=$2 LIMIT 1", [principalId, bindingId]);
-    return { replacement: row
-      ? { previous: row.previous, replacement: row.replacement, previousSignature: row.previous_signature } : null };
-  }
 
   // Publishes the first keys of an identity, or confirms the same ones again.
   async publish(actor: Actor, input: z.infer<typeof SignedBinding>) {
@@ -56,7 +48,7 @@ export class Bindings {
       );
       if (previous) {
         if (canonical(previous.binding) === canonical(binding)) return SignedBinding.parse(previous);
-        fail(409, 'key_binding_changed', 'Replace the keys of this identity with a key rotation.');
+        fail(409, 'key_binding_changed', 'This identity already has keys. Make new ones with a key reset.');
       }
       await bindFirst(connection, this.db, this.audit, actor.id, signed);
       return signed;
@@ -74,7 +66,7 @@ export async function bindFirst(connection: Queryable, db: Database, audit: Audi
   const principal = required(await db.one<{ public_key: PublicEncryptionKey | null }>(
     'SELECT public_key FROM principals WHERE id=$1 FOR UPDATE', [binding.principalId], connection));
   if (await db.one('SELECT 1 FROM principal_key_bindings WHERE principal_id=$1 AND retired_at IS NULL', [binding.principalId], connection))
-    fail(409, 'key_binding_changed', 'Replace the keys of this identity with a key rotation.');
+    fail(409, 'key_binding_changed', 'This identity already has keys. Make new ones with a key reset.');
   if (principal.public_key && !samePublicKey(principal.public_key, binding.encryption))
     fail(409, 'rekey_required', 'Use the existing encryption key when registering its signing key.');
   await connection.query('INSERT INTO principal_key_bindings(id,principal_id,binding,signature) VALUES($1,$2,$3,$4)',

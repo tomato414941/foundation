@@ -27,7 +27,6 @@ import { routesRequests } from './routes-requests.js';
 import { routesOperations } from './routes-operations.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
-import { routesKeyRotations } from './routes-key-rotations.js';
 import { web } from './web.js';
 
 for (const [id, schema] of Object.entries({ AccessPolicy, ProtectedContent })) z.globalRegistry.add(schema, { id });
@@ -493,7 +492,6 @@ export async function buildApp(context: Context) {
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);
   await routesAccounts(app, context);
-  await routesKeyRotations(app, context);
   await web(app);
   return app;
 }

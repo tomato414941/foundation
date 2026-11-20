@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture } from './flow-support.js';
-import { rotationStart } from './key-rotation-support.js';
 import { ContentTypes, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 import { Resource, listOf } from '../shared/contracts.js';
@@ -102,7 +101,7 @@ test('トークン更新中の項目があっても委任先の線を引け、�
   assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [busy.id]);
 });
 
-test('以前の形のまま残った項目は、開こうとすると理由を示して断り、一覧・封じ直し・鍵の作り直し・削除は止めない', async (t) => {
+test('以前の形のまま残った項目は、開こうとすると理由を示して断り、一覧・封じ直し・削除は止めない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
   const ai = await f.person('Agent');
@@ -120,13 +119,6 @@ test('以前の形のまま残った項目は、開こうとすると理由を�
   assert.deepEqual(await f.client.reprotectPending(), { done: [f.resource.id], failed: [] });
   assert.equal(decode(await reveal((await f.custody.read(ai.actor, f.resource.id)).content, ai.binding, ai.keys.encryption)).length > 0, true);
 
-  // Replacing the owner's keys goes over the items sealed now and leaves the earlier one as it is.
-  const { input } = await rotationStart(f.owner);
-  assert.deepEqual((await f.keyRotations.start(f.owner.actor, f.owner.actor.id, input)).blockers, []);
-  const rotation = await f.keyRotations.get(f.owner.actor, f.owner.actor.id, input.id, 100);
-  assert.ok(rotation.items.some(item => item.id === f.resource.id));
-  assert.equal(rotation.items.some(item => item.id === earlier.id), false);
-  await f.keyRotations.cancel(f.owner.actor, f.owner.actor.id, input.id);
   await f.client.api.json('/api/resources/' + earlier.id, { method: 'DELETE' });
   await assert.rejects(f.client.api.json('/api/resources/' + earlier.id, {}, Resource), { status: 404 });
 });

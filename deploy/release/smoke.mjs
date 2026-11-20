@@ -12,8 +12,7 @@ import { CustodyClient } from '../../dist/shared/client.js';
 import { FileJournal } from '../../dist/runtime/journal.js';
 import { JournalTrust } from '../../dist/runtime/trust.js';
 import { ContentTypes } from '../../dist/shared/custody.js';
-import { encode, decode } from '../../dist/shared/encryption.js';
-import { followKeys, rotateKeys } from '../../dist/shared/key-rotations.js';
+import { encode } from '../../dist/shared/encryption.js';
 import { cleanupIdentities } from './cleanup.mjs';
 
 // Only disposable identities and test material are used, including against production.
@@ -44,28 +43,6 @@ try {
     identities[index] = { id: binding.principalId, client, custody, binding, trust };
   }
   const [owner, caller] = identities;
-  {
-    // A disposable identity replaces its keys; another sign-in key that held the previous keys follows to the new ones,
-    // and both read the same value afterwards.
-    const keys = await newIdentityKeys();
-    const binding = bindKeys(crypto.randomUUID(), keys);
-    const enrollment = await context.authentication.enroll('Release key rotation ' + crypto.randomUUID(), await signBinding(binding, keys));
-    identities.push(enrollment.principal.id);
-    const client = new Client({ origin: config.origin, principalId: binding.principalId, token: enrollment.token, keys, binding });
-    const open = (api, held, name) => new CustodyClient(api, config.origin, held.binding, held.keys,
-      new JournalTrust(new FileJournal(join(directory, name), config.origin, held.binding, held.keys)));
-    const value = crypto.randomUUID(), before = open(client, { binding, keys }, 'rotation-before');
-    const saved = await before.save('Release rotation value', encode(value), await before.policy(binding.principalId, ContentTypes.value));
-    const second = await context.authentication.issueKey(binding.principalId, 'Release second device');
-    const other = new Client({ origin: config.origin, principalId: binding.principalId, token: second.token, keys, binding });
-    const rotated = await rotateKeys(client, { binding, keys });
-    assert.equal(rotated.state, 'committed');
-    assert.equal((await client.json('/api/identities/' + binding.principalId + '/binding')).binding.id, rotated.binding.id);
-    assert.equal(decode(await open(client, rotated, 'rotation-after').reveal(saved.id)), value);
-    const followed = await followKeys(other, { binding, keys });
-    assert.equal(followed.binding.id, rotated.binding.id);
-    assert.equal(decode(await open(other, followed, 'rotation-followed').reveal(saved.id)), value);
-  }
   // The CLI of this release opens a value on this machine and hands it to a local command, which sees it masked
   // nowhere but in its own environment.
   const secret = 'release-input-' + crypto.randomUUID();
@@ -115,4 +92,4 @@ try {
   if (failures.length) throw new AggregateError(failures, 'Release verification cleanup failed.');
 }
 assert.equal(finished, true);
-console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, exec: true, keyRotation: true, cleanup: true }));
+console.log(JSON.stringify({ verified: true, publicUrl: true, database: true, storage: storageVerified, exec: true, cleanup: true }));

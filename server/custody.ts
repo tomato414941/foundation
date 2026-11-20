@@ -98,9 +98,9 @@ export class Custody {
   // Items this identity can seal again without anyone deciding anything, where it uses what the owner holds: those whose
   // readers no longer match who may open them: not yet sealed for everyone who uses what the owner holds, as for a new
   // delegate, still sealed for one that may no longer open them, as for a delegate whose line was erased, or sealed for
-  // keys that someone has since replaced. The server cannot do it, because only the item's readers can open it. The list
-  // only says where to look, and each item is sealed again on its own. An item sealed in an earlier form opens nowhere,
-  // so it is left out.
+  // keys that a key reset has since replaced. The server cannot do it, because only the item's readers can open it. The
+  // list only says where to look, and each item is sealed again on its own. An item sealed in an earlier form opens
+  // nowhere, so it is left out.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);

@@ -4,8 +4,7 @@ import { CatalogMethod, Id, Resource, listOf } from './contracts.js';
 import { catalogDefinition } from './connection-methods.js';
 import { openConnection } from './connections.js';
 import type { JsonValue, ResourceView } from './contracts.js';
-import { endorsementPayload, RotationRequest } from './key-rotations.js';
-import { KeyReplacement, SignedBinding, canonical, fingerprint, hash, verifyBinding, verifiesReplacement } from './authority.js';
+import { SignedBinding, canonical, fingerprint, hash, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
   AccessPolicy, ContentTypes, continuesPolicy, policyAuthority, protect, reveal, verifyContent,
@@ -63,38 +62,12 @@ export class CustodyClient {
 
   async trusted(binding: BoundKeys) {
     if (!(await this.verifies(binding))) {
-      const known = binding.principalId === this.binding.principalId ? this.binding : await this.known(binding.principalId);
-      if (known && binding.principalId !== this.binding.principalId && binding.generation > known.generation) {
-        if (await this.connectedKeys(known, binding)) {
-          const verifiedAt = new Date().toISOString();
-          try {
-            await this.changeKeyring(keys => [...keys.filter(entry => entry.binding.principalId !== binding.principalId),
-              { binding, verifiedAt }]);
-          } catch (error) { if (!errorIs(error, 401, 403)) throw error; }
-          (await this.keyring()).set(binding.principalId, { binding, verifiedAt });
-          await this.trust.rememberBinding(binding);
-          return binding;
-        }
-      }
       // Keys verified before and since replaced are told apart from keys never verified, to be verified again.
       if (binding.principalId !== this.binding.principalId && await this.known(binding.principalId))
         throw new ClientFailure('identity_changed', 'Identity ' + binding.principalId + ' replaced the keys verified before. Verify its current keys.');
       throw new ClientFailure('identity_untrusted', 'Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
     }
     return binding;
-  }
-  private async connectedKeys(previous: BoundKeys, next: BoundKeys) {
-    if (previous.principalId !== next.principalId) return false;
-    // Each step is one request; an identity rotated more often than this is verified again by hand instead.
-    if (next.generation - previous.generation > 32) return false;
-    let current = previous;
-    while (current.generation < next.generation) {
-      const { replacement } = await this.api.json('/api/identities/' + Id.parse(next.principalId) +
-        '/key-replacements/' + Id.parse(current.id), {}, z.object({ replacement: KeyReplacement.nullable() }));
-      if (!replacement || !await verifiesReplacement(current, replacement.replacement.binding, [replacement])) return false;
-      current = replacement.replacement.binding;
-    }
-    return canonical(current) === canonical(next);
   }
   // Whether this identity verified the keys: its own, those in its keyring, or those this device verified before
   // keyrings. A keyring's entry for a principal decides over what this device verified earlier.
@@ -410,30 +383,6 @@ export class CustodyClient {
           ? error.code : 'failure' });
       }
       onProgress?.({ completed: ++completed, total: items.length });
-    }
-    const endorsed = await this.endorseKeyRotations();
-    return { done: [...done, ...endorsed.done], failed: [...failed, ...endorsed.failed] };
-  }
-  // Signs the items that other identities' key rotations wait for, as an authority of those items: only for keys this
-  // identity verified, replaced by keys those signed for.
-  async endorseKeyRotations() {
-    const done: string[] = [], failed: Array<{ id: string; code: string }> = [];
-    const { items } = await this.api.json('/api/key-rotations/requests', {}, z.object({ items: z.array(RotationRequest) }));
-    for (const request of items) {
-      try {
-        const { rotation } = request, previous = rotation.previous.binding, next = rotation.replacement.binding;
-        await this.trusted(previous);
-        if (!await verifiesReplacement(previous, next, [{ previous: rotation.previous, replacement: rotation.replacement,
-          previousSignature: rotation.previousSignature }]))
-          throw new ClientFailure('identity_changed', 'The replacement keys were not signed with the verified keys.');
-        await this.api.json('/api/principals/' + Id.parse(rotation.principalId) + '/key-rotations/' + Id.parse(rotation.id) +
-          '/items/' + request.kind + '/' + Id.parse(request.id) + '/endorsement', { method: 'PUT', body: {
-          sourceDigest: request.sourceDigest, payload: await endorsementPayload(request, this.binding, this.keys) } });
-        done.push(request.id);
-      } catch (error) {
-        failed.push({ id: request.id, code: error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-          ? error.code : 'failure' });
-      }
     }
     return { done, failed };
   }

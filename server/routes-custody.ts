@@ -1,11 +1,10 @@
-import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
-import { KeyReplacement, SignedBinding } from '../shared/authority.js';
+import { SignedBinding } from '../shared/authority.js';
 import { KeyringState, KeyringWrite } from '../shared/keyring.js';
 
 export async function routesCustody(app: ApiApp, context: Context) {
@@ -19,13 +18,6 @@ export async function routesCustody(app: ApiApp, context: Context) {
   app.get('/api/identities/:id/binding', {
     schema: { params: C.IdParams, response: { 200: SignedBinding } },
   }, request => { actor(request); return bindings.current(request.params.id); });
-  app.get('/api/identities/:id/key-replacements/:bindingId', {
-    schema: { params: z.object({ id: C.Id, bindingId: C.Id }),
-      response: { 200: z.object({ replacement: KeyReplacement.nullable() }) } },
-  }, request => {
-    actor(request);
-    return bindings.replacement(request.params.id, request.params.bindingId);
-  });
   app.put('/api/principals/:id/binding', {
     schema: { params: C.IdParams, body: SignedBinding, response: { 200: SignedBinding } },
   }, request => {

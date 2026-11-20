@@ -4,16 +4,30 @@ import { flowFixture } from './flow-support.js';
 import { MemoryJournal } from './delegation-support.js';
 import { CustodyClient, IdentityVerificationRequired, transferResource } from '../shared/client.js';
 import type { RecipientAccess } from '../shared/client.js';
-import { fingerprint, verifyBinding } from '../shared/authority.js';
+import { bindKeys, fingerprint, newIdentityKeys, signBinding, verifyBinding } from '../shared/authority.js';
+import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import { protect, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 import { OperationView, RequestView } from '../shared/operations.js';
 import { Resource } from '../shared/contracts.js';
 import { TransferRecipients } from '../shared/protocol.js';
 import { JournalTrust } from '../runtime/trust.js';
-import { resetKeys, rotateKeys } from './key-rotation-support.js';
+import { bindFirst } from '../server/bindings.js';
+import type { Bindings } from '../server/bindings.js';
+import type { Database } from '../server/database.js';
+import type { Actor } from '../server/authorization.js';
 
 const transfer = (client: CustodyClient, id: string, to: string) => transferResource(client.api, id, to, () => client);
+// Replaces the holder's keys without a signed history, as a key reset does once its waiting period has passed.
+async function resetKeys(db: Database, bindings: Bindings, holder: { actor: Actor; binding: BoundKeys; keys: IdentityKeys }) {
+  const keys = await newIdentityKeys(), binding = bindKeys(holder.actor.id, keys);
+  await db.pool.query('UPDATE principal_key_bindings SET retired_at=now() WHERE principal_id=$1 AND retired_at IS NULL',
+    [holder.actor.id]);
+  await db.pool.query('UPDATE principals SET public_key=$2 WHERE id=$1', [holder.actor.id, JSON.stringify(binding.encryption)]);
+  const signed = await signBinding(binding, keys);
+  await db.transaction(connection => bindFirst(connection, db, bindings.audit, holder.actor.id, signed));
+  return { keys, binding };
+}
 
 test('暗号化した項目を渡すAPIは公開鍵の取得と手元での再暗号化と送信の手順を返す', async t => {
   const f = await flowFixture(); t.after(f.close);
@@ -211,7 +225,7 @@ test('承認待ちの間に受け取り先の公開鍵が変わったら譲渡�
   const f = await flowFixture(); t.after(f.close);
   await f.client.trustIdentity(f.stranger.actor.id, await fingerprint(f.stranger.binding));
   const asked = RequestView.parse(await transfer(f.client, f.resource.id, f.stranger.actor.id));
-  await rotateKeys(f.keyRotations, f.stranger);
+  await resetKeys(f.db, f.bindings, f.stranger);
   await failedTransfer(f, asked.id, 'key_binding_changed');
   assert.equal((await f.resources.get(f.resource.id)).owner_id, f.owner.actor.id);
   assert.equal(decode(await f.client.reveal(f.resource.id)), 'confidential-value');

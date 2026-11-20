@@ -24,7 +24,6 @@ import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, signBinding, SignedBinding } from '../../shared/authority.js';
 import { Client, ApiError, UnreadableResponse } from './client.js';
-import { currentIdentity, rotateIdentity } from './keys.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
@@ -62,7 +61,6 @@ Usage: foundation <command> [options]
   operation cancel ID                  Stop an operation not made yet or waiting on its service
   schema [--output FILE]                Read the OpenAPI specification
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
-  keys rotate                          Replace this identity's keys, keeping its items and sign-ins
   app NAME --method ID --client-id ID  Encrypt an application
   connect SERVICE [--owner ID] [--needs NAME] [--why TEXT]
                                        Find a connection you can use, or ask its owner to connect the service
@@ -546,7 +544,7 @@ async function main(argv: string[]) {
       next: 'Install it with: npm install --global --ignore-scripts ' + file }, args);
     return 0;
   }
-  const client = new Client(await currentIdentity(await readIdentity(args.values.origin, args.values.principal)));
+  const client = new Client(await readIdentity(args.values.origin, args.values.principal));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);
@@ -554,11 +552,6 @@ async function main(argv: string[]) {
     const { wrappedKey: _wrappedKey, ...status } = current;
     await output({ ...status, ...(client.identity.binding ? { fingerprint: await fingerprint(client.identity.binding),
       verificationUrl: await linked(new URL('/account/trust?principal=' + current.principal.id, client.identity.origin).href, client.identity) } : {}) }, args);
-    return 0;
-  }
-  if (command === 'keys') {
-    if (args.positionals[0] !== 'rotate') throw new Error('Use foundation keys rotate.');
-    await output(await rotateIdentity(client.identity), args);
     return 0;
   }
   if (command === 'trust') {

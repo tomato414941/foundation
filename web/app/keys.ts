@@ -17,7 +17,6 @@ import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
-import { followKeys } from '../../shared/key-rotations';
 import type { RecipientAccess, RecipientVerification } from '../../shared/client';
 
 const unlocked = new Map<string, IdentityKeys>();
@@ -43,20 +42,15 @@ export async function getKey(id: string, publicKey?: PublicEncryptionKey | null)
   if (!identity || (publicKey && canonical(identity.binding.encryption) !== canonical(publicKey))) return null;
   return identity.keys.encryption;
 }
-// The private key this browser holds for the principal while it is still the principal's. When a rotation replaced it,
-// this browser follows to the new keys; keys made again by a key reset are forgotten here.
+// The private key this browser holds for the principal while it is still the principal's. Keys made again by a key
+// reset are forgotten here.
 export async function heldKeys(principal: Pick<PrincipalView, 'id' | 'publicKey'>) {
   const identity = await getIdentity(principal.id);
   if (!identity) return null;
   if (principal.publicKey && canonical(identity.binding.encryption) === canonical(principal.publicKey)) return identity;
-  const next = await followKeys(jsonApi, identity).catch(() => null);
   await forget(principal.id);
-  if (!next || !principal.publicKey || canonical(next.binding.encryption) !== canonical(principal.publicKey)) return null;
-  await keep(principal.id, next.keys);
-  return getIdentity(principal.id);
+  return null;
 }
-const jsonApi = { json: <T>(path: string, options?: Parameters<typeof api>[1], schema?: Parameters<typeof api<T>>[2]) =>
-  api<T>(path.slice(4), options, schema) };
 async function forget(id: string) {
   held.delete(id);
   unlocked.delete(id);
@@ -216,18 +210,8 @@ export async function authenticate(principalId?: string, credentialId?: string, 
     });
     const keys = PrivateKeys.safeParse(unwrapped);
     if (!keys.success) throw new ApiFailure('key_unavailable');
-    let opened = keys.data;
-    if (!matchesPublicKey(opened, result.publicKey)) {
-      // The passkey holds keys a rotation replaced: follow to the new ones and wrap those for this passkey instead.
-      const next = await followKeys(jsonApi, { principalId: result.principalId, keys: opened }).catch(() => null);
-      if (!next || !matchesPublicKey(next.keys, result.publicKey)) throw new ApiFailure('encryption_key_changed');
-      opened = next.keys;
-      await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
-        method: 'PUT', body: { wrappedKey: await wrap(opened, proof.secret, result.principalId), publicKey: result.publicKey },
-      });
-      await forget(result.principalId);
-    }
-    await keep(result.principalId, opened);
+    if (!matchesPublicKey(keys.data, result.publicKey)) throw new ApiFailure('encryption_key_changed');
+    await keep(result.principalId, keys.data);
   } else if (!result.publicKey || wrapping) {
     if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
       throw new ApiFailure('encryption_key_changed');

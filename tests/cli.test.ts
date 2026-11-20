@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { enroll, fixture } from './support.js';
@@ -725,30 +725,4 @@ test('CLIが出す依頼のリンクと自分の公開鍵を検証させるリ�
     (({ fingerprint, verificationUrl }) => ({ fingerprint, verificationUrl }))(JSON.parse(status.stdout)),
     { fingerprint: value, verificationUrl: c.origin + '/account/trust?principal=' + principal.id + '#fingerprint=' + value },
   );
-});
-
-test('CLIで鍵を交換すると手元の記録を新しい鍵へ移し、旧鍵を持つ別の端末も次に使うときに移る', async t => {
-  const c = await cliFixture(); t.after(c.close);
-  assert.equal((await c.run(['init', '--name', 'Rotating machine', '--origin', c.origin])).code, 0);
-  const kept = await c.run(['keep', 'Rotated value', '--stdin'], 'kept-before-rotation');
-  assert.equal(kept.code, 0, kept.stderr);
-  const resource = JSON.parse(kept.stdout);
-  const other = await mkdtemp(join(tmpdir(), 'foundation-cli-copy-'));
-  t.after(() => rm(other, { recursive: true, force: true }));
-  await cp(c.directory, other, { recursive: true });
-  const before = JSON.parse((await c.run(['status'])).stdout).fingerprint;
-  const rotated = await c.run(['keys', 'rotate']);
-  assert.equal(rotated.code, 0, rotated.stderr);
-  assert.equal(JSON.parse(rotated.stdout).state, 'committed');
-  const after = JSON.parse((await c.run(['status'])).stdout).fingerprint;
-  assert.notEqual(after, before);
-  const used = await c.run(['exec', '--inputs', JSON.stringify([{ name: 'ROTATED', source: { id: resource.id } }]), '--',
-    process.execPath, '-e', "process.stdout.write(String(process.env.ROTATED === 'kept-before-rotation'))"]);
-  assert.equal(used.code, 0, used.stderr);
-  assert.equal(used.stdout, 'true');
-  const copied = await c.run(['status'], undefined, { XDG_CONFIG_HOME: other });
-  assert.equal(copied.code, 0, copied.stderr);
-  assert.equal(JSON.parse(copied.stdout).fingerprint, after);
-  const saved = JSON.parse(await readFile(join(other, 'foundation', 'identity.json'), 'utf8'));
-  assert.equal(await fingerprint(saved.identities[0].binding), after);
 });
