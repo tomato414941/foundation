@@ -16,6 +16,10 @@ export interface ConnectionOperation {
   result: SealedItemValue | null;
 }
 
+// A token update changes what the service grants, never which method and application the connection was saved with:
+// saving checked those, and a renewal does not.
+const kept = ['methodId', 'methodKind', 'generation', 'appId'] as const;
+
 export class ConnectionOperations {
   constructor(readonly custody: Custody) {}
   get db() { return this.custody.resources.db; }
@@ -93,6 +97,8 @@ export class ConnectionOperations {
       const { row: resource, content: previous } = await this.allowed(actor, operation.resource_id, connection);
       if (previous.revision !== operation.expected_revision || content.revision !== operation.expected_revision + 1)
         fail(409, 'changed', 'A token update must replace this revision of the connection.');
+      if (kept.some(key => content.metadata[key] !== previous.metadata[key]))
+        fail(409, 'changed', 'A token update must keep the connection method and application.');
       await this.custody.requireSealedFor(content, await this.custody.recipients(resource, connection));
       await connection.query('UPDATE resource_custody SET content=$2 WHERE resource_id=$1',
         [operation.resource_id, JSON.stringify(content)]);

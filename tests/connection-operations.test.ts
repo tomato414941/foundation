@@ -86,6 +86,20 @@ test('接続の更新中は値の保存と削除を待たせ、更新で変わ�
   } finally { await f.close(); }
 });
 
+test('接続の更新は、接続方法やアプリを変えた結果を断り、保った結果を確定する', async () => {
+  const f = await setup();
+  try {
+    const source = f.connection.content, resourceId = f.connection.resource.id;
+    const operation = await f.operations.prepare(f.delegate.actor, crypto.randomUUID(), resourceId, 1);
+    await f.operations.dispatch(f.delegate.actor, operation.id, operation.fence);
+    for (const changes of [{ methodId: 'other:oauth' }, { appId: crypto.randomUUID() }])
+      await assert.rejects(f.operations.commit(f.delegate.actor, operation.id, operation.fence,
+        await f.renewed(source, 'rotated-refresh-token', changes)), { code: 'changed' });
+    await f.operations.commit(f.delegate.actor, operation.id, operation.fence, await f.renewed(source, 'rotated-refresh-token'));
+    assert.equal((await f.resources.get(resourceId)).data.methodId, 'provider:oauth');
+  } finally { await f.close(); }
+});
+
 test('結果が不明な古い更新を新しく承認した接続に置き換え、新世代の更新を開始する', async () => {
   const f = await setup();
   try {
