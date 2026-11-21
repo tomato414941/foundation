@@ -16,7 +16,6 @@ import type { AwsConnectionProvider } from './aws.js';
 import { connectionProviders } from './connection-providers.js';
 import type { ConnectionCheckpoint, ConnectionOutputs, ConnectionProvider } from './connection-provider.js';
 import { utf8 } from './inputs.js';
-import { requireKnownHosts } from './service-hosts.js';
 
 export interface ConnectionBroker {
   method(connectionId: string): Promise<MethodDescription>;
@@ -90,9 +89,6 @@ export class Connections {
   async outputs(id: string, sources: Sources, signal: AbortSignal): Promise<ConnectionOutputs> {
     const content = this.source(id, 'connection', sources);
     let state = await this.material(id, content);
-    // What the connection holds goes only to the hosts this CLI knows for its method.
-    const app = await this.connectionApp(state, sources);
-    requireKnownHosts(state.methodId, state.method, { ...(state.fields ?? {}), ...(app?.fields ?? {}) });
     if (this.provider(state.method).renew && await this.broker.state(id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(id, content, state, sources, signal);

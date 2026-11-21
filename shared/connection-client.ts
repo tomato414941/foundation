@@ -54,10 +54,8 @@ const nonce = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
 export class ConnectionClient {
   private approvalPolls = new Map<string, Promise<FlowProgress>>();
   private devicePolls = new Map<string, Promise<FlowProgress>>();
-  // A device that sends what it exchanges outside a browser checks each method before it uses it.
   constructor(readonly custody: CustodyClient, readonly store: FlowStore,
-    readonly transport: Transport = new BrowserTransport(custody.origin), readonly device: 'browser' | 'cli' = 'browser',
-    readonly checkMethod: (methodId: string, method: MethodDescription, sealed: Record<string, string>) => void = () => {}) {}
+    readonly transport: Transport = new BrowserTransport(custody.origin), readonly device: 'browser' | 'cli' = 'browser') {}
   private async flow(id: string) {
     const found = await this.store.get(Id.parse(id));
     if (!found) throw new Error('The saved progress for this connection is unavailable.');
@@ -120,9 +118,7 @@ export class ConnectionClient {
     const selected = (await this.custody.api.json('/api/connection-methods', {}, listOf(CatalogMethod))).items
       .find(item => item.id === flow.registration.methodId);
     if (!selected) throw new Error('The connection method is no longer available. Start the connection again.');
-    const definition = catalogDefinition(selected);
-    this.checkMethod(flow.registration.methodId, definition, { ...flow.registration.fields, ...(flow.registration.app?.fields ?? {}) });
-    return definition;
+    return catalogDefinition(selected);
   }
   private async registration(flow: ConnectionFlow) {
     return { ...flow.registration, method: await this.method(flow) };
