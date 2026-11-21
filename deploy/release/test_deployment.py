@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -76,6 +77,28 @@ class DeploymentTests(unittest.TestCase):
         deployment = self.deployment()
         deployment.execute()
         self.assertEqual(deployment.removed, ["sha256:oldest", "sha256:ancient"])
+
+    def old_releases(self):
+        releases = self.root / "releases"
+        for age, name in enumerate(["1" * 40, "2" * 40, "3" * 40, "4" * 40, "5" * 40], start=1):
+            (releases / name).mkdir(parents=True)
+            (releases / name / "database.dump").write_bytes(b"dump")
+            os.utime(releases / name, (1_000_000 - age * 1000, 1_000_000 - age * 1000))
+        return releases
+
+    def test_keeps_the_newest_three_release_folders_and_removes_older_ones_with_their_backups(self):
+        releases = self.old_releases()
+        (releases / "deploy.lock").write_text("")
+        deployment = self.deployment()
+        deployment.execute()
+        self.assertEqual(sorted(path.name for path in releases.iterdir()),
+                         sorted([self.manifest["commit"], "1" * 40, "2" * 40, "deploy.lock"]))
+
+    def test_keeps_every_release_folder_when_verification_fails(self):
+        releases = self.old_releases()
+        with self.assertRaises(RuntimeError):
+            self.deployment(fail=True).execute()
+        self.assertEqual(len(list(releases.iterdir())), 6)
 
     def test_keeps_every_image_when_verification_fails(self):
         deployment = self.deployment(fail=True)
