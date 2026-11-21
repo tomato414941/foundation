@@ -134,7 +134,6 @@ export class Catalog {
   private async usable(actor: Actor, kind: 'service' | 'method') {
     const { authorization } = this.resources;
     await authorization.active(actor);
-    if (actor.requestId) return [];
     return this.resources.db.all<ResourceRow>('SELECT * FROM resources WHERE id=ANY($1::uuid[]) ORDER BY created_at,id',
       [await authorization.find(actor.id, kind, 'use')]);
   }

@@ -69,7 +69,6 @@ export class Accounts {
   async remove(actor: Actor, id: string) {
     const c = this.context;
     await c.authorization.active(actor);
-    if (actor.requestId) fail(403, 'forbidden', 'This principal cannot be removed.');
     if (actor.id !== id) await c.authorization.requirePrincipal(actor, id, 'delete');
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [id]);
     if (children) fail(409, 'owned_principals', 'Transfer or delete owned principals first.');
@@ -105,7 +104,6 @@ export class Accounts {
     });
   }
   async passkeyProof(actor: Actor, browser: string, input: { challengeId: string; credential: unknown }) {
-    if (actor.requestId) fail(403, 'forbidden', 'Sign in to merge accounts.');
     const c = this.context,
       proof = await c.authentication.verifyPasskey(browser, input, actor);
     await c.authentication.signout(proof.actor);
@@ -120,7 +118,6 @@ export class Accounts {
   }
   private async proof(actor: Actor, id: string) {
     await this.context.authorization.active(actor);
-    if (actor.requestId) fail(403, 'forbidden', 'Sign in to merge accounts.');
     const proof = await this.context.db.one<{ data: { from: string; credentialId: string } }>(
       "SELECT data FROM challenges WHERE id=$1 AND kind='merge' AND principal_id=$2 AND expires_at>now()",
       [id, actor.id],

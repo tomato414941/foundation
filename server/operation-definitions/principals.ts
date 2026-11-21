@@ -40,12 +40,6 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
   for (const [name, method] of [['relation.draw', 'POST'], ['relation.erase', 'DELETE']] as const)
     bind({ name, method, path: '/api/relations', schema: { body: line,
       response: { 200: C.Ok } }, input: (_params, body) => body });
-  const revoke = idInput.extend({ principalId: C.Id });
-  definitions.define('principal.revoke', revoke, ['アクセスを取り消す', 'Revoke access'], async (who, input) => {
-    await relations.revoke(who, input.id, input.principalId); return ok();
-  });
-  bind({ name: 'principal.revoke', method: 'POST', path: '/api/principals/:id/revoke', schema: { params: C.IdParams,
-    body: revoke.omit({ id: true }), response: { 200: C.Ok } }, input: withId });
   const transfer = idInput.extend({ to: C.Id, contents: P.KeyUpdates.optional() });
   definitions.define('principal.transfer', transfer, ['プリンシパルを譲る', 'Transfer a principal'], async (who, input) => {
     await principals.get(input.id); await relations.transfer(who, input.id, input.to, input.contents); return ok();

@@ -61,7 +61,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   // approved request makes its operations.
   let requests: Requests;
   const operations = new Operations(db, vault, authorization, definitions, principals, config.origin, () => requests);
-  requests = new Requests(db, vault, authorization, authentication, definitions, principals, audit, config.origin, operations);
+  requests = new Requests(db, vault, authorization, definitions, principals, audit, config.origin, operations);
   const context = {
     config,
     db,

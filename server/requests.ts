@@ -4,11 +4,10 @@ import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Actor, Authorization } from './authorization.js';
 import { principal } from './authorization.js';
-import type { Authentication } from './authentication.js';
 import type { Principals } from './principals.js';
 import type { Proposed } from './relations.js';
 import type { Vault } from './vault.js';
-import { digest, token } from './vault.js';
+import { digest } from './vault.js';
 import type { Audit } from './audit.js';
 import type { DefinitionRegistry } from './definitions.js';
 import type { Operations } from './operations.js';
@@ -37,19 +36,18 @@ interface RequestRow {
 // principal approves it, giving what it asks for, or declines it, until its requester withdraws it, or until it expires.
 export class Requests {
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
-    readonly authentication: Authentication, readonly definitions: DefinitionRegistry, readonly principals: Principals,
-    readonly audit: Audit, readonly origin: string, readonly operations: Operations) {}
+    readonly definitions: DefinitionRegistry, readonly principals: Principals, readonly audit: Audit, readonly origin: string,
+    readonly operations: Operations) {}
 
   private read(row: RequestRow) { return this.vault.decrypt<Snapshot>(row.record, 'request:' + row.id); }
   private async row(id: string, connection: Queryable = this.db.pool) {
     return required(await this.db.one<RequestRow>('SELECT * FROM requests WHERE id=$1', [Id.parse(id)], connection));
   }
-  // Whether the actor may approve or decline the request: through its link, as the principal it is sent to, or, for a
-  // request that a code opens, as anyone but its requester.
+  // Whether the actor may approve or decline the request: as the principal it is sent to, or, for a request that a code
+  // opens, as anyone but its requester.
   async canAnswer(actor: Actor | null, row: RequestRow) {
     if (!actor || row.state !== 'pending') return false;
     await this.authorization.active(actor);
-    if (actor.requestId) return actor.requestId === row.id && row.to_id === actor.id;
     if (row.to_id) return this.authorization.holds(actor.id, principal(row.to_id), 'stands');
     return !!row.code_hash && actor.id !== row.from_id;
   }
@@ -80,7 +78,7 @@ export class Requests {
       performed, url: this.origin + '/requests/' + row.id,
       ...(code ? { code } : {}), returnUrl: returnUrl?.href ?? null, refreshUrl: settings?.settings.refreshUrl ?? null,
       canAnswer: await this.canAnswer(actor, row),
-      canWithdraw: !!actor && !actor.requestId && row.state === 'pending' && actor.id === row.from_id });
+      canWithdraw: !!actor && row.state === 'pending' && actor.id === row.from_id });
   }
   private async expire(row: RequestRow) {
     if (row.state !== 'pending' || row.expires_at.getTime() > Date.now()) return row;
@@ -91,21 +89,19 @@ export class Requests {
     await this.db.pool.query("UPDATE requests SET state='expired',answered_at=now() WHERE state='pending' AND expires_at<=now()");
   }
   async get(actor: Actor | null, id: string) {
-    if (actor?.requestId && actor.requestId !== id) fail(403, 'forbidden', 'This link can open only its own request.');
     const row = await this.expire(await this.row(id));
     if (actor) await this.authorization.active(actor);
     const open = row.code_hash && !row.to_id && row.state === 'pending';
     if (!open && (!actor || actor.id !== row.from_id && actor.id !== row.answered_by && !(await this.canAnswer(actor, row)) &&
-      !(row.to_id && !actor.requestId && await this.authorization.holds(actor.id, principal(row.to_id), 'stands')) &&
-      !(row.owner_id && !actor.requestId && await this.authorization.holds(actor.id, principal(row.owner_id), 'read')) &&
-      !(!actor.requestId && await this.db.one('SELECT 1 FROM principals WHERE id=$1 AND retired_at IS NOT NULL AND merged_into=$2', [row.from_id, actor.id]))))
+      !(row.to_id && await this.authorization.holds(actor.id, principal(row.to_id), 'stands')) &&
+      !(row.owner_id && await this.authorization.holds(actor.id, principal(row.owner_id), 'read')) &&
+      !(await this.db.one('SELECT 1 FROM principals WHERE id=$1 AND retired_at IS NOT NULL AND merged_into=$2', [row.from_id, actor.id]))))
       fail(403, 'forbidden', 'This request belongs to other principals.');
     return this.view(row, actor);
   }
   // Requests the actor sent or that were sent to principals it acts as, the latest first.
   async list(actor: Actor, limit = 100, after?: string) {
     await this.authorization.active(actor);
-    if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own request.');
     const ids = await this.authorization.find(actor.id, 'principal', 'stands');
     const rows = await this.db.all<RequestRow>(`SELECT r.* FROM requests r LEFT JOIN principals p ON p.id=r.from_id
       WHERE (r.from_id=$1 OR r.to_id=ANY($2::uuid[]) OR r.answered_by=$1 OR p.merged_into=$1)
@@ -122,7 +118,6 @@ export class Requests {
       body.objectId === '$approver' && Object.keys(body).length === 3 && operation.inputs.length === 0;
   }
   async create(actor: Actor, body: z.input<typeof RequestCreate>) {
-    if (actor.requestId) fail(403, 'forbidden', 'Sign in to send a request.');
     await this.authorization.active(actor);
     const input = RequestCreate.parse(body), creator = await this.principals.get(actor.id);
     const to = input.to ?? creator.owner_id ?? undefined, invitation = !to;
@@ -191,7 +186,7 @@ export class Requests {
       const attempted = await this.db.one('UPDATE requests SET attempts=attempts+1 WHERE id=$1 AND attempts<5 RETURNING attempts', [id]);
       if (!attempted || digest((code ?? '').replaceAll('-', '').toUpperCase()) !== row.code_hash) fail(400, 'invalid_code', 'Enter the code shown by the requesting device.');
     }
-    const approverId = actor.requestId ? required(row.to_id) : actor.id;
+    const approverId = actor.id;
     // A change the requester made its side of is made as the requester, with the approver's agreement.
     const approver: Actor = row.proposal ? { ...snapshot.creatorActor, agreedBy: approverId, approvalId: id }
       : { id: approverId, ...(actor.credentialId ? { credentialId: actor.credentialId } : {}), approvalId: id };
@@ -244,24 +239,9 @@ export class Requests {
   async withdraw(actor: Actor, id: string) {
     const row = await this.expire(await this.row(id));
     await this.authorization.active(actor);
-    if (actor.requestId || actor.id !== row.from_id) fail(403, 'forbidden', 'Only its requester can withdraw a request.');
+    if (actor.id !== row.from_id) fail(403, 'forbidden', 'Only its requester can withdraw a request.');
     if (row.state !== 'pending') fail(409, 'request_answered', 'This request has already been answered.');
     await this.db.pool.query("UPDATE requests SET state='withdrawn',answered_at=now() WHERE id=$1 AND state='pending'", [id]);
     return this.get(actor, id);
-  }
-  async link(actor: Actor, id: string) {
-    const item = await this.get(actor, id);
-    if (actor.requestId || !item.to || !item.canAnswer) fail(403, 'forbidden', 'Only the recipient can issue a request link.');
-    const secret = token();
-    await this.db.pool.query('INSERT INTO request_links(token_hash,request_id,principal_id,expires_at) VALUES($1,$2,$3,$4)',
-      [digest(secret), id, item.to.id, item.expiresAt]);
-    return { url: item.url + '#token=' + secret, expiresAt: item.expiresAt };
-  }
-  async redeem(id: string, secret: string) {
-    const row = await this.db.one<{ principal_id: string }>('DELETE FROM request_links WHERE token_hash=$1 AND request_id=$2 AND expires_at>now() RETURNING principal_id', [digest(secret), id]);
-    if (!row) fail(400, 'invalid_link', 'This link has expired or was already used.');
-    const item = await this.get({ id: row.principal_id }, id);
-    if (item.state !== 'pending') fail(409, 'request_answered', 'This request has already been answered.');
-    return this.authentication.session(row.principal_id, undefined, this.db.pool, id);
   }
 }

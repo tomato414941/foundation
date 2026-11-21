@@ -17,7 +17,6 @@ export interface Actor {
   id: string;
   credentialId?: string;
   sessionId?: string;
-  requestId?: string;
   approvalId?: string;
   approvalIndex?: number;
   // Who agreed, for the other side of a change the actor makes, to the request it is made under.
@@ -172,7 +171,7 @@ export class Authorization {
   // Whether the actor may, as it came in.
   async can(actor: Actor, target: Target, permission: string, connection: Queryable = this.db.pool) {
     await this.active(actor, connection);
-    return !actor.requestId && (await this.holds(actor.id, target, permission, connection));
+    return this.holds(actor.id, target, permission, connection);
   }
   async require(actor: Actor, target: Target, permission: string, connection: Queryable = this.db.pool) {
     if (!(await this.can(actor, target, permission, connection)))
@@ -205,7 +204,6 @@ export class Authorization {
   ): Promise<Map<string, string[]>> {
     await this.active(actor);
     const result = new Map<string, string[]>();
-    if (actor.requestId) return result;
     const ask = this.ask(this.db.pool),
       reached = new Map<string, Set<string>>();
     for (const target of targets) {
@@ -228,7 +226,6 @@ export class Authorization {
   async held(actor: Actor, ownerIds: string[]): Promise<Map<string, Partial<Record<ResourceKindName, ActionName[]>>>> {
     await this.active(actor);
     const result = new Map<string, Partial<Record<ResourceKindName, ActionName[]>>>();
-    if (actor.requestId) return result;
     const items = new Map(ownerIds.map((id) => [id, randomUUID()]));
     const ask = this.ask(this.db.pool, { owners: Object.fromEntries([...items].map(([owner, item]) => [item, owner])) });
     for (const [owner, item] of items) {

@@ -96,7 +96,6 @@ export async function buildApp(context: Context) {
   const secure = new URL(config.origin).protocol === 'https:',
     cookieOptions = { httpOnly: true, secure, sameSite: 'lax' as const, path: '/' };
   const signIn = (reply: FastifyReply, result: SigninResult) => {
-    reply.clearCookie('foundation_request', cookieOptions);
     reply.setCookie('foundation_session', result.token, {
       ...cookieOptions,
       expires: new Date(result.expiresAt),
@@ -113,31 +112,14 @@ export async function buildApp(context: Context) {
       if (
         (origin && origin !== config.origin) ||
         (!bearer &&
-          (request.cookies.foundation_session || request.cookies.foundation_request) &&
+          request.cookies.foundation_session &&
           origin !== config.origin) ||
         (request.headers['sec-fetch-site'] === 'cross-site' && !bearer)
       )
         fail(403, 'cross_origin', 'Send this request from Foundation.');
     }
-    request.actor =
-      (!bearer ? await authentication.authenticate(request.cookies.foundation_request) : null) ??
-      (await authentication.authenticate(bearer?.slice(7) ?? request.cookies.foundation_session));
+    request.actor = await authentication.authenticate(bearer?.slice(7) ?? request.cookies.foundation_session);
     if (bearer && !request.actor) fail(401, 'unauthenticated', 'The API key has expired or was revoked.');
-    if (request.actor?.requestId) {
-      const path = request.url.split('?')[0]!;
-      const ownRequest = '/api/requests/' + request.actor.requestId;
-      // The operations its request made are opened by ID, and their own checks keep them to that request.
-      if (
-        path !== '/api/session' &&
-        !path.startsWith('/api/auth/') &&
-        path !== ownRequest &&
-        !(request.method === 'GET' && /^\/api\/operations\/[0-9a-f-]{36}$/.test(path)) &&
-        !path.startsWith(ownRequest + '/') &&
-        !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
-        path !== '/oauth/callback'
-      )
-        fail(403, 'forbidden', 'This link can open only its own request.');
-    }
     request.browser = request.cookies.foundation_browser ?? token();
     if (!request.cookies.foundation_browser)
       reply.setCookie('foundation_browser', request.browser, { ...cookieOptions, maxAge: 365 * 86400 });
@@ -176,9 +158,8 @@ export async function buildApp(context: Context) {
       : null,
     credentialId: request.actor?.credentialId ?? null,
     wrappedKey: await authentication.wrapOf(request.actor),
-    requestId: request.actor?.requestId ?? null,
-    keyReset: request.actor && !request.actor.requestId ? await keyResets.get(request.actor.id) : null,
-    principals: request.actor && !request.actor.requestId ? await principals.accessible(request.actor) : [],
+    keyReset: request.actor ? await keyResets.get(request.actor.id) : null,
+    principals: request.actor ? await principals.accessible(request.actor) : [],
     server: { name: 'Foundation' },
     features: {
       email: context.mailer.enabled,
@@ -211,7 +192,6 @@ export async function buildApp(context: Context) {
       await authentication.signout(request.actor);
       await authentication.signout(await authentication.authenticate(request.cookies.foundation_session));
       reply.clearCookie('foundation_session', cookieOptions);
-      reply.clearCookie('foundation_request', cookieOptions);
       return { ok: true as const };
     },
   );
@@ -487,7 +467,7 @@ export async function buildApp(context: Context) {
   await routesResources(app, context);
   await routesCustody(app, context);
   await routesSSH(app, context);
-  await routesRequests(app, context, cookieOptions);
+  await routesRequests(app, context);
   await routesDevices(app, context);
   await routesAccounts(app, context);
   await web(app);

@@ -49,7 +49,7 @@ export class Operations {
   }
   // A sign-in authenticates a call; the operation keeps the identity, credential, consent and approval it is made with.
   authority(actor: Actor) {
-    const { sessionId: _sessionId, requestId: _requestId, ...authority } = actor;
+    const { sessionId: _sessionId, ...authority } = actor;
     return authority;
   }
   // The operation's actor as it is signed in now, keeping the approval and agreement the operation is made under.
@@ -83,11 +83,9 @@ export class Operations {
   }
   // Who goes on with an operation: the principal it is made by, signed in as itself.
   private async acts(actor: Actor, row: OperationRow) {
-    return !actor.requestId && actor.id === row.actor_id;
+    return actor.id === row.actor_id;
   }
-  // A link to a request opens the operations its approval made.
   private async visible(actor: Actor, row: OperationRow) {
-    if (actor.requestId) return actor.requestId === row.request_id;
     if (await this.acts(actor, row)) return true;
     if (row.owner_id && await this.authorization.holds(actor.id, principal(row.owner_id), 'read')) return true;
     if (row.request_id && await this.db.one('SELECT 1 FROM requests WHERE id=$1 AND (from_id=$2 OR to_id=$2 OR answered_by=$2)',
@@ -103,7 +101,6 @@ export class Operations {
   // Operations made by the actor or changing what it uses, the latest first.
   async list(actor: Actor, options: { limit?: number; after?: string; ownerId?: string; requestId?: string } = {}) {
     await this.authorization.active(actor);
-    if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own request.');
     const limit = options.limit ?? 100, represented = await this.authorization.find(actor.id, 'principal', 'stands');
     if (options.ownerId) await this.authorization.requirePrincipal(actor, options.ownerId, 'read');
     const rows = await this.db.all<OperationRow>(`SELECT o.* FROM operations o LEFT JOIN principals p ON p.id=o.actor_id
@@ -146,7 +143,6 @@ export class Operations {
   }
 
   async perform(actor: Actor, body: z.input<typeof OperationInput>): Promise<OperationRecordView | RequestRecordView> {
-    if (actor.requestId) fail(403, 'forbidden', 'This link can act only on its own request.');
     await this.authorization.active(actor);
     const call = OperationInput.parse(body), id = call.id ?? randomUUID();
     const submission = await hash({ name: call.name, input: call.input, proof: call.proof === undefined ? null : await hash(call.proof),
@@ -247,7 +243,7 @@ export class Operations {
   // The operation a device waits on its service for, as that device's actor sees it.
   async waiting(actor: Actor, id: string) {
     const row = await this.row(id), snapshot = await this.read(row);
-    if (actor.requestId || row.actor_id !== actor.id) fail(403, 'forbidden', 'Sign in with the identity making this operation.');
+    if (row.actor_id !== actor.id) fail(403, 'forbidden', 'Sign in with the identity making this operation.');
     if (row.state !== 'in_progress' || !snapshot.continuation || (row.expires_at && row.expires_at.getTime() <= Date.now()))
       fail(409, 'operation_changed', 'This operation is no longer waiting on its service.');
     return { row, snapshot };

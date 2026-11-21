@@ -6,7 +6,7 @@ export type Queryable = Pick<pg.Pool, 'query'>;
 export const SchemaMigration = '001-foundation-schema';
 // The migrations a database in use applies on top of the schema it was made with, in order. Those every database in use
 // has applied are left out; a database made from the current schema is marked as having applied these.
-const SqlMigrations = ['012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing', '015-no-payments'];
+const SqlMigrations = ['012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing', '015-no-payments', '016-no-request-links'];
 const RequiredMigrations = [SchemaMigration, ...SqlMigrations];
 export class Database {
   readonly pool: pg.Pool;

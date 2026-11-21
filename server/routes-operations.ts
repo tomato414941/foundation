@@ -64,7 +64,6 @@ export async function routesOperations(app: ApiApp, context: Context) {
     request => operations.cancel(actor(request), request.params.id));
   app.get('/api/operation-continuations/:id', { schema: { params: C.IdParams, response: { 200: ContinuationEnvelope.nullable() } } }, async request => {
     const who = actor(request);
-    if (who.requestId) fail(403, 'forbidden', 'Sign in with your keys to continue this operation.');
     const row = await context.db.one<{ actor_id: string; envelope: unknown }>('SELECT * FROM operation_continuations WHERE id=$1', [request.params.id]);
     if (row && row.actor_id !== who.id) fail(403, 'forbidden', 'This operation belongs to another identity.');
     return row ? ContinuationEnvelope.parse(row.envelope) : null;
@@ -72,7 +71,7 @@ export async function routesOperations(app: ApiApp, context: Context) {
   app.put('/api/operation-continuations/:id', { schema: { params: C.IdParams, body: ContinuationEnvelope,
     response: { 200: ContinuationEnvelope } } }, async request => {
     const who = actor(request), value = request.body;
-    if (who.requestId || value.actorId !== who.id || value.origin !== context.config.origin ||
+    if (value.actorId !== who.id || value.origin !== context.config.origin ||
       value.id !== request.params.id || value.sealed.aad !== base64url(encode(continuationContext(value.origin, value.id))))
       fail(403, 'forbidden', 'Save progress sealed for this identity.');
     const saved = await context.db.one<{ envelope: unknown }>(

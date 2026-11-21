@@ -9,11 +9,10 @@ export async function requestConnectionMethod(id: string, signal?: AbortSignal) 
   return method;
 }
 
-export async function loadRequestConnection(invocation: OperationCall, signal?: AbortSignal, inspect = true) {
+export async function loadRequestConnection(invocation: OperationCall, signal?: AbortSignal) {
   const { input } = invocation;
   const name = typeof input.name === 'string' ? input.name : '';
   const reconnecting = typeof input.connectionId === 'string';
-  if (!inspect) return { method: null, users: [], usersConfigured: false, name, reconnecting };
   const [method, connection, users] = await Promise.all([
     requestConnectionMethod(String(input.methodId), signal),
     typeof input.connectionId === 'string' ? api('/resources/' + input.connectionId, { signal }, Resource) : null,

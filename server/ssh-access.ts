@@ -128,7 +128,6 @@ export class SSHAccess {
     const value = SSHAccessQuery.parse(query);
     const [hosts, keys] = await Promise.all([this.authorization.find(actor.id, 'ssh_host', 'read'),
       this.authorization.find(actor.id, 'ssh_key', 'read')]);
-    if (actor.requestId) return { items: [] };
     const rows = await this.db.all<AuthorizationRow>(
       `SELECT * FROM ssh_authorizations WHERE (host_id=ANY($1::uuid[]) OR key_id=ANY($2::uuid[]))
        AND ($3::uuid IS NULL OR host_id=$3) AND ($4::uuid IS NULL OR key_id=$4) ORDER BY host_id,account,granted_at,id`,

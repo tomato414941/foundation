@@ -1630,29 +1630,6 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.get_by_role("button", name="承認", exact=True)).to_have_count(0)
         receiver.screenshot(path=str(ARTIFACTS / "request-withdrawn-ja.png"), full_page=True)
 
-    def test_通常のログインがある端末で依頼専用リンクを開いて依頼を承認する(self):
-        sender, _ = self.passkey_account("Link requester")
-        owner, principal = self.passkey_account("Link approver")
-        viewer, _ = self.passkey_account("Existing session")
-        sender.goto(ORIGIN + "/requests/new")
-        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
-        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"name": "principal.create", "input": {"name": "Link project", "ownerId": "$approver"}}]))
-        sender.get_by_role("button", name="作成", exact=True).click()
-        sender.wait_for_url("**/requests/*")
-        expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
-        request_id = sender.url.rsplit("/", 1)[1]
-        response = owner.request.post(f"{ORIGIN}/api/requests/{request_id}/links", data={}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        viewer.goto(response.json()["url"])
-        expect(viewer.get_by_role("button", name="承認", exact=True)).to_be_visible()
-        current = viewer.request.get(ORIGIN + "/api/session").json()
-        self.assertEqual(current["principal"]["id"], principal["id"])
-        self.assertEqual(current["requestId"], sender.url.rsplit("/", 1)[1])
-        viewer.get_by_role("button", name="承認", exact=True).click()
-        expect(viewer.get_by_role("heading", name="プリンシパルを作りました", exact=True)).to_be_visible()
-        projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
-        self.assertIn("Link project", [item["name"] for item in projects])
-
     def test_複数の操作を含む依頼で目的と各操作を確認して承認し結果を開く(self):
         sender, _ = self.passkey_account("Project requester")
         receiver, principal = self.passkey_account("Project approver", mobile=True)
@@ -1888,39 +1865,6 @@ class BrowserTests(unittest.TestCase):
         self.select(owner, "言語", "English")
         expect(owner.get_by_role("heading", name="Reconnected to Google", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "google-request-complete-mobile-en.png"), full_page=True)
-
-    def test_接続の依頼専用リンクから本人確認して再接続を断る(self):
-        owner, principal = self.passkey_account("Sign-in owner", mobile=True)
-        sender, _ = self.passkey_account("Sign-in assistant")
-        connection, _ = self.google_connection(owner, principal)
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "メールの確認に使うGoogle接続を再認証してください。", "operations": [{"name": "connection.connect", "input": {
-                "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
-                "appId": connection["data"]["appId"], "name": connection["name"], "scopes": connection["data"]["scopes"]
-            }}]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        asked = response.json()
-        link = owner.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/links", data={}, headers={"origin": ORIGIN})
-        self.assertTrue(link.ok, link.text())
-        owner.goto(link.json()["url"])
-        expect(owner.get_by_role("heading", name="Mail accountを再接続", exact=True)).to_be_visible()
-        expect(owner.get_by_text("続けるには、Foundationにサインインしてください。", exact=True)).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "google-request-signin-mobile-ja.png"), full_page=True)
-        owner.get_by_role("link", name="サインイン", exact=True).click()
-        owner.get_by_role("button", name="パスキーでサインイン", exact=True).click()
-        expect(owner.get_by_role("heading", name="Googleを再接続", exact=True)).to_be_visible()
-        expect(owner.get_by_role("button", name="Googleで再接続する", exact=True)).to_be_enabled()
-        self.assertIsNone(owner.request.get(ORIGIN + "/api/session").json()["requestId"])
-        owner.get_by_role("button", name="断る", exact=True).click()
-        expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
-        self.assertLessEqual(owner.evaluate("document.documentElement.scrollWidth"), 391)
-        owner.screenshot(path=str(ARTIFACTS / "google-request-declined-mobile-ja.png"), full_page=True)
-        self.select(owner, "言語", "English")
-        expect(owner.get_by_role("heading", name="Declined to reconnect Google", exact=True)).to_be_visible()
-        owner.screenshot(path=str(ARTIFACTS / "google-request-declined-mobile-en.png"), full_page=True)
-        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
-        sender.goto(asked["url"])
-        expect(sender.get_by_text("断られた", exact=True)).to_be_visible()
 
     def test_再接続で権限や利用者を確認し認証前に断り認証中にやめる(self):
         owner, principal = self.passkey_account("Permissions owner")

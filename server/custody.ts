@@ -105,7 +105,7 @@ export class Custody {
   // Items someone may open that are not sealed for them yet, with keys they have now, which this principal opens and
   // so can seal again. Only those an item is sealed for can seal it, so Foundation lists them; each is sealed on its own.
   async pending(actor: Actor, principalId: string) {
-    if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to seal its items.');
+    if (actor.id !== principalId) fail(403, 'forbidden', 'Sign in as this principal to seal its items.');
     const own = (await this.keyed([principalId]))[0];
     if (!own) return [];
     const mine = await thumbprint(own.publicKey);

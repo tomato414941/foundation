@@ -97,7 +97,7 @@ export default function App() {
   const principal = data.principals.find((item) => item.id === owner) ?? data.principal;
   const prefix = '/p/' + (owner ?? data.principal?.id);
   // The page that sets up this device comes before everything else, so it shows nothing to go to.
-  const authenticated = !!data.principal && !data.requestId && location.pathname !== '/keys';
+  const authenticated = !!data.principal && location.pathname !== '/keys';
   const focusedRequest = location.pathname.startsWith('/requests/') && location.pathname !== '/requests/new';
   const showNavigation = authenticated && !focusedRequest;
   useEffect(() => {

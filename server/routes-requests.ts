@@ -5,11 +5,7 @@ import type { Context } from './context.js';
 import * as C from '../shared/contracts.js';
 import { RequestApproval, RequestCreate, RequestView } from '../shared/operations.js';
 
-export async function routesRequests(
-  app: ApiApp,
-  context: Context,
-  cookieOptions: { httpOnly: boolean; secure: boolean; sameSite: 'lax'; path: string },
-) {
+export async function routesRequests(app: ApiApp, context: Context) {
   const { requests, integrations } = context;
   app.get(
     '/api/requests',
@@ -40,36 +36,6 @@ export async function routesRequests(
     '/api/requests/:id/withdraw',
     { schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: RequestView } } },
     (request) => requests.withdraw(actor(request), request.params.id),
-  );
-  app.post(
-    '/api/requests/:id/links',
-    {
-      schema: {
-        params: C.IdParams,
-        body: z.object({}).strict(),
-        response: { 200: z.object({ url: z.url(), expiresAt: C.Time }) },
-      },
-    },
-    (request) => requests.link(actor(request), request.params.id),
-  );
-  app.post(
-    '/api/requests/:id/redeem',
-    {
-      config: { rateLimit: { max: 30, timeWindow: '1 hour' } },
-      schema: {
-        params: C.IdParams,
-        body: z.object({ token: z.string().max(200) }).strict(),
-        response: { 200: C.Ok },
-      },
-    },
-    async (request, reply) => {
-      const session = await requests.redeem(request.params.id, request.body.token);
-      reply.setCookie('foundation_request', session.token, {
-        ...cookieOptions,
-        expires: new Date(session.expiresAt),
-      });
-      return { ok: true as const };
-    },
   );
   app.get(
     '/api/principals/:id/settings',

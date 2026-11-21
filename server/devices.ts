@@ -71,7 +71,6 @@ export class Devices {
     };
   }
   async approve(actor: Actor, id: string, code: string, principalId: string) {
-    if (actor.requestId) fail(403, 'forbidden', 'Sign in to let a device in.');
     await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     const row = await this.row(id);
     if (row.data.state !== 'pending') fail(409, 'device_answered', 'This device request is already being handled.');

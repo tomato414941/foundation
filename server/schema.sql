@@ -35,7 +35,6 @@ CREATE TABLE sessions (
   token_hash text NOT NULL UNIQUE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   credential_id uuid REFERENCES credentials(id) ON DELETE CASCADE,
-  request_id uuid,
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -150,12 +149,6 @@ CREATE TABLE operation_continuations (
   revision integer NOT NULL,
   envelope jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE request_links (
-  token_hash text PRIMARY KEY,
-  request_id uuid NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  expires_at timestamptz NOT NULL
 );
 CREATE TABLE integration_settings (
   principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,

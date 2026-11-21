@@ -45,7 +45,6 @@ export class Worker {
       await this.context.db.pool.query('DELETE FROM challenges WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM oauth_relays WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM sessions WHERE expires_at<now()');
-      await this.context.db.pool.query('DELETE FROM request_links WHERE expires_at<now()');
       await this.context.operations.expireAll();
       await this.context.requests.expireAll();
     }, 60_000);

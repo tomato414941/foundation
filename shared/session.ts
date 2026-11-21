@@ -11,7 +11,6 @@ export const Session = z.object({
   principal: Principal.nullable(),
   credentialId: Id.nullable(),
   wrappedKey: WrappedKey.nullable(),
-  requestId: Id.nullable(),
   keyReset: KeyReset.nullable(),
   server: z.object({ name: Name }),
   features: Features,

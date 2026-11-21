@@ -1,8 +1,6 @@
-import { useEffect } from 'react';
-import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useNavigation, useRevalidator, useRouteLoaderData } from 'react-router';
+import { Form, Link, redirect, redirectDocument, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowUpRight } from 'lucide-react';
-import type { clientLoader as rootLoader } from './root';
 import type { JsonValue } from '../../shared/contracts';
 import { OperationView, RequestView } from '../../shared/operations';
 import type { OperationCall, OperationRecordView, RequestRecordView } from '../../shared/operations';
@@ -73,11 +71,6 @@ async function readItem(id: string, signal?: AbortSignal) {
   return { item, made, next: made.find(operation => operation.state !== 'succeeded') ?? null };
 }
 export async function clientLoader({ params, request }: PageArgs) {
-  const fragment = new URLSearchParams(window.location.hash.slice(1)), token = fragment.get('token');
-  if (token) {
-    await api(`/requests/${params.id}/redeem`, { method: 'POST', body: { token } });
-    history.replaceState(null, '', window.location.pathname);
-  }
   const account = await session(request);
   let read: Awaited<ReturnType<typeof readItem>>;
   try { read = await readItem(params.id!, request.signal); }
@@ -87,10 +80,10 @@ export async function clientLoader({ params, request }: PageArgs) {
     throw error;
   }
   const needsKeys = !read.item.operations.every(operation => operation.name === 'resource.transfer' && !operation.input.content);
-  if (account.principal && !account.requestId && needsKeys) await holdingKeys(request, account.principal);
+  if (account.principal && needsKeys) await holdingKeys(request, account.principal);
   let progress: Awaited<ReturnType<Awaited<ReturnType<typeof connectionClient>>['progress']>> | null = null;
   let operationError: string | null = read.next?.error?.code ?? null;
-  if (read.next?.canPerform && read.next.continuation && !account.requestId) {
+  if (read.next?.canPerform && read.next.continuation) {
     const continuationId = read.next.continuation.id;
     try { progress = await (await connectionClient()).progress(continuationId); }
     catch (error) { operationError = errorCode(error); }
@@ -102,11 +95,11 @@ export async function clientLoader({ params, request }: PageArgs) {
   const operation = item.operations.length === 1 ? item.operations[0] : null;
   const reviewContext = { approver: item.canAnswer ? account.principal : null, requester: item.from,
     principals: [...account.principals, item.from, ...(item.to ? [item.to] : [])],
-    inspect: !!account.principal && !account.requestId, signal: request.signal };
+    inspect: !!account.principal, signal: request.signal };
   const [inputForm, requestConnection, delegationReviews, operationReviews] = await Promise.all([
-    current && !account.requestId && !next?.continuation ? loadOperationForm(current.invocation) : null,
+    current && !next?.continuation ? loadOperationForm(current.invocation) : null,
     operation?.name === 'connection.connect' && item.from.id !== account.principal?.id ? loadRequestConnection({ name: operation.name,
-      input: substitute(operation.input, account.principal?.id ?? '', item.from.id) as OperationCall['input'] }, request.signal, !account.requestId) : null,
+      input: substitute(operation.input, account.principal?.id ?? '', item.from.id) as OperationCall['input'] }, request.signal) : null,
     item.state === 'pending' && !item.proposal ? loadDelegationReviews(item.operations, reviewContext) : [],
     item.state === 'pending' && !item.proposal ? loadOperationReviews(item.operations, reviewContext) : [],
   ]);
@@ -176,8 +169,6 @@ export default function RequestPage() {
   const shareUrl = item.url;
   const sealing = useResealing(account.principal?.id);
   const approvalAccepted = waiting && navigation.state !== 'idle' && sealing?.requestId === item.id;
-  const root = useRouteLoaderData<typeof rootLoader>('root'), revalidator = useRevalidator();
-  const needsKeys = !!current && !!account.requestId;
   const recipientRequest = !requester;
   const focusedConnection = !!requestConnection && !requester;
   const service = requestConnection?.method?.defaultName ?? requestConnection?.name ?? '';
@@ -210,9 +201,6 @@ export default function RequestPage() {
   // makes it; others are told it did not complete.
   const stopped = !waiting && next && (['failed', 'uncertain'].includes(next.state) || next.state === 'stopped' && next.canPerform) &&
     !current ? next : null;
-  useEffect(() => {
-    if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle') void revalidator.revalidate();
-  }, [account.requestId, root?.requestId, revalidator]);
   usePolling(active, progress?.kind === 'pending' || progress?.kind === 'authorize' ? 2000 : 5000);
   const form = !approvalAccepted && showSteps && <Form method="post">
     <div className="flex min-w-0 flex-col gap-6">
@@ -245,10 +233,7 @@ export default function RequestPage() {
       {focusedConnection && progress && <ConnectionProgress progress={progress} cancelIntent="cancel" review
         authorization={{ label: t('requestContinueAtService', { name: service }), newWindow: requestConnection?.method?.kind === 'approval' }} />}
       {waiting && item.canAnswer && !item.to && <InputField name="code" label={t('code')} required autoComplete="off" hint={t('codeHelp')} />}
-      {needsKeys && <Notice tone="info" action={<Button asChild><Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + item.id)}>{t('signin')}</Link></Button>}>
-        {t(recipientRequest ? 'requestSignInHelp' : 'signinForPrivateInput')}
-      </Notice>}
-      {(waiting && item.canAnswer || current && !waiting && !next?.continuation) && !needsKeys && <div className="flex flex-wrap items-center gap-4">
+      {(waiting && item.canAnswer || current && !waiting && !next?.continuation) && <div className="flex flex-wrap items-center gap-4">
         <Button className={focusedConnection ? connectionRequestAction : transferring ? 'min-h-11 px-4' : undefined} type="submit" name="intent" value={waiting ? 'approve' : 'continue'}
           loading={navigation.state !== 'idle' && (focusedConnection || !['decline', 'withdraw', 'cancel'].includes(String(navigation.formData?.get('intent'))))}
           disabled={navigation.state !== 'idle'}>

@@ -61,9 +61,7 @@ export async function holdingKeys(request: Request, principal: Pick<PrincipalVie
 export async function signedIn(request: Request, options: { keys?: boolean } = {}) {
   const data = await session(request);
   if (!data.principal) throw redirect('/signin?returnTo=' + here(request));
-  if (data.requestId && new URL(request.url).pathname !== '/requests/' + data.requestId)
-    throw redirect('/requests/' + data.requestId);
-  if (!data.requestId && options.keys !== false) await holdingKeys(request, data.principal);
+  if (options.keys !== false) await holdingKeys(request, data.principal);
   return data;
 }
 export function safeReturn(value: string | null | undefined, fallback = '/') {

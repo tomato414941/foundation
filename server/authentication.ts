@@ -81,14 +81,12 @@ export class Authentication {
       id: string;
       principal_id: string;
       credential_id: string | null;
-      request_id: string | null;
     }>('SELECT * FROM sessions WHERE token_hash=$1 AND expires_at>now()', [hash]);
     if (session) {
       const actor: Actor = {
         id: session.principal_id,
         sessionId: session.id,
         ...(session.credential_id ? { credentialId: session.credential_id } : {}),
-        ...(session.request_id ? { requestId: session.request_id } : {}),
       };
       try {
         await this.authorization.active(actor);
@@ -114,21 +112,19 @@ export class Authentication {
     principalId: string,
     credentialId?: string,
     connection: Queryable = this.db.pool,
-    requestId?: string,
   ): Promise<SigninResult> {
     const raw = 'fs_' + token(),
       id = randomUUID(),
-      expires = new Date(Date.now() + (requestId ? 30 * 60_000 : 14 * 86400_000));
+      expires = new Date(Date.now() + 14 * 86400_000);
     await connection.query(
-      'INSERT INTO sessions(id,token_hash,principal_id,credential_id,request_id,expires_at) VALUES($1,$2,$3,$4,$5,$6)',
-      [id, digest(raw), principalId, credentialId ?? null, requestId ?? null, expires],
+      'INSERT INTO sessions(id,token_hash,principal_id,credential_id,expires_at) VALUES($1,$2,$3,$4,$5)',
+      [id, digest(raw), principalId, credentialId ?? null, expires],
     );
     return {
       actor: {
         id: principalId,
         sessionId: id,
         ...(credentialId ? { credentialId } : {}),
-        ...(requestId ? { requestId } : {}),
       },
       token: raw,
       expiresAt: iso(expires),
@@ -267,7 +263,7 @@ export class Authentication {
       if (!actor) fail(401, 'unauthenticated', 'Sign in to add an email address.');
       await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     }
-    if (mergeTo && (!actor || actor.id !== mergeTo || actor.requestId))
+    if (mergeTo && (!actor || actor.id !== mergeTo))
       fail(403, 'forbidden', 'Sign in to the account you want to keep.');
     const browserHash = digest(browser);
     const recent = await this.db.one<{ created_at: Date }>(

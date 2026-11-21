@@ -100,7 +100,7 @@ export class Relations {
   // the change goes there.
   async agree(actor: Actor, proposed: Proposed | null, sides: Side[], connection: Queryable = this.db.pool) {
     await this.authorization.active(actor, connection);
-    const parties = actor.requestId ? [] : [actor.id, ...(actor.agreedBy ? [actor.agreedBy] : [])];
+    const parties = [actor.id, ...(actor.agreedBy ? [actor.agreedBy] : [])];
     const holds = async (party: string, side: Side) => {
       for (const [target, name] of side.needs)
         if (!(await this.authorization.holds(party, target, name, connection))) return false;
@@ -267,22 +267,6 @@ export class Relations {
       await connection.query("DELETE FROM relations WHERE subject_id=$1 AND relation='revealer' AND resource_id=$2", [id, item.id]);
       await this.audit.record(item.owner_id, actor.id, 'relation.remove', item.id, { subjectId: id, relation: 'revealer' }, connection);
     }
-  }
-  // Takes back everything a principal was given by another and on what the other holds, and the other's open requests.
-  async revoke(actor: Actor, principalId: string, subjectId: string) {
-    await this.authorization.requirePrincipal(actor, principalId, 'share');
-    if (principalId === subjectId) fail(400, 'invalid_relation', 'Choose a different principal.');
-    await this.db.transaction(async (connection) => {
-      await connection.query(
-        'DELETE FROM relations WHERE subject_id=$1 AND (principal_id=$2 OR resource_id IN (SELECT id FROM resources WHERE owner_id=$2))',
-        [subjectId, principalId],
-      );
-      await connection.query(
-        "UPDATE requests SET state='declined',answered_at=now(),answered_by=$2 WHERE from_id=$1 AND to_id=$2 AND state='pending'",
-        [subjectId, principalId],
-      );
-      await this.audit.record(principalId, actor.id, 'principal.revoke', subjectId, {}, connection);
-    });
   }
 }
 
