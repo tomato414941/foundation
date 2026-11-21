@@ -103,8 +103,12 @@ export const Principal = z.object({
   // Whom this principal belongs to, if anyone: its owner acts as it.
   owner: z.object({ id: Id, name: Name }).nullable(),
   createdAt: Time,
+  // What the reader may do with this principal itself.
   permissions: z.array(Action),
   createKinds: z.array(ResourceKind),
+  // What the reader may do with the items this principal holds, for each kind, because the principal holds them.
+  // An item may let in more than this.
+  items: z.partialRecord(ResourceKind, z.array(Action)).optional(),
   publicKey: PublicKey.nullable(),
 });
 export type PrincipalView = z.infer<typeof Principal>;

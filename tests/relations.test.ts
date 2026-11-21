@@ -43,6 +43,9 @@ test('持ち主としてふるまえる者と一員だけがプリンシパル�
   const asAgent = await f.principals.view(ai.actor, await f.principals.get(team.id));
   assert.deepEqual(asAgent.permissions, ['read', 'use']);
   assert.ok(['variable', 'connection', 'app'].every(kind => asAgent.createKinds.includes(kind)));
+  // What the team holds, the delegate opens, changes and removes, but does not let others into or pass on.
+  assert.deepEqual(asAgent.items?.connection, ['read', 'update', 'delete', 'reveal']);
+  assert.deepEqual(view.items?.connection, ['read', 'update', 'delete', 'share', 'transfer', 'reveal']);
   assert.equal(await f.authorization.holds(team.id, principal(team.id), 'delete'), true);
 });
 

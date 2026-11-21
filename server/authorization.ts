@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { parseSchema, rebac } from 'rebac';
 import type { Expression, ObjectRef, SubjectRef } from 'rebac';
 import type { Database, Queryable } from './database.js';
@@ -95,7 +96,7 @@ function relationships(db: Database, connection: Queryable, change: Change = {})
       once('read ' + object.type + ':' + object.id + '#' + relation, async () => {
         if (relation === 'self') return object.type === 'principal' ? principals([object.id]) : [];
         if (relation === 'owner') {
-          if (object.type === 'principal' && object.id in (change.owners ?? {})) {
+          if (object.id in (change.owners ?? {})) {
             const owner = change.owners![object.id];
             return owner ? principals([owner]) : [];
           }
@@ -221,6 +222,26 @@ export class Authorization {
   }
   async actions(actor: Actor, target: Target): Promise<ActionName[]> {
     return ((await this.permissions(actor, [target])).get(target.id) ?? []) as ActionName[];
+  }
+  // What the actor may do with the items each principal holds, because the principal holds them: the actions of each
+  // kind of item, asked of an item the principal would own and that no line names.
+  async held(actor: Actor, ownerIds: string[]): Promise<Map<string, Partial<Record<ResourceKindName, ActionName[]>>>> {
+    await this.active(actor);
+    const result = new Map<string, Partial<Record<ResourceKindName, ActionName[]>>>();
+    if (actor.requestId) return result;
+    const items = new Map(ownerIds.map((id) => [id, randomUUID()]));
+    const ask = this.ask(this.db.pool, { owners: Object.fromEntries([...items].map(([owner, item]) => [item, owner])) });
+    for (const [owner, item] of items) {
+      const kinds: Partial<Record<ResourceKindName, ActionName[]>> = {};
+      for (const kind of ResourceKind.options) {
+        const actions: ActionName[] = [];
+        for (const action of actionsOf(kind))
+          if (await ask.check({ type: kind, id: item }, action, principal(actor.id))) actions.push(action);
+        if (actions.length) kinds[kind] = actions;
+      }
+      result.set(owner, kinds);
+    }
+    return result;
   }
   // The kinds of thing the actor may make for a principal.
   async createKinds(actor: Actor, ownerId: string): Promise<ResourceKindName[]> {

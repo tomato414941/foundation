@@ -54,11 +54,13 @@ export class Principals {
   async view(actor: Actor, row: PrincipalRow) {
     return (await this.views(actor, [row]))[0]!;
   }
-  // Each principal as the actor sees it: who owns it, what the actor may do there, and what the actor may make for it.
+  // Each principal as the actor sees it: who owns it, what the actor may do there, what the actor may make for it, and
+  // what the actor may do with what it holds.
   async views(actor: Actor, rows: PrincipalRow[]) {
     const kinds = ResourceKind.options,
       held = await this.authorization.permissions(actor, rows.map((row) => principal(row.id)),
-        (type) => [...actionsOf(type), ...kinds.map(createPermission)]);
+        (type) => [...actionsOf(type), ...kinds.map(createPermission)]),
+      items = await this.authorization.held(actor, rows.map((row) => row.id));
     const owners = new Map(
       (await this.db.all<{ id: string; name: string }>('SELECT id,name FROM principals WHERE id=ANY($1::uuid[])',
         [rows.map((row) => row.owner_id).filter(Boolean)])).map((owner) => [owner.id, owner]),
@@ -73,6 +75,7 @@ export class Principals {
         createdAt: iso(row.created_at),
         permissions: actionsOf('principal').filter((action) => permissions.includes(action)),
         createKinds: kinds.filter((kind) => permissions.includes(createPermission(kind))),
+        items: items.get(row.id) ?? {},
       });
     });
   }
