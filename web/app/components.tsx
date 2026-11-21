@@ -134,12 +134,10 @@ export function Empty({ search = false }: { search?: boolean }) {
   );
 }
 
-// What a proposed change does, in one sentence: the line it draws, or who becomes the owner.
+// What a proposed change does, in one sentence: who becomes the owner.
 export function ProposalText({ proposal }: { proposal: import('zod').z.infer<typeof Proposal> }) {
   const { t } = useTranslation();
-  return proposal.kind === 'line'
-    ? t('line', { subject: proposal.subject.name, relation: t(proposal.relation), object: proposal.object.name })
-    : t('transferLine', { item: proposal.item.name, to: proposal.to.name });
+  return t('transferLine', { item: proposal.item.name, to: proposal.to.name });
 }
 export function State({ value, label }: { value: string; label?: string }) {
   const { t } = useTranslation();

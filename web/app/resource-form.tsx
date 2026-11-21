@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
-import { CatalogEntry, CatalogMethod, Resource, Payment, listOf } from '../../shared/contracts';
+import { CatalogEntry, CatalogMethod, Resource, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod } from '../../shared/contracts';
 import { decode } from '../../shared/encryption';
 import { AppMaterial } from '../../shared/connections';
@@ -44,7 +44,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     catalog,
     apps,
     sessionData,
-    payment,
     methods,
     connections,
     shared,
@@ -55,9 +54,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       : null,
     kind === 'connection' ? ownedItems('app') : null,
     session(request),
-    kind === 'object'
-      ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
-      : null,
     ['connection', 'app'].includes(kind)
       ? api('/connection-methods', { signal: request.signal }, listOf(CatalogMethod))
       : null,
@@ -101,7 +97,6 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   return {
     kind,
     resource,
-    payment,
     catalog: catalog?.items ?? [],
     apps: [
       ...new Map(
@@ -305,22 +300,6 @@ export default function ResourceForm() {
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       {data.replaced && <Notice tone="warning">{t(data.kind === 'connection' ? 'errors.not_sealed_for_key' : 'valueReplaced')}</Notice>}
       {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
-      {data.payment?.required && !data.payment.active && (
-        <Notice
-          action={
-            sessionData.principals.some(
-              (item) => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'),
-            ) ? (
-              <Button variant="ghost" asChild>
-                <Link to={'/p/' + data.payment.payer?.id + '/settings/billing'}>{t('addPayment')}</Link>
-              </Button>
-            ) : undefined
-          }
-          tone={'info'}
-        >
-          {t('paymentRequired')}
-        </Notice>
-      )}
       <Form method="post" encType="multipart/form-data">
         <div className="flex min-w-0 flex-col gap-6">
           <input type="hidden" name="version" value={existing?.version ?? ''} />

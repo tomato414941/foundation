@@ -22,8 +22,6 @@ import type { Actor } from '../server/authorization.js';
 import { KeyResets } from '../server/key-resets.js';
 import { Custody } from '../server/custody.js';
 import { KeySharing } from '../server/key-sharing.js';
-import { Billing, StripePayments } from '../server/billing.js';
-import type { PaymentProvider } from '../server/billing.js';
 
 function testDatabaseUrl() {
   const value = process.env.TEST_DATABASE_URL;
@@ -43,7 +41,7 @@ export async function enroll(authentication: Authentication, name: string, keys?
   const identityKeys = keys ?? await newIdentityKeys();
   return { ...await authentication.enroll(name, publicPart(identityKeys.encryption)), keys: identityKeys };
 }
-export async function fixture(overrides: Record<string, string> = {}, payments?: PaymentProvider) {
+export async function fixture(overrides: Record<string, string> = {}) {
   const schema = 'test_' + randomUUID().replaceAll('-', '');
   const admin = new pg.Pool({ connectionString: databaseUrl });
   await admin.query(`CREATE SCHEMA "${schema}"`);
@@ -63,9 +61,8 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     audit = new Audit(db),
     principals = new Principals(db, authorization, audit),
     resources = new Resources(db, authorization, audit, principals),
-    billing = new Billing(db, authorization, audit, payments ?? new StripePayments(config), config),
     mailer = new TestMailer(),
-    relations = new Relations(db, authorization, audit, principals, resources, billing);
+    relations = new Relations(db, authorization, audit, principals, resources);
   const authentication = new Authentication(db, principals, authorization, audit, mailer, config),
     keyResets = new KeyResets(db, authorization, audit, config);
   const custody = new Custody(resources, relations);
@@ -99,7 +96,6 @@ export async function fixture(overrides: Record<string, string> = {}, payments?:
     audit,
     principals,
     relations,
-    billing,
     authentication,
     keyResets,
     resources,

@@ -13,8 +13,6 @@ import { Catalog } from './catalog.js';
 import { PublicTransport } from './transport.js';
 import type { Transport } from './transport.js';
 import { KeySharing } from './key-sharing.js';
-import { Billing, StripePayments } from './billing.js';
-import type { PaymentProvider } from './billing.js';
 import { Objects, S3Objects } from './objects.js';
 import type { ObjectStore } from './objects.js';
 import { SSHAccess } from './ssh-access.js';
@@ -32,7 +30,6 @@ export interface Dependencies {
   db?: Database;
   mailer?: Mailer;
   transport?: Transport;
-  payments?: PaymentProvider;
   storage?: ObjectStore;
 }
 export async function createContext(config: Configuration, deps: Dependencies = {}, options: { migrate?: boolean } = {}) {
@@ -44,9 +41,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     audit = new Audit(db),
     principals = new Principals(db, authorization, audit),
     resources = new Resources(db, authorization, audit, principals),
-    billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
     mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
-    relations = new Relations(db, authorization, audit, principals, resources, billing);
+    relations = new Relations(db, authorization, audit, principals, resources);
   const authentication = new Authentication(db, principals, authorization, audit, mailer, config),
     keyResets = new KeyResets(db, authorization, audit, config);
   const catalog = await Catalog.load(resources, config),
@@ -55,12 +51,12 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     connectionOperations = new ConnectionOperations(custody),
     oauthRelays = new OAuthRelays(resources, custody, config.origin, () => operations);
   principals.keySharing = new KeySharing(custody);
-  const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config));
+  const objects = new Objects(resources, deps.storage ?? new S3Objects(config), config.FOUNDATION_INCLUDED_STORAGE_BYTES);
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
   const sshAccess = new SSHAccess(db, resources, audit);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
-    objects, billing, integrations, custody, sshAccess });
+    objects, integrations, custody, sshAccess });
   // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an
   // approved request makes its operations.
   let requests: Requests;
@@ -81,7 +77,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     resources,
     catalog,
     transport,
-    billing,
     objects,
     integrations,
     requests,

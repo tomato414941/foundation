@@ -40,11 +40,7 @@ export class Worker {
       await this.context.operations.advanceAll();
     }, 15_000);
     this.schedule(() => this.context.connectionOperations.recover(), 15_000);
-    this.schedule(async () => {
-      await this.context.billing.measureStorage();
-      await this.context.billing.report();
-      await this.context.objects.collect();
-    }, 60_000);
+    this.schedule(() => this.context.objects.collect(), 60_000);
     this.schedule(async () => {
       await this.context.db.pool.query('DELETE FROM challenges WHERE expires_at<now()');
       await this.context.db.pool.query('DELETE FROM oauth_relays WHERE expires_at<now()');

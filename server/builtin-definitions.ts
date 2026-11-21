@@ -4,7 +4,6 @@ import type { Relations } from './relations.js';
 import type { Resources } from './resources.js';
 import type { Catalog } from './catalog.js';
 import type { Objects } from './objects.js';
-import type { Billing } from './billing.js';
 import type { Integrations } from './integrations.js';
 import type { Custody } from './custody.js';
 import type { SSHAccess } from './ssh-access.js';
@@ -12,13 +11,12 @@ import { DefinitionRegistry } from './definitions.js';
 import { definePrincipals } from './operation-definitions/principals.js';
 import { defineResources } from './operation-definitions/resources.js';
 import { defineObjects } from './operation-definitions/objects.js';
-import { defineBilling } from './operation-definitions/billing.js';
 import { defineConnections } from './operation-definitions/connections.js';
 import { defineSSH } from './operation-definitions/ssh.js';
 
 export interface OperationServices {
   authorization: Authorization; principals: Principals; relations: Relations; resources: Resources;
-  catalog: Catalog; objects: Objects; billing: Billing; integrations: Integrations; custody: Custody;
+  catalog: Catalog; objects: Objects; integrations: Integrations; custody: Custody;
   sshAccess: SSHAccess;
 }
 
@@ -27,7 +25,6 @@ export function builtinDefinitions(services: OperationServices) {
   definePrincipals(definitions, services);
   defineResources(definitions, services);
   defineObjects(definitions, services);
-  defineBilling(definitions, services);
   defineConnections(definitions, services);
   defineSSH(definitions, services);
   return definitions;

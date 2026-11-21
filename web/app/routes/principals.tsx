@@ -15,7 +15,7 @@ import { ResealingNotice } from '../resealing-notice';
 
 // The lines between principals that make up how they stand to one another; a single permission given on its own is
 // managed where the principal is shared.
-const relationships = ['delegate', 'member', 'payer'];
+const relationships = ['delegate', 'member'];
 // Lines that let someone open what the principal holds: once one is drawn, this browser seals its items for them.
 const sealing = ['delegate', 'member'];
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
@@ -85,7 +85,7 @@ export default function Principals() {
         <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">{text}</div>
       </div>
       <Copy value={id} />
-      {remove && principal.permissions.includes(remove.relation === 'payer' ? 'manage_billing' : 'share') && (
+      {remove && principal.permissions.includes('share') && (
         <Form method="post">
           <input type="hidden" name="subjectId" value={remove.subjectId} />
           <input type="hidden" name="objectId" value={remove.objectId} />
@@ -151,7 +151,6 @@ export default function Principals() {
                 ))}
               </SelectField>
               <p className="leading-relaxed text-muted-foreground text-sm">{t('relationHelp')}</p>
-              <p className="leading-relaxed text-muted-foreground text-sm">{t('paymentHelp')}</p>
               <Button type="submit" variant="default">
                 {t('add')}
               </Button>

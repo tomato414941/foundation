@@ -15,12 +15,7 @@ const Environment = z.object({
   AWS_REGION: z.string().default('ap-northeast-1'),
   RESEND_API_KEY: z.string().default(''),
   FOUNDATION_MAIL_FROM: z.string().default(''),
-  FOUNDATION_BILLING_MODE: z.enum(['required', 'included']).default('required'),
   FOUNDATION_INCLUDED_STORAGE_BYTES: z.coerce.number().int().nonnegative().default(21_474_836_480),
-  STRIPE_SECRET_KEY: z.string().default(''),
-  STRIPE_WEBHOOK_SECRET: z.string().default(''),
-  STRIPE_STORAGE_PRICE: z.string().default(''),
-  STRIPE_STORAGE_METER: z.string().default('foundation_storage_byte_hours'),
   FOUNDATION_BUCKET: z.string().default(''),
   FOUNDATION_LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])

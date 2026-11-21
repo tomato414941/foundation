@@ -27,7 +27,6 @@ export const Action = z.enum([
   'reveal',
   'use',
   'manage_credentials',
-  'manage_billing',
   'export',
 ]);
 export type ActionName = z.infer<typeof Action>;
@@ -43,7 +42,6 @@ export const RoleOf = {
   reveal: 'revealer',
   use: 'user',
   manage_credentials: 'credential_manager',
-  manage_billing: 'billing_manager',
   export: 'exporter',
 } as const satisfies Record<ActionName, string>;
 export const ResourceKind = z.enum([
@@ -452,12 +450,9 @@ export type RequestedOperation = z.infer<typeof Operation>;
 export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
 export type OperationTitle = z.infer<typeof OperationTitle>;
 const Named = z.object({ id: Id, name: Name });
-// A change its requester has made its own side of, waiting on the side the request is sent to: a line that needs both
-// its ends, or something passed to a new owner. The requester makes it once that side agrees.
-export const Proposal = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('line'), subject: Named, relation: RelationName, object: Named }),
-  z.object({ kind: z.literal('transfer'), item: Named, to: Named }),
-]);
+// A change its requester has made its own side of, waiting on the side the request is sent to: something passed to a
+// new owner. The requester makes it once that side agrees.
+export const Proposal = z.object({ kind: z.literal('transfer'), item: Named, to: Named });
 export const DeviceRequest = z.object({
   id: Id,
   name: Name,
@@ -466,17 +461,6 @@ export const DeviceRequest = z.object({
   principalId: Id.nullable(),
   createdAt: Time,
   expiresAt: Time,
-});
-export const Payment = z.object({
-  available: z.boolean(),
-  required: z.boolean(),
-  active: z.boolean(),
-  payer: Principal.pick({ id: true, name: true }).nullable(),
-});
-export const Usage = z.object({
-  storageBytes: z.number().nonnegative(),
-  storageLimit: z.number().positive(),
-  month: z.string(),
 });
 export const AuditEntry = z.object({
   id: z.string(),

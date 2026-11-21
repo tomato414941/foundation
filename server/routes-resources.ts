@@ -7,7 +7,7 @@ import * as C from '../shared/contracts.js';
 import { isProtected } from '../shared/protected.js';
 
 export async function routesResources(app: ApiApp, context: Context) {
-  const { resources, authorization, catalog, objects, billing } = context;
+  const { resources, authorization, catalog, objects } = context;
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,
@@ -149,30 +149,5 @@ export async function routesResources(app: ApiApp, context: Context) {
       .header('content-type', 'application/octet-stream')
       .header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(row.name))
       .send(Buffer.from(bytes));
-  });
-  app.get(
-    '/api/principals/:id/payment',
-    { schema: { params: C.IdParams, response: { 200: C.Payment } } },
-    (request) => billing.payment(actor(request), request.params.id),
-  );
-  app.get(
-    '/api/principals/:id/usage',
-    { schema: { params: C.IdParams, response: { 200: C.Usage } } },
-    async (request) => {
-      await authorization.requirePrincipal(actor(request), request.params.id, 'read');
-      return billing.usage(request.params.id);
-    },
-  );
-  await app.register(async (scope) => {
-    scope.removeContentTypeParser('application/json');
-    scope.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) =>
-      done(null, body),
-    );
-    scope.post('/api/webhooks/stripe', { schema: { hide: true } }, async (request, reply) => {
-      if (!Buffer.isBuffer(request.body) || typeof request.headers['stripe-signature'] !== 'string')
-        fail(400, 'invalid_signature', 'The webhook signature could not be verified.');
-      await billing.webhook(request.body, request.headers['stripe-signature']);
-      return reply.send({ ok: true });
-    });
   });
 }

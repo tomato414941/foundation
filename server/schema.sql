@@ -88,7 +88,6 @@ CREATE TABLE relations (
 CREATE UNIQUE INDEX relations_on_principal ON relations(principal_id, relation, subject_id) WHERE principal_id IS NOT NULL;
 CREATE UNIQUE INDEX relations_on_resource ON relations(resource_id, relation, subject_id) WHERE resource_id IS NOT NULL;
 CREATE INDEX relations_subject ON relations(subject_id, relation);
-CREATE UNIQUE INDEX relations_payer ON relations(principal_id) WHERE relation = 'payer';
 CREATE UNIQUE INDEX resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
 CREATE TABLE object_blobs (
   id uuid PRIMARY KEY,
@@ -161,31 +160,6 @@ CREATE TABLE request_links (
 CREATE TABLE integration_settings (
   principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
   settings jsonb NOT NULL
-);
-CREATE TABLE payment_accounts (
-  principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
-  customer_id text NOT NULL UNIQUE,
-  subscription_id text UNIQUE,
-  status text NOT NULL DEFAULT 'pending'
-);
-CREATE TABLE billing_events (
-  id uuid PRIMARY KEY,
-  reference text NOT NULL UNIQUE,
-  payer_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  -- Who used it, by id alone: the payer keeps the usage after that principal is deleted.
-  principal_id uuid NOT NULL,
-  amount bigint NOT NULL CHECK(amount >= 0),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  sent_at timestamptz
-);
-CREATE INDEX billing_events_usage ON billing_events(created_at,principal_id);
-CREATE TABLE payment_webhooks (
-  id text PRIMARY KEY,
-  received_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE usage_limits (
-  principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
-  storage_bytes bigint NOT NULL DEFAULT 1073741824
 );
 CREATE TABLE audit_log (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

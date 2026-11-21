@@ -1,5 +1,5 @@
 import { fixture } from './support.js';
-import { MemoryObjects, MemoryPayments } from './fakes.js';
+import { MemoryObjects } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
@@ -19,7 +19,6 @@ const context = await createContext(
     db: fixtureData.db,
     mailer: fixtureData.mailer,
     storage: new MemoryObjects(),
-    payments: new MemoryPayments(),
     transport: {
       async send(request) {
         return {
@@ -45,13 +44,6 @@ app.post<{ Params: { id: string } }>('/__test/key-reset/:id/ready', async reques
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,
 }));
-app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) => {
-  await context.db.pool.query(
-    "INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active') ON CONFLICT(principal_id) DO UPDATE SET status='active'",
-    [request.body.principalId, 'customer-' + request.body.principalId],
-  );
-  return { ok: true };
-});
 const worker = new Worker(context, (error) => app.log.error(error));
 try {
   await app.listen({ host: '127.0.0.1', port });

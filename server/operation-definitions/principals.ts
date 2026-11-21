@@ -8,15 +8,14 @@ import { bodyObject, idInput, withId, ok } from './support.js';
 const lineTitles: Record<string, readonly [readonly [string, string], readonly [string, string]]> = {
   delegate: [['権限を委任する', 'Delegate access'], ['委任を解除する', 'Revoke delegation']],
   member: [['メンバーに加える', 'Add a member'], ['メンバーから外す', 'Remove a member']],
-  payer: [['支払いを引き受ける', 'Pay for a principal'], ['支払いをやめる', 'Stop paying for a principal']],
 };
 function lineTitle(input: Record<string, C.JsonValue>, erase: boolean): readonly [string, string] {
   return lineTitles[String(input.relation)]?.[erase ? 1 : 0] ??
     (erase ? ['権限を外す', 'Take back a permission'] : ['権限を渡す', 'Give a permission']);
 }
 
-export function definePrincipals(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'principals' | 'relations'>) {
-  const { authorization, principals, relations } = services;
+export function definePrincipals(definitions: DefinitionRegistry, services: Pick<OperationServices, 'authorization' | 'principals' | 'relations' | 'integrations'>) {
+  const { authorization, principals, relations, integrations } = services;
   const bind = definitions.bind.bind(definitions);
   const createPrincipal = z.object({ name: C.Name, ownerId: C.Id }).strict();
   definitions.define('principal.create', createPrincipal, ['プリンシパルを作る', 'Create a principal'], async (who, input) => {
@@ -53,5 +52,8 @@ export function definePrincipals(definitions: DefinitionRegistry, services: Pick
   });
   bind({ name: 'principal.transfer', method: 'POST', path: '/api/principals/:id/transfer', bodyLimit: 32 * 1024 * 1024,
     schema: { params: C.IdParams, body: transfer.omit({ id: true }), response: { 200: C.Ok } }, input: withId });
-
+  definitions.define('settings.update', z.object({ id: C.Id, settings: C.Settings }).strict(), ['連携設定を変更する', 'Change integration settings'],
+    (who, input) => integrations.set(who, input.id, input.settings));
+  bind({ name: 'settings.update', method: 'PUT', path: '/api/principals/:id/settings', schema: { params: C.IdParams,
+    body: C.Settings, response: { 200: z.object({ settings: C.Settings }) } }, input: (params, body) => ({ id: params.id, settings: body }) });
 }

@@ -225,7 +225,7 @@ class BrowserTests(unittest.TestCase):
             expect(owner.get_by_text("Linked AIに、Linked ownerが所有するリソースの操作を許可します。", exact=True)).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="リソースの作成・閲覧・変更・削除・使用")).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="接続情報や変数などの機密情報の閲覧")).to_be_visible()
-            expect(owner.get_by_text("プリンシパルの管理・共有権限や支払い設定の変更は含まれません。", exact=True)).to_be_visible()
+            expect(owner.get_by_text("プリンシパルの管理や共有権限の変更は含まれません。", exact=True)).to_be_visible()
             self.select(owner, "言語", "English")
             expect(owner.get_by_text("Allow Linked AI to operate resources owned by Linked owner.", exact=True)).to_be_visible()
             expect(owner.get_by_role("listitem").filter(has_text="Read private content, including connection credentials and variables")).to_be_visible()
@@ -814,8 +814,6 @@ class BrowserTests(unittest.TestCase):
     def test_秘密鍵を開かずにオブジェクトを渡し相手の承認後にダウンロードする(self):
         sender, owner = self.passkey_account("Public item sender")
         receiver, recipient = self.passkey_account("Public item recipient")
-        response = sender.request.post(ORIGIN + "/__test/payment", data={"principalId": owner["id"]})
-        self.assertTrue(response.ok, response.text())
         sender.goto(f"{ORIGIN}/p/{owner['id']}/storage/new")
         sender.locator('input[name="file"]').set_input_files({"name": "report.txt", "mimeType": "text/plain", "buffer": b"transferred file"})
         sender.get_by_role("button", name="アップロード", exact=True).click()
@@ -1344,8 +1342,6 @@ class BrowserTests(unittest.TestCase):
         owner.goto(connection_path)
         expect(owner.get_by_role("heading", name="Hugging Face", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "hf-connection-ja.png"), full_page=True)
-        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
         created = owner.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={"name": "Model assistant"}, headers={"origin": ORIGIN})
         self.assertTrue(created.ok, created.text())
         agent = created.json()
@@ -1427,8 +1423,6 @@ class BrowserTests(unittest.TestCase):
 
     def test_所有するAIの接続を本人の一覧で検索し持ち主を確認して開く(self):
         page, principal = self.passkey_account("Connection owner")
-        paid = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
-        self.assertTrue(paid.ok, paid.text())
         created = page.request.post(ORIGIN + f"/api/principals/{principal['id']}/principals", data={
             "name": "dev-us の AI",
         }, headers={"origin": ORIGIN})
@@ -1744,11 +1738,8 @@ class BrowserTests(unittest.TestCase):
         page.screenshot(path=str(ARTIFACTS / "settings-general-desktop-ja.png"), full_page=True)
         page.get_by_role("tab", name="基本情報", exact=True).focus()
         page.keyboard.press("ArrowRight")
-        page.wait_for_url("**/settings/billing")
-        expect(page.get_by_role("progressbar", name="ストレージ", exact=True)).to_be_visible()
-        expect(page.get_by_text("0 B / 1 GB", exact=True)).to_be_visible()
-        page.get_by_text("上限を変更", exact=True).click()
-        expect(page.get_by_role("spinbutton", name="ストレージ上限（MB）", exact=True)).to_have_value("1024")
+        page.wait_for_url("**/settings/integrations")
+        expect(page.get_by_role("textbox", name="完了後のURL", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "settings-desktop-ja.png"), full_page=True)
         page.get_by_role("tab", name="基本情報", exact=True).click()
         remove = page.get_by_role("button", name="アカウントを削除", exact=True)

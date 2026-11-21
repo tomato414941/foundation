@@ -6,7 +6,6 @@ export const KeyReset = z.object({ requestedAt: Time, readyAt: Time }).strict();
 export const Features = z.object({
   email: z.boolean(),
   storage: z.boolean(),
-  payments: z.boolean(),
 });
 export const Session = z.object({
   principal: Principal.nullable(),

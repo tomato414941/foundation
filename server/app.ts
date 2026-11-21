@@ -183,7 +183,6 @@ export async function buildApp(context: Context) {
     features: {
       email: context.mailer.enabled,
       storage: context.objects.store.enabled,
-      payments: context.billing.provider.enabled,
     },
   }));
   app.post(

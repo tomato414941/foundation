@@ -2,48 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
-import { MemoryPayments, MemoryObjects } from './fakes.js';
+import { MemoryObjects } from './fakes.js';
 import { ObjectResource } from '../shared/contracts.js';
 import { RequestView } from '../shared/operations.js';
 import { buildApp } from '../server/app.js';
 
-test('配下のプリンシパルの支払いを支払元のアカウントで管理する', async (t) => {
-  const f = await fixture(),
-    c = await createContext(f.config, { db: f.db, payments: new MemoryPayments() });
-  t.after(f.close);
-  const owner = await f.person('Payer'),
-    outsider = await f.person('Other account');
-  const child = await f.principals.create('Project', null, owner.actor.id);
-  const checkout = await c.billing.checkout(owner.actor, child.id);
-  assert.equal(checkout.url, 'https://pay.example/checkout/customer-' + owner.actor.id);
-  assert.equal((await c.billing.payment(owner.actor, child.id)).payer.id, owner.actor.id);
-  await assert.rejects(c.billing.checkout(outsider.actor, child.id), { code: 'forbidden' });
-  await f.db.pool.query("UPDATE payment_accounts SET status='active' WHERE principal_id=$1", [
-    owner.actor.id,
-  ]);
-  assert.equal((await c.billing.payment(owner.actor, child.id)).active, true);
-  assert.equal(
-    (await c.billing.portal(owner.actor, child.id)).url,
-    'https://pay.example/portal/customer-' + owner.actor.id,
-  );
-});
-
 test('オブジェクトを更新し、同時編集と保存容量の超過を拒否して現在の内容を保持する', async (t) => {
   const f = await fixture(),
     storage = new MemoryObjects(),
-    c = await createContext(f.config, {
-      db: f.db,
-      mailer: f.mailer,
-      payments: new MemoryPayments(),
-      storage,
-    });
+    c = await createContext({ ...f.config, FOUNDATION_INCLUDED_STORAGE_BYTES: 10 }, { db: f.db, mailer: f.mailer, storage });
   t.after(() => f.close());
   const owner = await f.person();
-  await f.db.pool.query(
-    "INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')",
-    [owner.actor.id, 'customer-' + owner.actor.id],
-  );
-  await c.billing.limits(owner.actor, owner.actor.id, 10);
   const first = await c.objects.upload(
     owner.actor,
     owner.actor.id,
@@ -73,18 +42,16 @@ test('オブジェクトを更新し、同時編集と保存容量の超過を�
         Buffer.from('more than ten bytes'),
         'text/plain',
       ),
-    { code: 'storage_limit' },
+    { code: 'storage_capacity' },
   );
   await c.objects.remove(owner.actor, updated);
   assert.equal(storage.objects.size, 0);
 });
 
 test('通常のファイルアップロードと依頼からの更新を同じ利用者の権限と保存処理で行う', async t => {
-  const f = await fixture(), c = await createContext(f.config, { db: f.db, mailer: f.mailer,
-    payments: new MemoryPayments(), storage: new MemoryObjects() });
+  const f = await fixture(), c = await createContext(f.config, { db: f.db, mailer: f.mailer, storage: new MemoryObjects() });
   const app = await buildApp(c); t.after(async () => { await app.close(); await f.close(); });
   const owner = await f.person('File owner'), sender = await f.person('Sender');
-  await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')", [owner.actor.id, 'file-customer']);
   const headers = { authorization: 'Bearer ' + owner.token };
   const created = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/objects?name=note.txt&contentType=text/plain',
     headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: Buffer.from('one') });
@@ -111,19 +78,11 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
   assert.equal(stale.statusCode, 409, stale.body);
 });
 
-test('支払い登録不要の利用枠を複数プリンシパルで共有し、保存容量を制限する', async (t) => {
+test('保存容量を複数プリンシパルで共有し、合計が上限を超える保存を拒否する', async (t) => {
   const f = await fixture();
   t.after(f.close);
-  const c = await createContext(
-    {
-      ...f.config,
-      FOUNDATION_BILLING_MODE: 'included',
-      FOUNDATION_INCLUDED_STORAGE_BYTES: 5,
-    },
-    { db: f.db, storage: new MemoryObjects() },
-  );
+  const c = await createContext({ ...f.config, FOUNDATION_INCLUDED_STORAGE_BYTES: 5 }, { db: f.db, storage: new MemoryObjects() });
   const owners = [await f.person('First'), await f.person('Second')];
-  assert.equal((await c.billing.payment(owners[0]!.actor, owners[0]!.actor.id)).required, false);
   const files = await Promise.allSettled(
     owners.map(({ actor }) => c.objects.upload(actor, actor.id, 'note.txt', Buffer.from('abc'), 'text/plain')),
   );
@@ -143,22 +102,3 @@ test('支払い登録不要の利用枠を複数プリンシパルで共有し�
     { code: 'storage_capacity' },
   );
 });
-
-test('支払い登録が必要な環境では、支払いの準備が整ってからオブジェクト保存を許可する', async (t) => {
-  const f = await fixture();
-  t.after(f.close);
-  const owner = await f.person(),
-    storage = new MemoryObjects(),
-    unconfigured = await createContext(f.config, { db: f.db, storage });
-  assert.equal((await unconfigured.billing.payment(owner.actor, owner.actor.id)).required, true);
-  await assert.rejects(
-    unconfigured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
-    { code: 'payments_unavailable' },
-  );
-  const configured = await createContext(f.config, { db: f.db, storage, payments: new MemoryPayments() });
-  await assert.rejects(
-    configured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
-    { code: 'payment_required' },
-  );
-});
-

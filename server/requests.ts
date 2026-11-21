@@ -59,9 +59,7 @@ export class Requests {
       const found = await this.db.one<{ name: string }>('SELECT name FROM principals WHERE id=$1 UNION ALL SELECT name FROM resources WHERE id=$1', [id]);
       return { id, name: found?.name ?? id };
     };
-    return proposed.kind === 'line'
-      ? { kind: proposed.kind, subject: await named(proposed.subjectId), relation: proposed.relation, object: await named(proposed.objectId) }
-      : { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
+    return { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
   }
   private async view(row: RequestRow, actor: Actor | null, code?: string): Promise<RequestRecordView> {
     const snapshot = await this.read(row);

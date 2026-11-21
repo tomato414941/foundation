@@ -71,12 +71,6 @@ export class Accounts {
     await c.authorization.active(actor);
     if (actor.requestId) fail(403, 'forbidden', 'This principal cannot be removed.');
     if (actor.id !== id) await c.authorization.requirePrincipal(actor, id, 'delete');
-    const account = await c.db.one<{ status: string }>(
-      'SELECT status FROM payment_accounts WHERE principal_id=$1',
-      [id],
-    );
-    if (account && ['active', 'trialing', 'past_due', 'unpaid'].includes(account.status))
-      fail(409, 'subscription_active', 'Cancel the subscription before deleting this principal.');
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [id]);
     if (children) fail(409, 'owned_principals', 'Transfer or delete owned principals first.');
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [id]);
@@ -173,12 +167,6 @@ export class Accounts {
       );
     if ((await c.authorization.holds(from.id, principal(to.id), 'stands')) || (await c.authorization.holds(to.id, principal(from.id), 'stands')))
       fail(409, 'related_accounts', 'These principals are already connected by ownership or membership.');
-    const accounts = await c.db.all<{ principal_id: string; status: string }>(
-      'SELECT principal_id,status FROM payment_accounts WHERE principal_id=ANY($1::uuid[])',
-      [[from.id, to.id]],
-    );
-    if (accounts.length > 1)
-      fail(409, 'payment_accounts', 'Keep the payment account on one principal before merging.');
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [from.id]);
     const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [from.id]);
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
@@ -246,15 +234,6 @@ export class Accounts {
         [from.id, to.id, JSON.stringify(from.public_key)],
       );
       await connection.query('DELETE FROM sessions WHERE principal_id=$1', [from.id]);
-      await connection.query('UPDATE payment_accounts SET principal_id=$2 WHERE principal_id=$1', [
-        from.id,
-        to.id,
-      ]);
-      await connection.query('UPDATE billing_events SET payer_id=$2 WHERE payer_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE billing_events SET principal_id=$2 WHERE principal_id=$1', [
-        from.id,
-        to.id,
-      ]);
       await connection.query('UPDATE audit_log SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       // Keep the source identity for signed records and immutable authorship, without allowing it to act again.
       await connection.query('DELETE FROM challenges WHERE principal_id=$1', [from.id]);

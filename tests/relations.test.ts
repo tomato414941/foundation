@@ -4,8 +4,6 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
-import { AgreementNeeded } from '../server/relations.js';
-import { MemoryPayments } from './fakes.js';
 import { openItem, sealItem } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 
@@ -40,7 +38,7 @@ test('持ち主としてふるまえる者と一員だけがプリンシパル�
   assert.deepEqual(view.owner, { id: owner.actor.id, name: 'Owner' });
   assert.ok(view.permissions.includes('transfer') && view.permissions.includes('manage_credentials'));
   const asMember = await f.principals.view(member.actor, await f.principals.get(team.id));
-  assert.ok(asMember.permissions.includes('manage_billing'));
+  assert.ok(asMember.permissions.includes('manage_credentials'));
   assert.ok(!asMember.permissions.includes('transfer') && !asMember.permissions.includes('delete'));
   const asAgent = await f.principals.view(ai.actor, await f.principals.get(team.id));
   assert.deepEqual(asAgent.permissions, ['read', 'use']);
@@ -225,99 +223,6 @@ async function served(f: Awaited<ReturnType<typeof fixture>>) {
     app.inject({ method, url, headers: { authorization: 'Bearer ' + who.token }, payload });
   return { app, call };
 }
-
-test('支払元の線は、払う側と払ってもらう側の両方で支払いを管理できる人なら、その場で引ける', async (t) => {
-  const f = await fixture();
-  t.after(f.close);
-  const owner = await f.person('Owner'), sponsor = await f.person('Sponsor');
-  const bot = await f.principals.create('Bot', null, owner.actor.id);
-  await f.relations.draw(sponsor.actor, { subjectId: owner.actor.id, relation: 'billing_manager', objectId: sponsor.actor.id });
-  await f.relations.draw(owner.actor, { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id });
-  assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
-  await assert.rejects(f.relations.draw(owner.actor, { subjectId: bot.id, relation: 'payer', objectId: sponsor.actor.id }),
-    { code: 'relation_cycle' });
-});
-
-test('片方の側しか持たない人が支払元の線を引くと、もう片方への依頼になり、承認されたときに引かれる', async (t) => {
-  const f = await fixture(), { app, call } = await served(f);
-  t.after(async () => { await app.close(); await f.close(); });
-  const owner = await f.person('Owner'), sponsor = await f.person('Sponsor');
-  const bot = await f.principals.create('Bot', null, owner.actor.id);
-  const line = { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id };
-  const asked = await call(owner, '/api/relations', line);
-  assert.equal(asked.statusCode, 202, asked.body);
-  assert.deepEqual((await call(owner, '/api/requests/' + asked.json().id, undefined, 'GET')).json().to, { id: sponsor.actor.id, name: 'Sponsor' });
-  assert.deepEqual(asked.json().proposal, { kind: 'line', subject: { id: sponsor.actor.id, name: 'Sponsor' },
-    relation: 'payer', object: { id: bot.id, name: 'Bot' } });
-  assert.equal(await f.billing.payer(bot.id), owner.actor.id);
-  assert.equal((await call(sponsor, '/api/requests/' + asked.json().id + '/approve')).json().state, 'approved');
-  assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
-  await f.relations.erase(owner.actor, line);
-  const offered = await call(sponsor, '/api/relations', line);
-  assert.equal(offered.statusCode, 202, offered.body);
-  assert.deepEqual((await call(sponsor, '/api/requests/' + offered.json().id, undefined, 'GET')).json().to, { id: bot.id, name: 'Bot' });
-  assert.equal((await call(owner, '/api/requests/' + offered.json().id + '/approve')).json().state, 'approved');
-  assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
-});
-
-test('共有を管理するだけの人は、相手を支払元にできず、相手に頼むことしかできない', async (t) => {
-  const f = await fixture(), { app, call } = await served(f);
-  t.after(async () => { await app.close(); await f.close(); });
-  const owner = await f.person('Owner'), helper = await f.person('Helper');
-  await f.relations.draw(owner.actor, { subjectId: helper.actor.id, relation: 'sharer', objectId: owner.actor.id });
-  const bot = await f.principals.create('Helper bot', null, helper.actor.id);
-  const asked = await call(helper, '/api/relations', { subjectId: owner.actor.id, relation: 'payer', objectId: bot.id });
-  assert.equal(asked.statusCode, 202, asked.body);
-  assert.equal((await call(helper, '/api/requests/' + asked.json().id, undefined, 'GET')).json().to.id, owner.actor.id);
-  assert.equal((await call(owner, '/api/requests/' + asked.json().id + '/decline')).json().state, 'declined');
-  assert.equal(await f.billing.payer(bot.id), helper.actor.id);
-});
-
-test('AI は持ち主が払うお金で支払元になれず、AI に頼まれた支払いは持ち主に届く', async (t) => {
-  const f = await fixture();
-  t.after(f.close);
-  const owner = await f.person('Owner'), stranger = await f.person('Stranger');
-  const ai = await f.principals.create('AI', null, owner.actor.id);
-  const bot = await f.principals.create('Stranger bot', null, stranger.actor.id);
-  const line = { subjectId: ai.id, relation: 'payer', objectId: bot.id };
-  await assert.rejects(f.relations.draw({ id: ai.id }, line), { code: 'forbidden' });
-  await assert.rejects(f.relations.draw(stranger.actor, line),
-    (error) => error instanceof AgreementNeeded && error.to === owner.actor.id);
-  assert.equal(await f.billing.payer(bot.id), stranger.actor.id);
-});
-
-test('支払元の線は、どちらかの側で支払いを管理できる人が外せる', async (t) => {
-  const f = await fixture();
-  t.after(f.close);
-  const owner = await f.person('Owner'), sponsor = await f.person('Sponsor'),
-    accountant = await f.person('Accountant'), helper = await f.person('Helper');
-  const bot = await f.principals.create('Bot', null, owner.actor.id);
-  await f.relations.draw(sponsor.actor, { subjectId: owner.actor.id, relation: 'billing_manager', objectId: sponsor.actor.id });
-  await f.relations.draw(owner.actor, { subjectId: accountant.actor.id, relation: 'billing_manager', objectId: bot.id });
-  await f.relations.draw(owner.actor, { subjectId: helper.actor.id, relation: 'sharer', objectId: bot.id });
-  const line = { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id };
-  await f.relations.draw(owner.actor, line);
-  await assert.rejects(f.relations.erase(helper.actor, line), { code: 'forbidden' });
-  await f.relations.erase(sponsor.actor, line);
-  assert.equal(await f.billing.payer(bot.id), owner.actor.id);
-  await f.relations.draw(owner.actor, line);
-  await f.relations.erase(accountant.actor, line);
-  assert.equal(await f.billing.payer(bot.id), owner.actor.id);
-});
-
-test('お金を払う人に支払い方法がなければ、支払元の線を引かない', async (t) => {
-  const f = await fixture({}, new MemoryPayments());
-  t.after(f.close);
-  const owner = await f.person('Owner'), sponsor = await f.person('Sponsor');
-  const bot = await f.principals.create('Bot', null, owner.actor.id);
-  await f.relations.draw(sponsor.actor, { subjectId: owner.actor.id, relation: 'billing_manager', objectId: sponsor.actor.id });
-  const line = { subjectId: sponsor.actor.id, relation: 'payer', objectId: bot.id };
-  await assert.rejects(f.relations.draw(owner.actor, line), { code: 'payment_required' });
-  await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,'customer-sponsor','active')",
-    [sponsor.actor.id]);
-  await f.relations.draw(owner.actor, line);
-  assert.equal(await f.billing.payer(bot.id), sponsor.actor.id);
-});
 
 test('持ち主を移すと、受け取る側でも作れる人ならその場で移り、そうでなければ受け取る側が承認したときに移る', async (t) => {
   const f = await fixture(), { app, call } = await served(f);

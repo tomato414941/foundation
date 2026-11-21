@@ -5,7 +5,6 @@ import { SCHEMA, createPermission, objectOf, principal, reaches } from './author
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
 import type { Resources, ResourceRow } from './resources.js';
-import type { Billing } from './billing.js';
 import type { KeyUpdates } from './key-sharing.js';
 import { Relation, RelationInput } from '../shared/contracts.js';
 import type { RelationQuery, ResourceKindName } from '../shared/contracts.js';
@@ -26,10 +25,8 @@ interface LineRow {
 // Relations recorded where they are decided, never drawn: whom something belongs to comes of making, approving and
 // passing it on, and a principal is its own self.
 const RECORDED = new Set(['owner', 'self']);
-// A change one side has agreed to and the other is asked: a line that needs both its ends, or something passed on.
-export type Proposed =
-  | { kind: 'line'; subjectId: string; relation: string; objectId: string }
-  | { kind: 'transfer'; itemId: string; to: string };
+// A change one side has agreed to and the other is asked: something passed on.
+export type Proposed = { kind: 'transfer'; itemId: string; to: string };
 // One side of a change: every permission agreeing takes there, and whom to ask when the actor does not hold them.
 // Null where it cannot be asked: what is given there is given only by one who holds it.
 interface Side {
@@ -51,7 +48,7 @@ const cursor = (row: LineRow) =>
 
 // The lines drawn between principals and onto what they hold, and whom each principal and thing belongs to. Each side
 // that gives something by a change agrees to it: what a line passes on is given by one who holds all of it, since
-// nothing gives more than it has, and what a payer or a new owner takes on is taken on by its side. A change made on
+// nothing gives more than it has, and what a new owner takes on is taken on by its side. A change made on
 // one side waits on the other as a request. A subject may always erase a line to itself. A line that lets someone
 // open what a key protects takes effect at once: whoever drew it seals those items for them right after, and the
 // server gives an item only to those who may open it.
@@ -62,7 +59,6 @@ export class Relations {
     readonly audit: Audit,
     readonly principals: Principals,
     readonly resources: Resources,
-    readonly billing: Billing,
   ) {}
   // The principal or thing an id names.
   async target(id: string, connection: Queryable = this.db.pool): Promise<Target & { ownerId: string | null }> {
@@ -87,18 +83,9 @@ export class Relations {
     return 'kind' in target ? target.owner_id : target.id;
   }
   // What drawing a line takes. A line passes on what its object holds: sharing there, and every permission it passes on.
-  // A payer gives its money: whoever manages the billing of the payer and of whoever its costs reach agrees to give it,
-  // and whoever manages the billing of the principal paid for agrees to take it.
-  private async drawing(object: Target, line: Line): Promise<Side[]> {
-    if (line.relation !== 'payer') {
-      const passed = ['share', ...reaches(objectOf(object).type, line.relation)];
-      return [{ needs: passed.map((name): [Target, string] => [object, name]), ask: null }];
-    }
-    const pays = await this.billing.payer(line.subjectId), payers = [...new Set([line.subjectId, pays])];
-    return [
-      { needs: payers.map((id): [Target, string] => [principal(id), 'manage_billing']), ask: pays },
-      { needs: [[object, 'manage_billing']], ask: line.objectId },
-    ];
+  private drawing(object: Target, line: Line): Side[] {
+    const passed = ['share', ...reaches(objectOf(object).type, line.relation)];
+    return [{ needs: passed.map((name): [Target, string] => [object, name]), ask: null }];
   }
   // What passing a principal or a thing to a new owner takes: one who may pass it on gives it, and the new owner takes it
   // on by one who could make such a thing there.
@@ -109,8 +96,9 @@ export class Relations {
     ];
   }
   // Whether every side of a change agrees: the actor for what it holds, and for the other side whoever agreed to the
-  // request the change is made under. When the actor holds one side and the other can be asked, the change goes there.
-  async agree(actor: Actor, proposed: Proposed, sides: Side[], connection: Queryable = this.db.pool) {
+  // request the change is made under. When the actor holds one side of a proposed change and the other can be asked,
+  // the change goes there.
+  async agree(actor: Actor, proposed: Proposed | null, sides: Side[], connection: Queryable = this.db.pool) {
     await this.authorization.active(actor, connection);
     const parties = actor.requestId ? [] : [actor.id, ...(actor.agreedBy ? [actor.agreedBy] : [])];
     const holds = async (party: string, side: Side) => {
@@ -126,7 +114,7 @@ export class Relations {
     }
     if (!missing.length) return;
     const ask = missing[0]!.ask;
-    if (missing.length === sides.length || missing.length > 1 || !ask || actor.approvalId || actor.agreedBy)
+    if (missing.length === sides.length || missing.length > 1 || !ask || !proposed || actor.approvalId || actor.agreedBy)
       fail(403, 'forbidden', 'You do not have permission to perform this action.');
     throw new AgreementNeeded(ask, proposed);
   }
@@ -135,29 +123,11 @@ export class Relations {
     await this.principals.get(line.subjectId);
     const object = await this.target(line.objectId);
     this.drawable(object, line.relation);
-    const payer = line.relation === 'payer';
-    if (payer && (await this.authorization.can(actor, principal(line.subjectId), 'manage_billing')))
-      await this.billing.requireChargeable(line.subjectId);
-    await this.agree(actor, { kind: 'line', ...line }, await this.drawing(object, line));
-    if (payer) await this.billing.requireChargeable(line.subjectId);
+    await this.agree(actor, null, this.drawing(object, line));
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (line.relation === 'member' && (await this.authorization.holds(line.objectId, principal(line.subjectId), 'stands', connection)))
         fail(409, 'relation_cycle', 'This membership would create a cycle.');
-      if (payer) {
-        const cycle = await this.db.one(
-          `WITH RECURSIVE above(id) AS (
-            SELECT $1::uuid UNION SELECT next.id FROM above a CROSS JOIN LATERAL (
-              SELECT subject_id id FROM relations WHERE principal_id=a.id AND relation='payer'
-              UNION ALL SELECT owner_id FROM principals WHERE id=a.id AND owner_id IS NOT NULL
-            ) next
-          ) SELECT 1 FROM above WHERE id=$2`,
-          [line.subjectId, line.objectId],
-          connection,
-        );
-        if (cycle) fail(409, 'relation_cycle', 'This payment relationship would create a cycle.');
-        await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='payer'", [line.objectId]);
-      }
       await connection.query(
         `INSERT INTO relations(subject_id,relation,${'kind' in object ? 'resource_id' : 'principal_id'}) VALUES($1,$2,$3)
         ON CONFLICT DO NOTHING`,
@@ -170,11 +140,7 @@ export class Relations {
   async erase(actor: Actor, line: Line) {
     const object = await this.target(line.objectId);
     this.drawable(object, line.relation);
-    // Either side stops a payment, by whoever manages its billing there.
-    if (line.relation === 'payer') {
-      if (!(await this.authorization.can(actor, principal(line.subjectId), 'manage_billing')))
-        await this.authorization.require(actor, object, 'manage_billing');
-    } else if (!(await this.authorization.can(actor, principal(line.subjectId), 'stands')))
+    if (!(await this.authorization.can(actor, principal(line.subjectId), 'stands')))
       await this.authorization.require(actor, object, 'share');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');

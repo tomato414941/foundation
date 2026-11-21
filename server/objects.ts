@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Resources, ResourceRow } from './resources.js';
 import type { Actor } from './authorization.js';
-import type { Billing } from './billing.js';
+import type { Queryable } from './database.js';
 import type { Configuration } from './config.js';
 import { fail } from './errors.js';
 
@@ -57,9 +57,21 @@ export class S3Objects implements ObjectStore {
 export class Objects {
   constructor(
     readonly resources: Resources,
-    readonly billing: Billing,
     readonly store: ObjectStore,
+    readonly capacity: number,
   ) {}
+  // Storage is free up to a total that everyone who keeps objects here shares.
+  private async reserve(amount: number, connection: Queryable) {
+    await connection.query('SELECT pg_advisory_xact_lock(736023746)');
+    if (amount <= 0) return;
+    const total = await this.resources.db.one<{ bytes: string }>(
+      `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'variable' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources`,
+      [],
+      connection,
+    );
+    if (Number(total?.bytes ?? 0) + amount > this.capacity)
+      fail(409, 'storage_capacity', 'The available storage capacity has been reached.');
+  }
   async upload(
     actor: Actor,
     ownerId: string,
@@ -85,11 +97,7 @@ export class Objects {
     let row: ResourceRow;
     try {
       row = await this.resources.db.transaction(async (connection) => {
-        await this.billing.reserve(
-          ownerId,
-          body.length - Number(previous?.data.size ?? 0),
-          connection,
-        );
+        await this.reserve(body.length - Number(previous?.data.size ?? 0), connection);
         const data = { size: body.length, contentType };
         // Each version has its own storage key, so a failed edit cannot overwrite the current object.
         const updated = previous

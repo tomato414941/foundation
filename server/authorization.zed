@@ -14,15 +14,12 @@ definition principal {
   // Uses what this principal holds without deciding for it. What a key protects is sealed for it as well, so it
   // opens what it uses.
   relation delegate: principal
-  // Pays for what this principal uses. Drawn by the payer, who takes the cost on.
-  relation payer: principal
   // One action each, given on its own.
   relation reader: principal
   relation creator: principal
   relation editor: principal
   relation sharer: principal
   relation credential_manager: principal
-  relation billing_manager: principal
   relation exporter: principal
 
   // Acts as this principal: itself, whoever acts as its owner, and whoever acts as one of its members.
@@ -35,7 +32,6 @@ definition principal {
   permission update = stands + editor->stands
   permission share = stands + sharer->stands
   permission manage_credentials = stands + credential_manager->stands
-  permission manage_billing = stands + billing_manager->stands
   permission export = stands + exporter->stands
   // A principal ends itself or is ended by its owner, and only its owner passes it on.
   permission delete = self + owner->stands
