@@ -131,7 +131,7 @@ export async function routesResources(app: ApiApp, context: Context) {
     async (request, reply) => {
       try {
         const result = await context.oauthRelays.receive(new URL(request.url, context.config.origin).searchParams);
-        return reply.redirect('/connections/complete?flow=' + result.id);
+        return reply.redirect('/connections/complete?' + new URLSearchParams({ flow: result.id, operation: result.operationId }));
       } catch {
         return reply.redirect('/connections/complete?error=connection_expired');
       }

@@ -71,6 +71,6 @@ export class OAuthRelays {
       if (current.state_digest !== digest || current.callback_digest !== callbackDigest)
         fail(409, 'callback_received', 'This connection already received an authorization response.');
     }
-    return { id: row.id };
+    return { id: row.id, operationId: row.operation_id };
   }
 }

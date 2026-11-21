@@ -15,7 +15,8 @@ test('OAuthの認可応答を開始したプリンシパルへ暗号化して中
   const parameters = new URLSearchParams({ state, code: 'authorization-code', iss: 'https://accounts.google.com' });
   const callback = await f.app.inject('/oauth/callback?' + parameters);
   assert.equal(callback.statusCode, 302);
-  assert.equal(callback.headers.location, '/connections/complete?flow=' + started.flow.id);
+  assert.equal(callback.headers.location,
+    '/connections/complete?' + new URLSearchParams({ flow: started.flow.id, operation: started.flow.operationId }));
   const relayed = await f.app.inject({ url: '/api/oauth/relays/' + started.flow.id, headers: { authorization: 'Bearer ' + f.owner.token } });
   const result = relayed.json();
   assert.equal(decode(await open(result.sealed, f.owner.keys.privateKey, await thumbprint(f.owner.keys.publicKey), result.context)),

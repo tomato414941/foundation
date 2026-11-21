@@ -68,6 +68,7 @@ const words: Record<string, [string, string]> = {
   'errors.authorization_failed': ['サービスの認可に失敗しました。アプリの設定を確認してください。', 'Authorization failed. Check the application settings.'],
   connectionPending: ['認証情報を取得しています。', 'Obtaining credentials.'],
   authorizeService: ['サービスで認可する', 'Authorize at the service'],
+  connectionDeviceFinishes: ['サービスでの許可を受け取りました。この接続を始めた{{name}}が、つなぎ終えます。', 'The service’s authorization was received. {{name}}, which started this connection, finishes connecting it.'],
   connectionFlowHelp: ['接続を開始したブラウザーまたは端末で続けてください。', 'Continue in the browser or terminal where you started this connection.'],
   'state.uncertain': ['結果の確認が必要', 'Outcome needs review'],
   returnToService: ['{{name}}に戻る', 'Return to {{name}}'],
