@@ -16,10 +16,11 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable, requireKeys } from './keys';
 import { operationClient, custodyClient } from './custody';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionInitialValues } from './connection-form';
+import { ServiceFields } from './connection-fields';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath, sectionFor } from './navigation';
 import { useWorkspace } from './routes/workspace';
-import { connectionMethodName } from './connection-method-labels';
+import { connectionKeyLabel, connectionMethodName } from './connection-method-labels';
 import { connectionMethod } from '../../shared/connection-methods';
 import { connectionSubmission } from './operation-forms/connections';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
@@ -268,11 +269,32 @@ export default function ResourceForm() {
       maxLength={200}
     />
   );
+  const keyLabel = existing?.kind === 'connection' && method?.kind === 'token' && method.id === existing.data.methodId
+    ? connectionKeyLabel(existing.data.methodName) : undefined;
+  const keyTitle = keyLabel ? t('changeConnectionKey', { keyName: t(keyLabel) }) : undefined;
+  if (keyTitle && existing && method?.kind === 'token' && !methodUnavailable && service && methods.length === 1 && targets.length <= 1 &&
+      method.config.fields.length === 1 && method.config.fields[0]?.secret) return (
+    <Page title={keyTitle} narrow back={{ to: back, label: existing.name }}>
+      <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      {data.replaced && <Notice tone="warning">{t('errors.not_sealed_for_key')}</Notice>}
+      <Form method="post" className="grid gap-4">
+        <input type="hidden" name="connectionId" value={existing.id} />
+        <input type="hidden" name="methodId" value={method.id} />
+        <ServiceFields method={method} fields={method.config.fields} existing={existing} appMaterial={null}
+          reusableFields={data.connection?.reusableFields} />
+        <details className="border-t pt-3 text-sm">
+          <summary className="w-fit cursor-pointer text-muted-foreground">{t('rename')}</summary>
+          <div className="mt-3">{nameField}</div>
+        </details>
+        <SaveBar back={back} />
+      </Form>
+    </Page>
+  );
   return (
     <Page
       title={
         existing && data.kind === 'connection'
-          ? t('reconnect') + ' — ' + existing.name
+          ? (keyTitle ?? t('reconnect')) + ' — ' + existing.name
           : t(
               existing ? 'editItem' : 'newItem',
               existing ? { name: existing.name } : { kind: t('singular.' + data.kind) },
@@ -441,7 +463,7 @@ export default function ResourceForm() {
               back={back}
               label={
                 data.kind === 'connection'
-                  ? 'connect'
+                  ? keyTitle ? 'save' : 'connect'
                   : existing
                     ? 'save'
                     : data.kind === 'object'

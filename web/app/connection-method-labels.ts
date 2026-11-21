@@ -28,6 +28,12 @@ const labels: Record<string, string> = {
   'URL without authentication': 'httpUrlOnly',
 };
 
+export function connectionKeyLabel(name: string): 'apiKey' | 'adminApiKey' | undefined {
+  const key = labels[name.split(' · ').at(-1)!];
+  if (key === 'enterApiKey') return 'apiKey';
+  if (key === 'enterAdminApiKey') return 'adminApiKey';
+}
+
 export function connectionMethodName(name: string, t: TFunction, serviceName?: string): string {
   const separator = name.lastIndexOf(' · ');
   if (separator < 0) return labels[name] ? t(labels[name]!) : name;

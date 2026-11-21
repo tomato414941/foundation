@@ -28,7 +28,6 @@ export default [
     route(':section/:id', 'routes/resource.tsx'),
     route(':section/:id/edit', 'routes/resource-edit.tsx'),
     route(':section/:id/share', 'routes/resource-share.tsx'),
-    route('services/:id/access', 'routes/connection-access.tsx'),
     route(':section/:id/transfer', 'routes/resource-transfer.tsx'),
   ]),
   route('*', 'routes/not-found.tsx'),

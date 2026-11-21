@@ -1,4 +1,5 @@
 import { InputField } from '../form-fields';
+import { PrincipalField } from '../principal-field';
 import { Notice } from '../components';
 import { Form, redirect, useLoaderData, useActionData } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +11,7 @@ import { custodyClient } from '../custody';
 import { requireKeys } from '../keys';
 import { ErrorNotice, Page, SaveBar } from '../components';
 import { resourcePath } from '../navigation';
+import { useWorkspace } from './workspace';
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   return api('/resources/' + params.id, {}, Resource);
 }
@@ -27,6 +29,17 @@ export default function Transfer() {
   const item = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { t } = useTranslation();
+  const { session } = useWorkspace();
+  if (item.kind === 'connection') return <Page title={t('transfer')} narrow
+    back={{ to: resourcePath(item), label: item.name }}>
+    <ErrorNotice error={result && 'error' in result ? result.error : null} />
+    <Form method="post" className="grid gap-4">
+      <PrincipalField name="to" label={t('transferRecipient')} idLabel={t('transferTo')}
+        principals={session.principals.filter(principal => principal.id !== item.ownerId)} />
+      <p className="text-sm text-muted-foreground">{t('connectionTransferHelp')}</p>
+      <SaveBar back={resourcePath(item)} label="transfer" />
+    </Form>
+  </Page>;
   return (
     <Page title={t('transfer') + ' — ' + item.name} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />

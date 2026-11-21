@@ -34,12 +34,14 @@ import { TextareaField } from './form-fields';
 
 export function Page({
   title,
+  status,
   children,
   actions,
   narrow = false,
   back,
 }: {
   title: string;
+  status?: ReactNode;
   children: ReactNode;
   actions?: ReactNode;
   narrow?: boolean;
@@ -50,8 +52,11 @@ export function Page({
       {back && <Link to={back.to} className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ChevronLeft className="size-4" aria-hidden="true" />{back.label}
       </Link>}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <h1 className="min-w-0 text-2xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
+      <div className={cn('flex justify-between gap-4', status ? 'items-center' : 'flex-col sm:flex-row sm:items-center')}>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="min-w-0 text-2xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
+          {status}
+        </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </div>
       {children}
@@ -320,12 +325,14 @@ export function SaveBar({
 export function Confirm({
   label,
   name,
+  title,
   body,
   children,
   danger = true,
 }: {
   label: string;
   name: string;
+  title?: string;
   body?: string;
   children?: ReactNode;
   danger?: boolean;
@@ -349,7 +356,7 @@ export function Confirm({
       <DialogContent showCloseButton={false}>
         <Form method="post" className="space-y-5">
           <DialogHeader>
-            <DialogTitle>{danger ? t('deleteTitle', { name }) : label}</DialogTitle>
+            <DialogTitle>{title ?? (danger ? t('deleteTitle', { name }) : label)}</DialogTitle>
             <DialogDescription>{body ?? t('deleteBody')}</DialogDescription>
           </DialogHeader>
           {children}

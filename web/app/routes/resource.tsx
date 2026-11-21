@@ -1,15 +1,17 @@
 import { Button } from '../components/ui/button';
 import { InputField, TextareaField } from '../form-fields';
-import { Notice } from '../components';
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
+import { cn } from 'cn';
 import { Link, redirect, useActionData, useLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
 import { CatalogMethod, Resource } from '../../../shared/contracts';
+import type { ConnectionView } from '../../../shared/contracts';
 import { catalogDefinition } from '../../../shared/connection-methods';
 import { connectionConsole } from '../../../shared/connection-fields';
 import { decode } from '../../../shared/encryption';
-import { api, actionResult } from '../api';
+import { api, actionResult, ApiFailure } from '../api';
 import { decryptVariable, requireKeys } from '../keys';
 import {
   Bytes,
@@ -19,7 +21,6 @@ import {
   Detail,
   ErrorNotice,
   ExternalLink,
-  Operation,
   Page,
   Panel,
   State,
@@ -28,16 +29,21 @@ import {
 import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
-import { connectionMethodName } from '../connection-method-labels';
+import { connectionKeyLabel, connectionMethodName } from '../connection-method-labels';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
-  // Removing a connection leaves its credentials valid at the service, whose console is where they are disabled.
-  const method = resource.kind === 'connection' && resource.permissions.includes('delete')
-    ? catalogDefinition(await api('/connections/' + resource.id + '/method', { signal: request.signal }, CatalogMethod)) : null;
-  return { resource,
-    serviceConsole: method && resource.kind === 'connection' ? connectionConsole(method, resource.data.fields) ?? null : null };
+  let serviceConsole: string | undefined;
+  if (resource.kind === 'connection') {
+    const method = await api('/connections/' + resource.id + '/method', { signal: request.signal }, CatalogMethod)
+      .catch(error => {
+        if (error instanceof ApiFailure && error.status === 404) return null;
+        throw error;
+      });
+    if (method) serviceConsole = connectionConsole(catalogDefinition(method), resource.data.fields);
+  }
+  return { resource, serviceConsole };
 }
 export async function clientAction({ params }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -66,7 +72,8 @@ export default function ResourceDetail() {
   } | null>(null);
   const [minutes, setMinutes] = useState(15);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
-  const connection = item.kind === 'connection' ? item : null;
+  if (item.kind === 'connection')
+    return <ConnectionDetail key={item.id} item={item} serviceConsole={serviceConsole} />;
   const reveal = async () => {
     await requireKeys(session.principal!.id);
     return decryptVariable(item.id, session.principal!.id);
@@ -74,24 +81,20 @@ export default function ResourceDetail() {
   return (
     <Page
       title={item.name}
-      narrow={!!connection}
       back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t('backToList') }}
       actions={
         <>
-          {can('update') && !connection && (
+          {can('update') && (
             <Button variant="outline" asChild>
               <Link to="edit">{t('edit')}</Link>
             </Button>
           )}
-          {can('update') && connection && <Button asChild>
-            <Link to={`../new?connection=${item.id}`} relative="path">{t('reconnect')}</Link>
-          </Button>}
-          {can('share') && !connection && (
+          {can('share') && (
             <Button variant="ghost" asChild>
               <Link to="share">{t('share')}</Link>
             </Button>
           )}
-          {can('transfer') && !connection && (
+          {can('transfer') && (
             <Button variant="ghost" asChild>
               <Link to="transfer">{t('transfer')}</Link>
             </Button>
@@ -100,45 +103,7 @@ export default function ResourceDetail() {
       }
     >
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
-      {connection && connection.data.state !== 'ready' && (
-        <Notice tone={'warning'}>{t('state.' + connection.data.state)}</Notice>
-      )}
       <Panel><BoxDetails item={item} /></Panel>
-      {connection && (can('update') || can('share') || can('transfer') || can('delete')) && (
-        <Panel title={t('rarelyUsed')}>
-          <div className="divide-y divide-border">
-            {can('update') && (
-              <Operation title={t('authorizeConnection')} help={t('connectionPermissionHelp')}>
-                <Button variant="outline" asChild>
-                  <Link to="access">{t('authorizeConnection')}</Link>
-                </Button>
-              </Operation>
-            )}
-            {can('share') && (
-              <Operation title={t('share')} help={t('connectionUseHelp')}>
-                <Button variant="outline" asChild>
-                  <Link to="share">{t('share')}</Link>
-                </Button>
-              </Operation>
-            )}
-            {can('transfer') && (
-              <Operation title={t('transfer')} help={t('transferHelp')}>
-                <Button variant="outline" asChild>
-                  <Link to="transfer">{t('transfer')}</Link>
-                </Button>
-              </Operation>
-            )}
-            {can('delete') && (
-              <Operation title={t('disconnect')} help={t('disconnectHelp')}>
-                <div className="flex flex-wrap items-center gap-3">
-                  {serviceConsole && <ExternalLink href={serviceConsole}>{t('serviceConsole')}</ExternalLink>}
-                  <Confirm label={t('disconnect')} name={item.name} />
-                </div>
-              </Operation>
-            )}
-          </div>
-        </Panel>
-      )}
       {item.kind === 'variable' && can('reveal') && (
         <Panel>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -223,7 +188,7 @@ export default function ResourceDetail() {
           <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
         </Button>
       )}
-      {!connection && can('delete') && (
+      {can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t('delete')} name={item.name} />
         </div>
@@ -231,16 +196,94 @@ export default function ResourceDetail() {
     </Page>
   );
 }
-function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['resource'] }) {
+function ConnectionDetail({ item, serviceConsole }: { item: ConnectionView; serviceConsole?: string }) {
   const { t } = useTranslation();
-  if (item.kind === 'connection') return <>
-    <Detail label={t('status')}><State value={item.data.state} /></Detail>
-    <Detail label={t('service')}>{item.data.services.map((service) => service.name).join(', ') || '—'}</Detail>
-    <Detail label={t('method')}>{connectionMethodName(item.data.methodName, t)}</Detail>
-    <ConnectionFacts value={item.data} />
-    <Detail label={t('updated')}><DateText value={item.updatedAt} /></Detail>
-    <Detail label={t('id')}>{item.id}<Copy value={item.id} /></Detail>
-  </>;
+  const { principal } = useWorkspace();
+  const result = useActionData<typeof clientAction>();
+  const infoId = useId();
+  const [infoOpen, setInfoOpen] = useState(false);
+  const keyLabel = item.data.methodKind === 'token' ? connectionKeyLabel(item.data.methodName) : undefined;
+  const service = item.data.services.length === 1 ? item.data.services[0]?.name : undefined;
+
+  return (
+    <Page
+      title={item.name}
+      status={<State value={item.data.state} />}
+      back={{ to: `/p/${item.ownerId}/services`, label: t('backToList') }}
+      actions={item.permissions.includes('share') && <Button variant="outline" asChild><Link to="share">{t('share')}</Link></Button>}
+    >
+      <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      <div className="grid items-start border-t lg:grid-cols-[minmax(0,1fr)_minmax(17rem,35%)] lg:grid-rows-[auto_auto_1fr] lg:gap-x-8">
+        <div className="grid min-w-0 gap-4 py-5 lg:col-start-1 lg:row-start-1">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <dl className="min-w-0 space-y-1">
+              <dt className="text-sm text-muted-foreground">{t('method')}</dt>
+              <dd className="font-medium wrap-anywhere">{keyLabel ? t(keyLabel) : connectionMethodName(item.data.methodName, t, service)}</dd>
+            </dl>
+            {item.permissions.includes('update') && (
+              <Button variant={item.data.state === 'reconnect' ? 'default' : 'ghost'} className="min-h-10 lg:min-h-8" asChild>
+                <Link to="edit">
+                  {keyLabel ? t('changeConnectionKey', { keyName: t(keyLabel) }) : t('reconnect')}
+                </Link>
+              </Button>
+            )}
+          </div>
+          <div className="space-y-4 empty:hidden"><ConnectionFacts value={item.data} /></div>
+        </div>
+
+        <aside aria-label={t('connectionInfo')} className="min-w-0 border-t lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:border-t-0 lg:border-l lg:py-5 lg:pl-6">
+          <h2 className="hidden text-sm font-semibold lg:block">{t('connectionInfo')}</h2>
+          <button type="button" aria-controls={infoId} aria-expanded={infoOpen} onClick={() => setInfoOpen(!infoOpen)}
+            className="flex min-h-11 w-full items-center gap-2 rounded-sm text-left text-sm font-semibold lg:hidden">
+            <ChevronRight className={cn('size-4 text-muted-foreground', infoOpen && 'rotate-90')} aria-hidden="true" />
+            {t('connectionInfo')}
+          </button>
+          <div id={infoId} className={cn('space-y-4 pb-4 lg:block lg:pt-4 lg:pb-0', !infoOpen && 'hidden')}>
+            <div className="space-y-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <dl className="min-w-0 space-y-1">
+                  <dt className="text-muted-foreground">{t('owner')}</dt>
+                  <dd className="wrap-anywhere">{principal.name}</dd>
+                </dl>
+                {item.permissions.includes('transfer') && <Button variant="ghost" size="sm" className="min-h-10 lg:min-h-7" asChild>
+                  <Link to="transfer">{t('transfer')}</Link>
+                </Button>}
+              </div>
+              <dl className="space-y-1">
+                <dt className="text-muted-foreground">{t('updated')}</dt>
+                <dd><DateText value={item.updatedAt} /></dd>
+              </dl>
+              <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
+                {item.data.services.length > 0 && <dl className="min-w-0 space-y-1">
+                  <dt className="text-muted-foreground">{t('service')}</dt>
+                  <dd className="wrap-anywhere">{item.data.services.map(entry => entry.name).join(', ')}</dd>
+                </dl>}
+                {serviceConsole && <ExternalLink href={serviceConsole}>{t('serviceConsole')}</ExternalLink>}
+              </div>
+            </div>
+            <details className="group border-t">
+              <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 rounded-sm text-sm text-muted-foreground [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="size-4 group-open:rotate-90" aria-hidden="true" />{t('id')}
+              </summary>
+              <div className="flex flex-wrap items-center gap-x-1">
+                <code className="text-xs text-muted-foreground wrap-anywhere">{item.id}</code><Copy value={item.id} />
+              </div>
+            </details>
+          </div>
+        </aside>
+
+        {item.permissions.includes('delete') && <div className="border-t py-2 lg:col-start-1 lg:row-start-2">
+          <Confirm label={t('disconnect')} name={item.name} title={t('disconnectTitle', { name: item.name })} body={t('disconnectHelp')}>
+            {serviceConsole && <ExternalLink href={serviceConsole}>{t('serviceConsole')}</ExternalLink>}
+          </Confirm>
+        </div>}
+      </div>
+    </Page>
+  );
+}
+
+function BoxDetails({ item }: { item: Exclude<Awaited<ReturnType<typeof clientLoader>>['resource'], ConnectionView> }) {
+  const { t } = useTranslation();
   return (
     <>
       <Detail label={t('id')}>

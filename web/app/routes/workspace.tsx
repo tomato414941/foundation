@@ -79,7 +79,7 @@ export default function Workspace() {
             </BreadcrumbItem>
           </>}
           {operation && <><BreadcrumbSeparator /><BreadcrumbItem>
-            <BreadcrumbPage>{t(operation === 'new' ? 'create' : operation === 'access' ? 'authorizeConnection' : operation)}</BreadcrumbPage>
+            <BreadcrumbPage>{t(operation === 'new' ? 'create' : operation)}</BreadcrumbPage>
           </BreadcrumbItem></>}
         </BreadcrumbList>
       </Breadcrumb>
