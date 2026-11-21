@@ -2092,7 +2092,7 @@ class BrowserTests(unittest.TestCase):
                 self.application(page, principal, service + ":oauth", service + "-client", service + "-client-secret", fields,
                                  name=service + " application")
                 page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?service={service}&method={service}:oauth")
-                expect(page.get_by_text("この方式の認可は、同じ端末のFoundation CLIで続けます。", exact=True)).to_be_visible()
+                expect(page.get_by_text("この方式はブラウザでは最後までつなげないので、この接続を開けてよい機械がFoundation CLIでつなぎます。", exact=True)).to_be_visible()
                 expect(page.get_by_text("APIキーやアクセストークンを入力する方式は、ブラウザで保存できます。", exact=True)).to_be_visible()
                 page.screenshot(path=str(ARTIFACTS / (service + "-oauth-input-ja.png")), full_page=True)
                 print("Rendered " + service + " OAuth: " + page.locator("main").inner_text(), flush=True)

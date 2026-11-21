@@ -20,8 +20,9 @@ import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureW
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { RequestCreate, RequestView } from '../../shared/operations.js';
-import { awaitRequestedConnection, chooseMethod, connectionOutput, connectionOwner, existingConnection, flowOutput,
-  requestConnection } from './connections.js';
+import { awaitRequestedConnection, chooseMethod, connectionInput, connectionOutput, connectionOwner, existingConnection, flowOutput,
+  handedOver, ownerApplication, requestConnection } from './connections.js';
+import type { OperationResultView } from '../../shared/operation-client.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
 import { newSSHKey, withStoredKey } from './ssh-keys.js';
 import { operationClient } from './operations.js';
@@ -39,9 +40,13 @@ Usage: foundation <command> [options]
   identity use ID                      Make a saved identity the default
   request-access [--to ID] [--wait]     Ask another principal to delegate to this machine
   connect SERVICE [--owner ID] [--needs NAME] [--why TEXT] [--wait]
-                                       Find a connection you can use, or ask its owner to connect the service
+                                       Find a connection you can use, connect the service yourself when you may,
+                                       or ask its owner
+  connect --connection ID [--scope NAME] [--wait]
+                                       Connect a connection again, yourself when you may, or ask its owner
   connect wait ID                      Wait for the owner to finish a requested connection
-  connect continue ID                  Finish a connection a browser handed to this machine
+  connect continue ID                  Finish a connection this machine started, or one a browser could not
+                                       finish that this machine may make
   keep NAME (--file FILE | --stdin)    Seal and save a variable
   read ID [--output FILE]               Open a variable you may open
   exec --inputs JSON -- COMMAND ...    Give opened values to a local command
@@ -56,7 +61,9 @@ Options:
                          the one delegating to this machine)
   --needs NAME           Output a requested connection must give, such as RUNPOD_API_KEY (repeatable)
   --method ID            Connection method a request asks for
-  --connection ID        Connection a request asks its owner to connect again
+  --connection ID        Connection to connect again
+  --scope NAME           Service permission a connection asks for (repeatable; by default those it has)
+  --app ID               Application a new connection is authorized through, when the owner has several
   --why TEXT             Why a connection is requested, shown to its owner
   --new                  Ask for another connection even if the owner has one
   --to ID                Principal asked for delegation
@@ -111,6 +118,8 @@ const options = {
   method: textOption,
   connection: textOption,
   needs: { type: 'string' as const, multiple: true as const },
+  scope: { type: 'string' as const, multiple: true as const },
+  app: textOption,
   why: textOption,
   new: booleanOption,
   inputs: textOption,
@@ -441,19 +450,35 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'connect') {
-    if (args.positionals[0] === 'continue') {
-      // A service that gives its tokens only outside a browser: this machine, signed in as the one who started the
-      // connection there, exchanges and seals them.
-      const operations = await operationClient(client);
-      let progress = await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply the operation ID.')));
+    // Goes on with a connection this machine makes until it is made, the service is still to be allowed after the
+    // waiting time, or it fails.
+    const finish = async (operations: Awaited<ReturnType<typeof operationClient>>, started: OperationResultView, wait: boolean) => {
+      let progress = started;
       const deadline = Date.now() + seconds(args.values.timeout, 600) * 1000;
-      while ('flow' in progress && (progress.kind === 'pending' || progress.kind === 'authorize') && Date.now() < deadline) {
+      while (wait && 'flow' in progress && (progress.kind === 'pending' || progress.kind === 'authorize') && Date.now() < deadline) {
         await delay(1000);
         progress = await operations.connections.progress(progress.flow.id);
       }
-      await output('flow' in progress ? flowOutput(progress) : progress, args);
-      return 'flow' in progress ? ['connected'].includes(progress.kind) ? 0 : 1
+      await output('flow' in progress ? flowOutput(progress) : 'kind' in progress && progress.kind === 'saved'
+        ? { kind: 'connected', id: progress.operationId, connectionId: progress.resource.id } : progress, args);
+      return 'flow' in progress ? ['connected'].includes(progress.kind) || !wait && progress.kind === 'authorize' ? 0 : 1
         : 'kind' in progress && progress.kind === 'saved' ? 0 : 1;
+    };
+    if (args.positionals[0] === 'continue') {
+      // A service that gives its tokens only outside a browser: this machine exchanges and seals them. A connection a
+      // browser started and could not finish, this machine makes again itself when it may make it.
+      const operations = await operationClient(client);
+      const id = Id.parse(requireArgument(args.positionals[1], 'Supply the operation ID.'));
+      const operation = await operations.get(id);
+      if (operation.actor.id === self) return finish(operations, await operations.continue(id), true);
+      const method = (await chooseMethod(client, { methodId: z.object({ methodId: z.string() }).parse(operation.input).methodId,
+        needs: [] })).method;
+      const input = handedOver(operation, method);
+      if (!(input.connectionId
+        ? (await client.json('/api/resources/' + input.connectionId, {}, Resource)).permissions.includes('update')
+        : (await client.session()).principals.some(principal => principal.id === input.ownerId && principal.createKinds.includes('connection'))))
+        throw new Error('This machine may not make this connection. Finish it signed in as ' + operation.actor.name + '.');
+      return finish(operations, await operations.perform({ name: 'connection.connect', input }), !!args.values.wait);
     }
     if (args.positionals[0] === 'wait') {
       const request = await client.json('/api/requests/' + Id.parse(requireArgument(args.positionals[1], 'Supply a request ID.')), {}, RequestView);
@@ -461,23 +486,42 @@ async function main(argv: string[]) {
       await output(result, args);
       return result.kind === 'connected' ? 0 : 1;
     }
-    // The owner connects the service in a browser, entering what it needs there; this machine only asks.
+    // A machine that may make the connection makes it itself, through a method it authorizes at the service, and a
+    // person only allows it there. Otherwise the owner is asked, and connects the service in a browser.
     const service = args.positionals[0], needs = args.values.needs ?? [];
-    if (!service && !args.values.method) throw new Error('Name a service, such as foundation connect cloudrift.');
-    const chosen = await chooseMethod(client, { service, methodId: args.values.method, needs });
+    const again = args.values.connection ? await client.json('/api/resources/' + Id.parse(args.values.connection), {}, Resource) : null;
+    if (again && again.kind !== 'connection') throw new Error('Choose a connection to connect again.');
+    if (!service && !args.values.method && !again) throw new Error('Name a service, such as foundation connect cloudrift.');
     const current = await client.session();
-    const connectionOwnerId = await connectionOwner(client, self, args.values.owner);
+    const connectionOwnerId = again ? again.ownerId : await connectionOwner(client, self, args.values.owner);
     const connectionOwnerView = current.principals.find(principal => principal.id === connectionOwnerId);
+    const mayMake = again ? again.permissions.includes('update') : !!connectionOwnerView?.createKinds.includes('connection');
+    const methodId = args.values.method ?? (again?.kind === 'connection' ? again.data.methodId : undefined);
+    let chosen = await chooseMethod(client, { service, methodId, needs, making: mayMake });
     const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
-    const found = args.values.new || args.values.connection ? null
+    const found = args.values.new || again ? null
       : await existingConnection(client, { owner: connectionOwnerId, canListOwner: !!connectionOwnerView,
         service: chosen.service, outputs: wanted });
     if (found) {
       await output({ kind: 'existing', ...connectionOutput(found), next: 'Use this connection, or add --new to ask for another.' }, args);
       return 0;
     }
+    if (mayMake && connectionMethod(chosen.method).browserAuthorization) {
+      const appId = !connectionMethod(chosen.method).requiresApp ? null
+        : again?.kind === 'connection' && again.data.appId && !args.values.app ? again.data.appId
+        : await ownerApplication(client, connectionOwnerId, chosen.method, args.values.app);
+      if (appId !== undefined) {
+        const operations = await operationClient(client);
+        const input = connectionInput({ ownerId: connectionOwnerId, method: chosen.method, name: again?.name ?? chosen.method.defaultName,
+          connectionId: again?.id, appId, scopes: args.values.scope ?? (again?.kind === 'connection' ? again.data.scopes : undefined),
+          fields: again?.kind === 'connection' ? again.data.fields : undefined });
+        return finish(operations, await operations.perform({ name: 'connection.connect', input }), !!args.values.wait);
+      }
+      // Without an application of the owner's to authorize through, the owner is asked for a connection it can make.
+      if (!again && !args.values.method) chosen = await chooseMethod(client, { service, needs });
+    }
     const request = await requestConnection(client, { owner: connectionOwnerId, method: chosen.method, why: args.values.why,
-      connectionId: args.values.connection, userId: connectionOwnerView?.permissions.includes('use') ? undefined : self });
+      connectionId: again?.id, userId: connectionOwnerView?.permissions.includes('use') ? undefined : self });
     await output({ kind: 'requested', requestId: request.id, to: request.to,
       method: chosen.method.id, outputs: connectionMethod(chosen.method).outputs, url: request.url, expiresAt: request.expiresAt,
       next: 'Give the URL to ' + (request.to?.name ?? 'the owner') + ', then run foundation connect wait ' + request.id }, args);

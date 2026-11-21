@@ -441,17 +441,74 @@ test('CLIの接続依頼は必要な出力名で接続方法を選び、決ま�
   const ambiguous = await c.run(['connect', 'runpod']);
   assert.equal(ambiguous.code, 1);
   assert.match(ambiguous.stderr, /--needs NAME or --method ID: .*runpod:token \(RUNPOD_API_KEY\)/);
-  const chosen = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY']);
+  // An owner this machine does not act for is asked for a key it enters, the method giving the output named.
+  const other = await c.person('Other owner');
+  const chosen = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY', '--owner', other.actor.id]);
   assert.equal(chosen.code, 0, chosen.stderr);
-  assert.equal(JSON.parse(chosen.stdout).method, 'runpod:token');
+  assert.deepEqual([JSON.parse(chosen.stdout).kind, JSON.parse(chosen.stdout).method], ['requested', 'runpod:token']);
   const second = await c.person('Second owner');
   await c.context.relations.draw(second.actor, { subjectId: machine.principal.id, relation: 'delegate', objectId: second.actor.id });
-  const unchosen = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY']);
+  const unchosen = await c.run(['connect', 'cloudrift']);
   assert.equal(unchosen.code, 1);
   assert.match(unchosen.stderr, new RegExp('Choose one with --owner: .*' + owner.actor.id));
-  const named = await c.run(['connect', 'runpod', '--needs', 'RUNPOD_API_KEY', '--owner', second.actor.id]);
+  const named = await c.run(['connect', 'cloudrift', '--owner', second.actor.id]);
   assert.equal(named.code, 0, named.stderr);
   assert.equal(JSON.parse(named.stdout).to.id, second.actor.id);
+});
+
+// The owner keeps a GitHub OAuth application, as its browser saves one.
+async function githubApplication(operations: OperationClient, ownerId: string) {
+  const saved = await operations.perform({ name: 'app.save', input: { ownerId, name: 'GitHub application', methodId: 'github:oauth',
+    clientId: 'github-client-for-machines' } }, { clientSecret: 'github-client-secret' });
+  if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved application.');
+  return saved.resource.id;
+}
+const authorizeAt = (stdout: string) => {
+  const shown = JSON.parse(stdout), url = new URL(shown.authorizationUrl);
+  return { kind: shown.kind, id: shown.id, at: url.origin + url.pathname, clientId: url.searchParams.get('client_id') };
+};
+
+test('委任先のCLIは、持ち主のアプリでGitHubの認可を自分で始め、持ち主に依頼を送らず、持ち主の項目にできることを表示する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { owner, api, operations } = await connectionRequester(c, { delegate: true });
+  await githubApplication(operations, owner.actor.id);
+  const started = await c.run(['connect', 'github', '--method', 'github:oauth', '--why', 'Push packages']);
+  assert.equal(started.code, 0, started.stderr);
+  const shown = authorizeAt(started.stdout);
+  assert.deepEqual([shown.kind, shown.at, shown.clientId],
+    ['authorize', 'https://github.com/login/oauth/authorize', 'github-client-for-machines']);
+  assert.match(JSON.parse(started.stdout).next, new RegExp('foundation connect continue ' + shown.id));
+  const asked = await api.json<{ items: unknown[] }>('/api/requests');
+  assert.deepEqual(asked.items, []);
+  const status = await c.run(['status']);
+  assert.equal(status.code, 0, status.stderr);
+  const owned = JSON.parse(status.stdout).principals.find((principal: { id: string }) => principal.id === owner.actor.id);
+  assert.deepEqual([owned.permissions, owned.items.connection], [['read', 'use'], ['read', 'update', 'delete', 'reveal']]);
+});
+
+test('ブラウザで最後までつなげない接続は、接続を開けてよい機械がその操作の続きを自分で始め、ほかの人を入れる接続は持ち主に残す', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const { owner, custody, operations } = await connectionRequester(c, { delegate: true });
+  const appId = await githubApplication(operations, owner.actor.id);
+  const flows = new Map();
+  const browser = new OperationClient(custody, new ConnectionClient(custody, { async get(id) { return flows.get(id) ?? null; },
+    async put(flow) { flows.set(flow.id, flow); } }, { async send() { throw new Error('No service calls are expected.'); } }, 'browser'));
+  const handed = await browser.perform({ name: 'connection.connect', input: { ownerId: owner.actor.id, methodId: 'github:oauth',
+    name: 'GitHub', appId } });
+  if (!('kind' in handed) || handed.kind !== 'cli') throw new Error('Expected the browser to hand the connection over.');
+  const continued = await c.run(['connect', 'continue', handed.flow.operationId]);
+  assert.equal(continued.code, 0, continued.stderr);
+  const shown = authorizeAt(continued.stdout);
+  assert.deepEqual([shown.kind, shown.at, shown.clientId],
+    ['authorize', 'https://github.com/login/oauth/authorize', 'github-client-for-machines']);
+  assert.notEqual(shown.id, handed.flow.operationId);
+  const other = await c.person('Other user');
+  const shared = await browser.perform({ name: 'connection.connect', input: { ownerId: owner.actor.id, methodId: 'github:oauth',
+    name: 'Shared GitHub', appId, users: [other.actor.id] } });
+  if (!('kind' in shared) || shared.kind !== 'cli') throw new Error('Expected the browser to hand the connection over.');
+  const refused = await c.run(['connect', 'continue', shared.flow.operationId]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /lets others open it, which its owner decides/);
 });
 
 test('持ち主が保存したサービスなしのHTTP接続のURLとトークンを、CLIが端末で使う', async t => {

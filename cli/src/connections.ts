@@ -3,8 +3,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Client } from './client.js';
 import { CatalogEntry, Id, Name, Relation, Resource, listOf } from '../../shared/contracts.js';
 import type { CatalogConnectionMethod, CatalogService } from '../../shared/contracts.js';
-import { OperationView, RequestView } from '../../shared/operations.js';
-import type { RequestRecordView } from '../../shared/operations.js';
+import { ConnectService, OperationView, RequestView } from '../../shared/operations.js';
+import type { OperationRecordView, RequestRecordView } from '../../shared/operations.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
@@ -14,7 +14,8 @@ export function flowOutput(progress: FlowProgress) {
     ...(progress.kind === 'authorize' ? { authorizationUrl: progress.url,
       ...(progress.device ? { userCode: progress.device.userCode, verificationUri: progress.device.verificationUri,
         expiresAt: new Date(progress.device.expiresAt).toISOString() } : {}),
-      next: 'Open the URL, then run foundation connect continue ' + progress.flow.operationId } : {}),
+      next: 'Have whoever signs in at the service open the URL and allow it, then run foundation connect continue ' +
+        progress.flow.operationId } : {}),
     ...(progress.kind === 'cli' ? { next: progress.command } : {}),
     ...(progress.kind === 'connected' ? { connectionId: progress.id } : {}),
     ...(progress.kind === 'failed' ? { error: progress.error } : {}),
@@ -38,7 +39,7 @@ export async function connectionOwner(client: Client, self: string, named?: stri
 // The service and method a connection is asked with: --method alone, or a service by id or name, narrowed to the
 // methods that give every output named in needs. Methods giving the same outputs are one kind of connection; when kinds
 // still differ, this stops and lists them.
-export async function chooseMethod(client: Client, input: { service?: string; methodId?: string; needs: string[] }) {
+export async function chooseMethod(client: Client, input: { service?: string; methodId?: string; needs: string[]; making?: boolean }) {
   const catalog = await client.json('/api/catalog', {}, listOf(CatalogEntry));
   const wanted = input.service?.toLowerCase();
   const service = wanted ? catalog.items.find(entry => entry.id.toLowerCase() === wanted || entry.name.toLowerCase() === wanted)
@@ -53,10 +54,53 @@ export async function chooseMethod(client: Client, input: { service?: string; me
   const kinds = new Set(candidates.map(method => [...outputsOf(method)].sort().join(',')));
   if (kinds.size > 1) throw new Error(service.name + ' connections give different values. Choose one with --needs NAME or --method ID: ' +
     candidates.map(describe).join(', '));
-  // Of methods giving the same values, prefer one ready to use whose values the owner enters in the browser.
-  candidates = [...candidates].sort((a, b) => Number(b.availability === 'ready') - Number(a.availability === 'ready') ||
+  // Of methods giving the same values, a machine making the connection prefers one it authorizes at the service, so
+  // that a person only allows it there; otherwise prefer one ready to use whose values the owner enters in the browser.
+  const authorizes = (method: CatalogConnectionMethod) => Number(input.making === true && connectionMethod(method).browserAuthorization);
+  candidates = [...candidates].sort((a, b) => authorizes(b) - authorizes(a) ||
+    Number(b.availability === 'ready') - Number(a.availability === 'ready') ||
     Number(b.registration.kind === 'input') - Number(a.registration.kind === 'input'));
   return { service, method: candidates[0]! };
+}
+// The application of the owner's that a new connection is authorized through: the one named, or the only one the owner
+// holds for the method. Undefined when the owner holds none this machine may open.
+export async function ownerApplication(client: Client, owner: string, method: CatalogConnectionMethod, named?: string) {
+  if (named) return Id.parse(named);
+  const apps: string[] = [];
+  let after: string | null = null;
+  do {
+    const page: { items: z.infer<typeof Resource>[]; next: string | null } = await client.json('/api/principals/' + owner + '/resources?' +
+      new URLSearchParams({ kind: 'app', limit: '200', ...(after ? { after } : {}) }), {}, listOf(Resource));
+    for (const item of page.items)
+      if (item.kind === 'app' && item.ownerId === owner && item.data.methodId === method.id && item.permissions.includes('reveal'))
+        apps.push(item.id);
+    after = page.next;
+  } while (after);
+  if (apps.length > 1) throw new Error('The owner has several applications for ' + method.id + '. Choose one with --app: ' + apps.join(', '));
+  return apps[0];
+}
+// What a connection is made with when this machine makes it: the owner, method and connection, and what the owner
+// already decided of it. Who else may open it is the owner's to decide, so a machine makes no connection that lets
+// others in.
+export function connectionInput(input: {
+  ownerId: string; method: CatalogConnectionMethod; name: string; connectionId?: string; appId?: string | null;
+  scopes?: string[]; fields?: Record<string, string>;
+}) {
+  return { ownerId: input.ownerId, methodId: input.method.id, name: Name.parse(input.name),
+    ...(input.connectionId ? { connectionId: input.connectionId } : {}),
+    ...(input.appId ? { appId: input.appId } : {}),
+    ...(input.scopes?.length ? { scopes: input.scopes } : {}),
+    ...(input.fields && Object.keys(input.fields).length ? { fields: input.fields } : {}) };
+}
+// The connection an operation a browser could not finish was making, for this machine to make itself instead.
+export function handedOver(operation: OperationRecordView, method: CatalogConnectionMethod) {
+  if (operation.name !== 'connection.connect' || !['in_progress', 'stopped', 'failed'].includes(operation.state))
+    throw new Error('Choose a connection that is still being made.');
+  const input = ConnectService.parse(operation.input);
+  if (input.users?.length)
+    throw new Error('This connection lets others open it, which its owner decides. Finish it signed in as ' + operation.actor.name + '.');
+  return connectionInput({ ownerId: input.ownerId, method, name: input.name ?? method.defaultName, connectionId: input.connectionId,
+    appId: input.appId, scopes: input.scopes, fields: input.fields });
 }
 // A ready connection the caller may use, from the owner's list or among items shared with the caller.
 export async function existingConnection(client: Client, input: {

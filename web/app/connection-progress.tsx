@@ -25,7 +25,7 @@ export function ConnectionProgress({ progress, cancelIntent = 'cancel', authoriz
     {progress.kind === 'cli' && <Notice tone="info">
       <p>{t(progress.flow.error ? 'browserExchangeRestart' : 'connectionCliHelp')}</p>
       <div className="mt-3 flex min-w-0 items-center gap-2"><code className="min-w-0 break-all text-sm">{progress.command}</code><Copy value={progress.command} /></div>
-      <p className="mt-3">{t('connectionCliLoginHelp')}</p>
+      <p className="mt-3">{t('connectionCliRunHelp')}</p>
     </Notice>}
     {progress.kind === 'failed' && <ErrorNotice error={progress.error} />}
     {!['cancelled', 'connected'].includes(progress.kind) && <Button className={review ? 'min-h-12 w-fit px-4 text-muted-foreground' : undefined} variant="ghost" type="submit" name="intent" value={cancelIntent} formNoValidate>{t('cancel')}</Button>}
