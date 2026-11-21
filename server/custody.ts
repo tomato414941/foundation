@@ -93,9 +93,9 @@ export class Custody {
   }
   // Whether content is sealed for exactly these recipients, each by the key it has now.
   async sealedFor(content: SealedItemValue, recipients: Recipient[]) {
-    const expected = new Set(await Promise.all(recipients.map(recipient => thumbprint(recipient.publicKey))));
-    const given = content.sealed.recipients.map(recipient => recipient.header.kid);
-    return given.length === expected.size && given.every(id => expected.has(id));
+    const expected = (await Promise.all(recipients.map(recipient => thumbprint(recipient.publicKey)))).sort();
+    const given = content.sealed.recipients.map(recipient => recipient.header.kid).sort();
+    return given.join() === expected.join();
   }
   async requireSealedFor(content: SealedItemValue, recipients: Recipient[]) {
     if (!await this.sealedFor(content, recipients))

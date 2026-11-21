@@ -33,6 +33,10 @@ test('本番が示す開ける人に包んだ内容だけを保存し、示し�
     content: await sealItem(encode('value'), people, 1, { bytes: 5 }) });
   await assert.rejects(f.custody.put(owner.actor, await write([owner.keys])), { code: 'recipients_changed' });
   await assert.rejects(f.custody.put(owner.actor, await write([owner.keys, ai.keys, stranger.keys])), { code: 'recipients_changed' });
+  const twice = await write([owner.keys, ai.keys]);
+  const [first, second] = twice.content.sealed.recipients;
+  twice.content.sealed.recipients = [first!, { ...second!, header: { ...second!.header, kid: first!.header.kid } }];
+  await assert.rejects(f.custody.put(owner.actor, twice), { code: 'recipients_changed' });
   await f.custody.put(owner.actor, await write([owner.keys, ai.keys]));
   assert.equal(await opened(f, ai.actor, ai.keys, id), 'value');
   await assert.rejects(f.custody.read(stranger.actor, id), { code: 'forbidden' });
