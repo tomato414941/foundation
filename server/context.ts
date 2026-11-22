@@ -15,7 +15,6 @@ import type { Transport } from './transport.js';
 import { KeySharing } from './key-sharing.js';
 import { Objects, S3Objects } from './objects.js';
 import type { ObjectStore } from './objects.js';
-import { SSHAccess } from './ssh-access.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
 import { Devices } from './devices.js';
@@ -54,9 +53,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const objects = new Objects(resources, deps.storage ?? new S3Objects(config), config.FOUNDATION_INCLUDED_STORAGE_BYTES);
   const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, config.origin);
-  const sshAccess = new SSHAccess(db, resources, audit);
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
-    objects, integrations, custody, sshAccess });
+    objects, integrations, custody });
   // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an
   // approved request makes its operations.
   let requests: Requests;
@@ -73,7 +71,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     mailer,
     authentication,
     keyResets,
-    sshAccess,
     resources,
     catalog,
     transport,

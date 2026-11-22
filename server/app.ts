@@ -21,7 +21,6 @@ import * as P from '../shared/protocol.js';
 import { SealedItem } from '../shared/custody.js';
 import { routesResources } from './routes-resources.js';
 import { routesCustody } from './routes-custody.js';
-import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
 import { routesOperations } from './routes-operations.js';
 import { routesDevices } from './routes-devices.js';
@@ -466,7 +465,6 @@ export async function buildApp(context: Context) {
   await routesOperations(app, context);
   await routesResources(app, context);
   await routesCustody(app, context);
-  await routesSSH(app, context);
   await routesRequests(app, context);
   await routesDevices(app, context);
   await routesAccounts(app, context);

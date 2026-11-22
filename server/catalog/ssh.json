@@ -1,0 +1,55 @@
+{
+  "id": "ssh",
+  "name": "SSH",
+  "docs": "https://www.openssh.com/manual.html",
+  "methods": {
+    "key": {
+      "name": "SSH · Enter a private key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "host",
+            "label": "Host",
+            "secret": false,
+            "inputType": "text",
+            "placeholder": "server.example.com",
+            "pattern": "^[A-Za-z0-9_.:][A-Za-z0-9_.:-]{0,252}$"
+          },
+          {
+            "name": "port",
+            "label": "Port",
+            "secret": false,
+            "inputType": "text",
+            "defaultValue": "22",
+            "pattern": "^[1-9][0-9]{0,4}$"
+          },
+          {
+            "name": "user",
+            "label": "Account",
+            "secret": false,
+            "inputType": "text",
+            "placeholder": "deploy",
+            "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+          },
+          {
+            "name": "privateKey",
+            "label": "Private key",
+            "secret": true,
+            "inputType": "file",
+            "pattern": "^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----",
+            "note": "Choose a private key file without a passphrase, such as one ssh-keygen made."
+          }
+        ],
+        "outputs": {
+          "SSH_HOST": "/host",
+          "SSH_PORT": "/port",
+          "SSH_USER": "/user",
+          "SSH_PRIVATE_KEY": "/privateKey"
+        },
+        "files": ["SSH_PRIVATE_KEY"],
+        "hint": "SSH_PRIVATE_KEY names a file holding the private key. foundation ssh-agent CONNECTION -- COMMAND runs COMMAND with the key in an agent of its own and SSH_HOST, SSH_PORT and SSH_USER set."
+      }
+    }
+  }
+}

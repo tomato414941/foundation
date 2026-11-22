@@ -70,6 +70,9 @@ export class Requests {
     if (returnUrl) { returnUrl.searchParams.set('requestId', row.id); returnUrl.searchParams.set('state', row.state); }
     return RequestView.parse({ id: row.id, from: { id: from.id, name: from.name }, to: to ? { id: to.id, name: to.name } : null,
       message: row.message, operations: snapshot.operations.map(operation => {
+        // A request keeps what it asked for, and names an operation Foundation no longer makes by its name.
+        if (!this.definitions.has(operation.name))
+          return { ...operation, title: { ja: operation.name, en: operation.name }, keyholder: false, configure: [] };
         const definition = this.definitions.get(operation.name);
         return { ...operation, title: this.definitions.describe(operation), keyholder: definition.keyholder,
           configure: [...definition.configure] };

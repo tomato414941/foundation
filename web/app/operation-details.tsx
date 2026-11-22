@@ -5,7 +5,6 @@ import type { JsonValue } from '../../shared/contracts';
 import type { OperationCall } from '../../shared/operations';
 import type { OperationTitle } from '../../shared/contracts';
 import { hasSection, resourcePath } from './navigation';
-import { KnownResult, knownResult } from './operation-review';
 import { Button } from './components/ui/button';
 import { JsonView } from './components';
 
@@ -28,7 +27,6 @@ export function OperationResult({ invocation, value }: { invocation: OperationCa
   if (value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'connected' &&
     typeof value.id === 'string' && typeof invocation.input.ownerId === 'string')
     return <Button asChild variant="outline"><Link to={resourcePath({ ownerId: invocation.input.ownerId, kind: 'connection', id: value.id })}>{t('operationOpenConnection')}</Link></Button>;
-  if (knownResult(invocation.name, value)) return <KnownResult value={value} />;
   if (typeof value === 'string') return value ? <OutputText text={value} /> : <p className="text-muted-foreground">{t('operationNoTextOutput')}</p>;
   return <JsonView value={value} />;
 }

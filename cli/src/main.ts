@@ -24,7 +24,7 @@ import { awaitRequestedConnection, chooseMethod, connectionInput, connectionOutp
   handedOver, ownerApplication, requestConnection } from './connections.js';
 import type { OperationResultView } from '../../shared/operation-client.js';
 import { connectionMethod } from '../../shared/connection-methods.js';
-import { newSSHKey, withStoredKey } from './ssh-keys.js';
+import { withConnectionKey } from './ssh-keys.js';
 import { operationClient } from './operations.js';
 import { releaseNote } from './releases.js';
 
@@ -42,6 +42,9 @@ Usage: foundation <command> [options]
   connect SERVICE [--owner ID] [--needs NAME] [--why TEXT] [--wait]
                                        Find a connection you can use, connect the service yourself when you may,
                                        or ask its owner
+  connect SERVICE --field NAME=VALUE ... [--name NAME] [--owner ID]
+                                       Make a connection with the values given, this machine's own unless
+                                       --owner names another
   connect --connection ID [--scope NAME] [--wait]
                                        Connect a connection again, yourself when you may, or ask its owner
   connect wait ID                      Wait for the owner to finish a requested connection
@@ -51,9 +54,7 @@ Usage: foundation <command> [options]
   read ID [--output FILE]               Open a variable you may open
   exec --inputs JSON -- COMMAND ...    Give opened values to a local command
   seal                                 Seal what this machine opens for those let in since
-  ssh-key create NAME (--store | --private-key-output FILE) Make an SSH key and register its public key
-  ssh-key add NAME (--public-key KEY | --private-key FILE) Register an existing SSH key
-  ssh-key agent ID -- COMMAND ...      Run a command with a stored SSH key in a temporary agent
+  ssh-agent ID -- COMMAND ...          Run a command with an SSH connection's key in a temporary agent
   api METHOD /api/PATH [--body JSON]    Call the Foundation API; everything else is done this way
 
 Options:
@@ -66,11 +67,13 @@ Options:
   --app ID               Application a new connection is authorized through, when the owner has several
   --why TEXT             Why a connection is requested, shown to its owner
   --new                  Ask for another connection even if the owner has one
+  --field NAME=VALUE     A value a connection is made with; give a secret as @FILE or @- (repeatable)
   --to ID                Principal asked for delegation
   --message TEXT         Message shown with a delegation request
   --principal ID         Act as this saved identity for one command
   --key TOKEN            A key issued in a browser (@FILE or @- to read it)
-  --name NAME            How this machine appears when it signs in (default: host name)
+  --name NAME            How this machine appears when it signs in (default: host name), or the name of a
+                         connection made with --field
   --origin URL           Choose a server when signing in or registering
   --inputs JSON          Inputs for exec (default: [])
   --wait                 Wait for the request to be answered
@@ -79,11 +82,6 @@ Options:
   --force                Replace an existing output file
   --body JSON            Request body for api
   --upload FILE          Send a binary body with api
-  --store                Keep the new SSH private key sealed in Foundation
-  --public-key KEY       SSH public key text (@FILE accepted)
-  --private-key FILE     SSH private key file to keep sealed in Foundation
-  --private-key-output FILE  Write a new SSH private key to this private file on this machine
-  --purpose TEXT         What an SSH key is for
   --help                 Show this help
   --version              Show the version
 
@@ -118,6 +116,7 @@ const options = {
   method: textOption,
   connection: textOption,
   needs: { type: 'string' as const, multiple: true as const },
+  field: { type: 'string' as const, multiple: true as const },
   scope: { type: 'string' as const, multiple: true as const },
   app: textOption,
   why: textOption,
@@ -128,11 +127,6 @@ const options = {
   output: textOption,
   force: booleanOption,
   upload: textOption,
-  store: booleanOption,
-  'public-key': textOption,
-  'private-key': textOption,
-  'private-key-output': textOption,
-  purpose: textOption,
   help: booleanOption,
   version: booleanOption,
 };
@@ -164,6 +158,18 @@ async function text(value: string) {
     : value.startsWith('@')
       ? await readFile(value.slice(1), 'utf8')
       : value;
+}
+// The values a connection is made with, each given as NAME=VALUE.
+async function fieldValues(entries: string[]) {
+  const fields: Record<string, string> = {};
+  for (const entry of entries) {
+    const at = entry.indexOf('=');
+    if (at < 1) throw new Error('Give each --field as NAME=VALUE.');
+    const name = entry.slice(0, at);
+    if (Object.hasOwn(fields, name)) throw new Error('Give the field ' + name + ' once.');
+    fields[name] = await text(entry.slice(at + 1));
+  }
+  return fields;
 }
 async function json(value: string | undefined, fallback: unknown = {}) {
   if (!value) return fallback;
@@ -354,68 +360,6 @@ async function keep(client: Client, args: Arguments, owner: string) {
     { previous }), args);
 }
 
-// Saves a private key as a new variable of the owner, failing when one of that name exists, and registers the SSH
-// key with it. When registering fails, the variable just made is removed again.
-async function withNewVariable(client: Client, owner: string, name: string, content: Uint8Array,
-  register: (variableId: string) => Promise<ResourceView>) {
-  const { custody } = await privateClient(client);
-  const variable = await custody.save({ id: randomUUID(), ownerId: owner, kind: 'variable' }, name, content);
-  try { return await register(variable.id); } catch (error) {
-    await client.json('/api/resources/' + variable.id, { method: 'DELETE' }).catch(() => process.stderr.write(
-      'foundation: the private key was saved as variable ' + variable.id + ', which could not be removed after the SSH key failed to register.\n'));
-    throw error;
-  }
-}
-// The public key a private key file holds, as OpenSSH reads it; a key protected by a passphrase is refused.
-async function derivedPublicKey(file: string) {
-  return new Promise<string>((resolveKey, reject) => {
-    const child = spawn('ssh-keygen', ['-y', '-P', '', '-f', file], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let stdout = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.once('error', () => reject(new Error('Install OpenSSH to read the private key.')));
-    child.once('close', code => code === 0 ? resolveKey(stdout.trim())
-      : reject(new Error('Use an SSH private key file without a passphrase.')));
-  });
-}
-async function sshKeyCommand(client: Client, args: Arguments, owner: string, commandArguments: string[]) {
-  const action = requireArgument(args.positionals[0], 'Choose create, add, or agent.');
-  const purpose = args.values.purpose ?? '';
-  const register = (name: string, publicKey: string, privateKeyId: string | null) => client.json('/api/principals/' + owner + '/ssh-keys',
-    { method: 'POST', body: { name, publicKey, purpose, privateKeyId } }, Resource);
-  if (action === 'create') {
-    const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
-    const keyFile = args.values['private-key-output'];
-    if (Boolean(args.values.store) === Boolean(keyFile))
-      throw new Error('Choose --store to keep the private key in Foundation or --private-key-output FILE to keep it on this machine.');
-    if (keyFile && args.values.output && resolve(keyFile) === resolve(args.values.output))
-      throw new Error('Write the private key and the result to different files.');
-    const key = newSSHKey();
-    if (keyFile) {
-      await secureWrite(keyFile, key.privateKey, !!args.values.force);
-      // A private key whose public key was not registered is of no use, so it does not stay behind.
-      return register(name, key.publicKey, null).catch(async (error: unknown) => { await rm(keyFile, { force: true }); throw error; });
-    }
-    return withNewVariable(client, owner, name, Buffer.from(key.privateKey), id => register(name, key.publicKey, id));
-  }
-  if (action === 'add') {
-    const name = Name.parse(requireArgument(args.positionals[1], 'Supply the SSH key name.'));
-    if (Boolean(args.values['public-key']) === Boolean(args.values['private-key']))
-      throw new Error('Choose --public-key KEY to register only the public key or --private-key FILE to keep the private key as well.');
-    if (args.values['public-key']) return register(name, (await text(args.values['public-key'])).trim(), null);
-    const file = args.values['private-key']!, publicKey = await derivedPublicKey(file);
-    return withNewVariable(client, owner, name, await readFile(file), id => register(name, publicKey, id));
-  }
-  const id = Id.parse(requireArgument(args.positionals[1], 'Supply the SSH key ID.'));
-  if (action === 'agent') {
-    if (!commandArguments.length) throw new Error('Put the command after --.');
-    return withStoredKey(client, id, agent => new Promise<number>((resolveCode, reject) => {
-      const child = spawn(commandArguments[0]!, commandArguments.slice(1), { stdio: 'inherit', env: { ...process.env, SSH_AUTH_SOCK: agent.socket } });
-      child.once('error', () => reject(new Error('The command could not be started. Check the executable and arguments.')));
-      child.once('close', (code, signal) => resolveCode(code ?? (signal === 'SIGINT' ? 130 : 1)));
-    }));
-  }
-  throw new Error('Choose create, add, or agent.');
-}
 async function main(argv: string[]) {
   const boundary = argv.indexOf('--'),
     commandArguments = boundary < 0 ? [] : argv.slice(boundary + 1),
@@ -492,19 +436,29 @@ async function main(argv: string[]) {
     const again = args.values.connection ? await client.json('/api/resources/' + Id.parse(args.values.connection), {}, Resource) : null;
     if (again && again.kind !== 'connection') throw new Error('Choose a connection to connect again.');
     if (!service && !args.values.method && !again) throw new Error('Name a service, such as foundation connect cloudrift.');
+    // Values given here make a connection of this machine's own, unless it is made for another owner or again.
+    const fields = args.values.field?.length ? await fieldValues(args.values.field) : null;
     const current = await client.session();
-    const connectionOwnerId = again ? again.ownerId : await connectionOwner(client, self, args.values.owner);
+    const connectionOwnerId = again ? again.ownerId : fields ? owner : await connectionOwner(client, self, args.values.owner);
     const connectionOwnerView = current.principals.find(principal => principal.id === connectionOwnerId);
     const mayMake = again ? again.permissions.includes('update') : !!connectionOwnerView?.createKinds.includes('connection');
     const methodId = args.values.method ?? (again?.kind === 'connection' ? again.data.methodId : undefined);
-    let chosen = await chooseMethod(client, { service, methodId, needs, making: mayMake });
+    let chosen = await chooseMethod(client, { service, methodId, needs, making: mayMake && !fields });
     const wanted = needs.length ? needs : connectionMethod(chosen.method).outputs;
-    const found = args.values.new || again ? null
+    const found = args.values.new || again || fields ? null
       : await existingConnection(client, { owner: connectionOwnerId, canListOwner: !!connectionOwnerView,
         service: chosen.service, outputs: wanted });
     if (found) {
       await output({ kind: 'existing', ...connectionOutput(found), next: 'Use this connection, or add --new to ask for another.' }, args);
       return 0;
+    }
+    // Values given here are sealed on this machine into the connection it makes.
+    if (fields) {
+      if (!mayMake) throw new Error('This machine may not make this connection. Leave out --field to ask its owner.');
+      const operations = await operationClient(client);
+      const input = connectionInput({ ownerId: connectionOwnerId, method: chosen.method,
+        name: args.values.name ?? again?.name ?? chosen.method.defaultName, connectionId: again?.id });
+      return finish(operations, await operations.perform({ name: 'connection.connect', input }, { fields }), false);
     }
     if (mayMake && connectionMethod(chosen.method).browserAuthorization) {
       const appId = !connectionMethod(chosen.method).requiresApp ? null
@@ -569,11 +523,15 @@ async function main(argv: string[]) {
     await output(result, args);
     return result.failed.length ? 1 : 0;
   }
-  if (command === 'ssh-key') {
-    const result = await sshKeyCommand(client, args, owner, commandArguments);
-    if (typeof result === 'number') return result;
-    await output(result, args);
-    return 0;
+  if (command === 'ssh-agent') {
+    const id = Id.parse(requireArgument(args.positionals[0], 'Supply the SSH connection ID.'));
+    if (!commandArguments.length) throw new Error('Put the command after --.');
+    return withConnectionKey(client, id, (socket, place) => new Promise<number>((resolveCode, reject) => {
+      const child = spawn(commandArguments[0]!, commandArguments.slice(1), { stdio: 'inherit',
+        env: { ...process.env, ...place, SSH_AUTH_SOCK: socket } });
+      child.once('error', () => reject(new Error('The command could not be started. Check the executable and arguments.')));
+      child.once('close', (code, signal) => resolveCode(code ?? (signal === 'SIGINT' ? 130 : 1)));
+    }));
   }
   if (command === 'exec') {
     const inputs = z

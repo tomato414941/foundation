@@ -44,8 +44,6 @@ definition principal {
   permission create_method = create + use
   permission create_app = create + use
   permission create_object = create + use
-  permission create_ssh_key = create + use
-  permission create_ssh_host = create + use
 }
 
 // What a key protects: a value, a connection to a service, or an application used to connect. It is sealed for everyone
@@ -162,34 +160,3 @@ definition object {
   permission use = owner->use + user->stands
   permission rename = update
 }
-
-// An SSH public key. Its readers see it and where it lets someone in; its users take it out of servers it was let into.
-// The private key, when kept here, is a variable of the same owner, shared on its own. It stays with its owner.
-definition ssh_key {
-  relation owner: principal
-  relation reader: principal
-  relation editor: principal
-  relation user: principal
-
-  permission read = owner->use + reader->stands
-  permission update = owner->use + editor->stands
-  permission delete = owner->use
-  permission share = owner->stands
-  permission use = owner->use + user->stands
-  permission rename = update
-}
-
-// A server whose accounts SSH keys sign in to. Its editors record which key signs in to which account, and its readers
-// see those records. It stays with its owner.
-definition ssh_host {
-  relation owner: principal
-  relation reader: principal
-  relation editor: principal
-
-  permission read = owner->use + reader->stands
-  permission update = owner->use + editor->stands
-  permission delete = owner->use
-  permission share = owner->stands
-  permission rename = update
-}
-

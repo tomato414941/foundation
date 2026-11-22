@@ -8,7 +8,6 @@ import { encode } from '../shared/encryption.js';
 import { Resource } from '../shared/contracts.js';
 import { ProtectedKinds } from '../shared/protected.js';
 import type { ProtectedKindName } from '../shared/protected.js';
-import { newSSHKey } from '../cli/src/ssh-keys.js';
 import { OperationClient } from '../shared/operation-client.js';
 import { ConnectionClient } from '../shared/connection-client.js';
 import { RemoteFlowStore } from '../shared/operation-continuations.js';
@@ -27,9 +26,10 @@ const ways = {
   // A value entered by its owner, kept as a variable.
   variable: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
     { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode('the same value') }))) },
-  // A private key made by the CLI and kept as a variable, as foundation ssh-key create --store does.
-  sshKey: { kind: 'variable', deposit: async (f: Flow, name: string) => item(f, saved(await f.operations.perform(
-    { name: 'variable.save', input: { ownerId: f.owner.actor.id, name } }, { value: encode(newSSHKey().privateKey) }))) },
+  // A private key entered for a connection to a server over SSH.
+  ssh: { kind: 'connection', deposit: async (f: Flow, name: string) => item(f, (await f.saveConnection({ methodId: 'ssh:key', name,
+    fields: { host: 'server.example.test', user: 'deploy',
+      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n' } })).id) },
   // An API key entered for a connection.
   connection: { kind: 'connection', deposit: async (f: Flow, name: string) =>
     item(f, (await f.saveConnection({ methodId: 'cloudrift:api_key', name, fields: { token: 'the-same-token' } })).id) },

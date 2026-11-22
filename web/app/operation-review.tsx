@@ -9,8 +9,8 @@ import { api, ApiFailure } from './api';
 import { DateText, Detail } from './components';
 import { hasSection, resourcePath } from './navigation';
 
-// What an operation awaiting approval would do, in the words of its fields: the items it names by their names, keys by
-// their fingerprints, and times as dates, leaving out what only keeps concurrent changes apart.
+// What an operation awaiting approval would do, in the words of its fields: the items it names by their names, and
+// times as dates, leaving out what only keeps concurrent changes apart.
 
 const NamedPrincipal = Principal.pick({ id: true, name: true });
 type NamedPrincipal = z.infer<typeof NamedPrincipal>;
@@ -27,7 +27,6 @@ export type ReviewValue =
   | { kind: 'newVariable'; name: string }
   | { kind: 'replacedValue'; resource: ResourceView }
   | { kind: 'unknown'; id: string }
-  | { kind: 'key'; algorithm: string; fingerprint: string; comment: string }
   | { kind: 'list'; items: ReviewValue[] }
   | { kind: 'group'; rows: ReviewRow[] };
 export interface ReviewRow { field: string; value: ReviewValue; literal?: boolean }
@@ -36,23 +35,10 @@ export interface ReviewRow { field: string; value: ReviewValue; literal?: boolea
 // connect operations made before Foundation stopped pinning methods still hold in the history.
 const hidden = new Set(['version', 'revision', 'methodDigest']);
 const times = new Set(['expiresAt']);
-const keys = new Set(['publicKey']);
 // Fields naming an item or principal by its ID, and fields holding what the requester passes on as it is.
 const reference = (field: string) => /Ids?$/.test(field) || ['id', 'to', 'users'].includes(field);
 const data = new Set(['headers', 'default', 'data', 'settings', 'labels', 'fields', 'content', 'outputs']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const sshKey = /^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) ([A-Za-z0-9+/]+={0,2})(?: (.*))?$/;
-const algorithms: Record<string, string> = { 'ssh-ed25519': 'ED25519', 'ssh-rsa': 'RSA', 'ssh-dss': 'DSA',
-  'ecdsa-sha2-nistp256': 'ECDSA P-256', 'ecdsa-sha2-nistp384': 'ECDSA P-384', 'ecdsa-sha2-nistp521': 'ECDSA P-521',
-  'sk-ssh-ed25519@openssh.com': 'ED25519-SK', 'sk-ecdsa-sha2-nistp256@openssh.com': 'ECDSA-SK' };
-
-// The fingerprint OpenSSH shows for a key, or null for text that only looks like one.
-async function fingerprint(key: string) {
-  let bytes: Uint8Array<ArrayBuffer>;
-  try { bytes = Uint8Array.from(atob(key), character => character.charCodeAt(0)); } catch { return null; }
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  return 'SHA256:' + btoa(String.fromCharCode(...digest)).replace(/=+$/, '');
-}
 
 export interface ReviewContext {
   approver: NamedPrincipal | null; requester?: NamedPrincipal; principals: NamedPrincipal[]; inspect: boolean; signal: AbortSignal;
@@ -102,9 +88,6 @@ export function reviewer({ approver, requester, principals, inspect, signal }: R
     if (input === '$requester' && requester) return principal(requester);
     if (reference(field) && uuid.test(input)) return item(input);
     if (times.has(field) && !Number.isNaN(Date.parse(input))) return { kind: 'time', value: input };
-    const key = keys.has(field) ? sshKey.exec(input) : null;
-    const digest = key && await fingerprint(key[2]!);
-    if (key && digest) return { kind: 'key', algorithm: algorithms[key[1]!] ?? key[1]!, fingerprint: digest, comment: key[3] ?? '' };
     return { kind: 'text', text: input };
   };
   const rows = (input: Record<string, JsonValue>): Promise<ReviewRow[]> => Promise.all(Object.entries(input)
@@ -118,13 +101,10 @@ export function loadOperationReviews(operations: RequestRecordView['operations']
   return Promise.all(operations.map(operation => operation.keyholder ? null : rows(operation.input)));
 }
 
-// An item by its name, with what tells it apart from others of the same name where its name alone would not.
+// An item by its name, linked to it where it has a page.
 function ResourceName({ resource }: { resource: ResourceView }) {
-  const name = hasSection(resource.kind)
-    ? <Link className="underline underline-offset-4" to={resourcePath(resource)}>{resource.name}</Link> : resource.name;
-  const detail = resource.kind === 'ssh_host' ? resource.data.address + ':' + resource.data.port
-    : resource.kind === 'ssh_key' ? resource.data.fingerprint : null;
-  return detail ? <span className="flex min-w-0 flex-col">{name}<code className="text-xs wrap-anywhere">{detail}</code></span> : <>{name}</>;
+  return hasSection(resource.kind)
+    ? <Link className="underline underline-offset-4" to={resourcePath(resource)}>{resource.name}</Link> : <>{resource.name}</>;
 }
 
 function Value({ field, value }: { field: string; value: ReviewValue }) {
@@ -144,10 +124,6 @@ function Value({ field, value }: { field: string; value: ReviewValue }) {
     case 'replacedValue': return <span className="flex min-w-0 flex-col"><ResourceName resource={value.resource} />
       <span className="text-sm text-muted-foreground">{t('reviewReplacedValue')}</span></span>;
     case 'unknown': return <span>{t('reviewUnknownItem')} <code className="text-xs text-muted-foreground">{value.id}</code></span>;
-    case 'key': return <span className="flex min-w-0 flex-col">
-      <span>{value.algorithm}{value.comment && <span className="text-muted-foreground"> · {value.comment}</span>}</span>
-      <code className="text-xs wrap-anywhere">{value.fingerprint}</code>
-    </span>;
     case 'list': return <ul className="flex min-w-0 flex-col gap-1.5">
       {value.items.map((item, index) => <li key={index}><Value field={field} value={item} /></li>)}
     </ul>;
@@ -165,25 +141,6 @@ export function ReviewRows({ rows }: { rows: ReviewRow[] }) {
 // Settings left as they usually are stay folded until someone looks for them; any other value is shown.
 const usual: Record<string, JsonValue> = { timeoutSeconds: 60 };
 const folded = (row: ReviewRow) => row.field in usual && row.value.kind === 'text' && row.value.text === String(usual[row.field]);
-
-const SSHAuthorization = z.object({ account: z.string(),
-  key: z.object({ name: z.string(), fingerprint: z.string() }).nullable(),
-  host: z.object({ name: z.string(), address: z.string(), port: z.number() }).nullable() });
-// Only the operation that returns an SSH authorization has its result read as one.
-const authorizations = new Set(['ssh.access.grant']);
-export const knownResult = (name: string, value: JsonValue) => authorizations.has(name) && SSHAuthorization.safeParse(value).success;
-// A result read as what it is, for the results knownResult recognizes.
-export function KnownResult({ value }: { value: JsonValue }) {
-  const { t } = useTranslation();
-  const authorization = SSHAuthorization.safeParse(value);
-  if (!authorization.success) return null;
-  const { host, key, account } = authorization.data;
-  return <div className="flex min-w-0 flex-col gap-3">
-    {host && <Detail label={t('reviewField.hostId')}><span className="flex min-w-0 flex-col">{host.name}<code className="text-xs wrap-anywhere">{host.address + ':' + host.port}</code></span></Detail>}
-    {key && <Detail label={t('reviewField.keyId')}><span className="flex min-w-0 flex-col">{key.name}<code className="text-xs wrap-anywhere">{key.fingerprint}</code></span></Detail>}
-    <Detail label={t('reviewField.account')}>{account}</Detail>
-  </div>;
-}
 
 export function OperationReview({ rows }: { rows: ReviewRow[] }) {
   const { t } = useTranslation();

@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { SSHAddress, SSHFingerprint, SSHPublicKey } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
 
@@ -51,8 +50,6 @@ export const ResourceKind = z.enum([
   'method',
   'app',
   'object',
-  'ssh_key',
-  'ssh_host',
 ]);
 export type ResourceKindName = z.infer<typeof ResourceKind>;
 export const PublicKey = z
@@ -403,15 +400,6 @@ export const ObjectResource = z.object({
   kind: z.literal('object'),
   data: z.object({ size: z.number().int().nonnegative(), contentType: z.string() }),
 });
-// An SSH public key, and the private key kept as a variable of the same owner when it is kept here at all.
-export const SSHKeyData = z.object({
-  publicKey: SSHPublicKey, algorithm: z.string(), fingerprint: SSHFingerprint, purpose: z.string().max(500),
-  privateKeyId: Id.nullable(),
-});
-export const SSHKeyResource = z.object({ ...resourceBase, kind: z.literal('ssh_key'), data: SSHKeyData });
-// A server whose accounts SSH keys sign in to, and where it is reached.
-export const SSHHostData = z.object({ address: SSHAddress, port: z.number().int().min(1).max(65535) });
-export const SSHHostResource = z.object({ ...resourceBase, kind: z.literal('ssh_host'), data: SSHHostData });
 export const Resource = z.discriminatedUnion('kind', [
   VariableResource,
   ConnectionResource,
@@ -419,8 +407,6 @@ export const Resource = z.discriminatedUnion('kind', [
   MethodResource,
   AppResource,
   ObjectResource,
-  SSHKeyResource,
-  SSHHostResource,
 ]);
 export type ResourceView = z.infer<typeof Resource>;
 export type ConnectionView = z.infer<typeof ConnectionResource>;

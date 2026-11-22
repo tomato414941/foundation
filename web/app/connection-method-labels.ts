@@ -17,6 +17,7 @@ const labels: Record<string, string> = {
   'Enter Robot credentials': 'enterRobotCredentials',
   'Enter service account key': 'enterServiceAccountKey',
   'Enter secret key': 'enterSecretKey',
+  'Enter a private key': 'enterPrivateKey',
   'Enter database password': 'enterDatabasePassword',
   'Assume IAM role': 'assumeIamRole',
   'Authorize through Flash': 'authorizeThroughFlash',

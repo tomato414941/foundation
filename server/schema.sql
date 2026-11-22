@@ -53,7 +53,7 @@ CREATE TABLE resources (
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   -- When it came to its owner, kept by stamp_owned_at.
   owned_at timestamptz NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','ssh_key','ssh_host')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   private_data text,
@@ -190,15 +190,3 @@ CREATE TABLE oauth_relays (
   expires_at timestamptz NOT NULL,
   received_at timestamptz
 );
-
--- Which SSH key signs in to which account of a server. A record only: Foundation does not change or read the servers.
-CREATE TABLE ssh_authorizations (
-  id uuid PRIMARY KEY,
-  host_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  key_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  account text NOT NULL,
-  granted_by uuid NOT NULL,
-  granted_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (host_id,key_id,account)
-);
-CREATE INDEX ssh_authorizations_key ON ssh_authorizations(key_id);

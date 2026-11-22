@@ -68,6 +68,7 @@ export class DefinitionRegistry {
     this.get(endpoint.name);
     this.endpoints.push(endpoint);
   }
+  has(name: string) { return this.definitions.has(name); }
   get(name: string) {
     const definition = this.definitions.get(name);
     if (!definition) fail(400, 'operation_unavailable', 'Choose an available operation.');

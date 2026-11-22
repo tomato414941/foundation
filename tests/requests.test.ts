@@ -132,3 +132,24 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     { ja: 'サービスに接続する', en: 'Connect a service' },
   ]);
 });
+
+// Why: a request keeps the operations it asked for, and Foundation stops making some operations; those requests stay in
+// the lists of those they were sent between. Intent: such a request is listed and opened, naming the operation by name.
+test('今はない操作を頼んだ依頼も、その操作の名前を示して一覧と詳細に出す', async t => {
+  const f = await fixture(), context = await createContext(f.config, { db: f.db, mailer: f.mailer }), app = await buildApp(context);
+  t.after(async () => { await app.close(); await f.close(); });
+  const sender = await f.person('Sender'), receiver = await f.person('Receiver');
+  const call = (who: { token: string }, method: 'GET' | 'POST', url: string, payload?: object) =>
+    app.inject({ method, url, headers: { authorization: 'Bearer ' + who.token }, ...(payload ? { payload } : {}) });
+  const asked = await call(sender, 'POST', '/api/requests', { to: receiver.actor.id,
+    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'Project' } }] });
+  assert.equal(asked.statusCode, 201, asked.body);
+  context.definitions.definitions.delete('principal.create');
+  const listed = await call(receiver, 'GET', '/api/requests');
+  assert.equal(listed.statusCode, 200, listed.body);
+  const shown = listed.json().items.find((item: { id: string }) => item.id === asked.json().id);
+  assert.deepEqual(shown.operations[0].title, { ja: 'principal.create', en: 'principal.create' });
+  const opened = await call(receiver, 'GET', '/api/requests/' + asked.json().id);
+  assert.equal(opened.statusCode, 200, opened.body);
+  assert.equal(opened.json().operations[0].name, 'principal.create');
+});
