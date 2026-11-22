@@ -1,3 +1,4 @@
+import './jitless.js';
 import { z } from 'zod';
 
 export const AwsRegion = z.string().regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/);

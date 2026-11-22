@@ -1,8 +1,7 @@
+import './jitless.js';
 import { z } from 'zod';
 import { decodeProtectedHeader } from 'jose';
 import { AwsConnectionInfo } from './aws.js';
-
-if (typeof window !== 'undefined') z.config({ jitless: true });
 
 export const Id = z.uuid();
 export const Name = z
