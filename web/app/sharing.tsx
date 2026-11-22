@@ -6,14 +6,16 @@ import { useEffect, useState } from 'react';
 import { Form, useActionData, useFetcher, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { Action, Principal, Relation, Resource, RoleOf, listOf } from '../../shared/contracts';
+import { Action, Ok, Principal, Relation, Resource, RoleOf, listOf } from '../../shared/contracts';
 import type { ActionName, ConnectionView } from '../../shared/contracts';
+import { ConnectionSharePermission } from '../../shared/connection-sharing';
+import { KeySharingItem } from '../../shared/protocol';
 import { actionResult, api, ApiFailure, formText, session } from './api';
+import { custodyClient } from './custody';
 import { requireKeys, resealNow } from './keys';
 import { isProtected } from '../../shared/protected';
-import { ErrorNotice, Page, Panel, SaveBar } from './components';
+import { ErrorNotice, Notice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
-import { ResealingNotice } from './resealing-notice';
 import { useWorkspace } from './routes/workspace';
 
 type Grant = { principalId: string; principalName: string; actions: ActionName[] };
@@ -49,10 +51,24 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
     const objectId = params.id ?? params.owner!;
     const id = formText(form, 'principalId');
     const remove = formText(form, 'intent') === 'remove';
+    const item = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
+    if (item?.kind === 'connection') {
+      const permission = remove ? null : ConnectionSharePermission.parse(formText(form, 'actions'));
+      const path = '/connections/' + item.id + '/shares/' + encodeURIComponent(id);
+      const plan = permission === 'reveal' || permission === 'update'
+        ? await api(path + '/recipients?permission=' + permission, {}, KeySharingItem.nullable()) : null;
+      let protection;
+      if (plan) {
+        await requireKeys();
+        protection = (await (await custodyClient()).sharing([plan]))[item.id];
+      }
+      await api(path, { method: 'PUT', body: { permission, protection } }, Ok);
+      return { ok: true, removed: remove };
+    }
     const actions = remove ? [] : form.getAll('actions').map((value) => Action.parse(value));
     if (!remove && !actions.length) throw new ApiFailure('invalid_input');
     // Opening what a key protects means it is sealed for the one let in, which this browser does right after.
-    const sealed = !!params.id && isProtected((await api('/resources/' + params.id, {}, Resource)).kind);
+    const sealed = item && isProtected(item.kind);
     const signedIn = (await session()).principal?.id;
     if (sealed && signedIn) await requireKeys(signedIn);
     // Each action is its own line: draw the ones now chosen, erase the ones no longer.
@@ -92,6 +108,7 @@ function ConnectionSharing({ item, grants }: { item: ConnectionView; grants: Gra
   const busy = fetcher.state !== 'idle';
   const result = fetcher.data;
   const saved = !busy && result && 'ok' in result;
+  const error = !busy && result && 'error' in result ? result.error : null;
   const permissions = connectionPermissions.filter(entry => item.permissions.includes(entry.action));
   const strongest = (grant: Grant) => connectionPermissions.findLast(entry => grant.actions.includes(entry.action));
   const principals = session.principals.filter(principal => principal.id !== item.ownerId &&
@@ -119,7 +136,7 @@ function ConnectionSharing({ item, grants }: { item: ConnectionView; grants: Gra
       {permissions.map(entry => <SelectItem key={entry.action} value={entry.action}>{t(entry.label)}</SelectItem>)}
     </SelectField>
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="submit" loading={busy}>{t('save')}</Button>
+      <Button type="submit" loading={busy}>{t(existing ? 'save' : 'share')}</Button>
       <Button variant="ghost" disabled={busy} onClick={() => { fetcher.reset(); setEditor(null); }}>{t('cancel')}</Button>
       {existing && <Button type="submit" name="intent" value="remove" variant="ghost" disabled={busy}
         className="text-destructive hover:text-destructive">{t('removeShare')}</Button>}
@@ -128,8 +145,10 @@ function ConnectionSharing({ item, grants }: { item: ConnectionView; grants: Gra
 
   return <Page title={t('share')} narrow back={{ to: resourcePath(item), label: item.name }}
     actions={<Button variant="outline" disabled={busy} onClick={() => edit('new')}>{t('addShareRecipient')}</Button>}>
-    <ErrorNotice error={result && 'error' in result ? result.error : null} />
-    {(busy || result) && <ResealingNotice principalId={session.principal?.id} />}
+    {error && <Notice tone="error">{error === 'network' ? t('connectionShareUnconfirmed') : <>
+      <span className="block font-medium">{t('connectionShareFailed')}</span>
+      {error === 'connection_busy' ? t('connectionShareBusy') : t('errors.' + error, { defaultValue: t('failure') })}
+    </>}</Notice>}
     {saved && <p role="status" className="text-sm">{t(result.removed ? 'connectionShareRemoved' : 'connectionShareSaved')}</p>}
     {editor === 'new' && <div className="border-y">{editorForm}</div>}
     {grants.length ? <ul className="divide-y border-y" aria-label={t('shareRecipient')}>

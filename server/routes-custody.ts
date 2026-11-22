@@ -1,8 +1,11 @@
+import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
+import { ConnectionSharing } from './connection-sharing.js';
 import type { Context } from './context.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
+import { ConnectionShare, ConnectionSharePermission } from '../shared/connection-sharing.js';
 
 export async function routesCustody(app: ApiApp, context: Context) {
   const { custody, connectionOperations: operations } = context;
@@ -18,6 +21,14 @@ export async function routesCustody(app: ApiApp, context: Context) {
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
+  const sharing = new ConnectionSharing(custody), shareParams = C.IdParams.extend({ principalId: C.Id });
+  app.get('/api/connections/:id/shares/:principalId/recipients', {
+    schema: { params: shareParams, querystring: z.object({ permission: ConnectionSharePermission }),
+      response: { 200: P.KeySharingItem.nullable() } },
+  }, request => sharing.recipients(actor(request), request.params.id, request.params.principalId, request.query.permission));
+  app.put('/api/connections/:id/shares/:principalId', {
+    schema: { params: shareParams, body: ConnectionShare, response: { 200: C.Ok } },
+  }, request => sharing.save(actor(request), request.params.id, request.params.principalId, request.body));
   app.post('/api/connection-operations', {
     schema: { body: P.PrepareRenewal, response: { 201: P.RenewalOperation } },
   }, async (request, reply) => reply.code(201).send(await operations.prepare(actor(request), request.body.id,

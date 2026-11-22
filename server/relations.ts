@@ -118,14 +118,18 @@ export class Relations {
       fail(403, 'forbidden', 'You do not have permission to perform this action.');
     throw new AgreementNeeded(ask, proposed);
   }
-  async draw(actor: Actor, line: Line) {
+  async requireDraw(actor: Actor, line: Line, connection: Queryable) {
     if (line.subjectId === line.objectId) fail(400, 'invalid_relation', 'Choose a different principal.');
-    await this.principals.get(line.subjectId);
-    const object = await this.target(line.objectId);
+    await this.principals.get(line.subjectId, connection);
+    const object = await this.target(line.objectId, connection);
     this.drawable(object, line.relation);
-    await this.agree(actor, null, this.drawing(object, line));
-    await this.db.transaction(async (connection) => {
+    await this.agree(actor, null, this.drawing(object, line), connection);
+    return object;
+  }
+  async draw(actor: Actor, line: Line, transaction?: Queryable) {
+    const add = async (connection: Queryable) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      const object = await this.requireDraw(actor, line, connection);
       if (line.relation === 'member' && (await this.authorization.holds(line.objectId, principal(line.subjectId), 'stands', connection)))
         fail(409, 'relation_cycle', 'This membership would create a cycle.');
       await connection.query(
@@ -135,22 +139,24 @@ export class Relations {
       );
       await this.audit.record(this.ledger(object), actor.id, 'relation.add', line.objectId,
         { subjectId: line.subjectId, relation: line.relation, ...agreed(actor) }, connection);
-    });
+    };
+    return transaction ? add(transaction) : this.db.transaction(add);
   }
-  async erase(actor: Actor, line: Line) {
-    const object = await this.target(line.objectId);
-    this.drawable(object, line.relation);
-    if (!(await this.authorization.can(actor, principal(line.subjectId), 'stands')))
-      await this.authorization.require(actor, object, 'share');
-    await this.db.transaction(async (connection) => {
+  async erase(actor: Actor, line: Line, transaction?: Queryable) {
+    const remove = async (connection: Queryable) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      const object = await this.target(line.objectId, connection);
+      this.drawable(object, line.relation);
+      if (!(await this.authorization.can(actor, principal(line.subjectId), 'stands', connection)))
+        await this.authorization.require(actor, object, 'share', connection);
       await connection.query(
         `DELETE FROM relations WHERE subject_id=$1 AND relation=$2 AND ${'kind' in object ? 'resource_id' : 'principal_id'}=$3`,
         [line.subjectId, line.relation, line.objectId],
       );
       await this.audit.record(this.ledger(object), actor.id, 'relation.remove', line.objectId,
         { subjectId: line.subjectId, relation: line.relation }, connection);
-    });
+    };
+    return transaction ? remove(transaction) : this.db.transaction(remove);
   }
   // Acceptance rechecks the exact version and both sides' current permissions while the item is locked.
   async transferResource(actor: Actor, id: string, to: string, version: number) {

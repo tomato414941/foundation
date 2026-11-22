@@ -218,8 +218,25 @@ const words: Record<string, [string, string]> = {
   emptyShareRecipients: ['共有相手はいません。', 'No recipients yet.'],
   connectionShareUse: ['接続を使う', 'Use this connection'],
   connectionShareEdit: ['接続を編集する', 'Edit this connection'],
-  connectionShareSaved: ['共有権限を保存しました。', 'Sharing permissions saved.'],
+  connectionShareSaved: ['接続を共有しました。', 'Connection shared.'],
   connectionShareRemoved: ['共有を解除しました。', 'Access removed.'],
+  connectionShareFailed: ['共有設定を変更できませんでした。', 'Could not change sharing permissions.'],
+  connectionShareBusy: [
+    'トークンを更新しています。更新が終わったら、もう一度お試しください。',
+    'A token update is in progress. Try again after it finishes.',
+  ],
+  connectionShareUnconfirmed: [
+    '通信が途切れ、共有設定を変更できたか確認できませんでした。もう一度お試しください。',
+    'The connection was interrupted. We could not confirm the sharing change. Try again.',
+  ],
+  'errors.share_recipient_key_required': [
+    '共有相手に暗号化用の鍵を登録してもらってから、もう一度お試しください。',
+    'Ask the recipient to set up an encryption key, then try again.',
+  ],
+  'errors.share_application_required': [
+    'この接続を使うには接続用アプリも必要です。先に相手がそのアプリを開けるようにしてください。',
+    'Using this connection also requires its application. Give the recipient access to the app first.',
+  ],
   removeShare: ['共有を解除', 'Remove access'],
   transfer: ['所有者を変更', 'Transfer ownership'],
   transferTitle: ['所有者の変更', 'Ownership transfer'],

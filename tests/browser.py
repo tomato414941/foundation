@@ -1161,7 +1161,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("link", name="共有", exact=True).click()
         owner.get_by_role("button", name="相手を追加", exact=True).click()
         self.select(owner, "共有相手", recipient["name"])
-        owner.get_by_role("button", name="保存", exact=True).click()
+        owner.get_by_role("button", name="共有", exact=True).click()
         row = owner.get_by_role("listitem").filter(has_text=recipient["name"])
         edit = row.get_by_role("button", name="編集", exact=True)
         expect(row).to_contain_text("一覧・詳細を見る")
@@ -1176,7 +1176,24 @@ class BrowserTests(unittest.TestCase):
         self.select(owner, "許可する操作", "接続を使う")
         expect(owner.get_by_text("共有相手はこの接続の認証情報を取得できます。", exact=True)).to_be_visible()
         owner.screenshot(path=str(ARTIFACTS / "cloudrift-sharing-ja.png"), full_page=True)
+        revision = owner.request.get(resource + "/custody").json()["content"]["revision"]
+        operation_id = str(uuid.uuid4())
+        renewal = owner.request.post(ORIGIN + "/api/connection-operations", headers={"origin": ORIGIN},
+                                     data={"id": operation_id, "resourceId": item["id"], "expectedRevision": revision})
+        self.assertTrue(renewal.ok, renewal.text())
         owner.get_by_role("button", name="保存", exact=True).click()
+        expect(owner.get_by_role("alert")).to_contain_text("共有設定を変更できませんでした。")
+        expect(owner.get_by_role("alert")).to_contain_text("トークンを更新しています。更新が終わったら、もう一度お試しください。")
+        self.assertEqual(reader.request.get(resource).status, 200)
+        self.assertEqual(reader.request.get(resource + "/custody").status, 403)
+        owner.screenshot(path=str(ARTIFACTS / "cloudrift-sharing-busy-ja.png"), full_page=True)
+
+        aborted = owner.request.post(ORIGIN + "/api/connection-operations/" + operation_id + "/abort",
+                                     headers={"origin": ORIGIN}, data={"fence": renewal.json()["fence"]})
+        self.assertTrue(aborted.ok, aborted.text())
+        owner.get_by_role("button", name="保存", exact=True).click()
+        expect(owner.get_by_role("status")).to_contain_text("接続を共有しました。")
+        owner.screenshot(path=str(ARTIFACTS / "cloudrift-sharing-saved-ja.png"), full_page=True)
         expect(edit).to_be_enabled()
         expect(row).to_contain_text("接続を使う")
         content = reader.request.get(resource + "/custody")
