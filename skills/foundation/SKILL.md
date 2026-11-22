@@ -1,12 +1,12 @@
 ---
 name: foundation
-description: Use Foundation, a store of credentials, connections and SSH keys that hands them to commands without showing them. Use whenever a task needs an API key, a token, a login or an SSH key, or works with Foundation itself.
+description: Use Foundation, a store of credentials and connections, SSH keys among them, that hands them to commands without showing them. Use whenever a task needs an API key, a token, a login or an SSH key, or works with Foundation itself.
 ---
 
 # foundation
 
-- Foundation keeps credentials as items: variables, connections (logins to
-  services, with named outputs) and SSH keys. Each item belongs to a
+- Foundation keeps credentials as items: variables and connections (logins to
+  services and servers, with named outputs). Each item belongs to a
   principal, such as a machine that has signed in. Commands name items by
   ID. IDs belong to one installation, so keep them out of repositories.
   `foundation --help` lists every command.
@@ -24,18 +24,23 @@ description: Use Foundation, a store of credentials, connections and SSH keys th
 - Values that reach exec's output come out as `[redacted]`. Never print a
   value, or any part of one, and never keep one in a file that outlives the
   command that needs it, as `foundation read --output` into `~/.ssh` would.
-- SSH keys: keep one per machine and destination, with the private key in
-  Foundation, and let every session on that machine share it: use the key
-  that exists instead of making another.
-  `foundation ssh-key agent KEY -- COMMAND` runs COMMAND with SSH_AUTH_SOCK
-  naming a temporary agent that holds the key.
+- SSH: a connection through the service `ssh` holds a server, an account on it
+  and the private key. Keep one per machine and destination, and let every
+  session on that machine share it: use the connection that exists instead of
+  making another. `foundation ssh-agent CONNECTION -- COMMAND` runs COMMAND
+  with SSH_AUTH_SOCK naming a temporary agent that holds the key, and with
+  SSH_HOST, SSH_PORT and SSH_USER set.
 - The agent drops the key 15 minutes after COMMAND starts. Connections opened
-  before then stay open; for a job that connects later, hand over the key's
-  private-key variable as a file with exec instead. To give a command both
-  exec's inputs and the agent, put the agent inside exec:
-  `foundation exec --inputs ... -- foundation ssh-key agent KEY -- COMMAND`.
-- Make or store a credential (`foundation keep`, `foundation connect`,
-  `foundation ssh-key create`) only when the user asks for it. When Foundation
+  before then stay open; for a job that connects later, hand over the
+  connection's SSH_PRIVATE_KEY output with exec instead, which gives it as a
+  file. To give a command both exec's inputs and the agent, put the agent
+  inside exec: `foundation exec --inputs ... -- foundation ssh-agent CONNECTION -- COMMAND`.
+- A machine makes a connection from values it holds with
+  `foundation connect SERVICE --name NAME --field NAME=VALUE ...`, a secret
+  given as `@FILE`; for SSH, make the key with ssh-keygen, give it as
+  `--field privateKey=@FILE`, and remove the file afterwards.
+- Make or store a credential (`foundation keep`, `foundation connect`) only
+  when the user asks for it. When Foundation
   answers with a URL for consent or secret input, give the URL to the user.
 - When the user has a secret to hand over, such as a new API token, have
   them enter it in Foundation, on the page that `foundation connect SERVICE`
