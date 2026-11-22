@@ -38,7 +38,10 @@ test('サービスへアクセスできない端末でも入力式の認証情�
         field.name === 'url' && method.id.startsWith('supabase:') ? 'https://example.supabase.co' :
         field.name === 'projectId' && method.id.startsWith('supabase:') ? 'example' :
         field.name === 'credentials' && method.id.startsWith('google:') ?
-          JSON.stringify({ type: 'service_account', client_email: 'robot@example.iam.gserviceaccount.com' }) : valueFor(field.name))]));
+          JSON.stringify({ type: 'service_account', client_email: 'robot@example.iam.gserviceaccount.com' }) :
+        method.id.startsWith('ssh:') ? ({ host: 'server.example.test', user: 'deploy',
+          privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-value\n-----END OPENSSH PRIVATE KEY-----\n' })[field.name]! :
+        valueFor(field.name))]));
     const fields = Object.fromEntries(definitions.filter(field => activeConnectionField(field, entered))
       .map(field => [field.name, entered[field.name]!]));
     const saved = await client.perform({ name: 'connection.connect', input: { ownerId: f.stranger.actor.id,
