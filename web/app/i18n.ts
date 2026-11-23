@@ -447,7 +447,6 @@ const words: Record<string, [string, string]> = {
   'reviewField.bytes': ['サイズ（バイト）', 'Size (bytes)'],
   'reviewField.contentType': ['ファイルの種類', 'File type'],
   'reviewField.minutes': ['有効時間（分）', 'Valid for (minutes)'],
-  'reviewField.storageBytes': ['保存容量の上限（バイト）', 'Storage limit (bytes)'],
   'reviewField.outputs': ['結果の保存先', 'Result destinations'],
   'reviewField.labels': ['ラベル', 'Labels'],
   'reviewField.users': ['利用者', 'Users'],
