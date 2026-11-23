@@ -98,7 +98,7 @@ export default function App() {
   const prefix = '/p/' + (owner ?? data.principal?.id);
   // The page that sets up this device comes before everything else, so it shows nothing to go to.
   const authenticated = !!data.principal && location.pathname !== '/keys';
-  const focusedRequest = location.pathname.startsWith('/requests/') && location.pathname !== '/requests/new';
+  const focusedRequest = location.pathname.startsWith('/requests/');
   const showNavigation = authenticated && !focusedRequest;
   useEffect(() => {
     const language = localStorage.getItem('foundation.language');

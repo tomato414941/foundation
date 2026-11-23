@@ -7,7 +7,6 @@ export default [
   route('account', 'routes/account.tsx'),
   route('account/merge/:id', 'routes/merge.tsx'),
   route('requests', 'routes/requests.tsx'),
-  route('requests/new', 'routes/request-new.tsx'),
   route('requests/:id', 'routes/request.tsx'),
   route('operations/:id', 'routes/operation.tsx'),
   route('devices/:id', 'routes/device.tsx'),

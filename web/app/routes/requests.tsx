@@ -1,4 +1,3 @@
-import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/requests';
@@ -23,14 +22,7 @@ export default function Requests() {
     15000,
   );
   return (
-    <Page
-      title={t('requests')}
-      actions={
-        <Button variant="default" asChild>
-          <Link to="new">{t('newRequest')}</Link>
-        </Button>
-      }
-    >
+    <Page title={t('requests')}>
       {data.items.length ? (
         <div className="overflow-hidden rounded-xl border bg-card">
           <ul className="divide-y divide-border">

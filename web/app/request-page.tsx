@@ -103,10 +103,7 @@ export async function clientLoader({ params, request }: PageArgs) {
     item.state === 'pending' && !item.proposal ? loadDelegationReviews(item.operations, reviewContext) : [],
     item.state === 'pending' && !item.proposal ? loadOperationReviews(item.operations, reviewContext) : [],
   ]);
-  const code = item.state === 'pending' && item.from.id === account.principal?.id
-    ? sessionStorage.getItem('foundation.request.' + item.id) ?? undefined : undefined;
-  if (!code) sessionStorage.removeItem('foundation.request.' + item.id);
-  return { item, made, next, code, account, current, inputForm, progress, operationError, requestConnection, delegationReviews,
+  return { item, made, next, account, current, inputForm, progress, operationError, requestConnection, delegationReviews,
     operationReviews };
 }
 export async function clientAction({ params, request }: PageArgs) {
@@ -158,7 +155,7 @@ export async function clientAction({ params, request }: PageArgs) {
   });
 }
 export default function RequestPage() {
-  const { t, i18n } = useTranslation(), { item, made, next, code, account, current, inputForm, progress, operationError, requestConnection,
+  const { t, i18n } = useTranslation(), { item, made, next, account, current, inputForm, progress, operationError, requestConnection,
     delegationReviews, operationReviews } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>(), navigation = useNavigation();
   const waiting = item.state === 'pending', status = outcome(item);
@@ -321,7 +318,6 @@ export default function RequestPage() {
         {waiting && <Detail label={t('expires')}><DateText value={item.expiresAt} /></Detail>}
         {item.proposal ? <p className="font-medium leading-relaxed wrap-anywhere"><ProposalText proposal={item.proposal} /></p> :
           <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>}
-        {code && <Detail label={t('code')}>{code}<Copy value={code} /></Detail>}
         {requester && waiting && <Detail label={t('url')}><Link className="underline underline-offset-4" to={new URL(shareUrl).pathname + new URL(shareUrl).hash}>{item.url}</Link><Copy value={shareUrl} /></Detail>}
         {waitingNotice}
       </Panel>
