@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { Button } from '../components/ui/button';
 import { InputField } from '../form-fields';
@@ -21,9 +22,9 @@ import {
   listOf,
 } from '../../../shared/contracts';
 import { Changed, actionResult, api, formText, signedIn } from '../api';
-import { Confirm, Copy, DateText, Detail, ErrorNotice, Operation, Page, Paging, Panel } from '../components';
+import { Confirm, Copy, DateText, Detail, ErrorNotice, Operation, Page, Paging, Panel, saveFile, useTask } from '../components';
 import { useWorkspace } from './workspace';
-import { rekeySharing } from '../keys';
+import { openedExport, rekeySharing } from '../keys';
 import { CredentialsPanel } from '../credentials-panel';
 import { z } from 'zod';
 
@@ -95,6 +96,8 @@ export default function SettingsPage() {
   const prefix = '/p/' + data.principal.id + '/settings/';
   const self = data.principal.id === session.principal?.id;
   const transfer = can('transfer') && !self;
+  const exporting = useTask();
+  const [stillSealed, setStillSealed] = useState(0);
   const actionLabel = (action: string) => {
     const title = data.titles[action];
     return title ? (i18n.language === 'en' ? title.en : title.ja) : action;
@@ -118,8 +121,9 @@ export default function SettingsPage() {
             ))}
         </TabsList>
         <TabsContent value={data.tab} className="flex min-w-0 max-w-3xl flex-col gap-6">
-          <ErrorNotice error={result && 'error' in result ? result.error : null} />
+          <ErrorNotice error={exporting.error ?? (result && 'error' in result ? result.error : null)} />
           {result && 'ok' in result && <Notice tone={'success'}>{t('saved')}</Notice>}
+          {stillSealed > 0 && <Notice tone="warning">{t('exportSealed', { count: stillSealed })}</Notice>}
           {data.tab === 'general' && (
             <>
               <Panel title={t('general')}>
@@ -157,8 +161,16 @@ export default function SettingsPage() {
                   <div className="divide-y divide-border">
                     {can('export') && (
                       <Operation title={t('export')} help={t('exportHelp')}>
-                        <Button variant="outline" asChild>
-                          <a href={`/api/principals/${data.principal.id}/export`}>{t('download')}</a>
+                        <Button
+                          variant="outline"
+                          loading={exporting.busy}
+                          onClick={() => exporting.run(async () => {
+                            const { file, sealed } = await openedExport(data.principal.id, session.principal!.id);
+                            saveFile(file, 'foundation-export.ndjson');
+                            setStillSealed(sealed.length);
+                          })}
+                        >
+                          {t('download')}
                         </Button>
                       </Operation>
                     )}

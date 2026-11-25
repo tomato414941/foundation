@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openItem, sealItem, sealedFor } from '../shared/custody.js';
+import { openExportLine, openItem, sealItem, sealedFor } from '../shared/custody.js';
 import { decode, encode, newIdentityKeys, publicPart, thumbprint } from '../shared/encryption.js';
 import { CustodyClient } from '../shared/client.js';
 import type { JsonApi } from '../shared/client.js';
@@ -17,6 +17,22 @@ test('包んだ相手それぞれの秘密鍵で開け、包んでいない相�
   assert.equal(decode(await openItem(item, reader.privateKey, reader.publicKey)), 'sensitive-value');
   assert.equal(await sealedFor(item, stranger.publicKey), false);
   await assert.rejects(openItem(item, stranger.privateKey, stranger.publicKey));
+});
+
+test('書き出しの行のうち、端末の鍵で開ける値を開いて中身に置き換え、開けない値は包んだまま残して名指す', async () => {
+  const [owner, stranger] = await Promise.all([identity(), identity()]);
+  const opened = await sealItem(encode('値-1'), [owner], 1, {}), kept = await sealItem(encode('other'), [stranger], 1, {});
+  const header = JSON.stringify({ format: 'foundation', version: 5 }),
+    relations = JSON.stringify({ type: 'relations', items: [] }),
+    file = JSON.stringify({ type: 'resource', resource: { id: 'file', kind: 'object' }, content: 'AQI=' });
+  assert.deepEqual(await Promise.all([header, relations, file].map(line => openExportLine(line, owner))),
+    [header, relations, file].map(line => ({ line })));
+  const variable = await openExportLine(JSON.stringify({ type: 'resource', resource: { id: 'variable', kind: 'variable' }, custody: opened }), owner);
+  assert.deepEqual(JSON.parse(variable.line), { type: 'resource', resource: { id: 'variable', kind: 'variable' },
+    content: Buffer.from('値-1').toString('base64') });
+  assert.equal(variable.sealed, undefined);
+  const sealedLine = JSON.stringify({ type: 'resource', resource: { id: 'connection', kind: 'connection' }, custody: kept });
+  assert.deepEqual(await openExportLine(sealedLine, owner), { line: sealedLine, sealed: 'connection' });
 });
 
 test('包んだ相手を、それぞれの公開鍵の指紋で名指す', async () => {

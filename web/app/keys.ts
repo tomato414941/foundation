@@ -18,6 +18,7 @@ import { stored } from './storage';
 import { useSyncExternalStore } from 'react';
 import { Resource, listOf } from '../../shared/contracts';
 import { KeySharingItem } from '../../shared/protocol';
+import { openExportLine } from '../../shared/custody';
 
 const unlocked = new Map<string, IdentityKeysValue>();
 // The private key this browser keeps for a principal, which it cannot read back, with its public key.
@@ -329,6 +330,32 @@ export async function receiveKeys(receiving: Receiving, principalId: string) {
 export async function decryptVariable(id: string, principalId: string) {
   const { custodyClient } = await import('./custody');
   return (await custodyClient(principalId)).reveal(id);
+}
+
+// A principal's export as its holder keeps it: this browser opens each value sealed for the signed-in principal's key,
+// and names the items whose values stay sealed.
+export async function openedExport(principalId: string, signedIn: string) {
+  await requireKeys(signedIn);
+  const identity = await getIdentity(signedIn);
+  if (!identity) throw new ApiFailure('key_locked');
+  let response: Response;
+  try {
+    response = await fetch('/api/principals/' + principalId + '/export', { credentials: 'same-origin' });
+  } catch {
+    throw new ApiFailure('network', 0);
+  }
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+    throw new ApiFailure(failure?.error?.code ?? 'failure', response.status);
+  }
+  const lines: string[] = [], sealed: string[] = [];
+  for (const line of (await response.text()).split('\n')) {
+    if (!line) continue;
+    const opened = await openExportLine(line, identity);
+    if (opened.sealed) sealed.push(opened.sealed);
+    lines.push(opened.line + '\n');
+  }
+  return { file: new Blob(lines, { type: 'application/x-ndjson' }), sealed };
 }
 
 export async function mergeWithPasskey() {

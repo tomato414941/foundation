@@ -515,7 +515,14 @@ const words: Record<string, [string, string]> = {
   returnUrl: ['完了後のURL', 'Completion URL'],
   refreshUrl: ['やり直し用のURL', 'Retry URL'],
   export: ['データをエクスポート', 'Export data'],
-  exportHelp: ['暗号化されたデータとオブジェクトをダウンロードします。', 'Download encrypted data and objects.'],
+  exportHelp: [
+    'このプリンシパルが持っているものを1つのファイルにまとめてダウンロードします。このブラウザで開ける値は暗号化されずに入るので、ファイルの扱いに気をつけてください。',
+    'Download everything this principal keeps as one file. Values this browser can open are written unencrypted, so keep the file safe.',
+  ],
+  exportSealed: [
+    '{{count}}件の値は、このブラウザの鍵では開けないため、暗号化したまま入れました。',
+    '{{count}} values cannot be opened with this browser’s key and stay encrypted in the file.',
+  ],
   merge: ['アカウントを統合', 'Merge accounts'],
   mergeHelp: [
     '統合する別のアカウントで認証してください。データを現在のアカウントへ移します。',

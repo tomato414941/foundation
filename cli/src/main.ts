@@ -6,6 +6,7 @@ import { open as openFile, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
@@ -18,7 +19,8 @@ import { canonical } from '../../shared/digest.js';
 import { Client, ApiError, UnreadableResponse } from './client.js';
 import { configPath, listIdentities, origin, readIdentity, saveIdentity, secureWrite, useIdentity } from './config.js';
 import { execute } from './execute.js';
-import { localInputs, privateClient } from './custody.js';
+import { deviceKeys, localInputs, privateClient } from './custody.js';
+import { openExportLine } from '../../shared/custody.js';
 import { RequestCreate, RequestView } from '../../shared/operations.js';
 import { awaitRequestedConnection, chooseMethod, connectionInput, connectionOutput, connectionOwner, existingConnection, flowOutput,
   handedOver, ownerApplication, requestConnection } from './connections.js';
@@ -52,14 +54,16 @@ Usage: foundation <command> [options]
                                        finish that this machine may make
   keep NAME (--file FILE | --stdin)    Seal and save a variable
   read ID [--output FILE]               Open a variable you may open
+  export --output FILE [--owner ID]    Write everything a principal keeps to a file, with the values this
+                                       machine may open opened
   exec --inputs JSON -- COMMAND ...    Give opened values to a local command
   seal                                 Seal what this machine opens for those let in since
   ssh-agent ID -- COMMAND ...          Run a command with an SSH connection's key in a temporary agent
   api METHOD /api/PATH [--body JSON]    Call the Foundation API; everything else is done this way
 
 Options:
-  --owner ID             The principal that owns a new item, or that connect asks (by default
-                         the one delegating to this machine)
+  --owner ID             The principal that owns a new item, that connect asks (by default the
+                         one delegating to this machine), or whose items export writes
   --needs NAME           Output a requested connection must give, such as RUNPOD_API_KEY (repeatable)
   --method ID            Connection method a request asks for
   --connection ID        Connection to connect again
@@ -90,8 +94,8 @@ Signing in makes this machine act as you, with your encryption key. Registering
 with --name creates a separate principal instead.
 The unlock portion of a sign-in key stays on this machine. Content is sealed for
 everyone Foundation lets open it, and readable only by them. exec opens values on
-this machine and masks them in stdout and stderr. read deliberately reveals
-content. Ctrl+C while waiting stops the wait; the request stays.
+this machine and masks them in stdout and stderr. read and export deliberately
+reveal content. Ctrl+C while waiting stops the wait; the request stays.
 
 Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
 It can hold several identities. A command acts as --principal, then
@@ -192,17 +196,17 @@ async function output(value: unknown, args: Arguments) {
   if (args.values.output) await secureWrite(args.values.output, body, !!args.values.force);
   else process.stdout.write(body);
 }
-async function download(response: Response, path: string, replace: boolean) {
+function body(response: Response) {
   if (!response.body) throw new Error('Foundation returned an empty response.');
+  return Readable.fromWeb(response.body as import('node:stream/web').ReadableStream<Uint8Array>);
+}
+async function download(source: AsyncIterable<string | Uint8Array>, path: string, replace: boolean) {
   const destination = resolve(path),
     temporary = replace ? join(dirname(destination), '.foundation-' + randomUUID()) : destination;
   const file = await openFile(temporary, 'wx', 0o600);
   let done = false;
   try {
-    await pipeline(
-      Readable.fromWeb(response.body as import('node:stream/web').ReadableStream<Uint8Array>),
-      file.createWriteStream(),
-    );
+    await pipeline(source, file.createWriteStream());
     if (replace) await rename(temporary, destination);
     done = true;
   } finally {
@@ -495,16 +499,26 @@ async function main(argv: string[]) {
       ...(args.values.body ? { body: await json(args.values.body) } : {}),
       ...(args.values.upload ? { raw: await readFile(args.values.upload) } : {}),
     });
-    if (args.values.output) await download(response, args.values.output, !!args.values.force);
+    if (args.values.output) await download(body(response), args.values.output, !!args.values.force);
     else if (method === 'HEAD' || response.status === 204) print({ status: response.status });
     else if (response.headers.get('content-type')?.includes('json')) print(await response.json());
-    else {
-      if (!response.body) throw new Error('Foundation returned an empty response.');
-      await pipeline(
-        Readable.fromWeb(response.body as import('node:stream/web').ReadableStream<Uint8Array>),
-        process.stdout,
-      );
-    }
+    else await pipeline(body(response), process.stdout);
+    return 0;
+  }
+  if (command === 'export') {
+    // Foundation sends the values sealed; this machine opens those sealed for its key, so that the file holds them.
+    const path = requireArgument(args.values.output, 'Choose an export file with --output FILE.');
+    const keys = deviceKeys(client), sealed: string[] = [];
+    const lines = createInterface({ input: body(await client.response('/api/principals/' + owner + '/export')), crlfDelay: Infinity });
+    await download((async function* () {
+      for await (const line of lines) {
+        if (!line) continue;
+        const opened = await openExportLine(line, keys);
+        if (opened.sealed) sealed.push(opened.sealed);
+        yield opened.line + '\n';
+      }
+    })(), path, !!args.values.force);
+    print({ path: resolve(path), sealed });
     return 0;
   }
   if (command === 'keep') {

@@ -10,11 +10,16 @@ import { Connections } from '../../runtime/connections.js';
 import { PublicTransport } from '../../server/transport.js';
 import { openInputs } from '../../runtime/inputs.js';
 
+// The key this machine opens what is sealed for its identity with.
+export function deviceKeys(client: Client) {
+  const { keys } = client.identity;
+  if (!keys) throw new Error('Use a sign-in key that carries the encryption key for this operation.');
+  return { publicKey: publicPart(keys.encryption), privateKey: keys.encryption };
+}
 // What this machine opens and seals with the identity's private key, and the token updates it records meanwhile.
 export async function privateClient(client: Client) {
-  const { keys, origin, principalId } = client.identity;
-  if (!keys) throw new Error('Use a sign-in key that carries the encryption key for this operation.');
-  const device = { publicKey: publicPart(keys.encryption), privateKey: keys.encryption };
+  const { origin, principalId } = client.identity;
+  const device = deviceKeys(client);
   const custody = new CustodyClient(client, origin, principalId, device);
   const directory = join(dirname(configPath()), 'custody', await thumbprint(device.publicKey));
   const broker = new HttpBroker(client), transport = new PublicTransport(origin);

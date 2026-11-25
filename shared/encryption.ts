@@ -19,11 +19,14 @@ const agreement = 'ECDH-ES+A256KW';
 const encryption = 'A256GCM';
 export const encode = (value: string) => encoder.encode(value);
 export const decode = (value: Uint8Array) => decoder.decode(value);
-export function base64url(bytes: Uint8Array): string {
+export function base64(bytes: Uint8Array): string {
   let text = '';
   for (let offset = 0; offset < bytes.length; offset += 8192)
     text += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-  return btoa(text).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  return btoa(text);
+}
+export function base64url(bytes: Uint8Array): string {
+  return base64(bytes).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 export function unbase64url(text: string): Uint8Array {
   return Uint8Array.from(atob(text.replaceAll('-', '+').replaceAll('_', '/')), (character) =>

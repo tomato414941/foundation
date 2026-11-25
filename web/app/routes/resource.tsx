@@ -24,6 +24,7 @@ import {
   Page,
   Panel,
   State,
+  saveFile,
   useTask,
 } from '../components';
 import { resourceKind, sectionFor } from '../navigation';
@@ -50,14 +51,6 @@ export async function clientAction({ params }: Route.ClientActionArgs) {
     await api(`/resources/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
   });
-}
-function downloadBytes(bytes: Uint8Array, name: string) {
-  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
-  const element = document.createElement('a');
-  element.href = url;
-  element.download = name;
-  element.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function ResourceDetail() {
   const { resource: item, serviceConsole } = useLoaderData<typeof clientLoader>();
@@ -116,7 +109,7 @@ export default function ResourceDetail() {
             </Button>
             <Button
               loading={task.busy}
-              onClick={() => task.run(async () => downloadBytes(await reveal(), item.name))}
+              onClick={() => task.run(async () => saveFile(await reveal(), item.name))}
               variant="ghost"
             >
               {t('download')}

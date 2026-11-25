@@ -185,6 +185,15 @@ export function Bytes({ value }: { value: number }) {
 }
 
 // One rarely used operation: what it does on the left, its button on the right.
+// Saves what the page made as a file through the browser's download.
+export function saveFile(content: Blob | Uint8Array, name: string) {
+  const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([new Uint8Array(content)]));
+  const element = document.createElement('a');
+  element.href = url;
+  element.download = name;
+  element.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 export function Operation({ title, help, children }: { title: string; help: string; children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-x-6 gap-y-3 py-4 first:pt-0 last:pb-0">
     <div className="min-w-0 flex-1 basis-64 space-y-1">

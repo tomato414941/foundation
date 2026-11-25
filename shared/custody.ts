@@ -2,8 +2,9 @@ import { z } from 'zod';
 import type { JWK } from 'jose';
 import { JsonObject, Sealed, Time } from './contracts.js';
 import type { JsonValue, PublicEncryptionKey } from './contracts.js';
-import { open, seal, thumbprint } from './encryption.js';
+import { base64, open, seal, thumbprint } from './encryption.js';
 import type { ProtectedKindName } from './protected.js';
+import type { DeviceKeys } from './client.js';
 
 export const contentLimit = 1_000_000;
 // An item a key protects, as Foundation keeps it: its value sealed for everyone who may open it, each by the public key
@@ -35,4 +36,16 @@ export async function sealedFor(item: SealedItemValue, publicKey: PublicEncrypti
 }
 export async function openItem(item: SealedItemValue, privateKey: JWK | CryptoKey, publicKey: PublicEncryptionKey) {
   return open(item.sealed, privateKey, await thumbprint(publicKey));
+}
+// A line of a principal's export as the holder keeps it: an item's sealed value is opened and put in its place as
+// content, as a stored file's is, so that the file holds what was kept without Foundation. A value not sealed for this
+// device's key stays in the line as it was sealed, and its id is returned.
+const ExportedItem = z.object({ resource: z.object({ id: z.string() }), custody: SealedItemRead });
+export async function openExportLine(line: string, keys: DeviceKeys): Promise<{ line: string; sealed?: string }> {
+  const entry = JSON.parse(line) as Record<string, unknown>;
+  if (entry.type !== 'resource' || entry.custody === undefined) return { line };
+  const { resource, custody } = ExportedItem.parse(entry);
+  if (!(await sealedFor(custody, keys.publicKey))) return { line, sealed: resource.id };
+  const { custody: _custody, ...opened } = entry;
+  return { line: JSON.stringify({ ...opened, content: base64(await openItem(custody, keys.privateKey, keys.publicKey)) }) };
 }

@@ -88,7 +88,7 @@ async function cliFixture(environmentOverrides: Record<string, string> = {}, bun
   return { f, context, app, origin, directory, run, start, close, person };
 }
 
-test('CLIで登録して変数を保存し、コマンドへ渡して出力を伏せる', async (t) => {
+test('CLIで登録して変数を保存し、コマンドへ渡して出力を伏せ、値を開いて書き出す', async (t) => {
   const c = await cliFixture();
   t.after(c.close);
   const initialized = await c.run(['init', '--name', 'CLI test', '--origin', c.origin]);
@@ -138,6 +138,14 @@ test('CLIで登録して変数を保存し、コマンドへ渡して出力を�
     .find(item => item.type === 'resource');
   assert.equal(exportedResource.resource.id, resource.id);
   assert.equal(exportedResource.custody.revision, 1);
+  const opened = join(c.directory, 'opened.ndjson'), openedResult = await c.run(['export', '--output', opened]);
+  assert.equal(openedResult.code, 0, openedResult.stderr);
+  assert.deepEqual(JSON.parse(openedResult.stdout), { path: opened, sealed: [] });
+  assert.equal((await stat(opened)).mode & 0o777, 0o600);
+  const openedResource = (await readFile(opened, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    .find(item => item.type === 'resource');
+  assert.equal(openedResource.custody, undefined);
+  assert.equal(Buffer.from(openedResource.content, 'base64').toString('utf8'), '変数-value/123');
 });
 
 test('CLIは保存した複数の身元から既定の身元を切り替え、コマンドごとに指定した身元で実行する', async t => {
