@@ -82,11 +82,10 @@ test('RenderのOAuth応答を端末で交換して利用時に更新し、解除
 test('依頼された接続の更新をやめると元のキーを保ち、再登録で同じ接続を更新する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const saved = await f.saveConnection({ methodId: 'render:token', fields: { token: 'original' } });
-  const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operations: [
-    { name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'render:token', connectionId: saved.id, name: saved.name } }] } },
+  const asked = await f.api(f.stranger.token).json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id, operation: { name: 'connection.connect', input: { ownerId: f.owner.actor.id, methodId: 'render:token', connectionId: saved.id, name: saved.name } } } },
   RequestView);
   const approved = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, RequestView);
-  const stopped = await f.client.api.json('/api/operations/' + approved.performed[0]!.id + '/cancel', { method: 'POST', body: {} }, OperationView);
+  const stopped = await f.client.api.json('/api/operations/' + approved.performed!.id + '/cancel', { method: 'POST', body: {} }, OperationView);
   assert.equal(stopped.state, 'cancelled');
   assert.equal((await f.client.connection(saved.id)).fields!.token, 'original');
   const replacement = await f.saveConnection({ methodId: 'render:token', connectionId: saved.id, fields: { token: 'updated' } });

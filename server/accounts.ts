@@ -15,7 +15,7 @@ export class Accounts {
     await c.authorization.requirePrincipal(actor, id, 'export');
     yield JSON.stringify({
       format: 'foundation',
-      version: 5,
+      version: 6,
       exportedAt: new Date().toISOString(),
       principal: await c.principals.view(actor, await c.principals.get(id)),
       mergedIdentities: await c.db.all('SELECT id,name,public_key AS "publicKey",retired_at AS "retiredAt" FROM principals WHERE merged_into=$1 ORDER BY retired_at,id', [id]),

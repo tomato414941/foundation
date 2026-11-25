@@ -4,7 +4,6 @@ import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Principal, Resource } from '../../shared/contracts';
 import type { JsonValue, ResourceView } from '../../shared/contracts';
-import type { RequestRecordView } from '../../shared/operations';
 import { api, ApiFailure } from './api';
 import { DateText, Detail } from './components';
 import { hasSection, resourcePath } from './navigation';
@@ -94,11 +93,6 @@ export function reviewer({ approver, requester, principals, inspect, signal }: R
     .filter(([field]) => !hidden.has(field))
     .map(async ([field, child]): Promise<ReviewRow> => ({ field, value: await value(field, child) })));
   return rows;
-}
-
-export function loadOperationReviews(operations: RequestRecordView['operations'], context: ReviewContext) {
-  const rows = reviewer(context);
-  return Promise.all(operations.map(operation => operation.keyholder ? null : rows(operation.input)));
 }
 
 // An item by its name, linked to it where it has a page.

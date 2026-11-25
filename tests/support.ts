@@ -55,7 +55,7 @@ export async function fixture(overrides: Record<string, string> = {}) {
     ...overrides,
   });
   const db = new Database(databaseUrl, { schema });
-  await db.migrate();
+  await db.migrate(config);
   const vault = await Vault.initialize(db, config);
   const authorization = new Authorization(db),
     audit = new Audit(db),

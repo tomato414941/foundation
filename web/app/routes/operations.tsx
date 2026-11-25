@@ -31,7 +31,7 @@ export default function Operations() {
                       {item.title[i18n.language === 'ja' ? 'ja' : 'en']}
                     </div>
                     <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
-                      {item.actor.name} · <DateText value={item.createdAt} />{item.request && <> · {t('fromRequest')}</>}
+                      {item.actor.name} · <DateText value={item.createdAt} />{item.requestId && <> · {t('fromRequest')}</>}
                     </div>
                   </div>
                   <State value={item.state} />

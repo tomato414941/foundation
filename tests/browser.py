@@ -21,10 +21,10 @@ ORIGIN = "http://localhost:" + os.environ.get("FOUNDATION_TEST_PORT", "3458")
 ARTIFACTS = Path("test-results/browser")
 
 
-# The operation an approved request made at the given place in its order.
-def performed(page, request_id, position=0):
+# The operation made when the request was approved.
+def performed(page, request_id):
     request = page.request.get(ORIGIN + "/api/requests/" + request_id).json()
-    made = next(item for item in request["performed"] if item["position"] == position)
+    made = request["performed"]
     return page.request.get(ORIGIN + "/api/operations/" + made["id"]).json()
 
 
@@ -245,9 +245,7 @@ class BrowserTests(unittest.TestCase):
         delegate, recipient = self.passkey_account("Progress delegate")
         paths = [self.variable(owner, principal, "Progress variable " + str(index), "progress value " + str(index)) for index in range(3)]
         ids = sorted(path.rsplit("/", 1)[1] for path in paths)
-        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
-            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
-        ]}, headers={"origin": ORIGIN})
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         owner.goto(response.json()["url"])
         held = []
@@ -290,9 +288,7 @@ class BrowserTests(unittest.TestCase):
         delegate, recipient = self.passkey_account("Retry delegate")
         paths = [self.variable(owner, principal, "Retry variable " + str(index), "retry value " + str(index)) for index in range(2)]
         blocked = paths[0].rsplit("/", 1)[1]
-        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
-            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
-        ]}, headers={"origin": ORIGIN})
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         owner.goto(response.json()["url"])
         def busy(route):
@@ -327,9 +323,7 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Check owner")
         delegate, recipient = self.passkey_account("Check delegate")
         self.variable(owner, principal, "Check variable", "check value")
-        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
-            {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}
-        ]}, headers={"origin": ORIGIN})
+        response = delegate.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "relation.draw", "input": {"subjectId": "$requester", "relation": "delegate", "objectId": "$approver"}}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         owner.goto(response.json()["url"])
         pattern = "**/api/principals/" + principal["id"] + "/reprotection"
@@ -371,9 +365,9 @@ class BrowserTests(unittest.TestCase):
         sender, _ = self.passkey_account("Delegation requester")
         receiver, principal = self.passkey_account("Delegation approver")
         response = sender.request.post(ORIGIN + "/api/requests", data={
-            "to": principal["id"], "operations": [{"name": "relation.draw", "input": {
+            "to": principal["id"], "operation": {"name": "relation.draw", "input": {
                 "subjectId": "$requester", "relation": "delegate", "objectId": "$approver"
-            }}]
+            }}
         }, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
@@ -393,9 +387,9 @@ class BrowserTests(unittest.TestCase):
         workspace = response.json()
         response = sender.request.post(ORIGIN + "/api/requests", data={
             "to": principal["id"], "message": "共同作業のための権限を確認してください。",
-            "operations": [{"name": "relation.draw", "input": {
+            "operation": {"name": "relation.draw", "input": {
                 "subjectId": recipient["id"], "relation": "delegate", "objectId": workspace["id"]
-            }}]
+            }}
         }, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
@@ -411,14 +405,14 @@ class BrowserTests(unittest.TestCase):
     def test_承認された依頼の操作を続けられるのが相手だけのとき依頼した側には相手を待っていることを示す(self):
         sender, _ = self.passkey_account("Waiting requester")
         owner, principal = self.passkey_account("Chancellor Rigel")
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {
             "name": "variable.save", "input": {"ownerId": "$approver", "name": "Awaited value", "value": ""},
-            "inputs": [{"pointer": "/value", "label": "Value", "secret": True}]}]}, headers={"origin": ORIGIN})
+            "inputs": [{"pointer": "/value", "label": "Value", "secret": True}]}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         approved = owner.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/approve", data={}, headers={"origin": ORIGIN})
         self.assertTrue(approved.ok, approved.text())
-        self.assertEqual([item["state"] for item in approved.json()["performed"]], ["stopped"])
+        self.assertEqual(approved.json()["performed"]["state"], "stopped")
         sender.goto(asked["url"])
         expect(sender.get_by_role("status")).to_have_text("Chancellor Rigelが操作を続けるのを待っています。")
         expect(sender.get_by_role("link", name="変数を保存する", exact=True)).to_be_visible()
@@ -1339,9 +1333,9 @@ class BrowserTests(unittest.TestCase):
         sender, _ = self.passkey_account("HF requester")
         owner, principal = self.passkey_account("HF owner")
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "Hugging Faceに接続してください。", "operations": [{"name": "connection.connect", "input": {
+            "message": "Hugging Faceに接続してください。", "operation": {"name": "connection.connect", "input": {
                 "ownerId": principal["id"], "methodId": "huggingface:token", "name": "Hugging Face"
-            }}]}, headers={"origin": ORIGIN})
+            }}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         owner.goto(asked["url"])
@@ -1375,10 +1369,10 @@ class BrowserTests(unittest.TestCase):
             connection = owner.request.get(ORIGIN + "/api/resources/" + connection_id).json()
             permission = subprocess.run(["node", "cli/dist/cli.mjs", "api", "POST", "/api/requests", "--body", json.dumps({
                 "to": principal["id"], "message": "モデルの保存・取得に接続を使います。",
-                "operations": [{"name": "connection.authorize", "input": {
+                "operation": {"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id,
                     "version": connection["version"], "users": [agent["id"]]
-                }}]
+                }}
             })], capture_output=True, text=True, env=environment)
             self.assertEqual(permission.returncode, 0, permission.stderr)
             permission_request = json.loads(permission.stdout)
@@ -1400,10 +1394,10 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(used.returncode, 0, used.stderr)
             self.assertEqual(used.stdout, "Configured\n")
             response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-                "message": "この接続を使い続けます。", "operations": [{"name": "connection.authorize", "input": {
+                "message": "この接続を使い続けます。", "operation": {"name": "connection.authorize", "input": {
                     "ownerId": principal["id"], "connectionId": connection_id, "version": connection["version"],
                     "users": [agent["id"]]
-                }}]}, headers={"origin": ORIGIN})
+                }}}, headers={"origin": ORIGIN})
             self.assertTrue(response.ok, response.text())
             repeated_request = response.json()
             owner.goto(repeated_request["url"])
@@ -1513,11 +1507,11 @@ class BrowserTests(unittest.TestCase):
         sender, _ = self.passkey_account("Value requester")
         receiver, principal = self.passkey_account("Value approver", mobile=True)
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "作業で使用する値を保存してください。", "operations": [{
+            "message": "作業で使用する値を保存してください。", "operation": {
             "name": "variable.save", "input": {
                 "ownerId": "$approver", "name": "Requested variable", "value": ""
             }, "inputs": [{"pointer": "/value", "label": "Private value", "secret": True}]
-        }]}, headers={"origin": ORIGIN})
+        }}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         receiver.goto(asked["url"])
@@ -1542,15 +1536,16 @@ class BrowserTests(unittest.TestCase):
 
     def test_依頼の内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
-        receiver, principal = self.passkey_account("Approver")
+        receiver, principal = self.passkey_account("Approver", mobile=True)
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "message": "Create a project account",
-            "operations": [{"name": "principal.create", "input": {"name": "Approved project", "ownerId": "$approver"}}]}, headers={"origin": ORIGIN})
+            "operation": {"name": "principal.create", "input": {"name": "Approved project", "ownerId": "$approver"}}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         sender.goto(asked["url"])
         expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
         receiver.goto(asked["url"])
         expect(receiver.get_by_role("heading", name="プリンシパルを作る", exact=True)).to_be_visible()
+        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
         receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_role("heading", name="プリンシパルを作りました", exact=True)).to_be_visible()
@@ -1558,16 +1553,15 @@ class BrowserTests(unittest.TestCase):
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
         sender.reload()
-        made = sender.get_by_role("main").get_by_role("listitem").filter(has_text="プリンシパルを作る")
-        expect(made).to_contain_text("完了")
+        expect(sender.get_by_role("link", name="プリンシパルを作る", exact=True)).to_be_visible()
+        expect(sender.get_by_text("完了", exact=True)).to_be_visible()
         expect(sender.get_by_role("link", name="Approved project", exact=True)).to_be_visible()
         sender.screenshot(path=str(ARTIFACTS / "request-sent-approved-ja.png"), full_page=True)
 
     def test_取り下げられた依頼を開くと取り下げられたことと依頼された操作を示す(self):
         sender, _ = self.passkey_account("Cancelling requester")
         receiver, principal = self.passkey_account("Cancelled approver")
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [
-            {"name": "principal.create", "input": {"ownerId": "$approver", "name": "Withdrawn project"}}]}, headers={"origin": ORIGIN})
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "principal.create", "input": {"ownerId": "$approver", "name": "Withdrawn project"}}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         withdrawn = sender.request.post(ORIGIN + "/api/requests/" + asked["id"] + "/withdraw", data={}, headers={"origin": ORIGIN})
@@ -1578,33 +1572,6 @@ class BrowserTests(unittest.TestCase):
         expect(receiver.locator("main")).to_contain_text("プリンシパルを作る")
         expect(receiver.get_by_role("button", name="承認", exact=True)).to_have_count(0)
         receiver.screenshot(path=str(ARTIFACTS / "request-withdrawn-ja.png"), full_page=True)
-
-    def test_複数の操作を含む依頼で目的と各操作を確認して承認し結果を開く(self):
-        sender, _ = self.passkey_account("Project requester")
-        receiver, principal = self.passkey_account("Project approver", mobile=True)
-        names = ["Research project", "Delivery project"]
-        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "調査と納品の作業場所を作成してください。", "operations": [
-                {"name": "principal.create", "input": {"ownerId": "$approver", "name": name}} for name in names
-            ]}, headers={"origin": ORIGIN})
-        self.assertTrue(response.ok, response.text())
-        asked = response.json()
-        receiver.goto(asked["url"])
-        expect(receiver.get_by_text("Project requesterからの依頼", exact=True)).to_be_visible()
-        expect(receiver.get_by_text("調査と納品の作業場所を作成してください。", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("heading", name="1. プリンシパルを作る", exact=True)).to_be_visible()
-        expect(receiver.get_by_role("heading", name="2. プリンシパルを作る", exact=True)).to_be_visible()
-        self.assertLessEqual(receiver.evaluate("document.documentElement.scrollWidth"), 391)
-        receiver.screenshot(path=str(ARTIFACTS / "multi-request-mobile-ja.png"), full_page=True)
-        receiver.get_by_role("button", name="承認", exact=True).click()
-        expect(receiver.get_by_role("status")).to_have_text("完了")
-        for name in names:
-            expect(receiver.get_by_role("link", name=name, exact=True)).to_be_visible()
-        made = [performed(sender, asked["id"], position) for position in range(len(names))]
-        self.assertEqual([operation["state"] for operation in made], ["succeeded", "succeeded"])
-        self.assertEqual([operation["result"]["name"] for operation in made], names)
-        receiver.get_by_role("link", name=names[-1], exact=True).click()
-        expect(receiver.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
 
     def test_モバイルでメール認証してアカウントを作成するとパスキーの登録を求め英語表示へ切り替える(self):
         page = self.page(webkit=True, mobile=True)
@@ -1774,10 +1741,10 @@ class BrowserTests(unittest.TestCase):
             route.fulfill(content_type="text/html", body='<h1>Google authorization</h1><a href="' + callback + '">Allow requested access</a>')
         owner.context.route("https://accounts.google.com/**", authorize)
         response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"],
-            "message": "通知メールを確認するために、接続を再認証してください。", "operations": [{"name": "connection.connect", "input": {
+            "message": "通知メールを確認するために、接続を再認証してください。", "operation": {"name": "connection.connect", "input": {
                 "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
                 "appId": connection["data"]["appId"], "name": connection["name"], "scopes": connection["data"]["scopes"]
-            }}]}, headers={"origin": ORIGIN})
+            }}}, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
         owner.goto(asked["url"])
@@ -1819,11 +1786,11 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Permissions owner")
         sender, requester = self.passkey_account("Permissions assistant")
         connection, exchanges = self.google_connection(owner, principal)
-        body = {"to": principal["id"], "message": "メールの送信にも接続を使います。", "operations": [{"name": "connection.connect", "input": {
+        body = {"to": principal["id"], "message": "メールの送信にも接続を使います。", "operation": {"name": "connection.connect", "input": {
             "ownerId": principal["id"], "methodId": "google:oauth", "connectionId": connection["id"],
             "appId": connection["data"]["appId"], "name": connection["name"],
             "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
-        }}]}
+        }}}
         response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
@@ -1836,9 +1803,9 @@ class BrowserTests(unittest.TestCase):
         expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
         self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
         self.assertEqual(owner.request.get(ORIGIN + "/api/resources/" + connection["id"]).json()["version"], connection["version"])
-        body["operations"][0]["input"]["scopes"] = connection["data"]["scopes"]
+        body["operation"]["input"]["scopes"] = connection["data"]["scopes"]
         body["message"] = "通知メールの確認に接続を使います。"
-        body["operations"][0]["input"]["users"] = [requester["id"]]
+        body["operation"]["input"]["users"] = [requester["id"]]
         response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         access_request = response.json()
@@ -1850,7 +1817,7 @@ class BrowserTests(unittest.TestCase):
         owner.screenshot(path=str(ARTIFACTS / "google-request-access-ja.png"), full_page=True)
         owner.get_by_role("button", name="断る", exact=True).click()
         expect(owner.get_by_role("heading", name="Googleの再接続を断りました", exact=True)).to_be_visible()
-        del body["operations"][0]["input"]["users"]
+        del body["operation"]["input"]["users"]
         response = sender.request.post(ORIGIN + "/api/requests", data=body, headers={"origin": ORIGIN})
         self.assertTrue(response.ok, response.text())
         asked = response.json()
@@ -1951,9 +1918,9 @@ class BrowserTests(unittest.TestCase):
         ]:
             with self.subTest(result=result):
                 state["result"] = "pending"
-                asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+                asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {
                     "name": "connection.connect", "input": {"ownerId": "$approver", "methodId": method["id"]},
-                }]}, headers={"origin": ORIGIN})
+                }}, headers={"origin": ORIGIN})
                 self.assertTrue(asked.ok, asked.text())
                 request = asked.json()
                 owner.goto(ORIGIN + "/requests/" + request["id"])
@@ -1996,9 +1963,9 @@ class BrowserTests(unittest.TestCase):
     def test_OVHのサービスアカウントの接続を依頼すると受け手がクライアントIDとシークレットを入力して一度で接続する(self):
         owner, principal = self.passkey_account("OVH service account owner")
         sender, requester = self.passkey_account("OVH service account requester")
-        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
+        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "connection.connect", "input": {
             "ownerId": "$approver", "methodId": "ovh:client_credentials", "fields": {"apiRegion": "ca"}, "name": "Requested OVH service account"
-        }}]}, headers={"origin": ORIGIN})
+        }}}, headers={"origin": ORIGIN})
         self.assertTrue(asked.ok, asked.text())
         request = asked.json()
         owner.goto(ORIGIN + "/requests/" + request["id"])
@@ -2014,9 +1981,9 @@ class BrowserTests(unittest.TestCase):
     def test_OVH接続の依頼を受け手のブラウザで入力して完了する(self):
         owner, principal = self.passkey_account("OVH request owner")
         sender, requester = self.passkey_account("OVH requester")
-        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{"name": "connection.connect", "input": {
+        asked = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operation": {"name": "connection.connect", "input": {
             "ownerId": "$approver", "methodId": "ovh:api_key", "fields": {"apiRegion": "ca"}, "name": "Requested OVH"
-        }}]}, headers={"origin": ORIGIN})
+        }}}, headers={"origin": ORIGIN})
         self.assertTrue(asked.ok, asked.text())
         request = asked.json()
         owner.goto(ORIGIN + "/requests/" + request["id"])

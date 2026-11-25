@@ -27,12 +27,12 @@ export const OperationKind = z.object({ name: Invocation.shape.name, title: Oper
 export const serviceStep = 86_400_000;
 export const Continuation = z.object({ kind: z.literal('connection'), id: Id }).strict();
 export type OperationContinuation = z.infer<typeof Continuation>;
-// Stopped: not done yet, after an earlier operation of its request failed or while the device that seals it has not.
+// A stopped operation has not started or is waiting for the device that seals it.
 export const OperationState = z.enum(['stopped', 'in_progress', 'succeeded', 'failed', 'uncertain', 'cancelled']);
 export const OperationView = z.object({
   id: Id, name: Invocation.shape.name, title: OperationTitle, input: JsonObject, keyholder: z.boolean(),
   configure: z.array(z.string()), ownerId: Id.nullable(), actor: Principal.pick({ id: true, name: true }),
-  request: z.object({ id: Id, position: z.number().int().nonnegative() }).strict().nullable(),
+  requestId: Id.nullable(),
   state: OperationState, result: Json.nullable(),
   error: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
   continuation: Continuation.nullable(), canPerform: z.boolean(), canCancel: z.boolean(),
@@ -50,21 +50,20 @@ const Named = Principal.pick({ id: true, name: true });
 export const RequestState = z.enum(['pending', 'approved', 'declined', 'withdrawn', 'expired']);
 export const RequestView = z.object({
   id: Id, from: Named, to: Named.nullable(), message: z.string(),
-  operations: z.array(DisplayedOperation), proposal: Proposal.nullable(),
+  operation: DisplayedOperation, proposal: Proposal.nullable(),
   state: RequestState, createdAt: Time, expiresAt: Time, answeredAt: Time.nullable(),
-  // The operations an approval made, in the order they were asked for.
-  performed: z.array(z.object({ position: z.number().int().nonnegative(), id: Id, state: OperationState }).strict()),
+  performed: z.object({ id: Id, state: OperationState }).strict().nullable(),
   url: z.url(), code: z.string().optional(), returnUrl: z.url().nullable(), refreshUrl: z.url().nullable(),
   canAnswer: z.boolean(), canWithdraw: z.boolean(),
 }).strict();
 export type RequestRecordView = z.infer<typeof RequestView>;
 export const RequestCreate = z.object({
   id: Id.optional(), to: Id.optional(), message: z.string().max(1000).default(''),
-  operations: z.array(RequestedOperation).min(1).max(8),
+  operation: RequestedOperation,
   expiresInMinutes: z.number().int().min(1).max(1440).default(30),
 }).strict();
 export const RequestApproval = z.object({
-  values: z.array(z.record(z.string(), Json)).max(8).default([]),
-  configuration: z.array(JsonObject).max(8).default([]),
+  values: JsonObject.default({}),
+  configuration: JsonObject.default({}),
   code: z.string().max(20).optional(),
 }).strict();

@@ -101,7 +101,7 @@ CREATE TABLE resource_references (
 );
 -- The records of what principals did name who acted by id alone: deleting a principal neither waits for them nor
 -- removes them from the history of others. What a principal owns still goes with it.
--- A request asks a principal, or whoever enters its code, to make operations. Who asked and what it asked for are kept
+-- A request asks a principal, or whoever enters its code, to make an operation. Who asked and what it asked for are kept
 -- encrypted in its record; it ends approved, declined, withdrawn or expired.
 CREATE TABLE requests (
   id uuid PRIMARY KEY,
@@ -109,7 +109,7 @@ CREATE TABLE requests (
   to_id uuid,
   owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   message text NOT NULL DEFAULT '',
-  record text NOT NULL,
+  operation_record text NOT NULL,
   proposal jsonb,
   code_hash text,
   attempts integer NOT NULL DEFAULT 0,
@@ -122,11 +122,10 @@ CREATE TABLE requests (
 CREATE INDEX requests_from ON requests(from_id,created_at DESC);
 CREATE INDEX requests_to ON requests(to_id,state,created_at DESC);
 -- An operation changes something in Foundation. Its input, result and the sign-in it was made with are kept encrypted
--- in its record; one a request asked for names that request and its place in it.
+-- in its record; one made by approval identifies its request.
 CREATE TABLE operations (
   id uuid PRIMARY KEY,
-  request_id uuid REFERENCES requests(id) ON DELETE CASCADE,
-  position integer,
+  request_id uuid UNIQUE REFERENCES requests(id) ON DELETE CASCADE,
   owner_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   actor_id uuid NOT NULL,
   name text NOT NULL,
@@ -137,8 +136,7 @@ CREATE TABLE operations (
   lease_until timestamptz,
   expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(request_id,position)
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX operations_actor ON operations(actor_id,created_at DESC);
 CREATE INDEX operations_owner ON operations(owner_id,created_at DESC);

@@ -66,8 +66,8 @@ test('通常のファイルアップロードと依頼からの更新を同じ�
   assert.equal(link.statusCode, 200, link.body);
   assert.equal(link.json().url, 'https://files.example/' + (await c.resources.get(file.id)).private_data + '?expires=900');
   const asked = await app.inject({ method: 'POST', url: '/api/requests', headers: { authorization: 'Bearer ' + sender.token },
-    payload: { to: owner.actor.id, operations: [{ name: 'object.update', input: { id: file.id, version: file.version,
-      contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } }] } });
+    payload: { to: owner.actor.id, operation: { name: 'object.update', input: { id: file.id, version: file.version,
+      contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') } } } });
   assert.equal(asked.statusCode, 201, asked.body);
   const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
   assert.equal(answered.statusCode, 200, answered.body); assert.equal(RequestView.parse(answered.json()).state, 'approved');

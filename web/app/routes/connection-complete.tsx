@@ -20,7 +20,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     const progress = await (await connectionClient()).progress(id.data);
     // A connection a request asked for goes back to that request.
     const operation = await api('/operations/' + progress.flow.operationId, {}, OperationView);
-    if (operation.request) return redirect('/requests/' + operation.request.id);
+    if (operation.requestId) return redirect('/requests/' + operation.requestId);
     if (progress.kind === 'connected') return redirect(resourcePath(await api('/resources/' + progress.id, {}, Resource)));
     return redirect('/operations/' + operation.id);
   }

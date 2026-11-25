@@ -1,5 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
+import type { Configuration } from './config.js';
+import { Vault } from './vault.js';
+import { migrateRequests } from './migrations/018-single-request-operation.js';
 import type { PoolClient, QueryResultRow } from 'pg';
 
 export type Queryable = Pick<pg.Pool, 'query'>;
@@ -8,7 +11,8 @@ export const SchemaMigration = '001-foundation-schema';
 // has applied are left out; a database made from the current schema is marked as having applied these.
 const SqlMigrations = ['012-ssh-records', '013-no-key-rotations', '014-server-decided-sealing', '015-no-payments', '016-no-request-links',
   '017-ssh-connections'];
-const RequiredMigrations = [SchemaMigration, ...SqlMigrations];
+const SingleOperation = '018-single-request-operation';
+const RequiredMigrations = [SchemaMigration, ...SqlMigrations, SingleOperation];
 export class Database {
   readonly pool: pg.Pool;
   constructor(url: string, options: { max?: number; schema?: string } = {}) {
@@ -22,7 +26,7 @@ export class Database {
       options: `-c statement_timeout=30000${options.schema ? ' -c search_path=' + options.schema : ''}`,
     });
   }
-  async migrate() {
+  async migrate(config: Configuration) {
     await this.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
       const installed = await this.one<{ principals: string | null; migrations: string | null }>(
@@ -38,6 +42,10 @@ export class Database {
           await client.query(await readFile(new URL(`./migrations/${name}.sql`, import.meta.url), 'utf8'));
           await client.query('INSERT INTO schema_migrations(name) VALUES($1)', [name]);
         }
+      if (!await this.one('SELECT 1 FROM schema_migrations WHERE name=$1', [SingleOperation], client)) {
+        await migrateRequests(client, await Vault.open(client, config));
+        await client.query('INSERT INTO schema_migrations(name) VALUES($1)', [SingleOperation]);
+      }
     });
   }
   async assertReady() {

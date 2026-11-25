@@ -11,11 +11,14 @@ const Delegation = RelationInput.extend({ subjectId: Participant, objectId: Part
 type ReviewPrincipal = NamedPrincipal | null;
 export interface DelegationReviewData { subject: ReviewPrincipal; object: ReviewPrincipal; }
 
-export async function loadDelegationReviews(operations: RequestRecordView['operations'], {
+export async function loadDelegationReview(operation: RequestRecordView['operation'], {
   approver, requester, principals, inspect, signal,
 }: {
   approver: NamedPrincipal | null; requester: NamedPrincipal; principals: NamedPrincipal[]; inspect: boolean; signal: AbortSignal;
 }) {
+  if (operation.name !== 'relation.draw' || operation.inputs.length) return null;
+  const input = Delegation.safeParse(operation.input);
+  if (!input.success) return null;
   const known = new Map(principals.map(principal => [principal.id, principal]));
   known.set(requester.id, requester);
   if (approver) known.set(approver.id, approver);
@@ -32,13 +35,8 @@ export async function loadDelegationReviews(operations: RequestRecordView['opera
     }));
     return pending.get(id)!;
   };
-  return Promise.all(operations.map(async operation => {
-    if (operation.name !== 'relation.draw' || operation.inputs.length) return null;
-    const input = Delegation.safeParse(operation.input);
-    if (!input.success) return null;
-    const [subject, object] = await Promise.all([resolve(input.data.subjectId), resolve(input.data.objectId)]);
-    return { subject, object } satisfies DelegationReviewData;
-  }));
+  const [subject, object] = await Promise.all([resolve(input.data.subjectId), resolve(input.data.objectId)]);
+  return { subject, object } satisfies DelegationReviewData;
 }
 
 export function DelegationReview({ review }: { review: DelegationReviewData }) {

@@ -29,15 +29,14 @@ interface Snapshot {
   submission: string | null;
 }
 interface OperationRow {
-  id: string; request_id: string | null; position: number | null; owner_id: string | null; actor_id: string; name: string;
+  id: string; request_id: string | null; owner_id: string | null; actor_id: string; name: string;
   state: State; record: string; revision: number; lease_token: string | null; lease_until: Date | null;
   expires_at: Date | null; created_at: Date; updated_at: Date;
 }
 
 // An operation changes something in Foundation. Its actor makes it at once; one that seals what it saves is made by the
 // actor's device, which sends what it sealed, or first waits on the service it connects to. An operation that needs
-// another principal's agreement becomes a request to it, and the operations a request asks for are made when it is
-// approved, in order, stopping at the first that fails.
+// another principal's agreement becomes a request to it, and the requested operation is made once that principal approves.
 export class Operations {
   constructor(readonly db: Database, readonly vault: Vault, readonly authorization: Authorization,
     readonly definitions: DefinitionRegistry, readonly principals: Principals, readonly origin: string,
@@ -68,15 +67,13 @@ export class Operations {
     const error = fault && typeof fault === 'object' && !Array.isArray(fault) && typeof fault.code === 'string' && typeof fault.message === 'string'
       ? { code: fault.code, message: fault.message } : null;
     const acts = !!viewer && await this.acts(viewer, row);
-    const earlier = row.request_id !== null && !!await this.db.one(
-      "SELECT 1 FROM operations WHERE request_id=$1 AND position<$2 AND state<>'succeeded'", [row.request_id, row.position]);
     return OperationView.parse({ id: row.id, name: row.name, title: this.definitions.describe({ name: row.name, input: snapshot.input }),
       input: snapshot.input, keyholder: definition.keyholder, configure: [...definition.configure],
       ownerId: row.owner_id, actor: { id: actor.id, name: actor.name },
-      request: row.request_id === null ? null : { id: row.request_id, position: row.position ?? 0 },
+      requestId: row.request_id,
       state: row.state, result: error ? null : result !== null && definition.resultView ? definition.resultView(result) : result, error,
       continuation: snapshot.continuation,
-      canPerform: acts && !earlier && (['stopped', 'failed'].includes(row.state) || row.state === 'in_progress' && !!snapshot.continuation),
+      canPerform: acts && (['stopped', 'failed'].includes(row.state) || row.state === 'in_progress' && !!snapshot.continuation),
       canCancel: acts && (row.state === 'stopped' || row.state === 'in_progress' && !!snapshot.continuation),
       url: this.origin + '/operations/' + row.id, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
       expiresAt: row.expires_at ? iso(row.expires_at) : null });
@@ -115,31 +112,23 @@ export class Operations {
     }));
     return { items, next: rows.length > limit ? rows[limit - 1]!.id : null };
   }
-  // The operations an approved request asks for, in its order, each to be made by the actor the approval gives it.
-  async plan(connection: Queryable, requestId: string, operations: OperationCall[], actors: Actor[]) {
-    for (const [position, operation] of operations.entries()) {
-      const id = randomUUID(), snapshot: Snapshot = { actor: this.authority(actors[position]!), input: operation.input,
-        result: null, proof: null, continuation: null, inFlight: false, submission: null };
-      await connection.query(`INSERT INTO operations(id,request_id,position,owner_id,actor_id,name,state,record)
-        VALUES($1,$2,$3,(SELECT id FROM principals WHERE id=$4),$5,$6,'stopped',$7)`,
-      [id, requestId, position, this.owner(operation.input) ?? actors[position]!.id, actors[position]!.id, operation.name,
-        await this.vault.encrypt(snapshot, 'operation:' + id)]);
-    }
+  async plan(connection: Queryable, requestId: string, operation: OperationCall, actor: Actor) {
+    const id = randomUUID(), snapshot: Snapshot = { actor: this.authority(actor), input: operation.input,
+      result: null, proof: null, continuation: null, inFlight: false, submission: null };
+    await connection.query(`INSERT INTO operations(id,request_id,owner_id,actor_id,name,state,record)
+      VALUES($1,$2,(SELECT id FROM principals WHERE id=$3),$4,$5,'stopped',$6)`,
+    [id, requestId, this.owner(operation.input) ?? actor.id, actor.id, operation.name, await this.vault.encrypt(snapshot, 'operation:' + id)]);
+    return id;
   }
-  // Makes the request's operations in order, up to one its actor's device makes or the first that does not succeed.
-  // Each is made with the sign-in that made the one before it, when the same principal makes both.
-  async advance(requestId: string, previous?: Actor) {
-    const next = await this.db.one<OperationRow>(
-      "SELECT * FROM operations WHERE request_id=$1 AND state<>'succeeded' ORDER BY position LIMIT 1", [requestId]);
-    if (!next || next.state !== 'stopped' || this.definitions.get(next.name).keyholder) return;
+  // A server operation can start as soon as its approval is committed. A keyholder continues on its device.
+  async runApproved(id: string, name: string) {
+    if (!this.definitions.has(name) || this.definitions.get(name).keyholder) return;
     try {
-      await this.locked(next.id, async () => {
-        const current = await this.row(next.id), snapshot = await this.read(current);
-        if (current.state !== 'stopped') return;
-        if (previous?.id === current.actor_id) snapshot.actor = this.signedIn(snapshot.actor, previous);
-        await this.make(current, snapshot);
+      await this.locked(id, async () => {
+        const current = await this.row(id);
+        if (current.state === 'stopped') await this.make(current, await this.read(current));
       });
-    } catch { /* The operation keeps its failure, and those after it stay stopped. */ }
+    } catch { /* The operation records its own failure; a busy operation is already claimed. */ }
   }
 
   async perform(actor: Actor, body: z.input<typeof OperationInput>): Promise<OperationRecordView | RequestRecordView> {
@@ -182,8 +171,6 @@ export class Operations {
     if (row.state === 'uncertain') fail(409, 'operation_uncertain', 'Check the result before making this operation again.');
     if (!(['stopped', 'failed'].includes(row.state) || row.state === 'in_progress' && snapshot.continuation))
       fail(409, 'operation_changed', 'This operation is not waiting to be made.');
-    if (row.request_id && await this.db.one("SELECT 1 FROM operations WHERE request_id=$1 AND position<$2 AND state<>'succeeded'",
-      [row.request_id, row.position])) fail(409, 'operation_waiting', 'Make the earlier operations of its request first.');
     const definition = this.definitions.get(row.name);
     if (definition.keyholder && proof === undefined)
       fail(400, 'proof_required', 'Seal what this operation saves on your device and send it with the operation.');
@@ -223,7 +210,7 @@ export class Operations {
       return this.view(row, snapshot, actor);
     });
   }
-  // Stops an operation that is not made yet, or that waits on its service, with any after it in its request.
+  // Stops an operation that is not made yet, or that waits on its service.
   async cancel(actor: Actor, id: string) {
     const row = await this.recover(await this.row(id));
     await this.authorization.active(actor);
@@ -234,9 +221,6 @@ export class Operations {
         fail(409, 'operation_changed', 'This operation is not waiting to be made.');
       snapshot.continuation = null;
       await this.save(current, snapshot, 'cancelled');
-      if (current.request_id) await this.db.pool.query(
-        "UPDATE operations SET state='cancelled',updated_at=now(),revision=revision+1 WHERE request_id=$1 AND position>$2 AND state='stopped'",
-        [current.request_id, current.position]);
     });
     return this.get(actor, id);
   }
@@ -279,7 +263,6 @@ export class Operations {
     snapshot.inFlight = false; snapshot.continuation = null;
     snapshot.proof = proof === undefined ? null : await hash(proof);
     await this.save(row, snapshot, 'succeeded');
-    if (row.request_id) await this.advance(row.request_id, snapshot.actor);
     return this.view(row, snapshot, snapshot.actor);
   }
   private async save(row: OperationRow, snapshot: Snapshot, state: State, connection?: Queryable) {
@@ -325,12 +308,11 @@ export class Operations {
     }
     return this.row(row.id);
   }
-  // A request approved while its server stopped before making what it asked for goes on from the operation it reached.
-  async advanceAll() {
-    const rows = await this.db.all<{ request_id: string }>(`SELECT DISTINCT o.request_id FROM operations o
-      WHERE o.state='stopped' AND o.request_id IS NOT NULL AND (o.lease_until IS NULL OR o.lease_until<now())
-      AND NOT EXISTS(SELECT 1 FROM operations p WHERE p.request_id=o.request_id AND p.position<o.position AND p.state<>'succeeded')`);
-    for (const row of rows) await this.advance(row.request_id);
+  // Pick up an approval committed just before its server stopped.
+  async runApprovedPending() {
+    const rows = await this.db.all<{ id: string; name: string }>(
+      "SELECT id,name FROM operations WHERE state='stopped' AND request_id IS NOT NULL AND (lease_until IS NULL OR lease_until<now())");
+    for (const row of rows) await this.runApproved(row.id, row.name);
   }
   async recoverAll() {
     const rows = await this.db.all<OperationRow>(

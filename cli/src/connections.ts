@@ -131,10 +131,10 @@ export function connectionOutput(connection: Connection) {
 export async function requestConnection(client: Client, input: {
   owner: string; method: CatalogConnectionMethod; why?: string; connectionId?: string; userId?: string;
 }) {
-  return client.json('/api/requests', { method: 'POST', body: { to: input.owner, message: input.why ?? '', operations: [{
+  return client.json('/api/requests', { method: 'POST', body: { to: input.owner, message: input.why ?? '', operation: {
     name: 'connection.connect', input: { ownerId: input.owner, methodId: input.method.id, name: Name.parse(input.method.defaultName),
       ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-      ...(!input.connectionId && input.userId ? { users: [input.userId] } : {}) } }] } }, RequestView);
+      ...(!input.connectionId && input.userId ? { users: [input.userId] } : {}) } } } }, RequestView);
 }
 // Waits for the owner to answer, then for the connection they made.
 export async function awaitRequestedConnection(client: Client, request: RequestRecordView, timeout: number) {
@@ -142,7 +142,7 @@ export async function awaitRequestedConnection(client: Client, request: RequestR
   while (true) {
     const answer = await client.json('/api/requests/' + request.id, {}, RequestView);
     if (!['pending', 'approved'].includes(answer.state)) return { kind: answer.state, requestId: request.id };
-    const made = answer.performed[0];
+    const made = answer.performed;
     if (made && ['succeeded', 'failed', 'cancelled', 'uncertain'].includes(made.state)) {
       const operation = await client.json('/api/operations/' + made.id, {}, OperationView);
       if (operation.state !== 'succeeded') return { kind: operation.state, requestId: request.id, operationId: operation.id, error: operation.error };

@@ -70,7 +70,7 @@ test('変数と接続とアプリを受け取り先で開ける人向けに包�
 async function failedTransfer(f: Awaited<ReturnType<typeof flowFixture>>, id: string, code: string) {
   const approved = await f.api(f.stranger.token).json('/api/requests/' + id + '/approve', { method: 'POST', body: {} }, RequestView);
   assert.equal(approved.state, 'approved');
-  const made = await f.client.api.json('/api/operations/' + approved.performed[0]!.id, {}, OperationView);
+  const made = await f.client.api.json('/api/operations/' + approved.performed!.id, {}, OperationView);
   assert.equal(made.state, 'failed'); assert.equal(made.error?.code, code);
 }
 
@@ -104,7 +104,7 @@ test('暗号化していない項目は秘密鍵を開かずに譲渡を依頼�
   assert.equal(asked.state, 'pending');
   assert.equal((await f.resources.get(file.id)).owner_id, f.owner.actor.id);
   const approved = await f.api(f.stranger.token).json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, RequestView);
-  const completed = await f.api(f.stranger.token).json('/api/operations/' + approved.performed[0]!.id, {}, OperationView);
+  const completed = await f.api(f.stranger.token).json('/api/operations/' + approved.performed!.id, {}, OperationView);
   const received = Resource.parse(completed.result);
   assert.equal(received.id, file.id);
   assert.equal(received.ownerId, f.stranger.actor.id);

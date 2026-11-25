@@ -509,8 +509,9 @@ async function main(argv: string[]) {
     // Foundation sends the values sealed; this machine opens those sealed for its key, so that the file holds them.
     const path = requireArgument(args.values.output, 'Choose an export file with --output FILE.');
     const keys = deviceKeys(client), sealed: string[] = [];
-    const lines = createInterface({ input: body(await client.response('/api/principals/' + owner + '/export')), crlfDelay: Infinity });
+    const response = await client.response('/api/principals/' + owner + '/export');
     await download((async function* () {
+      const lines = createInterface({ input: body(response), crlfDelay: Infinity });
       for await (const line of lines) {
         if (!line) continue;
         const opened = await openExportLine(line, keys);
@@ -557,7 +558,7 @@ async function main(argv: string[]) {
   if (command === 'request-access') {
     const request = await client.json('/api/requests', { method: 'POST', body: RequestCreate.parse({
       to: args.values.to, message: args.values.message ?? hostname(),
-      operations: [{ name: 'relation.draw', input: { subjectId: self, relation: 'delegate', objectId: '$approver' } }],
+      operation: { name: 'relation.draw', input: { subjectId: self, relation: 'delegate', objectId: '$approver' } },
     }) }, RequestView);
     await output(request, args);
     if (!args.values.wait) return 0;

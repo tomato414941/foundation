@@ -37,7 +37,7 @@ export class Worker {
     this.stopped = false;
     this.schedule(async () => {
       await this.context.operations.recoverAll();
-      await this.context.operations.advanceAll();
+      await this.context.operations.runApprovedPending();
     }, 15_000);
     this.schedule(() => this.context.connectionOperations.recover(), 15_000);
     this.schedule(() => this.context.objects.collect(), 60_000);

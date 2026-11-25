@@ -14,7 +14,7 @@ const words: Record<string, [string, string]> = {
   openOperation: ['操作を開く', 'Open operation'],
   continueOperation: ['続けて行う', 'Continue'],
   stopOperation: ['この操作をやめる', 'Stop this operation'],
-  performedOperations: ['行われた操作', 'Operations made'],
+  performedOperation: ['操作', 'Operation'],
   operationNoTextOutput: ['テキストの出力はありません。', 'There is no text output.'],
   operationOpenConnection: ['接続を開く', 'Open connection'],
   operationWaitingFor: ['{{name}}が操作を続けるのを待っています。', 'Waiting for {{name}} to continue.'],
@@ -784,11 +784,6 @@ const errors: Array<[string[], string, string]> = [
     ['operation_conflict', 'request_conflict'],
     '内容を変えるときは、新しい操作や依頼として行ってください。',
     'Make a new operation or request when changing its contents.',
-  ],
-  [
-    ['operation_waiting'],
-    '同じ依頼の前の操作を先に行ってください。',
-    'Make the earlier operations of the same request first.',
   ],
   [
     ['email_failed'],

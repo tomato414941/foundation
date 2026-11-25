@@ -265,7 +265,7 @@ test('承認までに頼んだ人が譲る権限を失っていると、承認�
   await f.relations.erase(owner.actor, role);
   const approved = await call(other, '/api/requests/' + asked.json().id + '/approve');
   assert.equal(approved.statusCode, 200, approved.body);
-  const made = await call(helper, '/api/operations/' + approved.json().performed[0].id, undefined, 'GET');
+  const made = await call(helper, '/api/operations/' + approved.json().performed.id, undefined, 'GET');
   assert.equal(made.json().state, 'failed'); assert.equal(made.json().error.code, 'forbidden');
   assert.equal((await f.resources.get(file.id)).owner_id, owner.actor.id);
 });

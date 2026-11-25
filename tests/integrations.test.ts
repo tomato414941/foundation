@@ -21,9 +21,9 @@ test('外部連携のURLを保存し、依頼の状態を含めた完了URLを�
   assert.deepEqual(read.json(), settings);
   const created = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: {
     to: recipient.actor.id,
-    operations: [{ name: 'relation.draw', input: {
+    operation: { name: 'relation.draw', input: {
       relation: 'delegate', objectId: '$approver', subjectId: sender.actor.id,
-    } }],
+    } },
   } });
   assert.equal(created.statusCode, 201, created.body);
   const pending = created.json();

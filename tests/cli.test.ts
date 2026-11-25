@@ -142,8 +142,9 @@ test('CLIで登録して変数を保存し、コマンドへ渡して出力を�
   assert.equal(openedResult.code, 0, openedResult.stderr);
   assert.deepEqual(JSON.parse(openedResult.stdout), { path: opened, sealed: [] });
   assert.equal((await stat(opened)).mode & 0o777, 0o600);
-  const openedResource = (await readFile(opened, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    .find(item => item.type === 'resource');
+  const entries = (await readFile(opened, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual([entries[0].format, entries[0].version], ['foundation', 6]);
+  const openedResource = entries.find(item => item.type === 'resource');
   assert.equal(openedResource.custody, undefined);
   assert.equal(Buffer.from(openedResource.content, 'base64').toString('utf8'), '変数-value/123');
 });
@@ -392,9 +393,9 @@ test('CLIは持ち主に一件の接続を頼み、許可された接続を使�
   const request = JSON.parse(asked.stdout);
   assert.deepEqual([request.kind, request.to.id], ['requested', owner.actor.id]);
 
-  const approved = await api.json<{ performed: Array<{ id: string }> }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
+  const approved = await api.json<{ performed: { id: string } }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
   const token = 'hf_cli_scoped_connection';
-  const saved = await operations.continue(approved.performed[0]!.id, { fields: { token } });
+  const saved = await operations.continue(approved.performed.id, { fields: { token } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
   const waited = await c.run(['connect', 'wait', request.requestId, '--timeout', '5']);
   assert.equal(waited.code, 0, waited.stderr);
@@ -427,8 +428,8 @@ test('鍵の値を渡さないCLIの接続は委任元へ依頼を送り、入�
   const received = await api.json<{ message: string; state: string }>('/api/requests/' + request.requestId);
   assert.deepEqual([received.message, received.state], ['Rent a GPU for training', 'pending']);
   const waiting = c.run(['connect', 'wait', request.requestId, '--timeout', '30']);
-  const approved = await api.json<{ performed: Array<{ id: string }> }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
-  const saved = await operations.continue(approved.performed[0]!.id, { fields: { token: 'cloudrift_requested_key' } });
+  const approved = await api.json<{ performed: { id: string } }>('/api/requests/' + request.requestId + '/approve', { method: 'POST', body: {} });
+  const saved = await operations.continue(approved.performed.id, { fields: { token: 'cloudrift_requested_key' } });
   if (!('kind' in saved) || saved.kind !== 'saved') throw new Error('Expected a saved connection.');
   const waited = await waiting;
   assert.equal(waited.code, 0, waited.stderr);
@@ -590,7 +591,7 @@ test('CLIのapiで別のプリンシパルに操作を依頼し、承認され�
   assert.equal(initialized.code, 0, initialized.stderr);
   const recipient = await c.person('Operation recipient');
   const sent = await c.run(['api', 'POST', '/api/requests', '--body', '@-'], JSON.stringify({ to: recipient.actor.id,
-    operations: [{ name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } }] }));
+    operation: { name: 'principal.create', input: { ownerId: '$approver', name: 'CLI handoff result' } } }));
   assert.equal(sent.code, 0, sent.stderr);
   const request = JSON.parse(sent.stdout);
   assert.equal(new URL(request.url).pathname, '/requests/' + request.id);
@@ -600,7 +601,7 @@ test('CLIのapiで別のプリンシパルに操作を依頼し、承認され�
   assert.equal(read.code, 0, read.stderr);
   const answered = JSON.parse(read.stdout);
   assert.equal(answered.state, 'approved');
-  const made = await c.run(['api', 'GET', '/api/operations/' + answered.performed[0].id]);
+  const made = await c.run(['api', 'GET', '/api/operations/' + answered.performed.id]);
   assert.equal(made.code, 0, made.stderr);
   assert.equal(JSON.parse(made.stdout).state, 'succeeded');
   assert.equal(JSON.parse(made.stdout).result.name, 'CLI handoff result');

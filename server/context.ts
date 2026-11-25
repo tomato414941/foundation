@@ -33,7 +33,7 @@ export interface Dependencies {
 }
 export async function createContext(config: Configuration, deps: Dependencies = {}, options: { migrate?: boolean } = {}) {
   const db = deps.db ?? new Database(config.DATABASE_URL);
-  if (options.migrate) await db.migrate();
+  if (options.migrate) await db.migrate(config);
   else await db.assertReady();
   const vault = await Vault.initialize(db, config),
     authorization = new Authorization(db),
@@ -56,7 +56,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const definitions = builtinDefinitions({ authorization, principals, relations, resources, catalog,
     objects, integrations, custody });
   // Each side of a change that needs another's agreement reaches the other: an operation asks through a request, and an
-  // approved request makes its operations.
+  // approved request makes its operation.
   let requests: Requests;
   const operations = new Operations(db, vault, authorization, definitions, principals, config.origin, () => requests);
   requests = new Requests(db, vault, authorization, definitions, principals, audit, config.origin, operations);

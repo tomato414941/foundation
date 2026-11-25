@@ -77,7 +77,7 @@ export default function OperationPage() {
       <Detail label={t('operationActor')}>{item.actor.name}<Copy value={item.actor.id} /></Detail>
       <Detail label={t('created')}><DateText value={item.createdAt} seconds /></Detail>
       {item.updatedAt !== item.createdAt && <Detail label={t('updated')}><DateText value={item.updatedAt} seconds /></Detail>}
-      {item.request && <Detail label={t('request')}><Link className="underline underline-offset-4" to={'/requests/' + item.request.id}>{t('openRequest')}</Link></Detail>}
+      {item.requestId && <Detail label={t('request')}><Link className="underline underline-offset-4" to={'/requests/' + item.requestId}>{t('openRequest')}</Link></Detail>}
     </Panel>
     {item.state === 'succeeded' && item.result !== null && <Panel title={t('result')}>
       <OperationResult invocation={item} value={item.result} />
