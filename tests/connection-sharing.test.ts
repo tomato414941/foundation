@@ -46,6 +46,10 @@ test('接続用アプリと認証情報を開ける相手に接続を共有す�
   const renewal = await renewals.prepare(f.owner.actor, crypto.randomUUID(), connection.id, shared.content.revision);
   await renewals.dispatch(f.owner.actor, renewal.id, renewal.fence);
   await renewals.uncertain(f.owner.actor, renewal.id, renewal.fence);
+  const token = await recipient.seal(connection.id, encode('renewed-token'), shared.content.revision + 1, shared.content.metadata);
+  const appRevision = (await recipient.read(app.id)).content.revision;
+  await assert.rejects(recipient.api.json('/api/connections/' + connection.id + '/token',
+    { method: 'PUT', body: { content: token, appRevision } }), { code: 'wrong_grant' });
   const edit = { method: 'PUT', body: { permission: 'update' } };
   await assert.rejects(f.client.api.json(path, edit), { code: 'connection_uncertain' });
 

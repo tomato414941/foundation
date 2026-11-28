@@ -29,6 +29,12 @@ export async function routesCustody(app: ApiApp, context: Context) {
   app.put('/api/connections/:id/shares/:principalId', {
     schema: { params: shareParams, body: ConnectionShare, response: { 200: C.Ok } },
   }, request => sharing.save(actor(request), request.params.id, request.params.principalId, request.body));
+  app.put('/api/connections/:id/token', {
+    schema: { params: C.IdParams, body: P.IssuedToken, response: { 200: C.Ok } },
+  }, async request => {
+    await operations.saveToken(actor(request), request.params.id, request.body.content, request.body.appRevision);
+    return { ok: true as const };
+  });
   app.post('/api/connection-operations', {
     schema: { body: P.PrepareRenewal, response: { 201: P.RenewalOperation } },
   }, async (request, reply) => reply.code(201).send(await operations.prepare(actor(request), request.body.id,

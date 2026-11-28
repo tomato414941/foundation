@@ -1,6 +1,8 @@
 import type { Actor } from './authorization.js';
 import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
+import type { ResourceRow } from './resources.js';
+import { usesClientCredentials } from '../shared/connection-methods.js';
 import { canonical } from '../shared/digest.js';
 import { SealedItem, sealedFor } from '../shared/custody.js';
 import type { SealedItemValue } from '../shared/custody.js';
@@ -80,9 +82,49 @@ export class ConnectionOperations {
     return updated;
   }
 
+  private async saveResult(actor: Actor, resource: ResourceRow, previous: SealedItemValue, content: SealedItemValue,
+    connection: Queryable, operationId?: string) {
+    this.custody.metadata('connection', content);
+    if (content.revision !== previous.revision + 1)
+      fail(409, 'changed', 'A token update must replace the current revision of the connection.');
+    if (kept.some(key => content.metadata[key] !== previous.metadata[key]))
+      fail(409, 'changed', 'A token update must keep the connection method and application.');
+    await this.custody.requireSealedFor(content, await this.custody.recipients(resource, connection));
+    await connection.query('UPDATE resource_custody SET content=$2 WHERE resource_id=$1', [resource.id, JSON.stringify(content)]);
+    await this.custody.resources.update(resource, { data: { ...resource.data, ...content.metadata, state: 'ready' } }, connection);
+    await this.custody.resources.audit.record(resource.owner_id, actor.id, 'connection.renew', resource.id,
+      { ...(operationId ? { operationId } : {}), revision: content.revision }, connection);
+  }
+
+  async saveToken(actor: Actor, resourceId: string, content: SealedItemValue, appRevision: number | null) {
+    const { resources } = this.custody;
+    await this.db.transaction(async connection => {
+      await connection.query('SELECT pg_advisory_xact_lock_shared(736023743)');
+      await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [resourceId]);
+      const { row, content: previous } = await this.allowed(actor, resourceId, connection);
+      const method = await resources.connectionMethod?.(String(previous.metadata.methodId), connection);
+      if (!method || !usesClientCredentials(method))
+        fail(409, 'wrong_grant', 'Use the token update operation for this connection method.');
+      if (row.data.state === 'reconnect' || content.metadata.state !== 'ready')
+        fail(409, 'reconnect_required', 'Reconnect this service before using it.');
+      const appId = previous.metadata.appId;
+      let currentAppRevision: number | null = null;
+      if (typeof appId === 'string') {
+        await resources.authorization.requireResource(actor, await resources.get(appId, connection), 'reveal', connection);
+        currentAppRevision = (await this.custody.get(appId, connection)).revision;
+      }
+      if (currentAppRevision !== appRevision)
+        fail(409, 'changed', 'Read the current application before renewing this connection.');
+      await this.saveResult(actor, row, previous, content, connection);
+      // An older device may still report an outcome for the revision this token replaced.
+      await connection.query(
+        "UPDATE connection_operations SET state='aborted',updated_at=now() WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
+        [resourceId]);
+    });
+  }
+
   async commit(actor: Actor, id: string, fence: string, input: SealedItemValue) {
     const content = SealedItem.parse(input);
-    this.custody.metadata('connection', content);
     return this.db.transaction(async connection => {
       const operation = await this.operation(actor, id, fence, connection);
       await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [operation.resource_id]);
@@ -95,22 +137,13 @@ export class ConnectionOperations {
       if (!['in_flight', 'uncertain'].includes(locked.state))
         fail(409, 'invalid_operation', 'Start the token update before committing its result.');
       const { row: resource, content: previous } = await this.allowed(actor, operation.resource_id, connection);
-      if (previous.revision !== operation.expected_revision || content.revision !== operation.expected_revision + 1)
+      if (previous.revision !== locked.expected_revision)
         fail(409, 'changed', 'A token update must replace this revision of the connection.');
-      if (kept.some(key => content.metadata[key] !== previous.metadata[key]))
-        fail(409, 'changed', 'A token update must keep the connection method and application.');
-      await this.custody.requireSealedFor(content, await this.custody.recipients(resource, connection));
-      await connection.query('UPDATE resource_custody SET content=$2 WHERE resource_id=$1',
-        [operation.resource_id, JSON.stringify(content)]);
-      await this.custody.resources.update(resource, {
-        data: { ...resource.data, ...content.metadata, state: 'ready' },
-      }, connection);
+      await this.saveResult(actor, resource, previous, content, connection, id);
       await connection.query(
         "UPDATE connection_operations SET state='committed',result=$3,updated_at=now() WHERE id=$1 AND fence=$2::bigint",
         [id, fence, JSON.stringify(content)],
       );
-      await this.custody.resources.audit.record(resource.owner_id, actor.id, 'connection.renew', resource.id,
-        { operationId: id, revision: content.revision }, connection);
       return content;
     });
   }

@@ -25,6 +25,7 @@ export const RenewalOperation = z.object({
 export const PrepareRenewal = z.object({ id: Id, resourceId: Id, expectedRevision: z.number().int().positive() }).strict();
 export const Fence = z.object({ fence: z.string().regex(/^\d+$/) }).strict();
 export const RenewalResult = Fence.extend({ content: SealedItem }).strict();
+export const IssuedToken = z.object({ content: SealedItem, appRevision: Version.nullable() }).strict();
 export const RegisterRelay = z.object({ id: Id, operationId: Id, stateDigest: Digest, expiresAt: Time }).strict();
 export const OAuthRelay = z.object({ id: Id, operationId: Id, context: z.string(),
   sealed: Sealed.nullable(), expiresAt: Time, receivedAt: Time.nullable() }).strict();

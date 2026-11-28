@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { JsonApi } from '../shared/client.js';
-import { CatalogMethod } from '../shared/contracts.js';
+import { CatalogMethod, Ok } from '../shared/contracts.js';
 import { catalogDefinition } from '../shared/connection-methods.js';
 import { RenewalOperation, SealedItem } from '../shared/protocol.js';
 import type { ConnectionBroker } from './connections.js';
@@ -23,6 +23,9 @@ export class HttpBroker {
     const api = this.api;
     return {
       method: async id => catalogDefinition(await api.json('/api/connections/' + id + '/method', {}, CatalogMethod)),
+      saveToken: (id, content, appRevision) => api.json('/api/connections/' + id + '/token', {
+        method: 'PUT', body: { content, appRevision },
+      }, Ok),
       prepare: (id, resourceId, expectedRevision) => api.json('/api/connection-operations', {
         method: 'POST', body: { id, resourceId, expectedRevision },
       }, RenewalOperation),

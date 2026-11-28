@@ -8,7 +8,7 @@ export interface RenewalContext {
   material: ConnectionState;
   app: AppState | null;
   signal: AbortSignal;
-  receive(checkpoint: ConnectionCheckpoint): Promise<void>;
+  receive?(checkpoint: ConnectionCheckpoint): Promise<void>;
 }
 export interface ConnectionProvider {
   facts(material: ConnectionState): ConnectionFactValues;

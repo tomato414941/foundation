@@ -31,6 +31,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   const operations = new ConnectionOperations(f.custody), journal = new MemoryJournal();
   const broker: ConnectionBroker = {
     method: async () => method,
+    saveToken: (id, content, appRevision) => operations.saveToken(f.delegate.actor, id, content, appRevision),
     prepare: (id, resourceId, revision) => operations.prepare(f.delegate.actor, id, resourceId, revision),
     dispatch: (id, fence) => operations.dispatch(f.delegate.actor, id, fence),
     commit: (id, fence, content) => operations.commit(f.delegate.actor, id, fence, content),

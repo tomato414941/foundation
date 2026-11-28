@@ -54,6 +54,10 @@ export function requiresApp(method: MethodDescription) {
   return connectionMethod(method).requiresApp;
 }
 
+export function usesClientCredentials(method: MethodDescription) {
+  return method.kind === 'oauth' && method.config.grantType === 'client_credentials';
+}
+
 export function browserExchange(method: MethodDescription): 'available' | 'unavailable' | 'unknown' {
   if (method.kind === 'approval') return 'unavailable';
   if (!connectionMethod(method).browserAuthorization || method.kind === 'ovh') return 'available';

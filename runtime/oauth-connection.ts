@@ -4,7 +4,6 @@ import { oauthConnectionFacts } from '../shared/connection-facts.js';
 import type { AppState, ConnectionState } from '../shared/connections.js';
 import { selectScopes } from '../shared/connection-methods.js';
 import { OAuth } from '../shared/oauth.js';
-import type { OAuthToken } from '../shared/oauth.js';
 import type { Transport } from '../server/transport.js';
 import { fail } from '../server/errors.js';
 import type { ConnectionCheckpoint, ConnectionProvider, RenewalContext } from './connection-provider.js';
@@ -35,10 +34,10 @@ export class OAuthConnection implements ConnectionProvider {
   async renew(context: RenewalContext) {
     const value = context.material, spec = specification(value), app = application(context.app);
     const scopes = ('requestedScopes' in value ? value.requestedScopes : undefined) ?? value.oauth?.requestedScopes;
-    const receive = (token: OAuthToken, response: Record<string, unknown>) => context.receive({ token, response });
     const token = spec.grantType === 'client_credentials'
-      ? await this.oauth(context.signal).clientCredentials(spec, app, scopes ?? selectScopes(spec.scopes), value.oauth, receive)
-      : await this.oauth(context.signal).refresh(spec, app, value.oauth!, receive);
+      ? await this.oauth(context.signal).clientCredentials(spec, app, scopes ?? selectScopes(spec.scopes), value.oauth)
+      : await this.oauth(context.signal).refresh(spec, app, value.oauth!,
+        async (token, response) => context.receive?.({ token, response }));
     return ConnectionMaterial.parse({ ...context.material, oauth: token });
   }
   async recover(value: ConnectionState, _app: AppState | null, received: ConnectionCheckpoint) {

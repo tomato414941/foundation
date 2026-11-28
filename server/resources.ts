@@ -29,7 +29,7 @@ export interface ResourceRow extends ResourceIdentity {
 export class Resources {
   readonly ownership = new Map<ResourceKindName, (row: ResourceRow) => Record<string, JsonValue>>();
   connectionServices?: (actor: Actor, methodId: string) => Promise<Array<{ id: string; name: string }>>;
-  connectionMethod?: (methodId: string) => Promise<MethodDescription | null>;
+  connectionMethod?: (methodId: string, connection?: Queryable) => Promise<MethodDescription | null>;
   constructor(
     readonly db: Database,
     readonly authorization: Authorization,
